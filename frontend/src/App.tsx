@@ -1,6 +1,9 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import "./App.css";
 import type { AppData } from "./types";
+
+const DEFAULT_BLOCK_WIDTH = 220;
+const DEFAULT_BLOCK_HEIGHT = 96;
 
 const initialData: AppData = {
   folders: [
@@ -30,11 +33,25 @@ function App() {
   );
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
   const [editingPageId, setEditingPageId] = useState<string | null>(null);
+  const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
+  const blockRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
 
   const selectedPage = data.pages.find((page) => page.id === selectedPageId);
   const visiblePages = data.pages.filter(
     (page) => page.folderId === selectedFolderId,
   );
+  const visibleBlocks = data.blocks.filter(
+    (block) => block.pageId === selectedPageId,
+  );
+
+  useEffect(() => {
+    if (!editingBlockId) {
+      return;
+    }
+
+    const blockElement = blockRefs.current[editingBlockId];
+    blockElement?.focus();
+  }, [editingBlockId]);
 
   function createFolder() {
     const folderId = createId("folder");
@@ -47,6 +64,7 @@ function App() {
     setSelectedPageId("");
     setEditingFolderId(folderId);
     setEditingPageId(null);
+    setEditingBlockId(null);
   }
 
   function renameFolder(folderId: string, name: string) {
@@ -85,6 +103,7 @@ function App() {
       setSelectedPageId(nextSelectedPageId);
       setEditingFolderId(null);
       setEditingPageId(null);
+      setEditingBlockId(null);
 
       return {
         folders: nextFolders,
@@ -103,6 +122,7 @@ function App() {
     setSelectedPageId(firstPage?.id ?? "");
     setEditingFolderId(null);
     setEditingPageId(null);
+    setEditingBlockId(null);
   }
 
   function createPage() {
@@ -125,6 +145,7 @@ function App() {
     setSelectedPageId(pageId);
     setEditingFolderId(null);
     setEditingPageId(pageId);
+    setEditingBlockId(null);
   }
 
   function renamePage(pageId: string, title: string) {
@@ -154,6 +175,7 @@ function App() {
 
       setSelectedPageId(nextSelectedPageId);
       setEditingPageId(null);
+      setEditingBlockId(null);
 
       return {
         ...currentData,
@@ -167,6 +189,44 @@ function App() {
     setSelectedPageId(pageId);
     setEditingFolderId(null);
     setEditingPageId(null);
+    setEditingBlockId(null);
+  }
+
+  function createBlock(event: React.MouseEvent<HTMLElement>) {
+    if (!selectedPageId) {
+      return;
+    }
+
+    const canvasRect = event.currentTarget.getBoundingClientRect();
+    const blockId = createId("block");
+    const x = event.clientX - canvasRect.left;
+    const y = event.clientY - canvasRect.top;
+
+    setData((currentData) => ({
+      ...currentData,
+      blocks: [
+        ...currentData.blocks,
+        {
+          id: blockId,
+          pageId: selectedPageId,
+          x,
+          y,
+          width: DEFAULT_BLOCK_WIDTH,
+          height: DEFAULT_BLOCK_HEIGHT,
+          content: "",
+        },
+      ],
+    }));
+    setEditingBlockId(blockId);
+  }
+
+  function updateBlockContent(blockId: string, content: string) {
+    setData((currentData) => ({
+      ...currentData,
+      blocks: currentData.blocks.map((block) =>
+        block.id === blockId ? { ...block, content } : block,
+      ),
+    }));
   }
 
   return (
@@ -343,10 +403,42 @@ function App() {
           </div>
         </header>
 
-        <section className="canvas" aria-label="Freeform note canvas">
-          <div className="canvas-empty">
-            <p>Canvas ready</p>
-          </div>
+        <section
+          className="canvas"
+          aria-label="Freeform note canvas"
+          onClick={createBlock}
+        >
+          {visibleBlocks.map((block) => (
+            <textarea
+              aria-label="Text block"
+              className="text-block"
+              key={block.id}
+              onChange={(event) =>
+                updateBlockContent(block.id, event.currentTarget.value)
+              }
+              onClick={(event) => event.stopPropagation()}
+              ref={(element) => {
+                blockRefs.current[block.id] = element;
+              }}
+              style={{
+                left: block.x,
+                top: block.y,
+                width: block.width,
+                height: block.height,
+              }}
+              value={block.content}
+            />
+          ))}
+          {selectedPageId && visibleBlocks.length === 0 ? (
+            <div className="canvas-empty">
+              <p>Click anywhere to add a textbox</p>
+            </div>
+          ) : null}
+          {!selectedPageId ? (
+            <div className="canvas-empty">
+              <p>Select or create a page</p>
+            </div>
+          ) : null}
         </section>
       </section>
     </main>

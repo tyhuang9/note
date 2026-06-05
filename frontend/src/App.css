@@ -118,7 +118,8 @@ h2 {
 .nav-item {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
+  justify-content: flex-start;
   min-height: 36px;
   padding: 8px 10px;
   border: 1px solid transparent;
@@ -139,9 +140,60 @@ h2 {
   background: #e6edf3;
 }
 
+.nav-label {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .item-count {
+  margin-left: auto;
   color: #7a8795;
   font-size: 12px;
+}
+
+.nav-actions {
+  display: none;
+  gap: 4px;
+}
+
+.nav-item:hover .nav-actions,
+.nav-item:focus-within .nav-actions {
+  display: flex;
+}
+
+.nav-actions button {
+  width: 24px;
+  height: 24px;
+  color: #586474;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.inline-input {
+  min-width: 0;
+  flex: 1;
+  height: 26px;
+  border: 1px solid #9eacba;
+  border-radius: 5px;
+  padding: 0 7px;
+  color: #17202e;
+  background: #ffffff;
+  font: inherit;
+}
+
+.inline-input:focus {
+  outline: 2px solid #b8c7d8;
+  outline-offset: 1px;
+}
+
+.empty-state {
+  margin: 8px 2px 0;
+  color: #7a8795;
+  font-size: 13px;
+  line-height: 18px;
 }
 
 .workspace {

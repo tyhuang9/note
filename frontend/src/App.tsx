@@ -16,15 +16,89 @@ const initialData: AppData = {
   blocks: [],
 };
 
+function createId(prefix: string) {
+  return `${prefix}-${crypto.randomUUID()}`;
+}
+
 function App() {
-  const [data] = useState<AppData>(initialData);
-  const [selectedFolderId] = useState(initialData.folders[0]?.id ?? "");
-  const [selectedPageId] = useState(initialData.pages[0]?.id ?? "");
+  const [data, setData] = useState<AppData>(initialData);
+  const [selectedFolderId, setSelectedFolderId] = useState(
+    initialData.folders[0]?.id ?? "",
+  );
+  const [selectedPageId, setSelectedPageId] = useState(
+    initialData.pages[0]?.id ?? "",
+  );
+  const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
 
   const selectedPage = data.pages.find((page) => page.id === selectedPageId);
   const visiblePages = data.pages.filter(
     (page) => page.folderId === selectedFolderId,
   );
+
+  function createFolder() {
+    const folderId = createId("folder");
+
+    setData((currentData) => ({
+      ...currentData,
+      folders: [...currentData.folders, { id: folderId, name: "New folder" }],
+    }));
+    setSelectedFolderId(folderId);
+    setSelectedPageId("");
+    setEditingFolderId(folderId);
+  }
+
+  function renameFolder(folderId: string, name: string) {
+    const nextName = name.trim();
+
+    if (!nextName) {
+      return;
+    }
+
+    setData((currentData) => ({
+      ...currentData,
+      folders: currentData.folders.map((folder) =>
+        folder.id === folderId ? { ...folder, name: nextName } : folder,
+      ),
+    }));
+  }
+
+  function deleteFolder(folderId: string) {
+    setData((currentData) => {
+      const nextFolders = currentData.folders.filter(
+        (folder) => folder.id !== folderId,
+      );
+      const deletedPageIds = new Set(
+        currentData.pages
+          .filter((page) => page.folderId === folderId)
+          .map((page) => page.id),
+      );
+      const nextPages = currentData.pages.filter(
+        (page) => page.folderId !== folderId,
+      );
+      const nextFolderId = nextFolders[0]?.id ?? "";
+      const nextSelectedPageId =
+        nextPages.find((page) => page.folderId === nextFolderId)?.id ?? "";
+
+      setSelectedFolderId(nextFolderId);
+      setSelectedPageId(nextSelectedPageId);
+      setEditingFolderId(null);
+
+      return {
+        folders: nextFolders,
+        pages: nextPages,
+        blocks: currentData.blocks.filter(
+          (block) => !deletedPageIds.has(block.pageId),
+        ),
+      };
+    });
+  }
+
+  function selectFolder(folderId: string) {
+    const firstPage = data.pages.find((page) => page.folderId === folderId);
+
+    setSelectedFolderId(folderId);
+    setSelectedPageId(firstPage?.id ?? "");
+  }
 
   return (
     <main className="app-shell">
@@ -39,7 +113,7 @@ function App() {
         <section className="sidebar-section" aria-labelledby="folders-title">
           <div className="section-header">
             <h2 id="folders-title">Folders</h2>
-            <button type="button" aria-label="Create folder">
+            <button type="button" aria-label="Create folder" onClick={createFolder}>
               +
             </button>
           </div>
@@ -55,12 +129,61 @@ function App() {
                     folder.id === selectedFolderId ? "is-active" : ""
                   }`}
                   key={folder.id}
+                  onClick={() => selectFolder(folder.id)}
                 >
-                  <span>{folder.name}</span>
+                  {editingFolderId === folder.id ? (
+                    <input
+                      aria-label="Folder name"
+                      autoFocus
+                      className="inline-input"
+                      defaultValue={folder.name}
+                      onBlur={(event) => {
+                        renameFolder(folder.id, event.currentTarget.value);
+                        setEditingFolderId(null);
+                      }}
+                      onClick={(event) => event.stopPropagation()}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.currentTarget.blur();
+                        }
+
+                        if (event.key === "Escape") {
+                          setEditingFolderId(null);
+                        }
+                      }}
+                    />
+                  ) : (
+                    <span className="nav-label">{folder.name}</span>
+                  )}
                   <span className="item-count">{pageCount}</span>
+                  <span className="nav-actions">
+                    <button
+                      type="button"
+                      aria-label={`Rename ${folder.name}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setEditingFolderId(folder.id);
+                      }}
+                    >
+                      R
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Delete ${folder.name}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        deleteFolder(folder.id);
+                      }}
+                    >
+                      X
+                    </button>
+                  </span>
                 </div>
               );
             })}
+            {data.folders.length === 0 ? (
+              <p className="empty-state">No folders yet</p>
+            ) : null}
           </div>
         </section>
 

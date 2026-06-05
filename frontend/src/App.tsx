@@ -36,6 +36,58 @@ type DragState = {
 
 type BlockUpdates = Partial<Pick<TextBlock, "content" | "height" | "width" | "x" | "y">>;
 
+type InlineRenameProps = {
+  ariaLabel: string;
+  initialValue: string;
+  onCancel: () => void;
+  onCommit: (value: string) => void;
+};
+
+function InlineRename({
+  ariaLabel,
+  initialValue,
+  onCancel,
+  onCommit,
+}: InlineRenameProps) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const didCancel = useRef(false);
+
+  useEffect(() => {
+    inputRef.current?.select();
+  }, []);
+
+  function commit(value: string) {
+    if (didCancel.current) {
+      return;
+    }
+
+    onCommit(value);
+  }
+
+  return (
+    <input
+      aria-label={ariaLabel}
+      autoFocus
+      className="inline-input"
+      defaultValue={initialValue}
+      onBlur={(event) => commit(event.currentTarget.value)}
+      onClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          commit(event.currentTarget.value);
+          event.currentTarget.blur();
+        }
+
+        if (event.key === "Escape") {
+          didCancel.current = true;
+          onCancel();
+        }
+      }}
+      ref={inputRef}
+    />
+  );
+}
+
 type TextBlockViewProps = {
   block: TextBlock;
   canvasRef: React.RefObject<HTMLElement | null>;
@@ -551,24 +603,13 @@ function App() {
                   onClick={() => selectFolder(folder.id)}
                 >
                   {editingFolderId === folder.id ? (
-                    <input
-                      aria-label="Folder name"
-                      autoFocus
-                      className="inline-input"
-                      defaultValue={folder.name}
-                      onBlur={(event) => {
-                        renameFolder(folder.id, event.currentTarget.value);
+                    <InlineRename
+                      ariaLabel="Folder name"
+                      initialValue={folder.name}
+                      onCancel={() => setEditingFolderId(null)}
+                      onCommit={(value) => {
+                        renameFolder(folder.id, value);
                         setEditingFolderId(null);
-                      }}
-                      onClick={(event) => event.stopPropagation()}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.currentTarget.blur();
-                        }
-
-                        if (event.key === "Escape") {
-                          setEditingFolderId(null);
-                        }
                       }}
                     />
                   ) : (
@@ -628,24 +669,13 @@ function App() {
                 onClick={() => selectPage(page.id)}
               >
                 {editingPageId === page.id ? (
-                  <input
-                    aria-label="Page title"
-                    autoFocus
-                    className="inline-input"
-                    defaultValue={page.title}
-                    onBlur={(event) => {
-                      renamePage(page.id, event.currentTarget.value);
+                  <InlineRename
+                    ariaLabel="Page title"
+                    initialValue={page.title}
+                    onCancel={() => setEditingPageId(null)}
+                    onCommit={(value) => {
+                      renamePage(page.id, value);
                       setEditingPageId(null);
-                    }}
-                    onClick={(event) => event.stopPropagation()}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.currentTarget.blur();
-                      }
-
-                      if (event.key === "Escape") {
-                        setEditingPageId(null);
-                      }
                     }}
                   />
                 ) : (

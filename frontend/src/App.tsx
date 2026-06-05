@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 import type { AppData, TextBlock } from "./types";
 
@@ -8,17 +9,9 @@ const MIN_BLOCK_WIDTH = 140;
 const MIN_BLOCK_HEIGHT = 64;
 const TEXT_COMMIT_DELAY_MS = 500;
 
-const initialData: AppData = {
-  folders: [
-    { id: "folder-work", name: "Work" },
-    { id: "folder-personal", name: "Personal" },
-  ],
-  pages: [
-    { id: "page-meeting-notes", folderId: "folder-work", title: "Meeting Notes" },
-    { id: "page-todo", folderId: "folder-work", title: "TODO" },
-    { id: "page-ideas", folderId: "folder-personal", title: "Ideas" },
-    { id: "page-journal", folderId: "folder-personal", title: "Journal" },
-  ],
+const emptyData: AppData = {
+  folders: [],
+  pages: [],
   blocks: [],
 };
 
@@ -27,12 +20,17 @@ function createId(prefix: string) {
 }
 
 type DragState = {
+  canvasLeft: number;
+  canvasTop: number;
   offsetX: number;
   offsetY: number;
   startX: number;
   startY: number;
   currentX: number;
   currentY: number;
+  rafId: number | null;
+  translateX: number;
+  translateY: number;
 };
 
 type BlockUpdates = Partial<Pick<TextBlock, "content" | "height" | "width" | "x" | "y">>;
@@ -84,17 +82,26 @@ const TextBlockView = memo(function TextBlockView({
     return () => window.clearTimeout(commitTimer);
   }, [block.content, block.id, draftContent, onUpdate]);
 
-  function saveSize() {
+  function getSizeUpdates() {
     const blockElement = blockRef.current;
+    const updates: BlockUpdates = {};
 
     if (!blockElement) {
-      return;
+      return updates;
     }
 
-    onUpdate(block.id, {
-      width: Math.max(MIN_BLOCK_WIDTH, blockElement.offsetWidth),
-      height: Math.max(MIN_BLOCK_HEIGHT, blockElement.offsetHeight),
-    });
+    const width = Math.max(MIN_BLOCK_WIDTH, blockElement.offsetWidth);
+    const height = Math.max(MIN_BLOCK_HEIGHT, blockElement.offsetHeight);
+
+    if (width !== block.width) {
+      updates.width = width;
+    }
+
+    if (height !== block.height) {
+      updates.height = height;
+    }
+
+    return updates;
   }
 
   function startDrag(event: React.PointerEvent<HTMLDivElement>) {
@@ -107,12 +114,17 @@ const TextBlockView = memo(function TextBlockView({
     const canvasRect = canvasElement.getBoundingClientRect();
 
     dragState.current = {
+      canvasLeft: canvasRect.left,
+      canvasTop: canvasRect.top,
       offsetX: event.clientX - canvasRect.left - block.x,
       offsetY: event.clientY - canvasRect.top - block.y,
       startX: block.x,
       startY: block.y,
       currentX: block.x,
       currentY: block.y,
+      rafId: null,
+      translateX: 0,
+      translateY: 0,
     };
     setIsDragging(true);
     onSelect(block.id);
@@ -121,28 +133,38 @@ const TextBlockView = memo(function TextBlockView({
 
   function moveBlock(event: React.PointerEvent<HTMLDivElement>) {
     const currentDrag = dragState.current;
-    const canvasElement = canvasRef.current;
     const blockElement = blockRef.current;
 
-    if (!currentDrag || !canvasElement || !blockElement) {
+    if (!currentDrag || !blockElement) {
       return;
     }
 
-    const canvasRect = canvasElement.getBoundingClientRect();
     const x = Math.max(
       0,
-      event.clientX - canvasRect.left - currentDrag.offsetX,
+      event.clientX - currentDrag.canvasLeft - currentDrag.offsetX,
     );
     const y = Math.max(
       0,
-      event.clientY - canvasRect.top - currentDrag.offsetY,
+      event.clientY - currentDrag.canvasTop - currentDrag.offsetY,
     );
 
     currentDrag.currentX = x;
     currentDrag.currentY = y;
-    blockElement.style.transform = `translate3d(${x - currentDrag.startX}px, ${
-      y - currentDrag.startY
-    }px, 0)`;
+    currentDrag.translateX = x - currentDrag.startX;
+    currentDrag.translateY = y - currentDrag.startY;
+
+    if (currentDrag.rafId !== null) {
+      return;
+    }
+
+    currentDrag.rafId = window.requestAnimationFrame(() => {
+      if (!dragState.current || !blockRef.current) {
+        return;
+      }
+
+      blockRef.current.style.transform = `translate3d(${dragState.current.translateX}px, ${dragState.current.translateY}px, 0)`;
+      dragState.current.rafId = null;
+    });
   }
 
   function endDrag(event: React.PointerEvent<HTMLDivElement>) {
@@ -150,6 +172,10 @@ const TextBlockView = memo(function TextBlockView({
 
     if (!currentDrag) {
       return;
+    }
+
+    if (currentDrag.rafId !== null) {
+      window.cancelAnimationFrame(currentDrag.rafId);
     }
 
     if (blockRef.current) {
@@ -195,10 +221,16 @@ const TextBlockView = memo(function TextBlockView({
         aria-label="Text block"
         className="text-block-editor"
         onBlur={() => {
-          saveSize();
+          const updates = getSizeUpdates();
+
           if (draftContent !== block.content) {
-            onUpdate(block.id, { content: draftContent });
+            updates.content = draftContent;
           }
+
+          if (Object.keys(updates).length > 0) {
+            onUpdate(block.id, updates);
+          }
+
           onEditEnd();
         }}
         onChange={(event) => setDraftContent(event.currentTarget.value)}
@@ -211,13 +243,9 @@ const TextBlockView = memo(function TextBlockView({
 });
 
 function App() {
-  const [data, setData] = useState<AppData>(initialData);
-  const [selectedFolderId, setSelectedFolderId] = useState(
-    initialData.folders[0]?.id ?? "",
-  );
-  const [selectedPageId, setSelectedPageId] = useState(
-    initialData.pages[0]?.id ?? "",
-  );
+  const [data, setData] = useState<AppData>(emptyData);
+  const [selectedFolderId, setSelectedFolderId] = useState("");
+  const [selectedPageId, setSelectedPageId] = useState("");
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
   const [editingPageId, setEditingPageId] = useState<string | null>(null);
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
@@ -245,6 +273,37 @@ function App() {
 
     return pageCounts;
   }, [data.pages]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadData() {
+      try {
+        const savedData = await invoke<AppData>("load_app_data");
+
+        if (!isMounted) {
+          return;
+        }
+
+        const firstFolderId = savedData.folders[0]?.id ?? "";
+        const firstPageId =
+          savedData.pages.find((page) => page.folderId === firstFolderId)?.id ??
+          "";
+
+        setData(savedData);
+        setSelectedFolderId(firstFolderId);
+        setSelectedPageId(firstPageId);
+      } catch (error) {
+        console.warn("Could not load local note data.", error);
+      }
+    }
+
+    loadData();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   function createFolder() {
     const folderId = createId("folder");

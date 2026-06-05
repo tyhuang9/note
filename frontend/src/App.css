@@ -257,7 +257,6 @@ h2 {
   border-radius: 6px;
   color: #1e2733;
   background: #fffefa;
-  box-shadow: 0 4px 10px rgba(31, 41, 55, 0.08);
   overflow: hidden;
   resize: both;
 }
@@ -268,7 +267,8 @@ h2 {
 
 .text-block.is-selected {
   border-color: #718399;
-  box-shadow: 0 0 0 2px rgba(113, 131, 153, 0.18);
+  outline: 2px solid rgba(113, 131, 153, 0.22);
+  outline-offset: 0;
 }
 
 .text-block.is-editing {

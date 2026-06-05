@@ -1,49 +1,63 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
-
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
-
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
+    <main className="app-shell">
+      <aside className="sidebar" aria-label="Workspace navigation">
+        <div className="sidebar-header">
+          <div>
+            <p className="eyebrow">Workspace</p>
+            <h1>Note</h1>
+          </div>
+        </div>
 
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
+        <section className="sidebar-section" aria-labelledby="folders-title">
+          <div className="section-header">
+            <h2 id="folders-title">Folders</h2>
+            <button type="button" aria-label="Create folder">
+              +
+            </button>
+          </div>
+          <div className="nav-list">
+            <div className="nav-item is-active">
+              <span>Work</span>
+              <span className="item-count">2</span>
+            </div>
+            <div className="nav-item">
+              <span>Personal</span>
+              <span className="item-count">2</span>
+            </div>
+          </div>
+        </section>
 
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
+        <section className="sidebar-section" aria-labelledby="pages-title">
+          <div className="section-header">
+            <h2 id="pages-title">Pages</h2>
+            <button type="button" aria-label="Create page">
+              +
+            </button>
+          </div>
+          <div className="nav-list">
+            <div className="nav-item is-selected">Meeting Notes</div>
+            <div className="nav-item">TODO</div>
+          </div>
+        </section>
+      </aside>
+
+      <section className="workspace">
+        <header className="page-header">
+          <div>
+            <p className="eyebrow">Current page</p>
+            <h2>Meeting Notes</h2>
+          </div>
+        </header>
+
+        <section className="canvas" aria-label="Freeform note canvas">
+          <div className="canvas-empty">
+            <p>Canvas ready</p>
+          </div>
+        </section>
+      </section>
     </main>
   );
 }

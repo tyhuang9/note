@@ -1,7 +1,10 @@
-# Tauri + React + Typescript
+# Note Frontend
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+React and TypeScript frontend for the Note desktop application.
 
-## Recommended IDE Setup
+Run from the repo root:
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+```bash
+npm run dev
+npm run build
+```

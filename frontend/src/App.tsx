@@ -1,6 +1,31 @@
+import { useState } from "react";
 import "./App.css";
+import type { AppData } from "./types";
+
+const initialData: AppData = {
+  folders: [
+    { id: "folder-work", name: "Work" },
+    { id: "folder-personal", name: "Personal" },
+  ],
+  pages: [
+    { id: "page-meeting-notes", folderId: "folder-work", title: "Meeting Notes" },
+    { id: "page-todo", folderId: "folder-work", title: "TODO" },
+    { id: "page-ideas", folderId: "folder-personal", title: "Ideas" },
+    { id: "page-journal", folderId: "folder-personal", title: "Journal" },
+  ],
+  blocks: [],
+};
 
 function App() {
+  const [data] = useState<AppData>(initialData);
+  const [selectedFolderId] = useState(initialData.folders[0]?.id ?? "");
+  const [selectedPageId] = useState(initialData.pages[0]?.id ?? "");
+
+  const selectedPage = data.pages.find((page) => page.id === selectedPageId);
+  const visiblePages = data.pages.filter(
+    (page) => page.folderId === selectedFolderId,
+  );
+
   return (
     <main className="app-shell">
       <aside className="sidebar" aria-label="Workspace navigation">
@@ -19,14 +44,23 @@ function App() {
             </button>
           </div>
           <div className="nav-list">
-            <div className="nav-item is-active">
-              <span>Work</span>
-              <span className="item-count">2</span>
-            </div>
-            <div className="nav-item">
-              <span>Personal</span>
-              <span className="item-count">2</span>
-            </div>
+            {data.folders.map((folder) => {
+              const pageCount = data.pages.filter(
+                (page) => page.folderId === folder.id,
+              ).length;
+
+              return (
+                <div
+                  className={`nav-item ${
+                    folder.id === selectedFolderId ? "is-active" : ""
+                  }`}
+                  key={folder.id}
+                >
+                  <span>{folder.name}</span>
+                  <span className="item-count">{pageCount}</span>
+                </div>
+              );
+            })}
           </div>
         </section>
 
@@ -38,8 +72,16 @@ function App() {
             </button>
           </div>
           <div className="nav-list">
-            <div className="nav-item is-selected">Meeting Notes</div>
-            <div className="nav-item">TODO</div>
+            {visiblePages.map((page) => (
+              <div
+                className={`nav-item ${
+                  page.id === selectedPageId ? "is-selected" : ""
+                }`}
+                key={page.id}
+              >
+                {page.title}
+              </div>
+            ))}
           </div>
         </section>
       </aside>
@@ -48,7 +90,7 @@ function App() {
         <header className="page-header">
           <div>
             <p className="eyebrow">Current page</p>
-            <h2>Meeting Notes</h2>
+            <h2>{selectedPage?.title ?? "No page selected"}</h2>
           </div>
         </header>
 

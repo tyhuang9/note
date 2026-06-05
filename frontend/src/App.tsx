@@ -4,6 +4,8 @@ import type { AppData } from "./types";
 
 const DEFAULT_BLOCK_WIDTH = 220;
 const DEFAULT_BLOCK_HEIGHT = 96;
+const MIN_BLOCK_WIDTH = 140;
+const MIN_BLOCK_HEIGHT = 64;
 
 const initialData: AppData = {
   folders: [
@@ -23,6 +25,12 @@ function createId(prefix: string) {
   return `${prefix}-${crypto.randomUUID()}`;
 }
 
+type DragState = {
+  blockId: string;
+  offsetX: number;
+  offsetY: number;
+};
+
 function App() {
   const [data, setData] = useState<AppData>(initialData);
   const [selectedFolderId, setSelectedFolderId] = useState(
@@ -35,7 +43,11 @@ function App() {
   const [editingPageId, setEditingPageId] = useState<string | null>(null);
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
-  const blockRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
+  const [draggingBlockId, setDraggingBlockId] = useState<string | null>(null);
+  const canvasRef = useRef<HTMLElement | null>(null);
+  const blockRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const editorRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
+  const dragState = useRef<DragState | null>(null);
 
   const selectedPage = data.pages.find((page) => page.id === selectedPageId);
   const visiblePages = data.pages.filter(
@@ -50,8 +62,8 @@ function App() {
       return;
     }
 
-    const blockElement = blockRefs.current[editingBlockId];
-    blockElement?.focus();
+    const editorElement = editorRefs.current[editingBlockId];
+    editorElement?.focus();
   }, [editingBlockId]);
 
   function createFolder() {
@@ -107,6 +119,7 @@ function App() {
       setEditingPageId(null);
       setSelectedBlockId(null);
       setEditingBlockId(null);
+      setDraggingBlockId(null);
 
       return {
         folders: nextFolders,
@@ -230,11 +243,14 @@ function App() {
     setEditingBlockId(blockId);
   }
 
-  function updateBlockContent(blockId: string, content: string) {
+  function updateBlock(
+    blockId: string,
+    updates: Partial<Pick<AppData["blocks"][number], "content" | "height" | "width" | "x" | "y">>,
+  ) {
     setData((currentData) => ({
       ...currentData,
       blocks: currentData.blocks.map((block) =>
-        block.id === blockId ? { ...block, content } : block,
+        block.id === blockId ? { ...block, ...updates } : block,
       ),
     }));
   }
@@ -242,6 +258,70 @@ function App() {
   function selectBlock(blockId: string) {
     setSelectedBlockId(blockId);
     setEditingBlockId(blockId);
+  }
+
+  function saveBlockSize(blockId: string) {
+    const blockElement = blockRefs.current[blockId];
+
+    if (!blockElement) {
+      return;
+    }
+
+    updateBlock(blockId, {
+      width: Math.max(MIN_BLOCK_WIDTH, blockElement.offsetWidth),
+      height: Math.max(MIN_BLOCK_HEIGHT, blockElement.offsetHeight),
+    });
+  }
+
+  function startBlockDrag(
+    event: React.PointerEvent<HTMLDivElement>,
+    blockId: string,
+  ) {
+    const block = data.blocks.find((item) => item.id === blockId);
+    const canvasElement = canvasRef.current;
+
+    if (!block || !canvasElement) {
+      return;
+    }
+
+    const canvasRect = canvasElement.getBoundingClientRect();
+
+    dragState.current = {
+      blockId,
+      offsetX: event.clientX - canvasRect.left - block.x,
+      offsetY: event.clientY - canvasRect.top - block.y,
+    };
+    setDraggingBlockId(blockId);
+    setSelectedBlockId(blockId);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function moveBlock(event: React.PointerEvent<HTMLDivElement>) {
+    const currentDrag = dragState.current;
+    const canvasElement = canvasRef.current;
+
+    if (!currentDrag || !canvasElement) {
+      return;
+    }
+
+    const canvasRect = canvasElement.getBoundingClientRect();
+    const x = event.clientX - canvasRect.left - currentDrag.offsetX;
+    const y = event.clientY - canvasRect.top - currentDrag.offsetY;
+
+    updateBlock(currentDrag.blockId, {
+      x: Math.max(0, x),
+      y: Math.max(0, y),
+    });
+  }
+
+  function endBlockDrag(event: React.PointerEvent<HTMLDivElement>) {
+    if (!dragState.current) {
+      return;
+    }
+
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    dragState.current = null;
+    setDraggingBlockId(null);
   }
 
   return (
@@ -422,23 +502,19 @@ function App() {
           className="canvas"
           aria-label="Freeform note canvas"
           onClick={createBlock}
+          ref={canvasRef}
         >
           {visibleBlocks.map((block) => (
-            <textarea
-              aria-label="Text block"
+            <div
               className={`text-block ${
                 block.id === selectedBlockId ? "is-selected" : ""
-              } ${block.id === editingBlockId ? "is-editing" : ""}`}
+              } ${block.id === editingBlockId ? "is-editing" : ""} ${
+                block.id === draggingBlockId ? "is-dragging" : ""
+              }`}
               key={block.id}
-              onChange={(event) =>
-                updateBlockContent(block.id, event.currentTarget.value)
-              }
-              onBlur={() => setEditingBlockId(null)}
               onClick={(event) => {
                 event.stopPropagation();
-                selectBlock(block.id);
               }}
-              onFocus={() => selectBlock(block.id)}
               ref={(element) => {
                 blockRefs.current[block.id] = element;
               }}
@@ -448,8 +524,34 @@ function App() {
                 width: block.width,
                 height: block.height,
               }}
-              value={block.content}
-            />
+            >
+              <div
+                aria-label="Move text block"
+                className="text-block-handle"
+                onPointerCancel={endBlockDrag}
+                onPointerDown={(event) => startBlockDrag(event, block.id)}
+                onPointerMove={moveBlock}
+                onPointerUp={endBlockDrag}
+                role="button"
+                tabIndex={0}
+              />
+              <textarea
+                aria-label="Text block"
+                className="text-block-editor"
+                onBlur={() => {
+                  saveBlockSize(block.id);
+                  setEditingBlockId(null);
+                }}
+                onChange={(event) =>
+                  updateBlock(block.id, { content: event.currentTarget.value })
+                }
+                onFocus={() => selectBlock(block.id)}
+                ref={(element) => {
+                  editorRefs.current[block.id] = element;
+                }}
+                value={block.content}
+              />
+            </div>
           ))}
           {selectedPageId && visibleBlocks.length === 0 ? (
             <div className="canvas-empty">

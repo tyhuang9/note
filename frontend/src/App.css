@@ -251,18 +251,17 @@ h2 {
 
 .text-block {
   position: absolute;
+  display: grid;
+  grid-template-rows: 18px minmax(0, 1fr);
   min-width: 140px;
   min-height: 64px;
   border: 1px solid #b9c4d0;
   border-radius: 6px;
-  padding: 10px 12px;
-  resize: none;
   color: #1e2733;
   background: #fffefa;
   box-shadow: 0 8px 20px rgba(31, 41, 55, 0.1);
-  font: inherit;
-  font-size: 14px;
-  line-height: 20px;
+  overflow: hidden;
+  resize: both;
 }
 
 .text-block:hover {
@@ -276,12 +275,43 @@ h2 {
     0 8px 20px rgba(31, 41, 55, 0.1);
 }
 
-.text-block:focus {
-  border-color: #6f86a1;
-  outline: 2px solid #c7d6e6;
-  outline-offset: 1px;
-}
-
 .text-block.is-editing {
   background: #ffffff;
+}
+
+.text-block.is-dragging {
+  opacity: 0.92;
+}
+
+.text-block-handle {
+  cursor: grab;
+  background:
+    radial-gradient(circle, #9aa8b7 1px, transparent 1px) 6px 6px / 8px 8px,
+    #eef3f7;
+}
+
+.text-block-handle:focus {
+  outline: 2px solid #c7d6e6;
+  outline-offset: -2px;
+}
+
+.text-block.is-dragging .text-block-handle {
+  cursor: grabbing;
+}
+
+.text-block-editor {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  padding: 8px 12px 10px;
+  resize: none;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.text-block-editor:focus {
+  outline: none;
 }

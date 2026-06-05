@@ -33,6 +33,7 @@ function App() {
   );
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
   const [editingPageId, setEditingPageId] = useState<string | null>(null);
+  const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
   const blockRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
 
@@ -64,6 +65,7 @@ function App() {
     setSelectedPageId("");
     setEditingFolderId(folderId);
     setEditingPageId(null);
+    setSelectedBlockId(null);
     setEditingBlockId(null);
   }
 
@@ -103,6 +105,7 @@ function App() {
       setSelectedPageId(nextSelectedPageId);
       setEditingFolderId(null);
       setEditingPageId(null);
+      setSelectedBlockId(null);
       setEditingBlockId(null);
 
       return {
@@ -122,6 +125,7 @@ function App() {
     setSelectedPageId(firstPage?.id ?? "");
     setEditingFolderId(null);
     setEditingPageId(null);
+    setSelectedBlockId(null);
     setEditingBlockId(null);
   }
 
@@ -145,6 +149,7 @@ function App() {
     setSelectedPageId(pageId);
     setEditingFolderId(null);
     setEditingPageId(pageId);
+    setSelectedBlockId(null);
     setEditingBlockId(null);
   }
 
@@ -175,6 +180,7 @@ function App() {
 
       setSelectedPageId(nextSelectedPageId);
       setEditingPageId(null);
+      setSelectedBlockId(null);
       setEditingBlockId(null);
 
       return {
@@ -189,11 +195,14 @@ function App() {
     setSelectedPageId(pageId);
     setEditingFolderId(null);
     setEditingPageId(null);
+    setSelectedBlockId(null);
     setEditingBlockId(null);
   }
 
   function createBlock(event: React.MouseEvent<HTMLElement>) {
     if (!selectedPageId) {
+      setSelectedBlockId(null);
+      setEditingBlockId(null);
       return;
     }
 
@@ -217,6 +226,7 @@ function App() {
         },
       ],
     }));
+    setSelectedBlockId(blockId);
     setEditingBlockId(blockId);
   }
 
@@ -227,6 +237,11 @@ function App() {
         block.id === blockId ? { ...block, content } : block,
       ),
     }));
+  }
+
+  function selectBlock(blockId: string) {
+    setSelectedBlockId(blockId);
+    setEditingBlockId(blockId);
   }
 
   return (
@@ -411,12 +426,19 @@ function App() {
           {visibleBlocks.map((block) => (
             <textarea
               aria-label="Text block"
-              className="text-block"
+              className={`text-block ${
+                block.id === selectedBlockId ? "is-selected" : ""
+              } ${block.id === editingBlockId ? "is-editing" : ""}`}
               key={block.id}
               onChange={(event) =>
                 updateBlockContent(block.id, event.currentTarget.value)
               }
-              onClick={(event) => event.stopPropagation()}
+              onBlur={() => setEditingBlockId(null)}
+              onClick={(event) => {
+                event.stopPropagation();
+                selectBlock(block.id);
+              }}
+              onFocus={() => selectBlock(block.id)}
               ref={(element) => {
                 blockRefs.current[block.id] = element;
               }}

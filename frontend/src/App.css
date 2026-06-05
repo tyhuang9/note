@@ -265,8 +265,23 @@ h2 {
   line-height: 20px;
 }
 
+.text-block:hover {
+  border-color: #91a0b1;
+}
+
+.text-block.is-selected {
+  border-color: #718399;
+  box-shadow:
+    0 0 0 2px rgba(113, 131, 153, 0.18),
+    0 8px 20px rgba(31, 41, 55, 0.1);
+}
+
 .text-block:focus {
   border-color: #6f86a1;
   outline: 2px solid #c7d6e6;
   outline-offset: 1px;
+}
+
+.text-block.is-editing {
+  background: #ffffff;
 }

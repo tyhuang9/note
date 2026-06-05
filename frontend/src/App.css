@@ -219,14 +219,11 @@ h2 {
 
 .canvas {
   position: relative;
+  contain: layout paint;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background:
-    linear-gradient(#e2e7ec 1px, transparent 1px),
-    linear-gradient(90deg, #e2e7ec 1px, transparent 1px),
-    #f4f6f8;
-  background-size: 28px 28px;
+  background: #f4f6f8;
 }
 
 .canvas-empty {
@@ -251,6 +248,7 @@ h2 {
 
 .text-block {
   position: absolute;
+  contain: layout paint;
   display: grid;
   grid-template-rows: 18px minmax(0, 1fr);
   min-width: 140px;
@@ -259,7 +257,7 @@ h2 {
   border-radius: 6px;
   color: #1e2733;
   background: #fffefa;
-  box-shadow: 0 8px 20px rgba(31, 41, 55, 0.1);
+  box-shadow: 0 4px 10px rgba(31, 41, 55, 0.08);
   overflow: hidden;
   resize: both;
 }
@@ -270,9 +268,7 @@ h2 {
 
 .text-block.is-selected {
   border-color: #718399;
-  box-shadow:
-    0 0 0 2px rgba(113, 131, 153, 0.18),
-    0 8px 20px rgba(31, 41, 55, 0.1);
+  box-shadow: 0 0 0 2px rgba(113, 131, 153, 0.18);
 }
 
 .text-block.is-editing {
@@ -281,6 +277,7 @@ h2 {
 
 .text-block.is-dragging {
   opacity: 0.92;
+  will-change: transform;
 }
 
 .text-block-handle {

@@ -236,6 +236,15 @@ function App() {
     () => data.blocks.filter((block) => block.pageId === selectedPageId),
     [data.blocks, selectedPageId],
   );
+  const pageCountsByFolder = useMemo(() => {
+    const pageCounts = new Map<string, number>();
+
+    for (const page of data.pages) {
+      pageCounts.set(page.folderId, (pageCounts.get(page.folderId) ?? 0) + 1);
+    }
+
+    return pageCounts;
+  }, [data.pages]);
 
   function createFolder() {
     const folderId = createId("folder");
@@ -450,9 +459,7 @@ function App() {
           </div>
           <div className="nav-list">
             {data.folders.map((folder) => {
-              const pageCount = data.pages.filter(
-                (page) => page.folderId === folder.id,
-              ).length;
+              const pageCount = pageCountsByFolder.get(folder.id) ?? 0;
 
               return (
                 <div

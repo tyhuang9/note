@@ -39,6 +39,12 @@ button:hover {
   background: #f6f8fa;
 }
 
+button:disabled {
+  color: #a5adb8;
+  background: #eef2f5;
+  cursor: not-allowed;
+}
+
 .app-shell {
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);

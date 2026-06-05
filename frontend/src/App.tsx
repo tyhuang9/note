@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
-import type { AppData } from "./types";
+import type { AppData, TextBlock } from "./types";
 
 const DEFAULT_BLOCK_WIDTH = 220;
 const DEFAULT_BLOCK_HEIGHT = 96;
 const MIN_BLOCK_WIDTH = 140;
 const MIN_BLOCK_HEIGHT = 64;
+const TEXT_COMMIT_DELAY_MS = 500;
 
 const initialData: AppData = {
   folders: [
@@ -26,10 +27,188 @@ function createId(prefix: string) {
 }
 
 type DragState = {
-  blockId: string;
   offsetX: number;
   offsetY: number;
+  startX: number;
+  startY: number;
+  currentX: number;
+  currentY: number;
 };
+
+type BlockUpdates = Partial<Pick<TextBlock, "content" | "height" | "width" | "x" | "y">>;
+
+type TextBlockViewProps = {
+  block: TextBlock;
+  canvasRef: React.RefObject<HTMLElement | null>;
+  isEditing: boolean;
+  isSelected: boolean;
+  onEditEnd: () => void;
+  onSelect: (blockId: string) => void;
+  onUpdate: (blockId: string, updates: BlockUpdates) => void;
+};
+
+const TextBlockView = memo(function TextBlockView({
+  block,
+  canvasRef,
+  isEditing,
+  isSelected,
+  onEditEnd,
+  onSelect,
+  onUpdate,
+}: TextBlockViewProps) {
+  const blockRef = useRef<HTMLDivElement | null>(null);
+  const editorRef = useRef<HTMLTextAreaElement | null>(null);
+  const dragState = useRef<DragState | null>(null);
+  const [draftContent, setDraftContent] = useState(block.content);
+  const [isDragging, setIsDragging] = useState(false);
+
+  useEffect(() => {
+    setDraftContent(block.content);
+  }, [block.content, block.id]);
+
+  useEffect(() => {
+    if (isEditing) {
+      editorRef.current?.focus();
+    }
+  }, [isEditing]);
+
+  useEffect(() => {
+    if (draftContent === block.content) {
+      return;
+    }
+
+    const commitTimer = window.setTimeout(() => {
+      onUpdate(block.id, { content: draftContent });
+    }, TEXT_COMMIT_DELAY_MS);
+
+    return () => window.clearTimeout(commitTimer);
+  }, [block.content, block.id, draftContent, onUpdate]);
+
+  function saveSize() {
+    const blockElement = blockRef.current;
+
+    if (!blockElement) {
+      return;
+    }
+
+    onUpdate(block.id, {
+      width: Math.max(MIN_BLOCK_WIDTH, blockElement.offsetWidth),
+      height: Math.max(MIN_BLOCK_HEIGHT, blockElement.offsetHeight),
+    });
+  }
+
+  function startDrag(event: React.PointerEvent<HTMLDivElement>) {
+    const canvasElement = canvasRef.current;
+
+    if (!canvasElement) {
+      return;
+    }
+
+    const canvasRect = canvasElement.getBoundingClientRect();
+
+    dragState.current = {
+      offsetX: event.clientX - canvasRect.left - block.x,
+      offsetY: event.clientY - canvasRect.top - block.y,
+      startX: block.x,
+      startY: block.y,
+      currentX: block.x,
+      currentY: block.y,
+    };
+    setIsDragging(true);
+    onSelect(block.id);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function moveBlock(event: React.PointerEvent<HTMLDivElement>) {
+    const currentDrag = dragState.current;
+    const canvasElement = canvasRef.current;
+    const blockElement = blockRef.current;
+
+    if (!currentDrag || !canvasElement || !blockElement) {
+      return;
+    }
+
+    const canvasRect = canvasElement.getBoundingClientRect();
+    const x = Math.max(
+      0,
+      event.clientX - canvasRect.left - currentDrag.offsetX,
+    );
+    const y = Math.max(
+      0,
+      event.clientY - canvasRect.top - currentDrag.offsetY,
+    );
+
+    currentDrag.currentX = x;
+    currentDrag.currentY = y;
+    blockElement.style.transform = `translate3d(${x - currentDrag.startX}px, ${
+      y - currentDrag.startY
+    }px, 0)`;
+  }
+
+  function endDrag(event: React.PointerEvent<HTMLDivElement>) {
+    const currentDrag = dragState.current;
+
+    if (!currentDrag) {
+      return;
+    }
+
+    if (blockRef.current) {
+      blockRef.current.style.transform = "";
+    }
+
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    onUpdate(block.id, {
+      x: currentDrag.currentX,
+      y: currentDrag.currentY,
+    });
+    dragState.current = null;
+    setIsDragging(false);
+  }
+
+  return (
+    <div
+      className={`text-block ${isSelected ? "is-selected" : ""} ${
+        isEditing ? "is-editing" : ""
+      } ${isDragging ? "is-dragging" : ""}`}
+      onClick={(event) => {
+        event.stopPropagation();
+      }}
+      ref={blockRef}
+      style={{
+        left: block.x,
+        top: block.y,
+        width: block.width,
+        height: block.height,
+      }}
+    >
+      <div
+        aria-label="Move text block"
+        className="text-block-handle"
+        onPointerCancel={endDrag}
+        onPointerDown={startDrag}
+        onPointerMove={moveBlock}
+        onPointerUp={endDrag}
+        role="button"
+        tabIndex={0}
+      />
+      <textarea
+        aria-label="Text block"
+        className="text-block-editor"
+        onBlur={() => {
+          saveSize();
+          if (draftContent !== block.content) {
+            onUpdate(block.id, { content: draftContent });
+          }
+          onEditEnd();
+        }}
+        onChange={(event) => setDraftContent(event.currentTarget.value)}
+        onFocus={() => onSelect(block.id)}
+        ref={editorRef}
+        value={draftContent}
+      />
+    </div>
+  );
+});
 
 function App() {
   const [data, setData] = useState<AppData>(initialData);
@@ -43,28 +222,20 @@ function App() {
   const [editingPageId, setEditingPageId] = useState<string | null>(null);
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
-  const [draggingBlockId, setDraggingBlockId] = useState<string | null>(null);
   const canvasRef = useRef<HTMLElement | null>(null);
-  const blockRefs = useRef<Record<string, HTMLDivElement | null>>({});
-  const editorRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
-  const dragState = useRef<DragState | null>(null);
 
-  const selectedPage = data.pages.find((page) => page.id === selectedPageId);
-  const visiblePages = data.pages.filter(
-    (page) => page.folderId === selectedFolderId,
+  const selectedPage = useMemo(
+    () => data.pages.find((page) => page.id === selectedPageId),
+    [data.pages, selectedPageId],
   );
-  const visibleBlocks = data.blocks.filter(
-    (block) => block.pageId === selectedPageId,
+  const visiblePages = useMemo(
+    () => data.pages.filter((page) => page.folderId === selectedFolderId),
+    [data.pages, selectedFolderId],
   );
-
-  useEffect(() => {
-    if (!editingBlockId) {
-      return;
-    }
-
-    const editorElement = editorRefs.current[editingBlockId];
-    editorElement?.focus();
-  }, [editingBlockId]);
+  const visibleBlocks = useMemo(
+    () => data.blocks.filter((block) => block.pageId === selectedPageId),
+    [data.blocks, selectedPageId],
+  );
 
   function createFolder() {
     const folderId = createId("folder");
@@ -119,7 +290,6 @@ function App() {
       setEditingPageId(null);
       setSelectedBlockId(null);
       setEditingBlockId(null);
-      setDraggingBlockId(null);
 
       return {
         folders: nextFolders,
@@ -243,86 +413,23 @@ function App() {
     setEditingBlockId(blockId);
   }
 
-  function updateBlock(
-    blockId: string,
-    updates: Partial<Pick<AppData["blocks"][number], "content" | "height" | "width" | "x" | "y">>,
-  ) {
+  const updateBlock = useCallback((blockId: string, updates: BlockUpdates) => {
     setData((currentData) => ({
       ...currentData,
       blocks: currentData.blocks.map((block) =>
         block.id === blockId ? { ...block, ...updates } : block,
       ),
     }));
-  }
+  }, []);
 
-  function selectBlock(blockId: string) {
+  const selectBlock = useCallback((blockId: string) => {
     setSelectedBlockId(blockId);
     setEditingBlockId(blockId);
-  }
+  }, []);
 
-  function saveBlockSize(blockId: string) {
-    const blockElement = blockRefs.current[blockId];
-
-    if (!blockElement) {
-      return;
-    }
-
-    updateBlock(blockId, {
-      width: Math.max(MIN_BLOCK_WIDTH, blockElement.offsetWidth),
-      height: Math.max(MIN_BLOCK_HEIGHT, blockElement.offsetHeight),
-    });
-  }
-
-  function startBlockDrag(
-    event: React.PointerEvent<HTMLDivElement>,
-    blockId: string,
-  ) {
-    const block = data.blocks.find((item) => item.id === blockId);
-    const canvasElement = canvasRef.current;
-
-    if (!block || !canvasElement) {
-      return;
-    }
-
-    const canvasRect = canvasElement.getBoundingClientRect();
-
-    dragState.current = {
-      blockId,
-      offsetX: event.clientX - canvasRect.left - block.x,
-      offsetY: event.clientY - canvasRect.top - block.y,
-    };
-    setDraggingBlockId(blockId);
-    setSelectedBlockId(blockId);
-    event.currentTarget.setPointerCapture(event.pointerId);
-  }
-
-  function moveBlock(event: React.PointerEvent<HTMLDivElement>) {
-    const currentDrag = dragState.current;
-    const canvasElement = canvasRef.current;
-
-    if (!currentDrag || !canvasElement) {
-      return;
-    }
-
-    const canvasRect = canvasElement.getBoundingClientRect();
-    const x = event.clientX - canvasRect.left - currentDrag.offsetX;
-    const y = event.clientY - canvasRect.top - currentDrag.offsetY;
-
-    updateBlock(currentDrag.blockId, {
-      x: Math.max(0, x),
-      y: Math.max(0, y),
-    });
-  }
-
-  function endBlockDrag(event: React.PointerEvent<HTMLDivElement>) {
-    if (!dragState.current) {
-      return;
-    }
-
-    event.currentTarget.releasePointerCapture(event.pointerId);
-    dragState.current = null;
-    setDraggingBlockId(null);
-  }
+  const endBlockEdit = useCallback(() => {
+    setEditingBlockId(null);
+  }, []);
 
   return (
     <main className="app-shell">
@@ -505,53 +612,16 @@ function App() {
           ref={canvasRef}
         >
           {visibleBlocks.map((block) => (
-            <div
-              className={`text-block ${
-                block.id === selectedBlockId ? "is-selected" : ""
-              } ${block.id === editingBlockId ? "is-editing" : ""} ${
-                block.id === draggingBlockId ? "is-dragging" : ""
-              }`}
+            <TextBlockView
+              block={block}
+              canvasRef={canvasRef}
+              isEditing={block.id === editingBlockId}
+              isSelected={block.id === selectedBlockId}
               key={block.id}
-              onClick={(event) => {
-                event.stopPropagation();
-              }}
-              ref={(element) => {
-                blockRefs.current[block.id] = element;
-              }}
-              style={{
-                left: block.x,
-                top: block.y,
-                width: block.width,
-                height: block.height,
-              }}
-            >
-              <div
-                aria-label="Move text block"
-                className="text-block-handle"
-                onPointerCancel={endBlockDrag}
-                onPointerDown={(event) => startBlockDrag(event, block.id)}
-                onPointerMove={moveBlock}
-                onPointerUp={endBlockDrag}
-                role="button"
-                tabIndex={0}
-              />
-              <textarea
-                aria-label="Text block"
-                className="text-block-editor"
-                onBlur={() => {
-                  saveBlockSize(block.id);
-                  setEditingBlockId(null);
-                }}
-                onChange={(event) =>
-                  updateBlock(block.id, { content: event.currentTarget.value })
-                }
-                onFocus={() => selectBlock(block.id)}
-                ref={(element) => {
-                  editorRefs.current[block.id] = element;
-                }}
-                value={block.content}
-              />
-            </div>
+              onEditEnd={endBlockEdit}
+              onSelect={selectBlock}
+              onUpdate={updateBlock}
+            />
           ))}
           {selectedPageId && visibleBlocks.length === 0 ? (
             <div className="canvas-empty">

@@ -1,0 +1,12 @@
+{
+  "name": "note-workspace",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "preview": "npm --prefix frontend run preview",
+    "tauri:dev": "cd backend && ../frontend/node_modules/.bin/tauri dev",
+    "tauri:build": "cd backend && ../frontend/node_modules/.bin/tauri build"
+  }
+}

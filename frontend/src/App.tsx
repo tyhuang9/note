@@ -8,6 +8,7 @@ const DEFAULT_BLOCK_HEIGHT = 96;
 const MIN_BLOCK_WIDTH = 140;
 const MIN_BLOCK_HEIGHT = 64;
 const TEXT_COMMIT_DELAY_MS = 500;
+const SAVE_DELAY_MS = 500;
 
 const emptyData: AppData = {
   folders: [],
@@ -250,6 +251,8 @@ function App() {
   const [editingPageId, setEditingPageId] = useState<string | null>(null);
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [persistenceAvailable, setPersistenceAvailable] = useState(false);
   const canvasRef = useRef<HTMLElement | null>(null);
 
   const selectedPage = useMemo(
@@ -293,8 +296,13 @@ function App() {
         setData(savedData);
         setSelectedFolderId(firstFolderId);
         setSelectedPageId(firstPageId);
+        setPersistenceAvailable(true);
       } catch (error) {
         console.warn("Could not load local note data.", error);
+      } finally {
+        if (isMounted) {
+          setIsLoaded(true);
+        }
       }
     }
 
@@ -304,6 +312,20 @@ function App() {
       isMounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!isLoaded || !persistenceAvailable) {
+      return;
+    }
+
+    const saveTimer = window.setTimeout(() => {
+      invoke("save_app_data", { data }).catch((error) => {
+        console.warn("Could not save local note data.", error);
+      });
+    }, SAVE_DELAY_MS);
+
+    return () => window.clearTimeout(saveTimer);
+  }, [data, isLoaded, persistenceAvailable]);
 
   function createFolder() {
     const folderId = createId("folder");

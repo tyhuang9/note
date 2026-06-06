@@ -16,7 +16,6 @@ import type {
   BlockUpdates,
   CanvasPoint,
   CanvasSize,
-  GroupDragOffset,
   InsertionPoint,
   InteractionMode,
   OffscreenGroup,
@@ -53,22 +52,27 @@ function App() {
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
   const [activeMode, setActiveMode] = useState<InteractionMode>("canvas");
   const [panOffset, setPanOffset] = useState<PanOffset>({ x: 0, y: 0 });
-  const [selectionRect, setSelectionRect] = useState<SelectionRect | null>(null);
   const [insertionPoint, setInsertionPoint] = useState<InsertionPoint | null>(null);
-  const [groupDragOffset, setGroupDragOffset] = useState<GroupDragOffset | null>(null);
   const [canvasSize, setCanvasSize] = useState<CanvasSize>({ width: 0, height: 0 });
   const [zoomLevel, setZoomLevel] = useState(DEFAULT_ZOOM);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
   const [focusEndBlockId, setFocusEndBlockId] = useState<string | null>(null);
+  const [isCanvasKeyboardActive, setIsCanvasKeyboardActive] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
   const [persistenceAvailable, setPersistenceAvailable] = useState(false);
   const canvasRef = useRef<HTMLElement | null>(null);
+  const canvasContentRef = useRef<HTMLDivElement | null>(null);
+  const selectionRectRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const panState = useRef<PanState | null>(null);
+  const panOffsetRef = useRef<PanOffset>(panOffset);
+  const panRafId = useRef<number | null>(null);
   const selectionState = useRef<SelectionState | null>(null);
+  const selectionRafId = useRef<number | null>(null);
+  const pendingSelectionRect = useRef<SelectionRect | null>(null);
   const searchCache = useRef<Map<string, SearchMatch[]>>(new Map());
 
   const selectedPage = useMemo(
@@ -187,6 +191,23 @@ function App() {
       count,
     }));
   }, [canvasViewport, visibleBlocks]);
+
+  useEffect(() => {
+    panOffsetRef.current = panOffset;
+    setCanvasContentTransform(panOffset);
+  }, [panOffset, zoomLevel]);
+
+  useEffect(() => {
+    return () => {
+      if (panRafId.current !== null) {
+        window.cancelAnimationFrame(panRafId.current);
+      }
+
+      if (selectionRafId.current !== null) {
+        window.cancelAnimationFrame(selectionRafId.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -325,6 +346,24 @@ function App() {
         return;
       }
 
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.key.toLowerCase() === "a" &&
+        !editingBlockId &&
+        !isTextEntryTarget(event.target)
+      ) {
+        event.preventDefault();
+
+        if (!isCanvasKeyboardActive || visibleBlocks.length === 0) {
+          return;
+        }
+
+        setSelectedBlockIds(visibleBlocks.map((block) => block.id));
+        setEditingBlockId(null);
+        setActiveMode("selected");
+        return;
+      }
+
       if (editingBlockId || isTextEntryTarget(event.target)) {
         return;
       }
@@ -357,17 +396,6 @@ function App() {
         return;
       }
 
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
-        if (visibleBlocks.length === 0) {
-          return;
-        }
-
-        event.preventDefault();
-        setSelectedBlockIds(visibleBlocks.map((block) => block.id));
-        setEditingBlockId(null);
-        setActiveMode("selected");
-      }
-
       if (
         insertionPoint &&
         selectedPageId &&
@@ -389,6 +417,7 @@ function App() {
     deleteBlocks,
     editingBlockId,
     insertionPoint,
+    isCanvasKeyboardActive,
     selectedBlockIds,
     selectedPageId,
     visibleBlocks,
@@ -444,6 +473,62 @@ function App() {
     return () => document.removeEventListener("paste", handlePaste);
   }, [insertionPoint, selectedPageId]);
 
+  function setCanvasContentTransform(nextPanOffset: PanOffset) {
+    const canvasContentElement = canvasContentRef.current;
+
+    if (!canvasContentElement) {
+      return;
+    }
+
+    canvasContentElement.style.transform = `translate3d(${nextPanOffset.x}px, ${nextPanOffset.y}px, 0) scale(${zoomLevel})`;
+  }
+
+  function scheduleCanvasContentTransform(nextPanOffset: PanOffset) {
+    panOffsetRef.current = nextPanOffset;
+
+    if (panRafId.current !== null) {
+      return;
+    }
+
+    panRafId.current = window.requestAnimationFrame(() => {
+      setCanvasContentTransform(panOffsetRef.current);
+      panRafId.current = null;
+    });
+  }
+
+  function hideSelectionRectangle() {
+    const selectionElement = selectionRectRef.current;
+
+    if (!selectionElement) {
+      return;
+    }
+
+    selectionElement.style.display = "none";
+  }
+
+  function scheduleSelectionRectangle(rect: SelectionRect) {
+    pendingSelectionRect.current = rect;
+
+    if (selectionRafId.current !== null) {
+      return;
+    }
+
+    selectionRafId.current = window.requestAnimationFrame(() => {
+      const nextRect = pendingSelectionRect.current;
+      const selectionElement = selectionRectRef.current;
+
+      if (nextRect && selectionElement) {
+        selectionElement.style.display = "block";
+        selectionElement.style.left = `${nextRect.x}px`;
+        selectionElement.style.top = `${nextRect.y}px`;
+        selectionElement.style.width = `${nextRect.width}px`;
+        selectionElement.style.height = `${nextRect.height}px`;
+      }
+
+      selectionRafId.current = null;
+    });
+  }
+
   function getCanvasPoint(clientX: number, clientY: number): CanvasPoint | null {
     const canvasElement = canvasRef.current;
 
@@ -454,8 +539,8 @@ function App() {
     const canvasRect = canvasElement.getBoundingClientRect();
 
     return {
-      x: (clientX - canvasRect.left - panOffset.x) / zoomLevel,
-      y: (clientY - canvasRect.top - panOffset.y) / zoomLevel,
+      x: (clientX - canvasRect.left - panOffsetRef.current.x) / zoomLevel,
+      y: (clientY - canvasRect.top - panOffsetRef.current.y) / zoomLevel,
     };
   }
 
@@ -659,6 +744,7 @@ function App() {
     setSelectedBlockIds([blockId]);
     setEditingBlockId(blockId);
     setFocusEndBlockId(blockId);
+    setIsCanvasKeyboardActive(true);
     setActiveMode("editing");
     setInsertionPoint(null);
   }
@@ -695,6 +781,7 @@ function App() {
     }));
     setSelectedBlockIds([blockId]);
     setEditingBlockId(null);
+    setIsCanvasKeyboardActive(true);
     setActiveMode("selected");
     setInsertionPoint(null);
   }
@@ -735,17 +822,25 @@ function App() {
     );
     setEditingBlockId(null);
     setInsertionPoint(null);
+    setIsCanvasKeyboardActive(true);
     setActiveMode("selected");
   }, [bringBlockToFront]);
 
   const previewGroupDrag = useCallback(
     (originId: string, offset: PanOffset) => {
-      setGroupDragOffset({
-        blockIds: selectedBlockIds,
-        originId,
-        x: offset.x,
-        y: offset.y,
-      });
+      for (const blockId of selectedBlockIds) {
+        if (blockId === originId) {
+          continue;
+        }
+
+        const blockElement = document.querySelector<HTMLElement>(
+          `[data-block-id="${blockId}"]`,
+        );
+
+        if (blockElement) {
+          blockElement.style.transform = `translate3d(${offset.x}px, ${offset.y}px, 0)`;
+        }
+      }
     },
     [selectedBlockIds],
   );
@@ -764,7 +859,15 @@ function App() {
             : block,
         ),
       }));
-      setGroupDragOffset(null);
+      for (const blockId of blockIdsToMove) {
+        const blockElement = document.querySelector<HTMLElement>(
+          `[data-block-id="${blockId}"]`,
+        );
+
+        if (blockElement) {
+          blockElement.style.transform = "";
+        }
+      }
     },
     [selectedBlockIds],
   );
@@ -774,6 +877,7 @@ function App() {
     setSelectedBlockIds([blockId]);
     setEditingBlockId(blockId);
     setInsertionPoint(null);
+    setIsCanvasKeyboardActive(true);
     setActiveMode("editing");
   }, [bringBlockToFront]);
 
@@ -784,12 +888,16 @@ function App() {
     );
   }, []);
 
+  const handleFocusEndHandled = useCallback(() => {
+    setFocusEndBlockId(null);
+  }, []);
+
   function selectCanvas() {
     blurActiveTextEntry();
     setSelectedBlockIds([]);
     setEditingBlockId(null);
-    setSelectionRect(null);
-    setGroupDragOffset(null);
+    hideSelectionRectangle();
+    setIsCanvasKeyboardActive(true);
     setActiveMode("canvas");
   }
 
@@ -800,10 +908,13 @@ function App() {
     panState.current = {
       startClientX: event.clientX,
       startClientY: event.clientY,
-      startPanX: panOffset.x,
-      startPanY: panOffset.y,
+      startPanX: panOffsetRef.current.x,
+      startPanY: panOffsetRef.current.y,
+      currentPanX: panOffsetRef.current.x,
+      currentPanY: panOffsetRef.current.y,
     };
     setInsertionPoint(null);
+    setIsCanvasKeyboardActive(true);
     setActiveMode("panning");
     event.currentTarget.setPointerCapture(event.pointerId);
   }
@@ -833,7 +944,7 @@ function App() {
         didMove: false,
       };
       setInsertionPoint(startPoint);
-      setSelectionRect(null);
+      hideSelectionRectangle();
     }
 
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -850,12 +961,14 @@ function App() {
     if (currentPan) {
       const deltaX = event.clientX - currentPan.startClientX;
       const deltaY = event.clientY - currentPan.startClientY;
-
-      setActiveMode("panning");
-      setPanOffset({
+      const nextPanOffset = {
         x: currentPan.startPanX + deltaX,
         y: currentPan.startPanY + deltaY,
-      });
+      };
+
+      currentPan.currentPanX = nextPanOffset.x;
+      currentPan.currentPanY = nextPanOffset.y;
+      scheduleCanvasContentTransform(nextPanOffset);
       return;
     }
 
@@ -878,10 +991,13 @@ function App() {
       Math.abs(currentSelection.currentX - currentSelection.startX) > 2 ||
       Math.abs(currentSelection.currentY - currentSelection.startY) > 2
     ) {
-      currentSelection.didMove = true;
-      setActiveMode("selecting");
-      setInsertionPoint(null);
-      setSelectionRect(getSelectionRect(currentSelection));
+      if (!currentSelection.didMove) {
+        currentSelection.didMove = true;
+        setActiveMode("selecting");
+        setInsertionPoint(null);
+      }
+
+      scheduleSelectionRectangle(getSelectionRect(currentSelection));
     }
   }
 
@@ -894,6 +1010,17 @@ function App() {
     }
 
     event.currentTarget.releasePointerCapture(event.pointerId);
+
+    if (currentPan) {
+      const nextPanOffset = {
+        x: currentPan.currentPanX,
+        y: currentPan.currentPanY,
+      };
+
+      panOffsetRef.current = nextPanOffset;
+      setPanOffset(nextPanOffset);
+      setActiveMode("canvas");
+    }
 
     if (currentSelection?.didMove) {
       const nextSelectionRect = getSelectionRect(currentSelection);
@@ -916,7 +1043,8 @@ function App() {
 
     panState.current = null;
     selectionState.current = null;
-    setSelectionRect(null);
+    pendingSelectionRect.current = null;
+    hideSelectionRectangle();
   }
 
   function handleCanvasWheel(event: React.WheelEvent<HTMLElement>) {
@@ -948,6 +1076,7 @@ function App() {
     setSelectedBlockIds([]);
     setEditingBlockId(null);
     setInsertionPoint(null);
+    setIsCanvasKeyboardActive(true);
     setActiveMode("canvas");
     setPanOffset({
       x: canvasSize.width / 2 - (block.x + block.width / 2) * zoomLevel,
@@ -1001,7 +1130,11 @@ function App() {
 
   return (
     <main className={`app-shell ${isDarkMode ? "is-dark" : ""}`}>
-      <aside className="sidebar" aria-label="Workspace navigation">
+      <aside
+        className="sidebar"
+        aria-label="Workspace navigation"
+        onPointerDown={() => setIsCanvasKeyboardActive(false)}
+      >
         <div className="sidebar-header">
           <h1>Note</h1>
         </div>
@@ -1121,7 +1254,10 @@ function App() {
       </aside>
 
       <section className="workspace">
-        <header className="page-header">
+        <header
+          className="page-header"
+          onPointerDown={() => setIsCanvasKeyboardActive(false)}
+        >
           <div className="page-title-group">
             <span className="app-title">Note</span>
             {selectedPage && isEditingHeaderTitle ? (
@@ -1230,6 +1366,7 @@ function App() {
           ) : null}
           <div
             className="canvas-content"
+            ref={canvasContentRef}
             style={{
               transform: `translate3d(${panOffset.x}px, ${panOffset.y}px, 0) scale(${zoomLevel})`,
             }}
@@ -1241,7 +1378,6 @@ function App() {
                 activeSearchRange={
                   activeSearchMatch?.blockId === block.id ? activeSearchMatch : null
                 }
-                groupDragOffset={groupDragOffset}
                 isEditing={block.id === editingBlockId}
                 isMultiSelected={selectedBlockIds.length > 1}
                 isSelected={selectedBlockIds.includes(block.id)}
@@ -1252,7 +1388,7 @@ function App() {
                 onCanvasPanEnd={endCanvasInteraction}
                 onCanvasPanMove={updateCanvasInteraction}
                 onCanvasPanStart={startCanvasPan}
-                onFocusEndHandled={() => setFocusEndBlockId(null)}
+                onFocusEndHandled={handleFocusEndHandled}
                 onGroupDragEnd={commitGroupDrag}
                 onGroupDragPreview={previewGroupDrag}
                 onInteractionModeChange={setActiveMode}
@@ -1264,17 +1400,7 @@ function App() {
                 zoomLevel={zoomLevel}
               />
             ))}
-            {selectionRect ? (
-              <div
-                className="selection-rectangle"
-                style={{
-                  left: selectionRect.x,
-                  top: selectionRect.y,
-                  width: selectionRect.width,
-                  height: selectionRect.height,
-                }}
-              />
-            ) : null}
+            <div className="selection-rectangle" ref={selectionRectRef} />
             {insertionPoint ? (
               <div
                 className="canvas-caret"

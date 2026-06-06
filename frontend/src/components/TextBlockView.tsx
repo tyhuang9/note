@@ -1,16 +1,16 @@
 import { memo, useEffect, useRef, useState } from "react";
-import type { PointerEvent, RefObject } from "react";
+import type { PointerEvent as ReactPointerEvent, RefObject } from "react";
 import {
   AUTO_WIDTH_RIGHT_PADDING,
   DEFAULT_BLOCK_WIDTH,
   MIN_BLOCK_HEIGHT,
   MIN_BLOCK_WIDTH,
+  TEXT_BLOCK_HEIGHT_BUFFER,
   TEXT_BLOCK_HEADER_HEIGHT,
   TEXT_COMMIT_DELAY_MS,
 } from "../constants";
 import type {
   BlockUpdates,
-  GroupDragOffset,
   InteractionMode,
   PanOffset,
   ResizeDirection,
@@ -50,6 +50,12 @@ type ResizeState = {
   rafId: number | null;
 };
 
+type PointerLike = {
+  clientX: number;
+  clientY: number;
+  preventDefault: () => void;
+};
+
 type TextBlockViewProps = {
   block: TextBlock;
   canvasRef: RefObject<HTMLElement | null>;
@@ -62,16 +68,15 @@ type TextBlockViewProps = {
   onEditEnd: () => void;
   onDelete: (blockId: string) => void;
   onEdit: (blockId: string) => void;
-  onCanvasPanEnd: (event: PointerEvent<HTMLElement>) => void;
-  onCanvasPanMove: (event: PointerEvent<HTMLElement>) => void;
-  onCanvasPanStart: (event: PointerEvent<HTMLElement>) => void;
+  onCanvasPanEnd: (event: ReactPointerEvent<HTMLElement>) => void;
+  onCanvasPanMove: (event: ReactPointerEvent<HTMLElement>) => void;
+  onCanvasPanStart: (event: ReactPointerEvent<HTMLElement>) => void;
   onFocusEndHandled: () => void;
   onGroupDragEnd: (originId: string, offset: PanOffset) => void;
   onGroupDragPreview: (originId: string, offset: PanOffset) => void;
   onInteractionModeChange: (mode: InteractionMode) => void;
   onSelect: (blockId: string) => void;
   onUpdate: (blockId: string, updates: BlockUpdates) => void;
-  groupDragOffset: GroupDragOffset | null;
   panOffset: PanOffset;
   zoomLevel: number;
 };
@@ -97,7 +102,6 @@ export const TextBlockView = memo(function TextBlockView({
   onInteractionModeChange,
   onSelect,
   onUpdate,
-  groupDragOffset,
   panOffset,
   zoomLevel,
 }: TextBlockViewProps) {
@@ -108,6 +112,7 @@ export const TextBlockView = memo(function TextBlockView({
   const heightMeasureRef = useRef<HTMLDivElement | null>(null);
   const dragState = useRef<DragState | null>(null);
   const resizeState = useRef<ResizeState | null>(null);
+  const activePointerId = useRef<number | null>(null);
   const ctrlAStage = useRef(0);
   const hasManualWidth = useRef(Boolean(block.isWidthManuallyResized));
   const pendingCaretOffset = useRef<number | null>(null);
@@ -241,7 +246,7 @@ export const TextBlockView = memo(function TextBlockView({
       width: measuredWidth,
       height: Math.max(
         MIN_BLOCK_HEIGHT,
-        measuredHeight + TEXT_BLOCK_HEADER_HEIGHT,
+        measuredHeight + TEXT_BLOCK_HEADER_HEIGHT + TEXT_BLOCK_HEIGHT_BUFFER,
       ),
     };
   }
@@ -380,7 +385,7 @@ export const TextBlockView = memo(function TextBlockView({
     return draftContent.length;
   }
 
-  function startDrag(event: PointerEvent<HTMLDivElement>) {
+  function startDrag(event: ReactPointerEvent<HTMLDivElement>) {
     if (event.shiftKey) {
       onCanvasPanStart(event);
       return;
@@ -416,10 +421,12 @@ export const TextBlockView = memo(function TextBlockView({
     onSelect(block.id);
     onInteractionModeChange("dragging");
     event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
+    event.stopPropagation();
+    activePointerId.current = event.pointerId;
+    blockRef.current?.setPointerCapture(event.pointerId);
   }
 
-  function moveBlock(event: PointerEvent<HTMLDivElement>) {
+  function moveBlock(event: PointerLike) {
     const currentDrag = dragState.current;
     const blockElement = blockRef.current;
 
@@ -462,7 +469,7 @@ export const TextBlockView = memo(function TextBlockView({
     });
   }
 
-  function endDrag(event: PointerEvent<HTMLDivElement>) {
+  function endDrag(pointerId?: number) {
     const currentDrag = dragState.current;
 
     if (!currentDrag) {
@@ -475,9 +482,15 @@ export const TextBlockView = memo(function TextBlockView({
 
     if (blockRef.current) {
       blockRef.current.style.transform = "";
+
+      if (
+        pointerId !== undefined &&
+        blockRef.current.hasPointerCapture(pointerId)
+      ) {
+        blockRef.current.releasePointerCapture(pointerId);
+      }
     }
 
-    event.currentTarget.releasePointerCapture(event.pointerId);
     if (isSelected && isMultiSelected) {
       onGroupDragEnd(block.id, {
         x: currentDrag.translateX,
@@ -490,12 +503,13 @@ export const TextBlockView = memo(function TextBlockView({
       });
     }
     dragState.current = null;
+    activePointerId.current = null;
     setIsDragging(false);
     onInteractionModeChange("selected");
   }
 
   function startResize(
-    event: PointerEvent<HTMLDivElement>,
+    event: ReactPointerEvent<HTMLDivElement>,
     direction: ResizeDirection,
   ) {
     event.stopPropagation();
@@ -519,10 +533,11 @@ export const TextBlockView = memo(function TextBlockView({
     setIsResizing(true);
     onSelect(block.id);
     onInteractionModeChange("resizing");
-    event.currentTarget.setPointerCapture(event.pointerId);
+    activePointerId.current = event.pointerId;
+    blockRef.current?.setPointerCapture(event.pointerId);
   }
 
-  function resizeBlock(event: PointerEvent<HTMLDivElement>) {
+  function resizeBlock(event: PointerLike) {
     const currentResize = resizeState.current;
     const blockElement = blockRef.current;
 
@@ -543,12 +558,9 @@ export const TextBlockView = memo(function TextBlockView({
       nextWidth = Math.max(MIN_BLOCK_WIDTH, currentResize.startWidth + deltaX);
     }
 
-    const nextHeight = getAutoHeight(nextWidth, true);
-
     currentResize.currentX = nextX;
     currentResize.currentY = nextY;
     currentResize.currentWidth = nextWidth;
-    currentResize.currentHeight = nextHeight;
 
     if (currentResize.rafId !== null) {
       return;
@@ -562,12 +574,16 @@ export const TextBlockView = memo(function TextBlockView({
       blockRef.current.style.left = `${resizeState.current.currentX}px`;
       blockRef.current.style.top = `${resizeState.current.currentY}px`;
       blockRef.current.style.width = `${resizeState.current.currentWidth}px`;
+      resizeState.current.currentHeight = getAutoHeight(
+        resizeState.current.currentWidth,
+        true,
+      );
       blockRef.current.style.height = `${resizeState.current.currentHeight}px`;
       resizeState.current.rafId = null;
     });
   }
 
-  function endResize(event: PointerEvent<HTMLDivElement>) {
+  function endResize(pointerId?: number) {
     const currentResize = resizeState.current;
 
     if (!currentResize) {
@@ -578,7 +594,15 @@ export const TextBlockView = memo(function TextBlockView({
       window.cancelAnimationFrame(currentResize.rafId);
     }
 
-    event.currentTarget.releasePointerCapture(event.pointerId);
+    currentResize.currentHeight = getAutoHeight(currentResize.currentWidth, true);
+
+    if (
+      pointerId !== undefined &&
+      blockRef.current?.hasPointerCapture(pointerId)
+    ) {
+      blockRef.current.releasePointerCapture(pointerId);
+    }
+
     onUpdate(block.id, {
       x: currentResize.currentX,
       y: currentResize.currentY,
@@ -587,8 +611,41 @@ export const TextBlockView = memo(function TextBlockView({
       isWidthManuallyResized: true,
     });
     resizeState.current = null;
+    activePointerId.current = null;
     setIsResizing(false);
     onInteractionModeChange("selected");
+  }
+
+  function handleRootPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    if (dragState.current) {
+      moveBlock(event);
+      return;
+    }
+
+    if (resizeState.current) {
+      resizeBlock(event);
+      return;
+    }
+
+    onCanvasPanMove(event);
+  }
+
+  function handleRootPointerEnd(event: ReactPointerEvent<HTMLDivElement>) {
+    if (dragState.current) {
+      event.preventDefault();
+      event.stopPropagation();
+      endDrag(event.pointerId);
+      return;
+    }
+
+    if (resizeState.current) {
+      event.preventDefault();
+      event.stopPropagation();
+      endResize(event.pointerId);
+      return;
+    }
+
+    onCanvasPanEnd(event);
   }
 
   return (
@@ -628,18 +685,13 @@ export const TextBlockView = memo(function TextBlockView({
         onSelect(block.id);
       }}
       ref={blockRef}
-      onPointerCancel={onCanvasPanEnd}
-      onPointerMove={onCanvasPanMove}
-      onPointerUp={onCanvasPanEnd}
+      onPointerCancel={handleRootPointerEnd}
+      onPointerMove={handleRootPointerMove}
+      onPointerUp={handleRootPointerEnd}
+      data-block-id={block.id}
       style={{
         left: block.x,
         top: block.y,
-        transform:
-          groupDragOffset &&
-          groupDragOffset.originId !== block.id &&
-          groupDragOffset.blockIds.includes(block.id)
-            ? `translate3d(${groupDragOffset.x}px, ${groupDragOffset.y}px, 0)`
-            : undefined,
         width: block.width,
         height: block.height,
       }}
@@ -655,10 +707,7 @@ export const TextBlockView = memo(function TextBlockView({
         onDoubleClick={(event) => {
           event.stopPropagation();
         }}
-        onPointerCancel={endDrag}
         onPointerDown={startDrag}
-        onPointerMove={moveBlock}
-        onPointerUp={endDrag}
         role="button"
         tabIndex={0}
       />
@@ -767,23 +816,16 @@ export const TextBlockView = memo(function TextBlockView({
           src={block.imageData}
         />
       ) : null}
-      {isSelected
-        ? (["e"] as ResizeDirection[]).map(
-            (direction) => (
-              <div
-                aria-label={`Resize text block ${direction}`}
-                className={`resize-handle resize-${direction}`}
-                key={direction}
-                onPointerCancel={endResize}
-                onPointerDown={(event) => startResize(event, direction)}
-                onPointerMove={resizeBlock}
-                onPointerUp={endResize}
-                role="button"
-                tabIndex={0}
-              />
-            ),
-          )
-        : null}
+      {(["e"] as ResizeDirection[]).map((direction) => (
+        <div
+          aria-label={`Resize text block ${direction}`}
+          className={`resize-handle resize-${direction}`}
+          key={direction}
+          onPointerDown={(event) => startResize(event, direction)}
+          role="button"
+          tabIndex={0}
+        />
+      ))}
       {!block.imageData ? (
         <>
           <div

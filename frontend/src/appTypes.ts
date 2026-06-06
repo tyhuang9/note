@@ -24,6 +24,8 @@ export type PanState = {
   startClientY: number;
   startPanX: number;
   startPanY: number;
+  currentPanX: number;
+  currentPanY: number;
 };
 
 export type SelectionState = {
@@ -42,13 +44,6 @@ export type SelectionRect = {
 };
 
 export type InsertionPoint = {
-  x: number;
-  y: number;
-};
-
-export type GroupDragOffset = {
-  blockIds: string[];
-  originId: string;
   x: number;
   y: number;
 };

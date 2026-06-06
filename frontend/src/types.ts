@@ -17,6 +17,9 @@ export type TextBlock = {
   width: number;
   height: number;
   content: string;
+  isWidthManuallyResized?: boolean;
+  imageData?: string;
+  imageName?: string;
 };
 
 export type AppData = {

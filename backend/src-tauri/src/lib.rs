@@ -36,6 +36,9 @@ struct TextBlock {
     width: f64,
     height: f64,
     content: String,
+    is_width_manually_resized: Option<bool>,
+    image_data: Option<String>,
+    image_name: Option<String>,
 }
 
 fn app_data_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {

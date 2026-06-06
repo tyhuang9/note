@@ -1,0 +1,12 @@
+export const DEFAULT_BLOCK_WIDTH = 220;
+export const DEFAULT_BLOCK_HEIGHT = 54;
+export const MIN_BLOCK_WIDTH = 140;
+export const MIN_BLOCK_HEIGHT = 54;
+export const AUTO_WIDTH_RIGHT_PADDING = 8;
+export const TEXT_BLOCK_HEADER_HEIGHT = 12;
+export const TEXT_COMMIT_DELAY_MS = 500;
+export const SAVE_DELAY_MS = 500;
+export const DEFAULT_ZOOM = 1;
+export const MIN_ZOOM = 0.5;
+export const MAX_ZOOM = 2;
+export const ZOOM_STEP = 0.1;

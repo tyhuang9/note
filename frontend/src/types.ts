@@ -26,4 +26,5 @@ export type AppData = {
   folders: Folder[];
   pages: Page[];
   blocks: TextBlock[];
+  isDarkMode?: boolean;
 };

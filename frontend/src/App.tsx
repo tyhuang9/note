@@ -39,6 +39,7 @@ const emptyData: AppData = {
   folders: [],
   pages: [],
   blocks: [],
+  isDarkMode: false,
 };
 
 function createId(prefix: string) {
@@ -1219,6 +1220,7 @@ function App() {
           "";
 
         setData(savedData);
+        setIsDarkMode(Boolean(savedData.isDarkMode));
         setSelectedFolderId(firstFolderId);
         setSelectedPageId(firstPageId);
         setSelectedBlockIds([]);
@@ -1287,13 +1289,13 @@ function App() {
     }
 
     const saveTimer = window.setTimeout(() => {
-      invoke("save_app_data", { data }).catch((error) => {
+      invoke("save_app_data", { data: { ...data, isDarkMode } }).catch((error) => {
         console.warn("Could not save local note data.", error);
       });
     }, SAVE_DELAY_MS);
 
     return () => window.clearTimeout(saveTimer);
-  }, [data, isLoaded, persistenceAvailable]);
+  }, [data, isDarkMode, isLoaded, persistenceAvailable]);
 
   useEffect(() => {
     const shouldDisableSelection =

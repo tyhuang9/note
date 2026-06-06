@@ -9,6 +9,7 @@ struct AppData {
     folders: Vec<Folder>,
     pages: Vec<Page>,
     blocks: Vec<TextBlock>,
+    is_dark_mode: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

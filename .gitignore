@@ -1,5 +1,7 @@
 # Logs
 PROJECT.md
+RESPONSIVENESS_REFACTOR_PLAN.md
+OBSIDIAN_FEATURE_PLAN.md
 logs
 *.log
 npm-debug.log*

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 import { InlineRename } from "./components/InlineRename";
@@ -38,6 +38,53 @@ import {
 } from "./editorUtils";
 import type { AppData } from "./types";
 
+type SidebarProps = {
+  editingFolderId: string | null;
+  editingPageId: string | null;
+  folders: AppData["folders"];
+  pageCountsByFolder: Map<string, number>;
+  selectedFolderId: string;
+  selectedPageId: string;
+  visiblePages: AppData["pages"];
+  onCreateFolder: () => void;
+  onCreatePage: () => void;
+  onDeleteFolder: (folderId: string) => void;
+  onDeletePage: (pageId: string) => void;
+  onPointerDown: () => void;
+  onRenameFolder: (folderId: string, name: string) => void;
+  onRenamePage: (pageId: string, title: string) => void;
+  onSelectFolder: (folderId: string) => void;
+  onSelectPage: (pageId: string) => void;
+  onSetEditingFolderId: (folderId: string | null) => void;
+  onSetEditingPageId: (pageId: string | null) => void;
+};
+
+type PageHeaderProps = {
+  activeMode: InteractionMode;
+  isDarkMode: boolean;
+  isEditingHeaderTitle: boolean;
+  selectedPage: AppData["pages"][number] | undefined;
+  zoomLevel: number;
+  onPointerDown: () => void;
+  onRenamePage: (pageId: string, title: string) => void;
+  onSetEditingHeaderTitle: (isEditing: boolean) => void;
+  onToggleDarkMode: () => void;
+};
+
+type DragLayerSession = {
+  blockIds: string[];
+  currentClientX: number;
+  currentClientY: number;
+  groupElement: HTMLDivElement;
+  modeRafId: number | null;
+  originId: string;
+  overlayElement: HTMLDivElement;
+  sourceElements: HTMLElement[];
+  startClientX: number;
+  startClientY: number;
+  zoomLevel: number;
+};
+
 
 
 
@@ -74,6 +121,13 @@ function App() {
   const selectionRafId = useRef<number | null>(null);
   const pendingSelectionRect = useRef<SelectionRect | null>(null);
   const searchCache = useRef<Map<string, SearchMatch[]>>(new Map());
+  const blockElementsRef = useRef<Map<string, HTMLElement>>(new Map());
+  const dragLayerSessionRef = useRef<DragLayerSession | null>(null);
+  const selectedBlockIdsRef = useRef<string[]>(selectedBlockIds);
+  const zoomLevelRef = useRef(zoomLevel);
+
+  selectedBlockIdsRef.current = selectedBlockIds;
+  zoomLevelRef.current = zoomLevel;
 
   const selectedPage = useMemo(
     () => data.pages.find((page) => page.id === selectedPageId),
@@ -206,7 +260,28 @@ function App() {
       if (selectionRafId.current !== null) {
         window.cancelAnimationFrame(selectionRafId.current);
       }
+
+      if (dragLayerSessionRef.current) {
+        cleanupDragLayerSession(dragLayerSessionRef.current);
+        dragLayerSessionRef.current = null;
+      }
     };
+  }, []);
+
+  useEffect(() => {
+    function handleWindowBlur() {
+      if (!dragLayerSessionRef.current) {
+        return;
+      }
+
+      cleanupDragLayerSession(dragLayerSessionRef.current);
+      dragLayerSessionRef.current = null;
+      setActiveMode("selected");
+    }
+
+    window.addEventListener("blur", handleWindowBlur);
+
+    return () => window.removeEventListener("blur", handleWindowBlur);
   }, []);
 
   useEffect(() => {
@@ -787,70 +862,214 @@ function App() {
   }
 
   const updateBlock = useCallback((blockId: string, updates: BlockUpdates) => {
-    setData((currentData) => ({
-      ...currentData,
-      blocks: currentData.blocks.map((block) =>
-        block.id === blockId ? { ...block, ...updates } : block,
-      ),
-    }));
-  }, []);
-
-  const bringBlockToFront = useCallback((blockId: string) => {
     setData((currentData) => {
-      const blockToMove = currentData.blocks.find((block) => block.id === blockId);
+      let didChange = false;
+      const nextBlocks = currentData.blocks.map((block) => {
+        if (block.id !== blockId) {
+          return block;
+        }
 
-      if (!blockToMove) {
-        return currentData;
-      }
+        const hasBlockChanges = Object.entries(updates).some(
+          ([key, value]) => block[key as keyof typeof block] !== value,
+        );
 
-      return {
-        ...currentData,
-        blocks: [
-          ...currentData.blocks.filter((block) => block.id !== blockId),
-          blockToMove,
-        ],
-      };
+        if (!hasBlockChanges) {
+          return block;
+        }
+
+        didChange = true;
+        return { ...block, ...updates };
+      });
+
+      return didChange ? { ...currentData, blocks: nextBlocks } : currentData;
     });
   }, []);
 
-  const selectBlock = useCallback((blockId: string) => {
-    bringBlockToFront(blockId);
-    setSelectedBlockIds((currentBlockIds) =>
-      currentBlockIds.includes(blockId) && currentBlockIds.length > 1
-        ? currentBlockIds
-        : [blockId],
-    );
-    setEditingBlockId(null);
-    setInsertionPoint(null);
-    setIsCanvasKeyboardActive(true);
-    setActiveMode("selected");
-  }, [bringBlockToFront]);
+  const registerBlockElement = useCallback(
+    (blockId: string, element: HTMLDivElement | null) => {
+      if (element) {
+        blockElementsRef.current.set(blockId, element);
 
-  const previewGroupDrag = useCallback(
-    (originId: string, offset: PanOffset) => {
-      for (const blockId of selectedBlockIds) {
-        if (blockId === originId) {
-          continue;
+        const dragSession = dragLayerSessionRef.current;
+
+        if (dragSession?.blockIds.includes(blockId)) {
+          element.classList.add("is-drag-source-hidden");
+
+          if (!dragSession.sourceElements.includes(element)) {
+            dragSession.sourceElements = [
+              ...dragSession.sourceElements.filter(
+                (sourceElement) => sourceElement.isConnected,
+              ),
+              element,
+            ];
+          }
         }
 
-        const blockElement = document.querySelector<HTMLElement>(
-          `[data-block-id="${blockId}"]`,
-        );
-
-        if (blockElement) {
-          blockElement.style.transform = `translate3d(${offset.x}px, ${offset.y}px, 0)`;
-        }
+        return;
       }
+
+      blockElementsRef.current.delete(blockId);
     },
-    [selectedBlockIds],
+    [],
   );
 
-  const commitGroupDrag = useCallback(
-    (originId: string, offset: PanOffset) => {
-      const blockIdsToMove = new Set(
-        selectedBlockIds.includes(originId) ? selectedBlockIds : [originId],
-      );
+  function cleanupDragLayerSession(session: DragLayerSession) {
+    if (session.modeRafId !== null) {
+      window.cancelAnimationFrame(session.modeRafId);
+      session.modeRafId = null;
+    }
 
+    for (const sourceElement of session.sourceElements) {
+      sourceElement.classList.remove("is-drag-source-hidden");
+    }
+
+    session.overlayElement.remove();
+  }
+
+  function selectDraggedBlocks(blockIds: string[]) {
+    setSelectedBlockIds((currentBlockIds) => {
+      if (
+        currentBlockIds.length === blockIds.length &&
+        currentBlockIds.every((blockId, index) => blockId === blockIds[index])
+      ) {
+        return currentBlockIds;
+      }
+
+      return blockIds;
+    });
+  }
+
+  const startVisualDrag = useCallback(
+    (originId: string, clientX: number, clientY: number) => {
+      if (dragLayerSessionRef.current) {
+        cleanupDragLayerSession(dragLayerSessionRef.current);
+        dragLayerSessionRef.current = null;
+      }
+
+      const currentSelectedBlockIds = selectedBlockIdsRef.current;
+      const isGroupDrag =
+        currentSelectedBlockIds.includes(originId) &&
+        currentSelectedBlockIds.length > 1;
+      const requestedBlockIds = isGroupDrag ? currentSelectedBlockIds : [originId];
+      const sourceEntries = requestedBlockIds
+        .map((blockId) => ({
+          blockId,
+          element: blockElementsRef.current.get(blockId) ?? null,
+        }))
+        .filter(
+          (entry): entry is { blockId: string; element: HTMLElement } =>
+            Boolean(entry.element),
+        );
+
+      if (!sourceEntries.some((entry) => entry.blockId === originId)) {
+        return false;
+      }
+
+      const overlayElement = document.createElement("div");
+      const groupElement = document.createElement("div");
+      const currentZoomLevel = zoomLevelRef.current;
+
+      overlayElement.className = "drag-layer";
+      groupElement.className = "drag-layer-group";
+      overlayElement.append(groupElement);
+
+      for (const { element } of sourceEntries) {
+        const elementRect = element.getBoundingClientRect();
+        const cloneElement = element.cloneNode(true) as HTMLElement;
+
+        cloneElement.removeAttribute("data-block-id");
+        cloneElement.setAttribute("aria-hidden", "true");
+        cloneElement.classList.remove("is-drag-source-hidden");
+        cloneElement.classList.add("is-dragging", "drag-layer-clone");
+        cloneElement.style.position = "absolute";
+        cloneElement.style.left = `${elementRect.left}px`;
+        cloneElement.style.top = `${elementRect.top}px`;
+        cloneElement.style.width = `${element.offsetWidth}px`;
+        cloneElement.style.height = `${element.offsetHeight}px`;
+        cloneElement.style.margin = "0";
+        cloneElement.style.pointerEvents = "none";
+        cloneElement.style.transform = `scale(${currentZoomLevel})`;
+        cloneElement.style.transformOrigin = "0 0";
+        groupElement.append(cloneElement);
+      }
+
+      const dragLayerHost =
+        (canvasRef.current?.closest(".app-shell") as HTMLElement | null) ??
+        document.body;
+
+      dragLayerHost.append(overlayElement);
+
+      const dragSession: DragLayerSession = {
+        blockIds: sourceEntries.map((entry) => entry.blockId),
+        currentClientX: clientX,
+        currentClientY: clientY,
+        groupElement,
+        modeRafId: null,
+        originId,
+        overlayElement,
+        sourceElements: sourceEntries.map((entry) => entry.element),
+        startClientX: clientX,
+        startClientY: clientY,
+        zoomLevel: currentZoomLevel,
+      };
+
+      dragLayerSessionRef.current = dragSession;
+
+      for (const sourceElement of dragSession.sourceElements) {
+        sourceElement.classList.add("is-drag-source-hidden");
+      }
+
+      dragSession.modeRafId = window.requestAnimationFrame(() => {
+        if (dragLayerSessionRef.current !== dragSession) {
+          return;
+        }
+
+        dragSession.modeRafId = null;
+        setActiveMode("dragging");
+      });
+
+      return true;
+    },
+    [],
+  );
+
+  const moveVisualDrag = useCallback((clientX: number, clientY: number) => {
+    const dragSession = dragLayerSessionRef.current;
+
+    if (!dragSession) {
+      return;
+    }
+
+    dragSession.currentClientX = clientX;
+    dragSession.currentClientY = clientY;
+    dragSession.groupElement.style.transform = `translate3d(${
+      clientX - dragSession.startClientX
+    }px, ${clientY - dragSession.startClientY}px, 0)`;
+  }, []);
+
+  const endVisualDrag = useCallback((clientX: number, clientY: number) => {
+    const dragSession = dragLayerSessionRef.current;
+
+    if (!dragSession) {
+      return;
+    }
+
+    dragSession.currentClientX = clientX;
+    dragSession.currentClientY = clientY;
+
+    const offset = {
+      x: (dragSession.currentClientX - dragSession.startClientX) /
+        dragSession.zoomLevel,
+      y: (dragSession.currentClientY - dragSession.startClientY) /
+        dragSession.zoomLevel,
+    };
+    const movedEnough = Math.abs(offset.x) > 0.01 || Math.abs(offset.y) > 0.01;
+    const blockIdsToMove = new Set(dragSession.blockIds);
+
+    cleanupDragLayerSession(dragSession);
+    dragLayerSessionRef.current = null;
+
+    if (movedEnough) {
       setData((currentData) => ({
         ...currentData,
         blocks: currentData.blocks.map((block) =>
@@ -859,27 +1078,56 @@ function App() {
             : block,
         ),
       }));
-      for (const blockId of blockIdsToMove) {
-        const blockElement = document.querySelector<HTMLElement>(
-          `[data-block-id="${blockId}"]`,
-        );
+    }
 
-        if (blockElement) {
-          blockElement.style.transform = "";
-        }
+    selectDraggedBlocks(dragSession.blockIds);
+    setEditingBlockId(null);
+    setInsertionPoint(null);
+    setIsCanvasKeyboardActive(true);
+    setActiveMode("selected");
+  }, []);
+
+  const cancelVisualDrag = useCallback(() => {
+    const dragSession = dragLayerSessionRef.current;
+
+    if (!dragSession) {
+      return;
+    }
+
+    cleanupDragLayerSession(dragSession);
+    dragLayerSessionRef.current = null;
+    setActiveMode("selected");
+  }, []);
+
+  const selectBlock = useCallback((blockId: string) => {
+    setSelectedBlockIds((currentBlockIds) => {
+      if (currentBlockIds.includes(blockId) && currentBlockIds.length > 1) {
+        return currentBlockIds;
       }
-    },
-    [selectedBlockIds],
-  );
+
+      if (currentBlockIds.length === 1 && currentBlockIds[0] === blockId) {
+        return currentBlockIds;
+      }
+
+      return [blockId];
+    });
+    setEditingBlockId(null);
+    setInsertionPoint(null);
+    setIsCanvasKeyboardActive(true);
+    setActiveMode("selected");
+  }, []);
 
   const editBlock = useCallback((blockId: string) => {
-    bringBlockToFront(blockId);
-    setSelectedBlockIds([blockId]);
+    setSelectedBlockIds((currentBlockIds) =>
+      currentBlockIds.length === 1 && currentBlockIds[0] === blockId
+        ? currentBlockIds
+        : [blockId],
+    );
     setEditingBlockId(blockId);
     setInsertionPoint(null);
     setIsCanvasKeyboardActive(true);
     setActiveMode("editing");
-  }, [bringBlockToFront]);
+  }, []);
 
   const endBlockEdit = useCallback(() => {
     setEditingBlockId(null);
@@ -1130,172 +1378,39 @@ function App() {
 
   return (
     <main className={`app-shell ${isDarkMode ? "is-dark" : ""}`}>
-      <aside
-        className="sidebar"
-        aria-label="Workspace navigation"
+      <Sidebar
+        editingFolderId={editingFolderId}
+        editingPageId={editingPageId}
+        folders={data.folders}
+        pageCountsByFolder={pageCountsByFolder}
+        selectedFolderId={selectedFolderId}
+        selectedPageId={selectedPageId}
+        visiblePages={visiblePages}
+        onCreateFolder={createFolder}
+        onCreatePage={createPage}
+        onDeleteFolder={deleteFolder}
+        onDeletePage={deletePage}
         onPointerDown={() => setIsCanvasKeyboardActive(false)}
-      >
-        <div className="sidebar-header">
-          <h1>Note</h1>
-        </div>
-
-        <section className="sidebar-section" aria-labelledby="folders-title">
-          <div className="section-header">
-            <h2 id="folders-title">Folders</h2>
-            <button type="button" aria-label="Create folder" onClick={createFolder}>
-              +
-            </button>
-          </div>
-          <div className="nav-list">
-            {data.folders.map((folder) => {
-              const pageCount = pageCountsByFolder.get(folder.id) ?? 0;
-
-              return (
-                <div
-                  className={`nav-item ${
-                    folder.id === selectedFolderId ? "is-active" : ""
-                  }`}
-                  key={folder.id}
-                  onDoubleClick={() => setEditingFolderId(folder.id)}
-                  onClick={() => selectFolder(folder.id)}
-                >
-                  {editingFolderId === folder.id ? (
-                    <InlineRename
-                      ariaLabel="Folder name"
-                      initialValue={folder.name}
-                      onCancel={() => setEditingFolderId(null)}
-                      onCommit={(value) => {
-                        renameFolder(folder.id, value);
-                        setEditingFolderId(null);
-                      }}
-                    />
-                  ) : (
-                    <span className="nav-label">{folder.name}</span>
-                  )}
-                  <span className="item-count">{pageCount}</span>
-                  <span className="nav-actions">
-                    <button
-                      type="button"
-                      aria-label={`Delete ${folder.name}`}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        deleteFolder(folder.id);
-                      }}
-                    >
-                      X
-                    </button>
-                  </span>
-                </div>
-              );
-            })}
-            {data.folders.length === 0 ? (
-              <p className="empty-state">No folders yet</p>
-            ) : null}
-          </div>
-        </section>
-
-        <section className="sidebar-section" aria-labelledby="pages-title">
-          <div className="section-header">
-            <h2 id="pages-title">Pages</h2>
-            <button
-              type="button"
-              aria-label="Create page"
-              disabled={data.folders.length === 0}
-              onClick={createPage}
-            >
-              +
-            </button>
-          </div>
-          <div className="nav-list">
-            {visiblePages.map((page) => (
-              <div
-                className={`nav-item ${
-                  page.id === selectedPageId ? "is-selected" : ""
-                }`}
-                key={page.id}
-                onDoubleClick={() => setEditingPageId(page.id)}
-                onClick={() => selectPage(page.id)}
-              >
-                {editingPageId === page.id ? (
-                  <InlineRename
-                    ariaLabel="Page title"
-                    initialValue={page.title}
-                    onCancel={() => setEditingPageId(null)}
-                    onCommit={(value) => {
-                      renamePage(page.id, value);
-                      setEditingPageId(null);
-                    }}
-                  />
-                ) : (
-                  <span className="nav-label">{page.title}</span>
-                )}
-                <span className="nav-actions">
-                  <button
-                    type="button"
-                    aria-label={`Delete ${page.title}`}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      deletePage(page.id);
-                    }}
-                  >
-                    X
-                  </button>
-                </span>
-              </div>
-            ))}
-            {selectedFolderId && visiblePages.length === 0 ? (
-              <p className="empty-state">No pages in this folder</p>
-            ) : null}
-            {!selectedFolderId ? (
-              <p className="empty-state">Select or create a folder</p>
-            ) : null}
-          </div>
-        </section>
-      </aside>
+        onRenameFolder={renameFolder}
+        onRenamePage={renamePage}
+        onSelectFolder={selectFolder}
+        onSelectPage={selectPage}
+        onSetEditingFolderId={setEditingFolderId}
+        onSetEditingPageId={setEditingPageId}
+      />
 
       <section className="workspace">
-        <header
-          className="page-header"
+        <PageHeader
+          activeMode={activeMode}
+          isDarkMode={isDarkMode}
+          isEditingHeaderTitle={isEditingHeaderTitle}
+          selectedPage={selectedPage}
+          zoomLevel={zoomLevel}
           onPointerDown={() => setIsCanvasKeyboardActive(false)}
-        >
-          <div className="page-title-group">
-            <span className="app-title">Note</span>
-            {selectedPage && isEditingHeaderTitle ? (
-              <InlineRename
-                ariaLabel="Page title"
-                initialValue={selectedPage.title}
-                onCancel={() => setIsEditingHeaderTitle(false)}
-                onCommit={(value) => {
-                  renamePage(selectedPage.id, value);
-                  setIsEditingHeaderTitle(false);
-                }}
-              />
-            ) : (
-              <h2
-                className="page-title"
-                onDoubleClick={() => {
-                  if (selectedPage) {
-                    setIsEditingHeaderTitle(true);
-                  }
-                }}
-              >
-                {selectedPage?.title ?? "No page selected"}
-              </h2>
-            )}
-          </div>
-          <div className="page-header-actions">
-            <span className="zoom-indicator">{Math.round(zoomLevel * 100)}%</span>
-            <span className="mode-indicator">{modeLabels[activeMode]}</span>
-            <button
-              aria-pressed={isDarkMode}
-              className="theme-toggle"
-              onClick={() => setIsDarkMode((currentMode) => !currentMode)}
-              type="button"
-            >
-              {isDarkMode ? "Light" : "Dark"}
-            </button>
-          </div>
-        </header>
+          onRenamePage={renamePage}
+          onSetEditingHeaderTitle={setIsEditingHeaderTitle}
+          onToggleDarkMode={() => setIsDarkMode((currentMode) => !currentMode)}
+        />
 
         <section
           className={`canvas ${activeMode === "canvas" ? "is-canvas-selected" : ""} ${
@@ -1374,7 +1489,6 @@ function App() {
             {visibleBlocks.map((block) => (
               <TextBlockView
                 block={block}
-                canvasRef={canvasRef}
                 activeSearchRange={
                   activeSearchMatch?.blockId === block.id ? activeSearchMatch : null
                 }
@@ -1389,12 +1503,14 @@ function App() {
                 onCanvasPanMove={updateCanvasInteraction}
                 onCanvasPanStart={startCanvasPan}
                 onFocusEndHandled={handleFocusEndHandled}
-                onGroupDragEnd={commitGroupDrag}
-                onGroupDragPreview={previewGroupDrag}
                 onInteractionModeChange={setActiveMode}
+                onBlockElementChange={registerBlockElement}
                 onSelect={selectBlock}
                 onUpdate={updateBlock}
-                panOffset={panOffset}
+                onVisualDragCancel={cancelVisualDrag}
+                onVisualDragEnd={endVisualDrag}
+                onVisualDragMove={moveVisualDrag}
+                onVisualDragStart={startVisualDrag}
                 searchQuery={searchQuery}
                 shouldFocusEnd={focusEndBlockId === block.id}
                 zoomLevel={zoomLevel}
@@ -1419,6 +1535,231 @@ function App() {
         </section>
       </section>
     </main>
+  );
+}
+
+const Sidebar = memo(function Sidebar({
+  editingFolderId,
+  editingPageId,
+  folders,
+  pageCountsByFolder,
+  selectedFolderId,
+  selectedPageId,
+  visiblePages,
+  onCreateFolder,
+  onCreatePage,
+  onDeleteFolder,
+  onDeletePage,
+  onPointerDown,
+  onRenameFolder,
+  onRenamePage,
+  onSelectFolder,
+  onSelectPage,
+  onSetEditingFolderId,
+  onSetEditingPageId,
+}: SidebarProps) {
+  return (
+    <aside
+      className="sidebar"
+      aria-label="Workspace navigation"
+      onPointerDown={onPointerDown}
+    >
+      <div className="sidebar-header">
+        <h1>Note</h1>
+      </div>
+
+      <section className="sidebar-section" aria-labelledby="folders-title">
+        <div className="section-header">
+          <h2 id="folders-title">Folders</h2>
+          <button type="button" aria-label="Create folder" onClick={onCreateFolder}>
+            +
+          </button>
+        </div>
+        <div className="nav-list">
+          {folders.map((folder) => {
+            const pageCount = pageCountsByFolder.get(folder.id) ?? 0;
+
+            return (
+              <div
+                className={`nav-item ${
+                  folder.id === selectedFolderId ? "is-active" : ""
+                }`}
+                key={folder.id}
+                onDoubleClick={() => onSetEditingFolderId(folder.id)}
+                onClick={() => onSelectFolder(folder.id)}
+              >
+                {editingFolderId === folder.id ? (
+                  <InlineRename
+                    ariaLabel="Folder name"
+                    initialValue={folder.name}
+                    onCancel={() => onSetEditingFolderId(null)}
+                    onCommit={(value) => {
+                      onRenameFolder(folder.id, value);
+                      onSetEditingFolderId(null);
+                    }}
+                  />
+                ) : (
+                  <span className="nav-label">{folder.name}</span>
+                )}
+                <span className="item-count">{pageCount}</span>
+                <span className="nav-actions">
+                  <button
+                    type="button"
+                    aria-label={`Delete ${folder.name}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onDeleteFolder(folder.id);
+                    }}
+                  >
+                    X
+                  </button>
+                </span>
+              </div>
+            );
+          })}
+          {folders.length === 0 ? (
+            <p className="empty-state">No folders yet</p>
+          ) : null}
+        </div>
+      </section>
+
+      <section className="sidebar-section" aria-labelledby="pages-title">
+        <div className="section-header">
+          <h2 id="pages-title">Pages</h2>
+          <button
+            type="button"
+            aria-label="Create page"
+            disabled={folders.length === 0}
+            onClick={onCreatePage}
+          >
+            +
+          </button>
+        </div>
+        <div className="nav-list">
+          {visiblePages.map((page) => (
+            <div
+              className={`nav-item ${
+                page.id === selectedPageId ? "is-selected" : ""
+              }`}
+              key={page.id}
+              onDoubleClick={() => onSetEditingPageId(page.id)}
+              onClick={() => onSelectPage(page.id)}
+            >
+              {editingPageId === page.id ? (
+                <InlineRename
+                  ariaLabel="Page title"
+                  initialValue={page.title}
+                  onCancel={() => onSetEditingPageId(null)}
+                  onCommit={(value) => {
+                    onRenamePage(page.id, value);
+                    onSetEditingPageId(null);
+                  }}
+                />
+              ) : (
+                <span className="nav-label">{page.title}</span>
+              )}
+              <span className="nav-actions">
+                <button
+                  type="button"
+                  aria-label={`Delete ${page.title}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDeletePage(page.id);
+                  }}
+                >
+                  X
+                </button>
+              </span>
+            </div>
+          ))}
+          {selectedFolderId && visiblePages.length === 0 ? (
+            <p className="empty-state">No pages in this folder</p>
+          ) : null}
+          {!selectedFolderId ? (
+            <p className="empty-state">Select or create a folder</p>
+          ) : null}
+        </div>
+      </section>
+    </aside>
+  );
+}, areSidebarPropsEqual);
+
+function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps) {
+  return (
+    previous.editingFolderId === next.editingFolderId &&
+    previous.editingPageId === next.editingPageId &&
+    previous.folders === next.folders &&
+    previous.pageCountsByFolder === next.pageCountsByFolder &&
+    previous.selectedFolderId === next.selectedFolderId &&
+    previous.selectedPageId === next.selectedPageId &&
+    previous.visiblePages === next.visiblePages
+  );
+}
+
+const PageHeader = memo(function PageHeader({
+  activeMode,
+  isDarkMode,
+  isEditingHeaderTitle,
+  selectedPage,
+  zoomLevel,
+  onPointerDown,
+  onRenamePage,
+  onSetEditingHeaderTitle,
+  onToggleDarkMode,
+}: PageHeaderProps) {
+  return (
+    <header
+      className="page-header"
+      onPointerDown={onPointerDown}
+    >
+      <div className="page-title-group">
+        <span className="app-title">Note</span>
+        {selectedPage && isEditingHeaderTitle ? (
+          <InlineRename
+            ariaLabel="Page title"
+            initialValue={selectedPage.title}
+            onCancel={() => onSetEditingHeaderTitle(false)}
+            onCommit={(value) => {
+              onRenamePage(selectedPage.id, value);
+              onSetEditingHeaderTitle(false);
+            }}
+          />
+        ) : (
+          <h2
+            className="page-title"
+            onDoubleClick={() => {
+              if (selectedPage) {
+                onSetEditingHeaderTitle(true);
+              }
+            }}
+          >
+            {selectedPage?.title ?? "No page selected"}
+          </h2>
+        )}
+      </div>
+      <div className="page-header-actions">
+        <span className="zoom-indicator">{Math.round(zoomLevel * 100)}%</span>
+        <span className="mode-indicator">{modeLabels[activeMode]}</span>
+        <button
+          aria-pressed={isDarkMode}
+          className="theme-toggle"
+          onClick={onToggleDarkMode}
+          type="button"
+        >
+          {isDarkMode ? "Light" : "Dark"}
+        </button>
+      </div>
+    </header>
+  );
+}, arePageHeaderPropsEqual);
+
+function arePageHeaderPropsEqual(previous: PageHeaderProps, next: PageHeaderProps) {
+  return (
+    previous.activeMode === next.activeMode &&
+    previous.isDarkMode === next.isDarkMode &&
+    previous.isEditingHeaderTitle === next.isEditingHeaderTitle &&
+    previous.selectedPage === next.selectedPage &&
+    previous.zoomLevel === next.zoomLevel
   );
 }
 

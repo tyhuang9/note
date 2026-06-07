@@ -1,5 +1,5 @@
-import { memo, useEffect, useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent, RefObject } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import {
   AUTO_WIDTH_RIGHT_PADDING,
   DEFAULT_BLOCK_WIDTH,
@@ -12,7 +12,6 @@ import {
 import type {
   BlockUpdates,
   InteractionMode,
-  PanOffset,
   ResizeDirection,
   SearchMatch,
 } from "../appTypes";
@@ -20,19 +19,7 @@ import { blurActiveTextEntry } from "../editorUtils";
 import type { TextBlock } from "../types";
 
 type DragState = {
-  canvasLeft: number;
-  canvasTop: number;
-  panX: number;
-  panY: number;
-  offsetX: number;
-  offsetY: number;
-  startX: number;
-  startY: number;
-  currentX: number;
-  currentY: number;
-  rafId: number | null;
-  translateX: number;
-  translateY: number;
+  pointerId: number;
 };
 
 type ResizeState = {
@@ -58,7 +45,6 @@ type PointerLike = {
 
 type TextBlockViewProps = {
   block: TextBlock;
-  canvasRef: RefObject<HTMLElement | null>;
   activeSearchRange: SearchMatch | null;
   isEditing: boolean;
   isMultiSelected: boolean;
@@ -72,18 +58,26 @@ type TextBlockViewProps = {
   onCanvasPanMove: (event: ReactPointerEvent<HTMLElement>) => void;
   onCanvasPanStart: (event: ReactPointerEvent<HTMLElement>) => void;
   onFocusEndHandled: () => void;
-  onGroupDragEnd: (originId: string, offset: PanOffset) => void;
-  onGroupDragPreview: (originId: string, offset: PanOffset) => void;
   onInteractionModeChange: (mode: InteractionMode) => void;
+  onBlockElementChange: (
+    blockId: string,
+    element: HTMLDivElement | null,
+  ) => void;
   onSelect: (blockId: string) => void;
   onUpdate: (blockId: string, updates: BlockUpdates) => void;
-  panOffset: PanOffset;
+  onVisualDragCancel: () => void;
+  onVisualDragEnd: (clientX: number, clientY: number) => void;
+  onVisualDragMove: (clientX: number, clientY: number) => void;
+  onVisualDragStart: (
+    originId: string,
+    clientX: number,
+    clientY: number,
+  ) => boolean;
   zoomLevel: number;
 };
 
 export const TextBlockView = memo(function TextBlockView({
   block,
-  canvasRef,
   activeSearchRange,
   isEditing,
   isMultiSelected,
@@ -97,12 +91,14 @@ export const TextBlockView = memo(function TextBlockView({
   onCanvasPanMove,
   onCanvasPanStart,
   onFocusEndHandled,
-  onGroupDragEnd,
-  onGroupDragPreview,
   onInteractionModeChange,
+  onBlockElementChange,
   onSelect,
   onUpdate,
-  panOffset,
+  onVisualDragCancel,
+  onVisualDragEnd,
+  onVisualDragMove,
+  onVisualDragStart,
   zoomLevel,
 }: TextBlockViewProps) {
   const blockRef = useRef<HTMLDivElement | null>(null);
@@ -112,26 +108,68 @@ export const TextBlockView = memo(function TextBlockView({
   const heightMeasureRef = useRef<HTMLDivElement | null>(null);
   const dragState = useRef<DragState | null>(null);
   const resizeState = useRef<ResizeState | null>(null);
+  const isResizingRef = useRef(false);
   const activePointerId = useRef<number | null>(null);
   const ctrlAStage = useRef(0);
   const hasManualWidth = useRef(Boolean(block.isWidthManuallyResized));
   const pendingCaretOffset = useRef<number | null>(null);
-  const [draftContent, setDraftContent] = useState(block.content);
+  const draftContentRef = useRef(block.content);
+  const committedContentRef = useRef(block.content);
+  const commitTimerRef = useRef<number | null>(null);
+  const autosizeRafId = useRef<number | null>(null);
+  const latestAutosizeText = useRef(block.content);
   const [isContentSelected, setIsContentSelected] = useState(false);
-  const [isDragging, setIsDragging] = useState(false);
-  const [isResizing, setIsResizing] = useState(false);
+
+  const setBlockElement = useCallback(
+    (element: HTMLDivElement | null) => {
+      blockRef.current = element;
+      onBlockElementChange(block.id, element);
+
+      if (!element) {
+        return;
+      }
+
+      element.classList.toggle("is-resizing", isResizingRef.current);
+    },
+    [block.id, onBlockElementChange],
+  );
 
   useEffect(() => {
-    setDraftContent(block.content);
-  }, [block.content, block.id]);
+    committedContentRef.current = block.content;
+
+    if (!isEditing) {
+      draftContentRef.current = block.content;
+      latestAutosizeText.current = "";
+
+      if (editorRef.current) {
+        editorRef.current.value = block.content;
+      }
+    }
+  }, [block.content, block.id, isEditing]);
 
   useEffect(() => {
     hasManualWidth.current = Boolean(block.isWidthManuallyResized);
   }, [block.id, block.isWidthManuallyResized]);
 
   useEffect(() => {
+    return () => {
+      if (commitTimerRef.current !== null) {
+        window.clearTimeout(commitTimerRef.current);
+      }
+
+      if (autosizeRafId.current !== null) {
+        window.cancelAnimationFrame(autosizeRafId.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     if (isEditing) {
       const editorElement = editorRef.current;
+
+      if (editorElement && editorElement.value !== draftContentRef.current) {
+        editorElement.value = draftContentRef.current;
+      }
 
       editorElement?.focus();
 
@@ -161,39 +199,25 @@ export const TextBlockView = memo(function TextBlockView({
 
   useEffect(() => {
     const blockElement = blockRef.current;
-    const editorElement = editorRef.current;
 
-    if (!blockElement || !editorElement) {
+    if (!blockElement) {
       return;
     }
 
-    const size = getAutoSize();
+    const size = getAutoSize(undefined, false, draftContentRef.current);
 
     blockElement.style.width = `${size.width}px`;
     blockElement.style.height = `${size.height}px`;
-  }, [block.isWidthManuallyResized, block.width, draftContent]);
-
-  useEffect(() => {
-    if (draftContent === block.content) {
-      return;
-    }
-
-    const commitTimer = window.setTimeout(() => {
-      onUpdate(block.id, { content: draftContent, ...getAutoSize() });
-    }, TEXT_COMMIT_DELAY_MS);
-
-    return () => window.clearTimeout(commitTimer);
   }, [
     block.content,
+    block.height,
     block.id,
     block.isWidthManuallyResized,
     block.width,
-    draftContent,
-    onUpdate,
   ]);
 
   function getSizeUpdates() {
-    const size = getAutoSize();
+    const size = getAutoSize(undefined, false, draftContentRef.current);
     const updates: BlockUpdates = {};
 
     if (size.width !== block.width) {
@@ -207,7 +231,29 @@ export const TextBlockView = memo(function TextBlockView({
     return updates;
   }
 
-  function getAutoSize(widthOverride?: number, forceFixedWidth = false) {
+  function setMeasureText(text: string) {
+    const measureText = text.length > 0 ? text : " ";
+
+    if (latestAutosizeText.current === text) {
+      return;
+    }
+
+    latestAutosizeText.current = text;
+
+    if (widthMeasureRef.current) {
+      widthMeasureRef.current.textContent = measureText;
+    }
+
+    if (heightMeasureRef.current) {
+      heightMeasureRef.current.textContent = measureText;
+    }
+  }
+
+  function getAutoSize(
+    widthOverride?: number,
+    forceFixedWidth = false,
+    content = draftContentRef.current,
+  ) {
     if (block.imageData) {
       return {
         width: Math.max(MIN_BLOCK_WIDTH, block.width),
@@ -218,6 +264,8 @@ export const TextBlockView = memo(function TextBlockView({
     const widthMeasureElement = widthMeasureRef.current;
     const heightMeasureElement = heightMeasureRef.current;
     const nextWidth = widthOverride ?? block.width;
+
+    setMeasureText(content);
 
     if (!widthMeasureElement || !heightMeasureElement) {
       return {
@@ -237,10 +285,7 @@ export const TextBlockView = memo(function TextBlockView({
 
     heightMeasureElement.style.width = `${measuredWidth}px`;
 
-    const measuredHeight = Math.max(
-      heightMeasureElement.scrollHeight,
-      Math.ceil(heightMeasureElement.getBoundingClientRect().height),
-    );
+    const measuredHeight = heightMeasureElement.scrollHeight;
 
     return {
       width: measuredWidth,
@@ -252,11 +297,55 @@ export const TextBlockView = memo(function TextBlockView({
   }
 
   function getAutoHeight(widthOverride?: number, forceFixedWidth = false) {
-    return getAutoSize(widthOverride, forceFixedWidth).height;
+    return getAutoSize(
+      widthOverride,
+      forceFixedWidth,
+      editorRef.current?.value ?? draftContentRef.current,
+    ).height;
   }
 
   function getMeasureText() {
-    return draftContent.length > 0 ? draftContent : " ";
+    return draftContentRef.current.length > 0 ? draftContentRef.current : " ";
+  }
+
+  function scheduleAutosize() {
+    if (autosizeRafId.current !== null) {
+      return;
+    }
+
+    autosizeRafId.current = window.requestAnimationFrame(() => {
+      const blockElement = blockRef.current;
+
+      if (blockElement) {
+        const size = getAutoSize(undefined, false, draftContentRef.current);
+
+        blockElement.style.width = `${size.width}px`;
+        blockElement.style.height = `${size.height}px`;
+      }
+
+      autosizeRafId.current = null;
+    });
+  }
+
+  function scheduleContentCommit() {
+    if (commitTimerRef.current !== null) {
+      window.clearTimeout(commitTimerRef.current);
+    }
+
+    commitTimerRef.current = window.setTimeout(() => {
+      const nextContent = draftContentRef.current;
+
+      if (nextContent === committedContentRef.current) {
+        commitTimerRef.current = null;
+        return;
+      }
+
+      const size = getAutoSize(undefined, false, nextContent);
+
+      committedContentRef.current = nextContent;
+      onUpdate(block.id, { content: nextContent, ...size });
+      commitTimerRef.current = null;
+    }, TEXT_COMMIT_DELAY_MS);
   }
 
   function selectCurrentLine(editorElement: HTMLTextAreaElement) {
@@ -273,7 +362,7 @@ export const TextBlockView = memo(function TextBlockView({
     const nextQuery = searchQuery.trim();
 
     if (!nextQuery) {
-      return draftContent;
+      return block.content;
     }
 
     const escapedQuery = nextQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -281,7 +370,7 @@ export const TextBlockView = memo(function TextBlockView({
 
     let cursor = 0;
 
-    return draftContent.split(queryRegex).map((part, index) => {
+    return block.content.split(queryRegex).map((part, index) => {
       const start = cursor;
 
       cursor += part.length;
@@ -340,7 +429,7 @@ export const TextBlockView = memo(function TextBlockView({
     const displayElement = displayRef.current;
 
     if (!displayElement) {
-      return draftContent.length;
+      return draftContentRef.current.length;
     }
 
     const caretPositionFromPoint = (
@@ -382,7 +471,7 @@ export const TextBlockView = memo(function TextBlockView({
       );
     }
 
-    return draftContent.length;
+    return draftContentRef.current.length;
   }
 
   function startDrag(event: ReactPointerEvent<HTMLDivElement>) {
@@ -391,98 +480,43 @@ export const TextBlockView = memo(function TextBlockView({
       return;
     }
 
-    const canvasElement = canvasRef.current;
+    event.preventDefault();
+    event.stopPropagation();
 
-    if (!canvasElement) {
+    const didStartDrag = onVisualDragStart(
+      block.id,
+      event.clientX,
+      event.clientY,
+    );
+
+    if (!didStartDrag) {
+      onSelect(block.id);
       return;
     }
 
-    const canvasRect = canvasElement.getBoundingClientRect();
-
     dragState.current = {
-      canvasLeft: canvasRect.left,
-      canvasTop: canvasRect.top,
-      panX: panOffset.x,
-      panY: panOffset.y,
-      offsetX:
-        (event.clientX - canvasRect.left - panOffset.x) / zoomLevel - block.x,
-      offsetY:
-        (event.clientY - canvasRect.top - panOffset.y) / zoomLevel - block.y,
-      startX: block.x,
-      startY: block.y,
-      currentX: block.x,
-      currentY: block.y,
-      rafId: null,
-      translateX: 0,
-      translateY: 0,
+      pointerId: event.pointerId,
     };
     blurActiveTextEntry();
-    setIsDragging(true);
-    onSelect(block.id);
-    onInteractionModeChange("dragging");
-    event.preventDefault();
-    event.stopPropagation();
     activePointerId.current = event.pointerId;
     blockRef.current?.setPointerCapture(event.pointerId);
   }
 
   function moveBlock(event: PointerLike) {
-    const currentDrag = dragState.current;
-    const blockElement = blockRef.current;
-
-    if (!currentDrag || !blockElement) {
+    if (!dragState.current) {
       return;
     }
 
     event.preventDefault();
-
-    const x =
-      (event.clientX - currentDrag.canvasLeft - currentDrag.panX) / zoomLevel -
-      currentDrag.offsetX;
-    const y =
-      (event.clientY - currentDrag.canvasTop - currentDrag.panY) / zoomLevel -
-      currentDrag.offsetY;
-
-    currentDrag.currentX = x;
-    currentDrag.currentY = y;
-    currentDrag.translateX = x - currentDrag.startX;
-    currentDrag.translateY = y - currentDrag.startY;
-
-    if (isSelected && isMultiSelected) {
-      onGroupDragPreview(block.id, {
-        x: currentDrag.translateX,
-        y: currentDrag.translateY,
-      });
-    }
-
-    if (currentDrag.rafId !== null) {
-      return;
-    }
-
-    currentDrag.rafId = window.requestAnimationFrame(() => {
-      if (!dragState.current || !blockRef.current) {
-        return;
-      }
-
-      blockRef.current.style.transform = `translate3d(${dragState.current.translateX}px, ${dragState.current.translateY}px, 0)`;
-      dragState.current.rafId = null;
-    });
+    onVisualDragMove(event.clientX, event.clientY);
   }
 
-  function endDrag(pointerId?: number) {
-    const currentDrag = dragState.current;
-
-    if (!currentDrag) {
+  function endDrag(clientX: number, clientY: number, pointerId?: number) {
+    if (!dragState.current) {
       return;
-    }
-
-    if (currentDrag.rafId !== null) {
-      window.cancelAnimationFrame(currentDrag.rafId);
     }
 
     if (blockRef.current) {
-      blockRef.current.style.transform = "";
-
       if (
         pointerId !== undefined &&
         blockRef.current.hasPointerCapture(pointerId)
@@ -491,21 +525,26 @@ export const TextBlockView = memo(function TextBlockView({
       }
     }
 
-    if (isSelected && isMultiSelected) {
-      onGroupDragEnd(block.id, {
-        x: currentDrag.translateX,
-        y: currentDrag.translateY,
-      });
-    } else {
-      onUpdate(block.id, {
-        x: currentDrag.currentX,
-        y: currentDrag.currentY,
-      });
-    }
+    onVisualDragEnd(clientX, clientY);
     dragState.current = null;
     activePointerId.current = null;
-    setIsDragging(false);
-    onInteractionModeChange("selected");
+  }
+
+  function cancelDrag(pointerId?: number) {
+    if (!dragState.current) {
+      return;
+    }
+
+    if (
+      pointerId !== undefined &&
+      blockRef.current?.hasPointerCapture(pointerId)
+    ) {
+      blockRef.current.releasePointerCapture(pointerId);
+    }
+
+    onVisualDragCancel();
+    dragState.current = null;
+    activePointerId.current = null;
   }
 
   function startResize(
@@ -530,7 +569,8 @@ export const TextBlockView = memo(function TextBlockView({
       rafId: null,
     };
     hasManualWidth.current = true;
-    setIsResizing(true);
+    isResizingRef.current = true;
+    blockRef.current?.classList.add("is-resizing");
     onSelect(block.id);
     onInteractionModeChange("resizing");
     activePointerId.current = event.pointerId;
@@ -571,13 +611,18 @@ export const TextBlockView = memo(function TextBlockView({
         return;
       }
 
-      blockRef.current.style.left = `${resizeState.current.currentX}px`;
-      blockRef.current.style.top = `${resizeState.current.currentY}px`;
-      blockRef.current.style.width = `${resizeState.current.currentWidth}px`;
-      resizeState.current.currentHeight = getAutoHeight(
+      const nextHeight = getAutoHeight(
         resizeState.current.currentWidth,
         true,
       );
+
+      if (resizeState.current.direction.includes("w")) {
+        blockRef.current.style.left = `${resizeState.current.currentX}px`;
+        blockRef.current.style.top = `${resizeState.current.currentY}px`;
+      }
+
+      blockRef.current.style.width = `${resizeState.current.currentWidth}px`;
+      resizeState.current.currentHeight = nextHeight;
       blockRef.current.style.height = `${resizeState.current.currentHeight}px`;
       resizeState.current.rafId = null;
     });
@@ -592,9 +637,15 @@ export const TextBlockView = memo(function TextBlockView({
 
     if (currentResize.rafId !== null) {
       window.cancelAnimationFrame(currentResize.rafId);
+      currentResize.rafId = null;
     }
 
     currentResize.currentHeight = getAutoHeight(currentResize.currentWidth, true);
+
+    if (blockRef.current) {
+      blockRef.current.style.height = `${currentResize.currentHeight}px`;
+      blockRef.current.classList.remove("is-resizing");
+    }
 
     if (
       pointerId !== undefined &&
@@ -611,8 +662,8 @@ export const TextBlockView = memo(function TextBlockView({
       isWidthManuallyResized: true,
     });
     resizeState.current = null;
+    isResizingRef.current = false;
     activePointerId.current = null;
-    setIsResizing(false);
     onInteractionModeChange("selected");
   }
 
@@ -634,7 +685,7 @@ export const TextBlockView = memo(function TextBlockView({
     if (dragState.current) {
       event.preventDefault();
       event.stopPropagation();
-      endDrag(event.pointerId);
+      endDrag(event.clientX, event.clientY, event.pointerId);
       return;
     }
 
@@ -648,6 +699,17 @@ export const TextBlockView = memo(function TextBlockView({
     onCanvasPanEnd(event);
   }
 
+  function handleRootPointerCancel(event: ReactPointerEvent<HTMLDivElement>) {
+    if (dragState.current) {
+      event.preventDefault();
+      event.stopPropagation();
+      cancelDrag(event.pointerId);
+      return;
+    }
+
+    handleRootPointerEnd(event);
+  }
+
   return (
     <div
       className={`text-block ${isSelected ? "is-selected" : ""} ${
@@ -656,8 +718,6 @@ export const TextBlockView = memo(function TextBlockView({
         isSelected && isMultiSelected ? "is-multi-selected" : ""
       } ${
         isSelected && !isEditing ? "is-canvas-mode" : ""
-      } ${isDragging ? "is-dragging" : ""} ${
-        isResizing ? "is-resizing" : ""
       } ${isContentSelected ? "is-content-selected" : ""
       }`}
       onClick={(event) => {
@@ -684,8 +744,8 @@ export const TextBlockView = memo(function TextBlockView({
         ctrlAStage.current = 0;
         onSelect(block.id);
       }}
-      ref={blockRef}
-      onPointerCancel={handleRootPointerEnd}
+      ref={setBlockElement}
+      onPointerCancel={handleRootPointerCancel}
       onPointerMove={handleRootPointerMove}
       onPointerUp={handleRootPointerEnd}
       data-block-id={block.id}
@@ -719,8 +779,18 @@ export const TextBlockView = memo(function TextBlockView({
           ctrlAStage.current = 0;
           setIsContentSelected(false);
 
+          if (commitTimerRef.current !== null) {
+            window.clearTimeout(commitTimerRef.current);
+            commitTimerRef.current = null;
+          }
+
+          if (editorRef.current) {
+            draftContentRef.current = editorRef.current.value;
+          }
+
+          const nextDraftContent = draftContentRef.current;
           const updates = getSizeUpdates();
-          const nextContent = draftContent.trim();
+          const nextContent = nextDraftContent.trim();
 
           if (!nextContent) {
             onDelete(block.id);
@@ -728,8 +798,9 @@ export const TextBlockView = memo(function TextBlockView({
             return;
           }
 
-          if (draftContent !== block.content) {
-            updates.content = draftContent;
+          if (nextDraftContent !== committedContentRef.current) {
+            updates.content = nextDraftContent;
+            committedContentRef.current = nextDraftContent;
           }
 
           if (Object.keys(updates).length > 0) {
@@ -738,10 +809,16 @@ export const TextBlockView = memo(function TextBlockView({
 
           onEditEnd();
         }}
-        onChange={(event) => {
+        onInput={(event) => {
           ctrlAStage.current = 0;
-          setIsContentSelected(false);
-          setDraftContent(event.currentTarget.value);
+
+          if (isContentSelected) {
+            setIsContentSelected(false);
+          }
+
+          draftContentRef.current = event.currentTarget.value;
+          scheduleAutosize();
+          scheduleContentCommit();
         }}
         onKeyDown={(event) => {
           if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
@@ -774,7 +851,7 @@ export const TextBlockView = memo(function TextBlockView({
           }
         }}
         ref={editorRef}
-        value={draftContent}
+        defaultValue={block.content}
       />
       {!isEditing && !block.imageData ? (
         <div
@@ -846,4 +923,42 @@ export const TextBlockView = memo(function TextBlockView({
       ) : null}
     </div>
   );
-});
+}, areTextBlockViewPropsEqual);
+
+function areSearchRangesEqual(
+  previousRange: SearchMatch | null,
+  nextRange: SearchMatch | null,
+) {
+  if (previousRange === nextRange) {
+    return true;
+  }
+
+  if (!previousRange || !nextRange) {
+    return false;
+  }
+
+  return (
+    previousRange.blockId === nextRange.blockId &&
+    previousRange.start === nextRange.start &&
+    previousRange.end === nextRange.end
+  );
+}
+
+function areTextBlockViewPropsEqual(
+  previousProps: TextBlockViewProps,
+  nextProps: TextBlockViewProps,
+) {
+  return (
+    previousProps.block === nextProps.block &&
+    previousProps.isEditing === nextProps.isEditing &&
+    previousProps.isMultiSelected === nextProps.isMultiSelected &&
+    previousProps.isSelected === nextProps.isSelected &&
+    previousProps.searchQuery === nextProps.searchQuery &&
+    previousProps.shouldFocusEnd === nextProps.shouldFocusEnd &&
+    previousProps.zoomLevel === nextProps.zoomLevel &&
+    areSearchRangesEqual(
+      previousProps.activeSearchRange,
+      nextProps.activeSearchRange,
+    )
+  );
+}

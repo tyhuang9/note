@@ -565,7 +565,7 @@ h2 {
 
 .text-block {
   position: absolute;
-  contain: layout;
+  contain: layout paint;
   display: grid;
   grid-template-rows: 20px minmax(0, 1fr);
   min-width: 140px;
@@ -616,17 +616,42 @@ h2 {
 }
 
 .text-block.is-dragging {
-  opacity: 0.92;
+  background: #ffffff;
   cursor: grabbing;
   user-select: none;
   will-change: transform;
   z-index: 7;
 }
 
+.text-block.is-drag-source-hidden {
+  visibility: hidden;
+}
+
 .text-block.is-resizing {
   background: rgba(255, 255, 255, 0.72);
   user-select: none;
   z-index: 7;
+}
+
+.drag-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  overflow: hidden;
+  pointer-events: none;
+  contain: layout paint;
+}
+
+.drag-layer-group {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  transform: translate3d(0, 0, 0);
+  will-change: transform;
+}
+
+.drag-layer-clone {
+  pointer-events: none;
 }
 
 .text-block-header {
@@ -916,6 +941,10 @@ h2 {
 .app-shell.is-dark .text-block.is-editing,
 .app-shell.is-dark .text-block.is-canvas-mode {
   background: rgba(38, 44, 53, 0.82);
+}
+
+.app-shell.is-dark .text-block.is-dragging {
+  background: #262c35;
 }
 
 .app-shell.is-dark .text-block.is-selected,

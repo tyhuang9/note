@@ -47,6 +47,7 @@ type TextBlockViewProps = {
   block: TextBlock;
   activeSearchRange: SearchMatch | null;
   isEditing: boolean;
+  isDragSourceHidden: boolean;
   isMultiSelected: boolean;
   isSelected: boolean;
   searchQuery: string;
@@ -80,6 +81,7 @@ export const TextBlockView = memo(function TextBlockView({
   block,
   activeSearchRange,
   isEditing,
+  isDragSourceHidden,
   isMultiSelected,
   isSelected,
   searchQuery,
@@ -493,6 +495,7 @@ export const TextBlockView = memo(function TextBlockView({
 
     event.preventDefault();
     event.stopPropagation();
+    blurActiveTextEntry();
 
     const didStartDrag = onVisualDragStart(
       block.id,
@@ -508,7 +511,6 @@ export const TextBlockView = memo(function TextBlockView({
     dragState.current = {
       pointerId: event.pointerId,
     };
-    blurActiveTextEntry();
     activePointerId.current = event.pointerId;
     blockRef.current?.setPointerCapture(event.pointerId);
   }
@@ -725,6 +727,8 @@ export const TextBlockView = memo(function TextBlockView({
     <div
       className={`text-block ${isSelected ? "is-selected" : ""} ${
         isEditing ? "is-editing" : ""
+      } ${
+        isDragSourceHidden ? "is-drag-source-hidden" : ""
       } ${
         isSelected && isMultiSelected ? "is-multi-selected" : ""
       } ${
@@ -994,6 +998,7 @@ function areTextBlockViewPropsEqual(
 ) {
   return (
     previousProps.block === nextProps.block &&
+    previousProps.isDragSourceHidden === nextProps.isDragSourceHidden &&
     previousProps.isEditing === nextProps.isEditing &&
     previousProps.isMultiSelected === nextProps.isMultiSelected &&
     previousProps.isSelected === nextProps.isSelected &&

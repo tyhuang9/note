@@ -318,12 +318,19 @@ h2 {
   text-transform: capitalize;
 }
 
-.theme-toggle {
+.theme-toggle,
+.header-toggle {
   width: auto;
   min-width: 58px;
   padding: 0 10px;
   font-size: 12px;
   font-weight: 700;
+}
+
+.header-toggle[aria-pressed="true"] {
+  border-color: #7a8795;
+  color: #1f2937;
+  background: #e8eef5;
 }
 
 .canvas {
@@ -356,6 +363,24 @@ h2 {
   pointer-events: none;
   transform-origin: 0 0;
   will-change: transform;
+}
+
+.canvas-grid {
+  --canvas-grid-size: 24px;
+  --canvas-grid-offset: calc(var(--canvas-grid-size) / -2);
+  position: absolute;
+  left: -99984px;
+  top: -99984px;
+  width: 199968px;
+  height: 199968px;
+  background-image: radial-gradient(
+    circle,
+    rgba(112, 124, 140, 0.34) 1.2px,
+    transparent 1.4px
+  );
+  background-position: var(--canvas-grid-offset) var(--canvas-grid-offset);
+  background-size: var(--canvas-grid-size) var(--canvas-grid-size);
+  pointer-events: none;
 }
 
 .search-panel {
@@ -574,7 +599,7 @@ h2 {
   border-radius: 6px;
   padding: 0;
   color: #202936;
-  background: transparent;
+  background: #ffffff;
   cursor: text;
   overflow: visible;
   pointer-events: auto;
@@ -583,27 +608,27 @@ h2 {
 .text-block:hover {
   border-color: #a8adb4;
   border-style: solid;
-  background: rgba(255, 255, 255, 0.46);
+  background: #ffffff;
 }
 
 .text-block.is-selected {
   border-color: #4f5661;
   border-style: solid;
   outline: 0;
-  background: rgba(79, 86, 97, 0.16);
+  background: #ffffff;
   box-shadow: none;
   z-index: 5;
 }
 
 .text-block.is-canvas-mode {
-  background: rgba(79, 86, 97, 0.16);
+  background: #ffffff;
 }
 
 .text-block.is-multi-selected {
   border-color: #3f4650;
   border-style: solid;
   outline: 0;
-  background: rgba(79, 86, 97, 0.24);
+  background: #ffffff;
   box-shadow: none;
 }
 
@@ -628,7 +653,7 @@ h2 {
 }
 
 .text-block.is-resizing {
-  background: rgba(255, 255, 255, 0.72);
+  background: #ffffff;
   user-select: none;
   z-index: 7;
 }
@@ -914,6 +939,12 @@ h2 {
   background: #262c35;
 }
 
+.app-shell.is-dark .header-toggle[aria-pressed="true"] {
+  border-color: #677487;
+  color: #eef2f7;
+  background: #384353;
+}
+
 .app-shell.is-dark .offscreen-indicator,
 .app-shell.is-dark .zoom-indicator {
   border-color: #3b4655;
@@ -929,18 +960,27 @@ h2 {
   background: #181c22;
 }
 
+.app-shell.is-dark .canvas-grid {
+  background-image: radial-gradient(
+    circle,
+    rgba(137, 148, 163, 0.34) 1.2px,
+    transparent 1.4px
+  );
+}
+
 .app-shell.is-dark .canvas-caret {
   background: #e9eef6;
 }
 
 .app-shell.is-dark .text-block {
   color: #edf2f8;
+  background: #262c35;
 }
 
 .app-shell.is-dark .text-block:hover,
 .app-shell.is-dark .text-block.is-editing,
 .app-shell.is-dark .text-block.is-canvas-mode {
-  background: rgba(38, 44, 53, 0.82);
+  background: #262c35;
 }
 
 .app-shell.is-dark .text-block.is-dragging {
@@ -950,17 +990,17 @@ h2 {
 .app-shell.is-dark .text-block.is-selected,
 .app-shell.is-dark .text-block.is-canvas-mode {
   border-color: #88919d;
-  background: rgba(136, 145, 157, 0.22);
+  background: #262c35;
 }
 
 .app-shell.is-dark .text-block.is-multi-selected {
   border-color: #a3acb7;
-  background: rgba(136, 145, 157, 0.3);
+  background: #262c35;
 }
 
 .app-shell.is-dark .text-block.is-editing {
   border-color: #5b6470;
-  background: rgba(38, 44, 53, 0.82);
+  background: #262c35;
 }
 
 .app-shell.is-dark .text-block:hover .text-block-header,

@@ -7,6 +7,7 @@ import {
   DEFAULT_BLOCK_HEIGHT,
   DEFAULT_BLOCK_WIDTH,
   DEFAULT_ZOOM,
+  GRID_SIZE,
   MAX_ZOOM,
   MIN_ZOOM,
   SAVE_DELAY_MS,
@@ -61,14 +62,18 @@ type SidebarProps = {
 
 type PageHeaderProps = {
   activeMode: InteractionMode;
+  isGridVisible: boolean;
   isDarkMode: boolean;
   isEditingHeaderTitle: boolean;
+  isSnapToGridEnabled: boolean;
   selectedPage: AppData["pages"][number] | undefined;
   zoomLevel: number;
   onPointerDown: () => void;
   onRenamePage: (pageId: string, title: string) => void;
   onSetEditingHeaderTitle: (isEditing: boolean) => void;
+  onToggleGrid: () => void;
   onToggleDarkMode: () => void;
+  onToggleSnapToGrid: () => void;
 };
 
 type DragLayerSession = {
@@ -121,6 +126,9 @@ function App() {
   const [focusEndBlockId, setFocusEndBlockId] = useState<string | null>(null);
   const [isCanvasKeyboardActive, setIsCanvasKeyboardActive] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
+  const [isGridVisible, setIsGridVisible] = useState(false);
+  const [isSnapToGridEnabled, setIsSnapToGridEnabled] = useState(false);
+  const [dragSourceBlockIds, setDragSourceBlockIds] = useState<string[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
   const [persistenceAvailable, setPersistenceAvailable] = useState(false);
   const dataRef = useRef<AppData>(data);
@@ -141,10 +149,12 @@ function App() {
   const redoBlockHistoryRef = useRef<TextBlock[][]>([]);
   const blockElementsRef = useRef<Map<string, HTMLElement>>(new Map());
   const dragLayerSessionRef = useRef<DragLayerSession | null>(null);
+  const isSnapToGridEnabledRef = useRef(isSnapToGridEnabled);
   const selectedBlockIdsRef = useRef<string[]>(selectedBlockIds);
   const zoomLevelRef = useRef(zoomLevel);
 
   dataRef.current = data;
+  isSnapToGridEnabledRef.current = isGridVisible && isSnapToGridEnabled;
   selectedBlockIdsRef.current = selectedBlockIds;
   zoomLevelRef.current = zoomLevel;
 
@@ -425,6 +435,57 @@ function App() {
     return blocks.map((block) => ({ ...block }));
   }
 
+  function snapValue(value: number) {
+    return Math.round(value / GRID_SIZE) * GRID_SIZE;
+  }
+
+  function snapPoint(point: CanvasPoint): CanvasPoint {
+    if (!isSnapToGridEnabledRef.current) {
+      return point;
+    }
+
+    return {
+      x: snapValue(point.x),
+      y: snapValue(point.y),
+    };
+  }
+
+  function snapBlockPosition<T extends Pick<TextBlock, "x" | "y">>(block: T): T {
+    if (!isSnapToGridEnabledRef.current) {
+      return block;
+    }
+
+    return {
+      ...block,
+      x: snapValue(block.x),
+      y: snapValue(block.y),
+    };
+  }
+
+  function snapManualResizeUpdates(updates: BlockUpdates): BlockUpdates {
+    if (!isSnapToGridEnabledRef.current || !updates.isWidthManuallyResized) {
+      return updates;
+    }
+
+    const snappedUpdates: BlockUpdates = {
+      ...updates,
+    };
+
+    if (updates.x !== undefined) {
+      snappedUpdates.x = snapValue(updates.x);
+    }
+
+    if (updates.y !== undefined) {
+      snappedUpdates.y = snapValue(updates.y);
+    }
+
+    if (updates.width !== undefined) {
+      snappedUpdates.width = Math.max(GRID_SIZE, snapValue(updates.width));
+    }
+
+    return snappedUpdates;
+  }
+
   function areBlocksEqual(firstBlocks: TextBlock[], secondBlocks: TextBlock[]) {
     if (firstBlocks.length !== secondBlocks.length) {
       return false;
@@ -580,7 +641,7 @@ function App() {
       return false;
     }
 
-    const pasteOrigin = getPasteOrigin();
+    const pasteOrigin = snapPoint(getPasteOrigin());
     const isViewportCenteredPaste =
       !insertionPoint && Boolean(canvasViewportRef.current);
     const pastedGroupSize = copiedBlocksRef.current.reduce(
@@ -609,7 +670,10 @@ function App() {
       imageName: block.imageName,
     }));
 
-    setBlocksWithHistory((currentBlocks) => [...currentBlocks, ...pastedBlocks]);
+    setBlocksWithHistory((currentBlocks) => [
+      ...currentBlocks,
+      ...pastedBlocks.map(snapBlockPosition),
+    ]);
     setSelectedBlockIds(pastedBlocks.map((block) => block.id));
     setEditingBlockId(null);
     setIsCanvasKeyboardActive(true);
@@ -1068,14 +1132,15 @@ function App() {
     }
 
     const blockId = createId("block");
+    const blockPosition = snapPoint({ x, y });
 
     setBlocksWithHistory((currentBlocks) => [
       ...currentBlocks,
       {
         id: blockId,
         pageId: selectedPageId,
-        x,
-        y,
+        x: blockPosition.x,
+        y: blockPosition.y,
         width: DEFAULT_BLOCK_WIDTH,
         height: DEFAULT_BLOCK_HEIGHT,
         content,
@@ -1101,14 +1166,15 @@ function App() {
     }
 
     const blockId = createId("block");
+    const blockPosition = snapPoint({ x, y });
 
     setBlocksWithHistory((currentBlocks) => [
       ...currentBlocks,
       {
         id: blockId,
         pageId: selectedPageId,
-        x,
-        y,
+        x: blockPosition.x,
+        y: blockPosition.y,
         width: 320,
         height: 220,
         content: imageName,
@@ -1125,6 +1191,8 @@ function App() {
   }
 
   const updateBlock = useCallback((blockId: string, updates: BlockUpdates) => {
+    const nextUpdates = snapManualResizeUpdates(updates);
+
     setData((currentData) => {
       let didChange = false;
       const nextBlocks = currentData.blocks.map((block) => {
@@ -1132,7 +1200,7 @@ function App() {
           return block;
         }
 
-        const hasBlockChanges = Object.entries(updates).some(
+        const hasBlockChanges = Object.entries(nextUpdates).some(
           ([key, value]) => block[key as keyof typeof block] !== value,
         );
 
@@ -1141,7 +1209,7 @@ function App() {
         }
 
         didChange = true;
-        return { ...block, ...updates };
+        return { ...block, ...nextUpdates };
       });
 
       return didChange ? { ...currentData, blocks: nextBlocks } : currentData;
@@ -1379,6 +1447,7 @@ function App() {
       };
 
       dragLayerSessionRef.current = dragSession;
+      setDragSourceBlockIds(dragSession.blockIds);
 
       for (const sourceElement of dragSession.sourceElements) {
         sourceElement.classList.add("is-drag-source-hidden");
@@ -1427,13 +1496,18 @@ function App() {
 
     cleanupDragLayerSession(dragSession);
     dragLayerSessionRef.current = null;
+    setDragSourceBlockIds([]);
     setPanOffset(panOffsetRef.current);
 
     if (movedEnough) {
       setBlocksWithHistory((currentBlocks) =>
         currentBlocks.map((block) =>
           blockIdsToMove.has(block.id)
-            ? { ...block, x: block.x + offset.x, y: block.y + offset.y }
+            ? snapBlockPosition({
+                ...block,
+                x: block.x + offset.x,
+                y: block.y + offset.y,
+              })
             : block,
         ),
       );
@@ -1455,6 +1529,7 @@ function App() {
 
     cleanupDragLayerSession(dragSession);
     dragLayerSessionRef.current = null;
+    setDragSourceBlockIds([]);
     setActiveMode("selected");
   }, []);
 
@@ -1787,14 +1862,32 @@ function App() {
       <section className="workspace">
         <PageHeader
           activeMode={activeMode}
+          isGridVisible={isGridVisible}
           isDarkMode={isDarkMode}
           isEditingHeaderTitle={isEditingHeaderTitle}
+          isSnapToGridEnabled={isSnapToGridEnabled}
           selectedPage={selectedPage}
           zoomLevel={zoomLevel}
           onPointerDown={() => setIsCanvasKeyboardActive(false)}
           onRenamePage={renamePage}
           onSetEditingHeaderTitle={setIsEditingHeaderTitle}
+          onToggleGrid={() =>
+            setIsGridVisible((currentValue) => {
+              const nextValue = !currentValue;
+
+              if (!nextValue) {
+                setIsSnapToGridEnabled(false);
+              }
+
+              return nextValue;
+            })
+          }
           onToggleDarkMode={() => setIsDarkMode((currentMode) => !currentMode)}
+          onToggleSnapToGrid={() =>
+            setIsSnapToGridEnabled((currentValue) =>
+              isGridVisible ? !currentValue : false,
+            )
+          }
         />
 
         <section
@@ -1872,6 +1965,7 @@ function App() {
               transform: `translate3d(${panOffset.x}px, ${panOffset.y}px, 0) scale(${zoomLevel})`,
             }}
           >
+            {isGridVisible ? <div className="canvas-grid" /> : null}
             {visibleBlocks.map((block) => (
               <TextBlockView
                 block={block}
@@ -1879,6 +1973,7 @@ function App() {
                   activeSearchMatch?.blockId === block.id ? activeSearchMatch : null
                 }
                 isEditing={block.id === editingBlockId}
+                isDragSourceHidden={dragSourceBlockIds.includes(block.id)}
                 isMultiSelected={selectedBlockIds.length > 1}
                 isSelected={selectedBlockIds.includes(block.id)}
                 key={block.id}
@@ -2084,14 +2179,18 @@ function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps) {
 
 const PageHeader = memo(function PageHeader({
   activeMode,
+  isGridVisible,
   isDarkMode,
   isEditingHeaderTitle,
+  isSnapToGridEnabled,
   selectedPage,
   zoomLevel,
   onPointerDown,
   onRenamePage,
   onSetEditingHeaderTitle,
+  onToggleGrid,
   onToggleDarkMode,
+  onToggleSnapToGrid,
 }: PageHeaderProps) {
   return (
     <header
@@ -2127,6 +2226,23 @@ const PageHeader = memo(function PageHeader({
         <span className="zoom-indicator">{Math.round(zoomLevel * 100)}%</span>
         <span className="mode-indicator">{modeLabels[activeMode]}</span>
         <button
+          aria-pressed={isGridVisible}
+          className="header-toggle"
+          onClick={onToggleGrid}
+          type="button"
+        >
+          Grid
+        </button>
+        <button
+          aria-pressed={isGridVisible && isSnapToGridEnabled}
+          className="header-toggle"
+          disabled={!isGridVisible}
+          onClick={onToggleSnapToGrid}
+          type="button"
+        >
+          Snap
+        </button>
+        <button
           aria-pressed={isDarkMode}
           className="theme-toggle"
           onClick={onToggleDarkMode}
@@ -2142,8 +2258,10 @@ const PageHeader = memo(function PageHeader({
 function arePageHeaderPropsEqual(previous: PageHeaderProps, next: PageHeaderProps) {
   return (
     previous.activeMode === next.activeMode &&
+    previous.isGridVisible === next.isGridVisible &&
     previous.isDarkMode === next.isDarkMode &&
     previous.isEditingHeaderTitle === next.isEditingHeaderTitle &&
+    previous.isSnapToGridEnabled === next.isSnapToGridEnabled &&
     previous.selectedPage === next.selectedPage &&
     previous.zoomLevel === next.zoomLevel
   );

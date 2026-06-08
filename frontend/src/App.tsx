@@ -21,6 +21,7 @@ import type {
   InteractionMode,
   OffscreenGroup,
   PanOffset,
+  PageViewport,
   PanState,
   SearchMatch,
   SelectionRect,
@@ -101,6 +102,7 @@ const DRAG_AUTO_PAN_EDGE_PX = 56;
 const DRAG_AUTO_PAN_MAX_STEP_PX = 18;
 const MAX_BLOCK_HISTORY_ENTRIES = 100;
 const PASTED_BLOCK_OFFSET = 24;
+const DEFAULT_PAN_OFFSET: PanOffset = { x: 0, y: 0 };
 
 
 
@@ -149,6 +151,7 @@ function App() {
   const redoBlockHistoryRef = useRef<TextBlock[][]>([]);
   const blockElementsRef = useRef<Map<string, HTMLElement>>(new Map());
   const dragLayerSessionRef = useRef<DragLayerSession | null>(null);
+  const pageViewportsRef = useRef<Map<string, PageViewport>>(new Map());
   const isSnapToGridEnabledRef = useRef(isSnapToGridEnabled);
   const selectedBlockIdsRef = useRef<string[]>(selectedBlockIds);
   const zoomLevelRef = useRef(zoomLevel);
@@ -339,8 +342,10 @@ function App() {
 
         setData(savedData);
         setIsDarkMode(Boolean(savedData.isDarkMode));
+        pageViewportsRef.current.clear();
         setSelectedFolderId(firstFolderId);
         setSelectedPageId(firstPageId);
+        restorePageViewport(firstPageId);
         setSelectedBlockIds([]);
         setEditingBlockId(null);
         setActiveMode("canvas");
@@ -958,6 +963,50 @@ function App() {
     );
   }
 
+  function getDefaultPageViewport(): PageViewport {
+    return {
+      panOffset: { ...DEFAULT_PAN_OFFSET },
+      zoomLevel: DEFAULT_ZOOM,
+    };
+  }
+
+  function rememberPageViewport(pageId: string) {
+    if (!pageId) {
+      return;
+    }
+
+    pageViewportsRef.current.set(pageId, {
+      panOffset: { ...panOffsetRef.current },
+      zoomLevel: zoomLevelRef.current,
+    });
+  }
+
+  function restorePageViewport(pageId: string) {
+    const nextViewport =
+      pageViewportsRef.current.get(pageId) ?? getDefaultPageViewport();
+
+    panOffsetRef.current = { ...nextViewport.panOffset };
+    setPanOffset(nextViewport.panOffset);
+    setLivePanOffset(nextViewport.panOffset);
+    setZoomLevel(nextViewport.zoomLevel);
+  }
+
+  function switchSelectedPage(nextPageId: string) {
+    if (selectedPageId === nextPageId) {
+      return;
+    }
+
+    rememberPageViewport(selectedPageId);
+    setSelectedPageId(nextPageId);
+    restorePageViewport(nextPageId);
+  }
+
+  function forgetPageViewports(pageIds: Iterable<string>) {
+    for (const pageId of pageIds) {
+      pageViewportsRef.current.delete(pageId);
+    }
+  }
+
   function createFolder() {
     const folderId = createId("folder");
 
@@ -965,8 +1014,10 @@ function App() {
       ...currentData,
       folders: [...currentData.folders, { id: folderId, name: "New folder" }],
     }));
+    rememberPageViewport(selectedPageId);
     setSelectedFolderId(folderId);
     setSelectedPageId("");
+    restorePageViewport("");
     setEditingFolderId(folderId);
     setEditingPageId(null);
     setIsEditingHeaderTitle(false);
@@ -1008,8 +1059,10 @@ function App() {
       const nextSelectedPageId =
         nextPages.find((page) => page.folderId === nextFolderId)?.id ?? "";
 
+      forgetPageViewports(deletedPageIds);
       setSelectedFolderId(nextFolderId);
       setSelectedPageId(nextSelectedPageId);
+      restorePageViewport(nextSelectedPageId);
       setEditingFolderId(null);
       setEditingPageId(null);
       setIsEditingHeaderTitle(false);
@@ -1030,9 +1083,12 @@ function App() {
 
   function selectFolder(folderId: string) {
     const firstPage = data.pages.find((page) => page.folderId === folderId);
+    const nextSelectedPageId = firstPage?.id ?? "";
 
+    rememberPageViewport(selectedPageId);
     setSelectedFolderId(folderId);
-    setSelectedPageId(firstPage?.id ?? "");
+    setSelectedPageId(nextSelectedPageId);
+    restorePageViewport(nextSelectedPageId);
     setEditingFolderId(null);
     setEditingPageId(null);
     setIsEditingHeaderTitle(false);
@@ -1058,8 +1114,10 @@ function App() {
         { id: pageId, folderId, title: "New page" },
       ],
     }));
+    rememberPageViewport(selectedPageId);
     setSelectedFolderId(folderId);
     setSelectedPageId(pageId);
+    restorePageViewport(pageId);
     setEditingFolderId(null);
     setEditingPageId(pageId);
     setIsEditingHeaderTitle(false);
@@ -1094,7 +1152,11 @@ function App() {
           ? nextPages.find((page) => page.folderId === folderId)?.id ?? ""
           : selectedPageId;
 
+      forgetPageViewports([pageId]);
       setSelectedPageId(nextSelectedPageId);
+      if (pageId === selectedPageId) {
+        restorePageViewport(nextSelectedPageId);
+      }
       setEditingPageId(null);
       setIsEditingHeaderTitle(false);
       setSelectedBlockIds([]);
@@ -1116,7 +1178,7 @@ function App() {
   );
 
   function selectPage(pageId: string) {
-    setSelectedPageId(pageId);
+    switchSelectedPage(pageId);
     setEditingFolderId(null);
     setEditingPageId(null);
     setIsEditingHeaderTitle(false);

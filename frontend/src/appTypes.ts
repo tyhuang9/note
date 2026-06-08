@@ -14,6 +14,11 @@ export type PanOffset = {
   y: number;
 };
 
+export type PageViewport = {
+  panOffset: PanOffset;
+  zoomLevel: number;
+};
+
 export type CanvasPoint = {
   x: number;
   y: number;

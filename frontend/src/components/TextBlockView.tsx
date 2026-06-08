@@ -63,7 +63,7 @@ type TextBlockViewProps = {
     blockId: string,
     element: HTMLDivElement | null,
   ) => void;
-  onSelect: (blockId: string) => void;
+  onSelect: (blockId: string, additive?: boolean) => void;
   onUpdate: (blockId: string, updates: BlockUpdates) => void;
   onVisualDragCancel: () => void;
   onVisualDragEnd: (clientX: number, clientY: number) => void;
@@ -480,6 +480,13 @@ export const TextBlockView = memo(function TextBlockView({
       return;
     }
 
+    if (event.ctrlKey || event.metaKey) {
+      event.preventDefault();
+      event.stopPropagation();
+      onSelect(block.id, true);
+      return;
+    }
+
     if (event.button !== 0) {
       return;
     }
@@ -750,7 +757,7 @@ export const TextBlockView = memo(function TextBlockView({
         blurActiveTextEntry();
         setIsContentSelected(false);
         ctrlAStage.current = 0;
-        onSelect(block.id);
+        onSelect(block.id, event.ctrlKey || event.metaKey);
       }}
       ref={setBlockElement}
       onContextMenu={(event) => event.preventDefault()}
@@ -771,7 +778,7 @@ export const TextBlockView = memo(function TextBlockView({
         onClick={(event) => {
           event.stopPropagation();
           blurActiveTextEntry();
-          onSelect(block.id);
+          onSelect(block.id, event.ctrlKey || event.metaKey);
         }}
         onDoubleClick={(event) => {
           event.stopPropagation();
@@ -868,6 +875,11 @@ export const TextBlockView = memo(function TextBlockView({
           onClick={(event) => {
             event.preventDefault();
             event.stopPropagation();
+
+            if (event.ctrlKey || event.metaKey) {
+              return;
+            }
+
             onEdit(block.id);
           }}
           onPointerDown={(event) => {
@@ -882,6 +894,12 @@ export const TextBlockView = memo(function TextBlockView({
 
             event.preventDefault();
             event.stopPropagation();
+
+            if (event.ctrlKey || event.metaKey) {
+              onSelect(block.id, true);
+              return;
+            }
+
             pendingCaretOffset.current = getCaretOffsetFromPoint(
               event.clientX,
               event.clientY,

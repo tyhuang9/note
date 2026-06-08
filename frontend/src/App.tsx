@@ -36,7 +36,7 @@ import {
   modeLabels,
   rectsIntersect,
 } from "./editorUtils";
-import type { AppData } from "./types";
+import type { AppData, TextBlock } from "./types";
 
 type SidebarProps = {
   editingFolderId: string | null;
@@ -87,8 +87,15 @@ type DragLayerSession = {
   zoomLevel: number;
 };
 
+type CopiedBlock = Omit<TextBlock, "id" | "pageId" | "x" | "y"> & {
+  offsetX: number;
+  offsetY: number;
+};
+
 const DRAG_AUTO_PAN_EDGE_PX = 56;
 const DRAG_AUTO_PAN_MAX_STEP_PX = 18;
+const MAX_BLOCK_HISTORY_ENTRIES = 100;
+const PASTED_BLOCK_OFFSET = 24;
 
 
 
@@ -116,10 +123,12 @@ function App() {
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
   const [persistenceAvailable, setPersistenceAvailable] = useState(false);
+  const dataRef = useRef<AppData>(data);
   const canvasRef = useRef<HTMLElement | null>(null);
   const canvasContentRef = useRef<HTMLDivElement | null>(null);
   const selectionRectRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const canvasViewportRef = useRef<ViewportRect | null>(null);
   const panState = useRef<PanState | null>(null);
   const panOffsetRef = useRef<PanOffset>(panOffset);
   const panRafId = useRef<number | null>(null);
@@ -127,11 +136,15 @@ function App() {
   const selectionRafId = useRef<number | null>(null);
   const pendingSelectionRect = useRef<SelectionRect | null>(null);
   const searchCache = useRef<Map<string, SearchMatch[]>>(new Map());
+  const copiedBlocksRef = useRef<CopiedBlock[]>([]);
+  const undoBlockHistoryRef = useRef<TextBlock[][]>([]);
+  const redoBlockHistoryRef = useRef<TextBlock[][]>([]);
   const blockElementsRef = useRef<Map<string, HTMLElement>>(new Map());
   const dragLayerSessionRef = useRef<DragLayerSession | null>(null);
   const selectedBlockIdsRef = useRef<string[]>(selectedBlockIds);
   const zoomLevelRef = useRef(zoomLevel);
 
+  dataRef.current = data;
   selectedBlockIdsRef.current = selectedBlockIds;
   zoomLevelRef.current = zoomLevel;
 
@@ -235,6 +248,7 @@ function App() {
     livePanOffset.y,
     zoomLevel,
   ]);
+  canvasViewportRef.current = canvasViewport;
   const offscreenGroups = useMemo<OffscreenGroup[]>(() => {
     if (!canvasViewport || visibleBlocks.length === 0) {
       return [];
@@ -407,15 +421,197 @@ function App() {
     return () => document.body.classList.remove("is-interacting");
   }, [activeMode]);
 
+  function cloneBlocks(blocks: TextBlock[]) {
+    return blocks.map((block) => ({ ...block }));
+  }
+
+  function areBlocksEqual(firstBlocks: TextBlock[], secondBlocks: TextBlock[]) {
+    if (firstBlocks.length !== secondBlocks.length) {
+      return false;
+    }
+
+    return firstBlocks.every((firstBlock, index) => {
+      const secondBlock = secondBlocks[index];
+
+      return (
+        firstBlock.id === secondBlock.id &&
+        firstBlock.pageId === secondBlock.pageId &&
+        firstBlock.x === secondBlock.x &&
+        firstBlock.y === secondBlock.y &&
+        firstBlock.width === secondBlock.width &&
+        firstBlock.height === secondBlock.height &&
+        firstBlock.content === secondBlock.content &&
+        firstBlock.isWidthManuallyResized ===
+          secondBlock.isWidthManuallyResized &&
+        firstBlock.imageData === secondBlock.imageData &&
+        firstBlock.imageName === secondBlock.imageName
+      );
+    });
+  }
+
+  function pushBlockUndoSnapshot(blocks: TextBlock[]) {
+    undoBlockHistoryRef.current = [
+      ...undoBlockHistoryRef.current.slice(-(MAX_BLOCK_HISTORY_ENTRIES - 1)),
+      cloneBlocks(blocks),
+    ];
+    redoBlockHistoryRef.current = [];
+  }
+
+  function setBlocksWithHistory(
+    getNextBlocks: (currentBlocks: TextBlock[]) => TextBlock[],
+  ) {
+    const currentData = dataRef.current;
+    const nextBlocks = getNextBlocks(currentData.blocks);
+
+    if (areBlocksEqual(currentData.blocks, nextBlocks)) {
+      return;
+    }
+
+    pushBlockUndoSnapshot(currentData.blocks);
+
+    const nextData = {
+      ...currentData,
+      blocks: nextBlocks,
+    };
+
+    dataRef.current = nextData;
+    setData(nextData);
+  }
+
+  function restoreBlockHistory(direction: "undo" | "redo") {
+    const fromStack =
+      direction === "undo"
+        ? undoBlockHistoryRef.current
+        : redoBlockHistoryRef.current;
+    const snapshot = fromStack[fromStack.length - 1];
+
+    if (!snapshot) {
+      return;
+    }
+
+    if (direction === "undo") {
+      undoBlockHistoryRef.current = undoBlockHistoryRef.current.slice(0, -1);
+    } else {
+      redoBlockHistoryRef.current = redoBlockHistoryRef.current.slice(0, -1);
+    }
+
+    const currentData = dataRef.current;
+    const currentSnapshot = cloneBlocks(currentData.blocks);
+
+    if (direction === "undo") {
+      redoBlockHistoryRef.current = [
+        ...redoBlockHistoryRef.current.slice(
+          -(MAX_BLOCK_HISTORY_ENTRIES - 1),
+        ),
+        currentSnapshot,
+      ];
+    } else {
+      undoBlockHistoryRef.current = [
+        ...undoBlockHistoryRef.current.slice(
+          -(MAX_BLOCK_HISTORY_ENTRIES - 1),
+        ),
+        currentSnapshot,
+      ];
+    }
+
+    const nextData = {
+      ...currentData,
+      blocks: cloneBlocks(snapshot),
+    };
+
+    dataRef.current = nextData;
+    setData(nextData);
+    const retainedSelectedBlockIds = selectedBlockIdsRef.current.filter(
+      (blockId) =>
+        snapshot.some((block) => block.id === blockId),
+    );
+
+    setSelectedBlockIds(retainedSelectedBlockIds);
+    setEditingBlockId(null);
+    setInsertionPoint(null);
+    setActiveMode(
+      retainedSelectedBlockIds.length > 0 ? "selected" : "canvas",
+    );
+  }
+
+  function copySelectedBlocks() {
+    const selectedBlockIdSet = new Set(selectedBlockIds);
+    const blocksToCopy = visibleBlocks.filter((block) =>
+      selectedBlockIdSet.has(block.id),
+    );
+
+    if (blocksToCopy.length === 0) {
+      return false;
+    }
+
+    const minX = Math.min(...blocksToCopy.map((block) => block.x));
+    const minY = Math.min(...blocksToCopy.map((block) => block.y));
+
+    copiedBlocksRef.current = blocksToCopy.map(
+      ({ id: _id, pageId: _pageId, x, y, ...block }) => ({
+        ...block,
+        offsetX: x - minX,
+        offsetY: y - minY,
+      }),
+    );
+
+    return true;
+  }
+
+  function getPasteOrigin() {
+    if (insertionPoint) {
+      return insertionPoint;
+    }
+
+    const currentCanvasViewport = canvasViewportRef.current;
+
+    if (currentCanvasViewport) {
+      return {
+        x: currentCanvasViewport.x + PASTED_BLOCK_OFFSET,
+        y: currentCanvasViewport.y + PASTED_BLOCK_OFFSET,
+      };
+    }
+
+    return { x: PASTED_BLOCK_OFFSET, y: PASTED_BLOCK_OFFSET };
+  }
+
+  function pasteCopiedBlocks() {
+    if (!selectedPageId || copiedBlocksRef.current.length === 0) {
+      return false;
+    }
+
+    const pasteOrigin = getPasteOrigin();
+    const pastedBlocks = copiedBlocksRef.current.map((block) => ({
+      id: createId("block"),
+      pageId: selectedPageId,
+      x: pasteOrigin.x + block.offsetX,
+      y: pasteOrigin.y + block.offsetY,
+      width: block.width,
+      height: block.height,
+      content: block.content,
+      isWidthManuallyResized: block.isWidthManuallyResized,
+      imageData: block.imageData,
+      imageName: block.imageName,
+    }));
+
+    setBlocksWithHistory((currentBlocks) => [...currentBlocks, ...pastedBlocks]);
+    setSelectedBlockIds(pastedBlocks.map((block) => block.id));
+    setEditingBlockId(null);
+    setIsCanvasKeyboardActive(true);
+    setInsertionPoint(null);
+    setActiveMode("selected");
+
+    return true;
+  }
+
   const deleteBlocks = useCallback((blockIds: string[]) => {
     const blockIdsToDelete = new Set(blockIds);
 
-    setData((currentData) => ({
-      ...currentData,
-      blocks: currentData.blocks.filter(
+    setBlocksWithHistory((currentBlocks) =>
+      currentBlocks.filter(
         (block) => !blockIdsToDelete.has(block.id),
       ),
-    }));
+    );
     setSelectedBlockIds((currentBlockIds) =>
       currentBlockIds.filter((blockId) => !blockIdsToDelete.has(blockId)),
     );
@@ -431,6 +627,41 @@ function App() {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
         event.preventDefault();
         setIsSearchOpen(true);
+        return;
+      }
+
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.key.toLowerCase() === "z" &&
+        !editingBlockId &&
+        !isTextEntryTarget(event.target)
+      ) {
+        event.preventDefault();
+        restoreBlockHistory(event.shiftKey ? "redo" : "undo");
+        return;
+      }
+
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.key.toLowerCase() === "y" &&
+        !editingBlockId &&
+        !isTextEntryTarget(event.target)
+      ) {
+        event.preventDefault();
+        restoreBlockHistory("redo");
+        return;
+      }
+
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.key.toLowerCase() === "c" &&
+        !editingBlockId &&
+        !isTextEntryTarget(event.target)
+      ) {
+        if (copySelectedBlocks()) {
+          event.preventDefault();
+        }
+
         return;
       }
 
@@ -513,7 +744,16 @@ function App() {
 
   useEffect(() => {
     function handlePaste(event: ClipboardEvent) {
-      if (!insertionPoint || !selectedPageId || isTextEntryTarget(event.target)) {
+      if (!selectedPageId || isTextEntryTarget(event.target)) {
+        return;
+      }
+
+      if (pasteCopiedBlocks()) {
+        event.preventDefault();
+        return;
+      }
+
+      if (!insertionPoint) {
         return;
       }
 
@@ -814,22 +1054,19 @@ function App() {
 
     const blockId = createId("block");
 
-    setData((currentData) => ({
-      ...currentData,
-      blocks: [
-        ...currentData.blocks,
-        {
-          id: blockId,
-          pageId: selectedPageId,
-          x,
-          y,
-          width: DEFAULT_BLOCK_WIDTH,
-          height: DEFAULT_BLOCK_HEIGHT,
-          content,
-          isWidthManuallyResized: false,
-        },
-      ],
-    }));
+    setBlocksWithHistory((currentBlocks) => [
+      ...currentBlocks,
+      {
+        id: blockId,
+        pageId: selectedPageId,
+        x,
+        y,
+        width: DEFAULT_BLOCK_WIDTH,
+        height: DEFAULT_BLOCK_HEIGHT,
+        content,
+        isWidthManuallyResized: false,
+      },
+    ]);
     setSelectedBlockIds([blockId]);
     setEditingBlockId(blockId);
     setFocusEndBlockId(blockId);
@@ -850,24 +1087,21 @@ function App() {
 
     const blockId = createId("block");
 
-    setData((currentData) => ({
-      ...currentData,
-      blocks: [
-        ...currentData.blocks,
-        {
-          id: blockId,
-          pageId: selectedPageId,
-          x,
-          y,
-          width: 320,
-          height: 220,
-          content: imageName,
-          isWidthManuallyResized: true,
-          imageData,
-          imageName,
-        },
-      ],
-    }));
+    setBlocksWithHistory((currentBlocks) => [
+      ...currentBlocks,
+      {
+        id: blockId,
+        pageId: selectedPageId,
+        x,
+        y,
+        width: 320,
+        height: 220,
+        content: imageName,
+        isWidthManuallyResized: true,
+        imageData,
+        imageName,
+      },
+    ]);
     setSelectedBlockIds([blockId]);
     setEditingBlockId(null);
     setIsCanvasKeyboardActive(true);
@@ -1181,14 +1415,13 @@ function App() {
     setPanOffset(panOffsetRef.current);
 
     if (movedEnough) {
-      setData((currentData) => ({
-        ...currentData,
-        blocks: currentData.blocks.map((block) =>
+      setBlocksWithHistory((currentBlocks) =>
+        currentBlocks.map((block) =>
           blockIdsToMove.has(block.id)
             ? { ...block, x: block.x + offset.x, y: block.y + offset.y }
             : block,
         ),
-      }));
+      );
     }
 
     selectDraggedBlocks(dragSession.blockIds);
@@ -1210,8 +1443,23 @@ function App() {
     setActiveMode("selected");
   }, []);
 
-  const selectBlock = useCallback((blockId: string) => {
+  const selectBlock = useCallback((blockId: string, additive = false) => {
+    const isDeselectingOnlyBlock =
+      additive &&
+      selectedBlockIdsRef.current.length === 1 &&
+      selectedBlockIdsRef.current[0] === blockId;
+
     setSelectedBlockIds((currentBlockIds) => {
+      if (additive) {
+        if (currentBlockIds.includes(blockId)) {
+          return currentBlockIds.filter(
+            (currentBlockId) => currentBlockId !== blockId,
+          );
+        }
+
+        return [...currentBlockIds, blockId];
+      }
+
       if (currentBlockIds.includes(blockId) && currentBlockIds.length > 1) {
         return currentBlockIds;
       }
@@ -1225,7 +1473,7 @@ function App() {
     setEditingBlockId(null);
     setInsertionPoint(null);
     setIsCanvasKeyboardActive(true);
-    setActiveMode("selected");
+    setActiveMode(isDeselectingOnlyBlock ? "canvas" : "selected");
   }, []);
 
   const editBlock = useCallback((blockId: string) => {

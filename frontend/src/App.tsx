@@ -81,11 +81,9 @@ type DragLayerSession = {
   originId: string;
   overlayElement: HTMLDivElement;
   sourceElements: HTMLElement[];
-  startBounds: ViewportRect;
   startClientX: number;
   startClientY: number;
   startPanOffset: PanOffset;
-  viewport: ViewportRect;
   zoomLevel: number;
 };
 
@@ -130,11 +128,9 @@ function App() {
   const searchCache = useRef<Map<string, SearchMatch[]>>(new Map());
   const blockElementsRef = useRef<Map<string, HTMLElement>>(new Map());
   const dragLayerSessionRef = useRef<DragLayerSession | null>(null);
-  const canvasSizeRef = useRef<CanvasSize>(canvasSize);
   const selectedBlockIdsRef = useRef<string[]>(selectedBlockIds);
   const zoomLevelRef = useRef(zoomLevel);
 
-  canvasSizeRef.current = canvasSize;
   selectedBlockIdsRef.current = selectedBlockIds;
   zoomLevelRef.current = zoomLevel;
 
@@ -953,88 +949,6 @@ function App() {
     });
   }
 
-  function getCurrentCanvasViewport(): ViewportRect | null {
-    const currentCanvasSize = canvasSizeRef.current;
-    const currentZoomLevel = zoomLevelRef.current;
-
-    if (currentCanvasSize.width === 0 || currentCanvasSize.height === 0) {
-      return null;
-    }
-
-    return {
-      x: -panOffsetRef.current.x / currentZoomLevel,
-      y: -panOffsetRef.current.y / currentZoomLevel,
-      width: currentCanvasSize.width / currentZoomLevel,
-      height: currentCanvasSize.height / currentZoomLevel,
-    };
-  }
-
-  function getDragBounds(entries: { element: HTMLElement }[]): ViewportRect | null {
-    const canvasElement = canvasRef.current;
-    const currentZoomLevel = zoomLevelRef.current;
-
-    if (!canvasElement || entries.length === 0) {
-      return null;
-    }
-
-    const canvasRect = canvasElement.getBoundingClientRect();
-    const bounds = entries.reduce(
-      (currentBounds, { element }) => {
-        const elementRect = element.getBoundingClientRect();
-        const x =
-          (elementRect.left - canvasRect.left - panOffsetRef.current.x) /
-          currentZoomLevel;
-        const y =
-          (elementRect.top - canvasRect.top - panOffsetRef.current.y) /
-          currentZoomLevel;
-        const width = element.offsetWidth;
-        const height = element.offsetHeight;
-
-        return {
-          minX: Math.min(currentBounds.minX, x),
-          minY: Math.min(currentBounds.minY, y),
-          maxX: Math.max(currentBounds.maxX, x + width),
-          maxY: Math.max(currentBounds.maxY, y + height),
-        };
-      },
-      {
-        minX: Number.POSITIVE_INFINITY,
-        minY: Number.POSITIVE_INFINITY,
-        maxX: Number.NEGATIVE_INFINITY,
-        maxY: Number.NEGATIVE_INFINITY,
-      },
-    );
-
-    return {
-      x: bounds.minX,
-      y: bounds.minY,
-      width: bounds.maxX - bounds.minX,
-      height: bounds.maxY - bounds.minY,
-    };
-  }
-
-  function clampOffsetToViewport(
-    offset: PanOffset,
-    bounds: ViewportRect,
-    viewport: ViewportRect,
-  ): PanOffset {
-    const maxX = viewport.x + viewport.width - bounds.width;
-    const maxY = viewport.y + viewport.height - bounds.height;
-    const nextX =
-      bounds.width > viewport.width
-        ? viewport.x
-        : Math.min(maxX, Math.max(viewport.x, bounds.x + offset.x));
-    const nextY =
-      bounds.height > viewport.height
-        ? viewport.y
-        : Math.min(maxY, Math.max(viewport.y, bounds.y + offset.y));
-
-    return {
-      x: nextX - bounds.x,
-      y: nextY - bounds.y,
-    };
-  }
-
   function getDragAutoPanDelta(clientX: number, clientY: number): PanOffset {
     const canvasElement = canvasRef.current;
 
@@ -1075,24 +989,26 @@ function App() {
   }
 
   function updateDragLayerVisual(session: DragLayerSession) {
-    const offset = clampOffsetToViewport(
-      {
-        x: (session.currentClientX - session.startClientX) / session.zoomLevel,
-        y: (session.currentClientY - session.startClientY) / session.zoomLevel,
-      },
-      session.startBounds,
-      session.viewport,
-    );
-
     session.groupElement.style.transform = `translate3d(${
-      offset.x * session.zoomLevel +
-      panOffsetRef.current.x -
-      session.startPanOffset.x
+      session.currentClientX - session.startClientX
     }px, ${
-      offset.y * session.zoomLevel +
-      panOffsetRef.current.y -
-      session.startPanOffset.y
+      session.currentClientY - session.startClientY
     }px, 0)`;
+  }
+
+  function getDragCommitOffset(session: DragLayerSession): PanOffset {
+    return {
+      x:
+        (session.currentClientX -
+          session.startClientX -
+          (panOffsetRef.current.x - session.startPanOffset.x)) /
+        session.zoomLevel,
+      y:
+        (session.currentClientY -
+          session.startClientY -
+          (panOffsetRef.current.y - session.startPanOffset.y)) /
+        session.zoomLevel,
+    };
   }
 
   function scheduleDragAutoPan(session: DragLayerSession) {
@@ -1120,7 +1036,6 @@ function App() {
         x: panOffsetRef.current.x + panDelta.x,
         y: panOffsetRef.current.y + panDelta.y,
       });
-      session.viewport = getCurrentCanvasViewport() ?? session.viewport;
       updateDragLayerVisual(session);
       scheduleDragAutoPan(session);
     });
@@ -1152,16 +1067,16 @@ function App() {
         return false;
       }
 
-      const viewport = getCurrentCanvasViewport();
-      const startBounds = getDragBounds(sourceEntries);
+      const canvasElement = canvasRef.current;
 
-      if (!viewport || !startBounds) {
+      if (!canvasElement) {
         return false;
       }
 
       const overlayElement = document.createElement("div");
       const groupElement = document.createElement("div");
       const currentZoomLevel = zoomLevelRef.current;
+      const canvasRect = canvasElement.getBoundingClientRect();
 
       overlayElement.className = "drag-layer";
       groupElement.className = "drag-layer-group";
@@ -1176,8 +1091,8 @@ function App() {
         cloneElement.classList.remove("is-drag-source-hidden");
         cloneElement.classList.add("is-dragging", "drag-layer-clone");
         cloneElement.style.position = "absolute";
-        cloneElement.style.left = `${elementRect.left}px`;
-        cloneElement.style.top = `${elementRect.top}px`;
+        cloneElement.style.left = `${elementRect.left - canvasRect.left}px`;
+        cloneElement.style.top = `${elementRect.top - canvasRect.top}px`;
         cloneElement.style.width = `${element.offsetWidth}px`;
         cloneElement.style.height = `${element.offsetHeight}px`;
         cloneElement.style.margin = "0";
@@ -1187,11 +1102,7 @@ function App() {
         groupElement.append(cloneElement);
       }
 
-      const dragLayerHost =
-        (canvasRef.current?.closest(".app-shell") as HTMLElement | null) ??
-        document.body;
-
-      dragLayerHost.append(overlayElement);
+      canvasElement.append(overlayElement);
 
       const dragSession: DragLayerSession = {
         autoPanRafId: null,
@@ -1203,11 +1114,9 @@ function App() {
         originId,
         overlayElement,
         sourceElements: sourceEntries.map((entry) => entry.element),
-        startBounds,
         startClientX: clientX,
         startClientY: clientY,
         startPanOffset: { ...panOffsetRef.current },
-        viewport,
         zoomLevel: currentZoomLevel,
       };
 
@@ -1254,18 +1163,7 @@ function App() {
     dragSession.currentClientX = clientX;
     dragSession.currentClientY = clientY;
 
-    const offset = clampOffsetToViewport(
-      {
-        x:
-          (dragSession.currentClientX - dragSession.startClientX) /
-          dragSession.zoomLevel,
-        y:
-          (dragSession.currentClientY - dragSession.startClientY) /
-          dragSession.zoomLevel,
-      },
-      dragSession.startBounds,
-      dragSession.viewport,
-    );
+    const offset = getDragCommitOffset(dragSession);
     const movedEnough = Math.abs(offset.x) > 0.01 || Math.abs(offset.y) > 0.01;
     const blockIdsToMove = new Set(dragSession.blockIds);
 

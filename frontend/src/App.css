@@ -634,9 +634,9 @@ h2 {
 }
 
 .drag-layer {
-  position: fixed;
+  position: absolute;
   inset: 0;
-  z-index: 1000;
+  z-index: 19;
   overflow: hidden;
   pointer-events: none;
   contain: layout paint;

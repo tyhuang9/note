@@ -567,8 +567,8 @@ function App() {
 
     if (currentCanvasViewport) {
       return {
-        x: currentCanvasViewport.x + PASTED_BLOCK_OFFSET,
-        y: currentCanvasViewport.y + PASTED_BLOCK_OFFSET,
+        x: currentCanvasViewport.x + currentCanvasViewport.width / 2,
+        y: currentCanvasViewport.y + currentCanvasViewport.height / 2,
       };
     }
 
@@ -581,11 +581,26 @@ function App() {
     }
 
     const pasteOrigin = getPasteOrigin();
+    const isViewportCenteredPaste =
+      !insertionPoint && Boolean(canvasViewportRef.current);
+    const pastedGroupSize = copiedBlocksRef.current.reduce(
+      (currentSize, block) => ({
+        width: Math.max(currentSize.width, block.offsetX + block.width),
+        height: Math.max(currentSize.height, block.offsetY + block.height),
+      }),
+      { width: 0, height: 0 },
+    );
+    const pastedGroupOrigin = isViewportCenteredPaste
+      ? {
+          x: pasteOrigin.x - pastedGroupSize.width / 2,
+          y: pasteOrigin.y - pastedGroupSize.height / 2,
+        }
+      : pasteOrigin;
     const pastedBlocks = copiedBlocksRef.current.map((block) => ({
       id: createId("block"),
       pageId: selectedPageId,
-      x: pasteOrigin.x + block.offsetX,
-      y: pasteOrigin.y + block.offsetY,
+      x: pastedGroupOrigin.x + block.offsetX,
+      y: pastedGroupOrigin.y + block.offsetY,
       width: block.width,
       height: block.height,
       content: block.content,

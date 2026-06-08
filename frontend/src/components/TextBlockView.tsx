@@ -777,8 +777,13 @@ export const TextBlockView = memo(function TextBlockView({
         className="text-block-header"
         onClick={(event) => {
           event.stopPropagation();
+
+          if (event.ctrlKey || event.metaKey) {
+            return;
+          }
+
           blurActiveTextEntry();
-          onSelect(block.id, event.ctrlKey || event.metaKey);
+          onSelect(block.id);
         }}
         onDoubleClick={(event) => {
           event.stopPropagation();

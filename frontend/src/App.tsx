@@ -104,6 +104,7 @@ function App() {
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
   const [activeMode, setActiveMode] = useState<InteractionMode>("canvas");
   const [panOffset, setPanOffset] = useState<PanOffset>({ x: 0, y: 0 });
+  const [livePanOffset, setLivePanOffset] = useState<PanOffset>(panOffset);
   const [insertionPoint, setInsertionPoint] = useState<InsertionPoint | null>(null);
   const [canvasSize, setCanvasSize] = useState<CanvasSize>({ width: 0, height: 0 });
   const [zoomLevel, setZoomLevel] = useState(DEFAULT_ZOOM);
@@ -222,12 +223,18 @@ function App() {
     }
 
     return {
-      x: -panOffset.x / zoomLevel,
-      y: -panOffset.y / zoomLevel,
+      x: -livePanOffset.x / zoomLevel,
+      y: -livePanOffset.y / zoomLevel,
       width: canvasSize.width / zoomLevel,
       height: canvasSize.height / zoomLevel,
     };
-  }, [canvasSize.height, canvasSize.width, panOffset.x, panOffset.y, zoomLevel]);
+  }, [
+    canvasSize.height,
+    canvasSize.width,
+    livePanOffset.x,
+    livePanOffset.y,
+    zoomLevel,
+  ]);
   const offscreenGroups = useMemo<OffscreenGroup[]>(() => {
     if (!canvasViewport || visibleBlocks.length === 0) {
       return [];
@@ -253,6 +260,7 @@ function App() {
 
   useEffect(() => {
     panOffsetRef.current = panOffset;
+    setLivePanOffset(panOffset);
     setCanvasContentTransform(panOffset);
   }, [panOffset, zoomLevel]);
 
@@ -572,6 +580,7 @@ function App() {
 
     panRafId.current = window.requestAnimationFrame(() => {
       setCanvasContentTransform(panOffsetRef.current);
+      setLivePanOffset(panOffsetRef.current);
       panRafId.current = null;
     });
   }
@@ -1413,6 +1422,7 @@ function App() {
     };
 
     panOffsetRef.current = nextPanOffset;
+    setLivePanOffset(nextPanOffset);
     setPanOffset(nextPanOffset);
   }
 

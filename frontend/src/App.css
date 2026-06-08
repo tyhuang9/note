@@ -814,13 +814,13 @@ h2 {
 .resize-e,
 .resize-w {
   top: 0;
-  width: 14px;
+  width: 20px;
   height: 100%;
   cursor: ew-resize;
 }
 
 .resize-e {
-  right: -7px;
+  right: -10px;
 }
 
 .resize-w {

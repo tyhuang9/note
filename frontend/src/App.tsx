@@ -72,6 +72,7 @@ type PageHeaderProps = {
 };
 
 type DragLayerSession = {
+  autoPanRafId: number | null;
   blockIds: string[];
   currentClientX: number;
   currentClientY: number;
@@ -80,10 +81,16 @@ type DragLayerSession = {
   originId: string;
   overlayElement: HTMLDivElement;
   sourceElements: HTMLElement[];
+  startBounds: ViewportRect;
   startClientX: number;
   startClientY: number;
+  startPanOffset: PanOffset;
+  viewport: ViewportRect;
   zoomLevel: number;
 };
+
+const DRAG_AUTO_PAN_EDGE_PX = 56;
+const DRAG_AUTO_PAN_MAX_STEP_PX = 18;
 
 
 
@@ -123,9 +130,11 @@ function App() {
   const searchCache = useRef<Map<string, SearchMatch[]>>(new Map());
   const blockElementsRef = useRef<Map<string, HTMLElement>>(new Map());
   const dragLayerSessionRef = useRef<DragLayerSession | null>(null);
+  const canvasSizeRef = useRef<CanvasSize>(canvasSize);
   const selectedBlockIdsRef = useRef<string[]>(selectedBlockIds);
   const zoomLevelRef = useRef(zoomLevel);
 
+  canvasSizeRef.current = canvasSize;
   selectedBlockIdsRef.current = selectedBlockIds;
   zoomLevelRef.current = zoomLevel;
 
@@ -919,6 +928,11 @@ function App() {
       session.modeRafId = null;
     }
 
+    if (session.autoPanRafId !== null) {
+      window.cancelAnimationFrame(session.autoPanRafId);
+      session.autoPanRafId = null;
+    }
+
     for (const sourceElement of session.sourceElements) {
       sourceElement.classList.remove("is-drag-source-hidden");
     }
@@ -936,6 +950,179 @@ function App() {
       }
 
       return blockIds;
+    });
+  }
+
+  function getCurrentCanvasViewport(): ViewportRect | null {
+    const currentCanvasSize = canvasSizeRef.current;
+    const currentZoomLevel = zoomLevelRef.current;
+
+    if (currentCanvasSize.width === 0 || currentCanvasSize.height === 0) {
+      return null;
+    }
+
+    return {
+      x: -panOffsetRef.current.x / currentZoomLevel,
+      y: -panOffsetRef.current.y / currentZoomLevel,
+      width: currentCanvasSize.width / currentZoomLevel,
+      height: currentCanvasSize.height / currentZoomLevel,
+    };
+  }
+
+  function getDragBounds(entries: { element: HTMLElement }[]): ViewportRect | null {
+    const canvasElement = canvasRef.current;
+    const currentZoomLevel = zoomLevelRef.current;
+
+    if (!canvasElement || entries.length === 0) {
+      return null;
+    }
+
+    const canvasRect = canvasElement.getBoundingClientRect();
+    const bounds = entries.reduce(
+      (currentBounds, { element }) => {
+        const elementRect = element.getBoundingClientRect();
+        const x =
+          (elementRect.left - canvasRect.left - panOffsetRef.current.x) /
+          currentZoomLevel;
+        const y =
+          (elementRect.top - canvasRect.top - panOffsetRef.current.y) /
+          currentZoomLevel;
+        const width = element.offsetWidth;
+        const height = element.offsetHeight;
+
+        return {
+          minX: Math.min(currentBounds.minX, x),
+          minY: Math.min(currentBounds.minY, y),
+          maxX: Math.max(currentBounds.maxX, x + width),
+          maxY: Math.max(currentBounds.maxY, y + height),
+        };
+      },
+      {
+        minX: Number.POSITIVE_INFINITY,
+        minY: Number.POSITIVE_INFINITY,
+        maxX: Number.NEGATIVE_INFINITY,
+        maxY: Number.NEGATIVE_INFINITY,
+      },
+    );
+
+    return {
+      x: bounds.minX,
+      y: bounds.minY,
+      width: bounds.maxX - bounds.minX,
+      height: bounds.maxY - bounds.minY,
+    };
+  }
+
+  function clampOffsetToViewport(
+    offset: PanOffset,
+    bounds: ViewportRect,
+    viewport: ViewportRect,
+  ): PanOffset {
+    const maxX = viewport.x + viewport.width - bounds.width;
+    const maxY = viewport.y + viewport.height - bounds.height;
+    const nextX =
+      bounds.width > viewport.width
+        ? viewport.x
+        : Math.min(maxX, Math.max(viewport.x, bounds.x + offset.x));
+    const nextY =
+      bounds.height > viewport.height
+        ? viewport.y
+        : Math.min(maxY, Math.max(viewport.y, bounds.y + offset.y));
+
+    return {
+      x: nextX - bounds.x,
+      y: nextY - bounds.y,
+    };
+  }
+
+  function getDragAutoPanDelta(clientX: number, clientY: number): PanOffset {
+    const canvasElement = canvasRef.current;
+
+    if (!canvasElement) {
+      return { x: 0, y: 0 };
+    }
+
+    const canvasRect = canvasElement.getBoundingClientRect();
+
+    function getAxisDelta(
+      pointerPosition: number,
+      startEdge: number,
+      endEdge: number,
+    ) {
+      if (pointerPosition < startEdge + DRAG_AUTO_PAN_EDGE_PX) {
+        const intensity =
+          (startEdge + DRAG_AUTO_PAN_EDGE_PX - pointerPosition) /
+          DRAG_AUTO_PAN_EDGE_PX;
+
+        return DRAG_AUTO_PAN_MAX_STEP_PX * Math.min(1, intensity);
+      }
+
+      if (pointerPosition > endEdge - DRAG_AUTO_PAN_EDGE_PX) {
+        const intensity =
+          (pointerPosition - (endEdge - DRAG_AUTO_PAN_EDGE_PX)) /
+          DRAG_AUTO_PAN_EDGE_PX;
+
+        return -DRAG_AUTO_PAN_MAX_STEP_PX * Math.min(1, intensity);
+      }
+
+      return 0;
+    }
+
+    return {
+      x: getAxisDelta(clientX, canvasRect.left, canvasRect.right),
+      y: getAxisDelta(clientY, canvasRect.top, canvasRect.bottom),
+    };
+  }
+
+  function updateDragLayerVisual(session: DragLayerSession) {
+    const offset = clampOffsetToViewport(
+      {
+        x: (session.currentClientX - session.startClientX) / session.zoomLevel,
+        y: (session.currentClientY - session.startClientY) / session.zoomLevel,
+      },
+      session.startBounds,
+      session.viewport,
+    );
+
+    session.groupElement.style.transform = `translate3d(${
+      offset.x * session.zoomLevel +
+      panOffsetRef.current.x -
+      session.startPanOffset.x
+    }px, ${
+      offset.y * session.zoomLevel +
+      panOffsetRef.current.y -
+      session.startPanOffset.y
+    }px, 0)`;
+  }
+
+  function scheduleDragAutoPan(session: DragLayerSession) {
+    if (session.autoPanRafId !== null) {
+      return;
+    }
+
+    session.autoPanRafId = window.requestAnimationFrame(() => {
+      session.autoPanRafId = null;
+
+      if (dragLayerSessionRef.current !== session) {
+        return;
+      }
+
+      const panDelta = getDragAutoPanDelta(
+        session.currentClientX,
+        session.currentClientY,
+      );
+
+      if (panDelta.x === 0 && panDelta.y === 0) {
+        return;
+      }
+
+      scheduleCanvasContentTransform({
+        x: panOffsetRef.current.x + panDelta.x,
+        y: panOffsetRef.current.y + panDelta.y,
+      });
+      session.viewport = getCurrentCanvasViewport() ?? session.viewport;
+      updateDragLayerVisual(session);
+      scheduleDragAutoPan(session);
     });
   }
 
@@ -962,6 +1149,13 @@ function App() {
         );
 
       if (!sourceEntries.some((entry) => entry.blockId === originId)) {
+        return false;
+      }
+
+      const viewport = getCurrentCanvasViewport();
+      const startBounds = getDragBounds(sourceEntries);
+
+      if (!viewport || !startBounds) {
         return false;
       }
 
@@ -1000,6 +1194,7 @@ function App() {
       dragLayerHost.append(overlayElement);
 
       const dragSession: DragLayerSession = {
+        autoPanRafId: null,
         blockIds: sourceEntries.map((entry) => entry.blockId),
         currentClientX: clientX,
         currentClientY: clientY,
@@ -1008,8 +1203,11 @@ function App() {
         originId,
         overlayElement,
         sourceElements: sourceEntries.map((entry) => entry.element),
+        startBounds,
         startClientX: clientX,
         startClientY: clientY,
+        startPanOffset: { ...panOffsetRef.current },
+        viewport,
         zoomLevel: currentZoomLevel,
       };
 
@@ -1042,9 +1240,8 @@ function App() {
 
     dragSession.currentClientX = clientX;
     dragSession.currentClientY = clientY;
-    dragSession.groupElement.style.transform = `translate3d(${
-      clientX - dragSession.startClientX
-    }px, ${clientY - dragSession.startClientY}px, 0)`;
+    updateDragLayerVisual(dragSession);
+    scheduleDragAutoPan(dragSession);
   }, []);
 
   const endVisualDrag = useCallback((clientX: number, clientY: number) => {
@@ -1057,17 +1254,24 @@ function App() {
     dragSession.currentClientX = clientX;
     dragSession.currentClientY = clientY;
 
-    const offset = {
-      x: (dragSession.currentClientX - dragSession.startClientX) /
-        dragSession.zoomLevel,
-      y: (dragSession.currentClientY - dragSession.startClientY) /
-        dragSession.zoomLevel,
-    };
+    const offset = clampOffsetToViewport(
+      {
+        x:
+          (dragSession.currentClientX - dragSession.startClientX) /
+          dragSession.zoomLevel,
+        y:
+          (dragSession.currentClientY - dragSession.startClientY) /
+          dragSession.zoomLevel,
+      },
+      dragSession.startBounds,
+      dragSession.viewport,
+    );
     const movedEnough = Math.abs(offset.x) > 0.01 || Math.abs(offset.y) > 0.01;
     const blockIdsToMove = new Set(dragSession.blockIds);
 
     cleanupDragLayerSession(dragSession);
     dragLayerSessionRef.current = null;
+    setPanOffset(panOffsetRef.current);
 
     if (movedEnough) {
       setData((currentData) => ({
@@ -1175,7 +1379,7 @@ function App() {
     selectCanvas();
     event.preventDefault();
 
-    if (event.shiftKey) {
+    if (event.button === 2) {
       startCanvasPan(event);
     } else {
       const startPoint = getCanvasPoint(event.clientX, event.clientY);
@@ -1257,7 +1461,9 @@ function App() {
       return;
     }
 
-    event.currentTarget.releasePointerCapture(event.pointerId);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
 
     if (currentPan) {
       const nextPanOffset = {
@@ -1296,12 +1502,20 @@ function App() {
   }
 
   function handleCanvasWheel(event: React.WheelEvent<HTMLElement>) {
-    if (!(event.metaKey || event.ctrlKey)) {
+    event.preventDefault();
+
+    if (event.metaKey || event.ctrlKey) {
+      updateZoom(event.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP);
       return;
     }
 
-    event.preventDefault();
-    updateZoom(event.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP);
+    const nextPanOffset = {
+      x: panOffsetRef.current.x - (event.shiftKey ? event.deltaY : event.deltaX),
+      y: panOffsetRef.current.y - (event.shiftKey ? 0 : event.deltaY),
+    };
+
+    panOffsetRef.current = nextPanOffset;
+    setPanOffset(nextPanOffset);
   }
 
   function focusSearchMatch(matchIndex: number) {
@@ -1419,6 +1633,7 @@ function App() {
           }`}
           aria-label="Freeform note canvas"
           onPointerCancel={endCanvasInteraction}
+          onContextMenu={(event) => event.preventDefault()}
           onPointerDown={startCanvasInteraction}
           onPointerMove={updateCanvasInteraction}
           onPointerUp={endCanvasInteraction}

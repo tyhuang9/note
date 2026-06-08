@@ -475,8 +475,12 @@ export const TextBlockView = memo(function TextBlockView({
   }
 
   function startDrag(event: ReactPointerEvent<HTMLDivElement>) {
-    if (event.shiftKey) {
+    if (event.button === 2) {
       onCanvasPanStart(event);
+      return;
+    }
+
+    if (event.button !== 0) {
       return;
     }
 
@@ -728,8 +732,12 @@ export const TextBlockView = memo(function TextBlockView({
         onEdit(block.id);
       }}
       onPointerDown={(event) => {
-        if (event.shiftKey) {
+        if (event.button === 2) {
           onCanvasPanStart(event);
+          return;
+        }
+
+        if (event.button !== 0) {
           return;
         }
 
@@ -745,6 +753,7 @@ export const TextBlockView = memo(function TextBlockView({
         onSelect(block.id);
       }}
       ref={setBlockElement}
+      onContextMenu={(event) => event.preventDefault()}
       onPointerCancel={handleRootPointerCancel}
       onPointerMove={handleRootPointerMove}
       onPointerUp={handleRootPointerEnd}
@@ -846,7 +855,7 @@ export const TextBlockView = memo(function TextBlockView({
           setIsContentSelected(false);
         }}
         onPointerDown={(event) => {
-          if (event.shiftKey) {
+          if (event.button === 2) {
             onCanvasPanStart(event);
           }
         }}
@@ -862,8 +871,12 @@ export const TextBlockView = memo(function TextBlockView({
             onEdit(block.id);
           }}
           onPointerDown={(event) => {
-            if (event.shiftKey) {
+            if (event.button === 2) {
               onCanvasPanStart(event);
+              return;
+            }
+
+            if (event.button !== 0) {
               return;
             }
 
@@ -874,8 +887,16 @@ export const TextBlockView = memo(function TextBlockView({
               event.clientY,
             );
           }}
-          onPointerMove={(event) => event.stopPropagation()}
-          onPointerUp={(event) => event.stopPropagation()}
+          onPointerMove={(event) => {
+            if (event.buttons !== 2) {
+              event.stopPropagation();
+            }
+          }}
+          onPointerUp={(event) => {
+            if (event.button !== 2) {
+              event.stopPropagation();
+            }
+          }}
           ref={displayRef}
         >
           {renderHighlightedContent()}
@@ -886,7 +907,7 @@ export const TextBlockView = memo(function TextBlockView({
           alt={block.imageName || "Pasted image"}
           className="text-block-image"
           onPointerDown={(event) => {
-            if (event.shiftKey) {
+            if (event.button === 2) {
               onCanvasPanStart(event);
             }
           }}

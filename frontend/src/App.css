@@ -256,6 +256,51 @@ h2 {
   gap: 10px;
 }
 
+.global-text-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  border: 1px solid #d3dce6;
+  border-radius: 6px;
+  padding: 4px 6px;
+  background: #f7f9fb;
+}
+
+.global-text-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  min-width: 28px;
+  height: 24px;
+  border-color: transparent;
+  border-radius: 5px;
+  padding: 0;
+  color: #3d4856;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.global-text-toolbar button:hover {
+  border-color: #c2cad4;
+  background: #ffffff;
+}
+
+.global-text-toolbar button.is-active,
+.global-text-toolbar button[aria-pressed="true"] {
+  border-color: #aab4c0;
+  color: #172033;
+  background: #e4e9ef;
+}
+
+.global-text-toolbar button:disabled {
+  color: #a5adb8;
+  background: transparent;
+}
+
 .page-title-group {
   display: flex;
   align-items: center;
@@ -589,13 +634,16 @@ h2 {
 }
 
 .text-block {
+  --text-block-border-width: 1px;
+  --text-block-resize-margin: 2px;
+  --text-block-resize-padding: 2px;
   position: absolute;
-  contain: layout paint;
+  contain: layout;
   display: grid;
-  grid-template-rows: 20px minmax(0, 1fr);
+  grid-template-rows: 14px minmax(0, 1fr);
   min-width: 140px;
   min-height: 54px;
-  border: 1px solid transparent;
+  border: var(--text-block-border-width) solid transparent;
   border-radius: 6px;
   padding: 0;
   color: #202936;
@@ -682,7 +730,7 @@ h2 {
 .text-block-header {
   position: relative;
   z-index: 3;
-  min-height: 20px;
+  min-height: 14px;
   border-bottom: 1px solid transparent;
   cursor: move;
   opacity: 0;
@@ -704,8 +752,6 @@ h2 {
   width: 100%;
   height: 100%;
   border: 0;
-  padding: 5px 8px 7px 10px;
-  resize: none;
   color: inherit;
   background: transparent;
   cursor: text;
@@ -713,13 +759,98 @@ h2 {
   font-size: 14px;
   line-height: 20px;
   overflow: hidden;
+}
+
+.text-block-editor .ProseMirror,
+.text-block-editor-content {
+  width: 100%;
+  min-height: 100%;
+  padding: 5px 8px 7px 10px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  outline: none;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
 }
 
-.text-block-editor:focus {
-  outline: none;
+.text-block.is-content-selected .text-block-editor .ProseMirror::selection,
+.text-block.is-content-selected .text-block-editor .ProseMirror *::selection {
+  color: inherit;
+  background: transparent;
+}
+
+.text-block-editor .ProseMirror p,
+.text-block-display p {
+  margin: 0;
+}
+
+.text-block-editor .ProseMirror h1,
+.text-block-editor .ProseMirror h2,
+.text-block-editor .ProseMirror h3,
+.text-block-editor .ProseMirror h4,
+.text-block-editor .ProseMirror h5,
+.text-block-editor .ProseMirror h6,
+.text-block-display h1,
+.text-block-display h2,
+.text-block-display h3,
+.text-block-display h4,
+.text-block-display h5,
+.text-block-display h6 {
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+}
+
+.text-block-editor .ProseMirror ul,
+.text-block-editor .ProseMirror ol,
+.text-block-display ul,
+.text-block-display ol {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.text-block-editor .ProseMirror blockquote,
+.text-block-display blockquote {
+  margin: 0;
+  border-left: 3px solid #cbd3dc;
+  padding-left: 8px;
+}
+
+.text-block-editor .ProseMirror pre,
+.text-block-display pre {
+  margin: 0;
+  border-radius: 4px;
+  padding: 4px 6px;
+  background: #eef2f6;
+  white-space: pre-wrap;
+}
+
+.text-block-editor .ProseMirror code,
+.text-block-display code {
+  border-radius: 3px;
+  padding: 0 3px;
+  background: #eef2f6;
+  font-family:
+    "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.92em;
+}
+
+.text-block-editor .ProseMirror pre code,
+.text-block-display pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.text-block-editor .ProseMirror hr,
+.text-block-display hr {
+  height: 1px;
+  border: 0;
+  background: #cbd3dc;
 }
 
 .text-block-display {
@@ -788,7 +919,7 @@ h2 {
 
 .resize-handle {
   position: absolute;
-  z-index: 4;
+  z-index: 8;
   border: 0;
   background: transparent;
 }
@@ -802,54 +933,17 @@ h2 {
   outline-offset: -2px;
 }
 
-.resize-n,
-.resize-s {
-  left: 50%;
-  width: 28px;
-  height: 12px;
-  cursor: ns-resize;
-  transform: translateX(-50%);
-}
-
-.resize-n {
-  top: -6px;
-}
-
-.resize-n::after,
-.resize-s::after {
-  left: 50%;
-  width: 24px;
-  height: 8px;
-  border-radius: 5px;
-  transform: translate(-50%, -50%);
-}
-
-.resize-n::after {
-  top: 50%;
-}
-
-.resize-s {
-  bottom: -6px;
-}
-
-.resize-s::after {
-  top: 50%;
-}
-
-.resize-e,
-.resize-w {
+.resize-e {
   top: 0;
-  width: 20px;
+  right: calc(
+    -1 * (var(--text-block-border-width) + var(--text-block-resize-margin))
+  );
+  width: calc(
+    var(--text-block-resize-padding) + var(--text-block-border-width) +
+      var(--text-block-resize-margin)
+  );
   height: 100%;
   cursor: ew-resize;
-}
-
-.resize-e {
-  right: -10px;
-}
-
-.resize-w {
-  display: none;
 }
 
 .app-shell.is-dark {
@@ -939,6 +1033,32 @@ h2 {
   background: #262c35;
 }
 
+.app-shell.is-dark .global-text-toolbar {
+  border-color: #3b4655;
+  background: #262c35;
+}
+
+.app-shell.is-dark .global-text-toolbar button {
+  color: #cbd4df;
+}
+
+.app-shell.is-dark .global-text-toolbar button:hover {
+  border-color: #4a5666;
+  background: #333c49;
+}
+
+.app-shell.is-dark .global-text-toolbar button.is-active,
+.app-shell.is-dark .global-text-toolbar button[aria-pressed="true"] {
+  border-color: #657386;
+  color: #f3f6fa;
+  background: #3a4656;
+}
+
+.app-shell.is-dark .global-text-toolbar button:disabled {
+  color: #687485;
+  background: transparent;
+}
+
 .app-shell.is-dark .header-toggle[aria-pressed="true"] {
   border-color: #677487;
   color: #eef2f7;
@@ -1008,6 +1128,31 @@ h2 {
 .app-shell.is-dark .text-block.is-editing .text-block-header {
   border-bottom-color: #4a5666;
   background: #2b333e;
+}
+
+.app-shell.is-dark .text-block-editor .ProseMirror blockquote,
+.app-shell.is-dark .text-block-display blockquote {
+  border-left-color: #566474;
+}
+
+.app-shell.is-dark .text-block-editor .ProseMirror pre,
+.app-shell.is-dark .text-block-display pre {
+  background: #1d222a;
+}
+
+.app-shell.is-dark .text-block-editor .ProseMirror code,
+.app-shell.is-dark .text-block-display code {
+  background: #1d222a;
+}
+
+.app-shell.is-dark .text-block-editor .ProseMirror pre code,
+.app-shell.is-dark .text-block-display pre code {
+  background: transparent;
+}
+
+.app-shell.is-dark .text-block-editor .ProseMirror hr,
+.app-shell.is-dark .text-block-display hr {
+  background: #566474;
 }
 
 .app-shell.is-dark .search-panel {

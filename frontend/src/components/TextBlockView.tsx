@@ -1,5 +1,9 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
+import type { Editor, JSONContent } from "@tiptap/core";
+import { EditorContent, useEditor } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
 import {
   AUTO_WIDTH_RIGHT_PADDING,
   DEFAULT_BLOCK_WIDTH,
@@ -43,6 +47,8 @@ type PointerLike = {
   preventDefault: () => void;
 };
 
+const tiptapExtensions = [StarterKit];
+
 type TextBlockViewProps = {
   block: TextBlock;
   activeSearchRange: SearchMatch | null;
@@ -55,6 +61,7 @@ type TextBlockViewProps = {
   onEditEnd: () => void;
   onDelete: (blockId: string) => void;
   onEdit: (blockId: string) => void;
+  onActiveEditorChange: (editor: Editor | null) => void;
   onCanvasPanEnd: (event: ReactPointerEvent<HTMLElement>) => void;
   onCanvasPanMove: (event: ReactPointerEvent<HTMLElement>) => void;
   onCanvasPanStart: (event: ReactPointerEvent<HTMLElement>) => void;
@@ -89,6 +96,7 @@ export const TextBlockView = memo(function TextBlockView({
   onEditEnd,
   onDelete,
   onEdit,
+  onActiveEditorChange,
   onCanvasPanEnd,
   onCanvasPanMove,
   onCanvasPanStart,
@@ -104,7 +112,7 @@ export const TextBlockView = memo(function TextBlockView({
   zoomLevel,
 }: TextBlockViewProps) {
   const blockRef = useRef<HTMLDivElement | null>(null);
-  const editorRef = useRef<HTMLTextAreaElement | null>(null);
+  const editorRef = useRef<Editor | null>(null);
   const displayRef = useRef<HTMLDivElement | null>(null);
   const widthMeasureRef = useRef<HTMLDivElement | null>(null);
   const heightMeasureRef = useRef<HTMLDivElement | null>(null);
@@ -116,7 +124,13 @@ export const TextBlockView = memo(function TextBlockView({
   const hasManualWidth = useRef(Boolean(block.isWidthManuallyResized));
   const pendingCaretOffset = useRef<number | null>(null);
   const draftContentRef = useRef(block.content);
+  const draftRichContentRef = useRef<JSONContent>(
+    getTipTapContent(block),
+  );
   const committedContentRef = useRef(block.content);
+  const committedRichContentRef = useRef<JSONContent>(
+    getTipTapContent(block),
+  );
   const commitTimerRef = useRef<number | null>(null);
   const autosizeRafId = useRef<number | null>(null);
   const latestAutosizeText = useRef(block.content);
@@ -138,16 +152,14 @@ export const TextBlockView = memo(function TextBlockView({
 
   useEffect(() => {
     committedContentRef.current = block.content;
+    committedRichContentRef.current = getTipTapContent(block);
 
     if (!isEditing) {
       draftContentRef.current = block.content;
+      draftRichContentRef.current = getTipTapContent(block);
       latestAutosizeText.current = "";
-
-      if (editorRef.current) {
-        editorRef.current.value = block.content;
-      }
     }
-  }, [block.content, block.id, isEditing]);
+  }, [block.content, block.id, block.richContent, isEditing]);
 
   useEffect(() => {
     hasManualWidth.current = Boolean(block.isWidthManuallyResized);
@@ -164,40 +176,6 @@ export const TextBlockView = memo(function TextBlockView({
       }
     };
   }, []);
-
-  useEffect(() => {
-    if (isEditing) {
-      const editorElement = editorRef.current;
-
-      if (editorElement && editorElement.value !== draftContentRef.current) {
-        editorElement.value = draftContentRef.current;
-      }
-
-      editorElement?.focus();
-
-      if (editorElement && pendingCaretOffset.current !== null) {
-        const caretPosition = Math.min(
-          editorElement.value.length,
-          pendingCaretOffset.current,
-        );
-
-        window.requestAnimationFrame(() => {
-          editorElement.setSelectionRange(caretPosition, caretPosition);
-          pendingCaretOffset.current = null;
-        });
-        return;
-      }
-
-      if (shouldFocusEnd && editorElement) {
-        const caretPosition = editorElement.value.length;
-
-        window.requestAnimationFrame(() => {
-          editorElement.setSelectionRange(caretPosition, caretPosition);
-          onFocusEndHandled();
-        });
-      }
-    }
-  }, [isEditing, onFocusEndHandled, shouldFocusEnd]);
 
   useEffect(() => {
     const blockElement = blockRef.current;
@@ -302,7 +280,7 @@ export const TextBlockView = memo(function TextBlockView({
     return getAutoSize(
       widthOverride,
       forceFixedWidth,
-      editorRef.current?.value ?? draftContentRef.current,
+      draftContentRef.current,
     ).height;
   }
 
@@ -336,8 +314,12 @@ export const TextBlockView = memo(function TextBlockView({
 
     commitTimerRef.current = window.setTimeout(() => {
       const nextContent = draftContentRef.current;
+      const nextRichContent = draftRichContentRef.current;
 
-      if (nextContent === committedContentRef.current) {
+      if (
+        nextContent === committedContentRef.current &&
+        areRichContentsEqual(nextRichContent, committedRichContentRef.current)
+      ) {
         commitTimerRef.current = null;
         return;
       }
@@ -345,19 +327,14 @@ export const TextBlockView = memo(function TextBlockView({
       const size = getAutoSize(undefined, false, nextContent);
 
       committedContentRef.current = nextContent;
-      onUpdate(block.id, { content: nextContent, ...size });
+      committedRichContentRef.current = nextRichContent;
+      onUpdate(block.id, {
+        content: nextContent,
+        richContent: nextRichContent,
+        ...size,
+      });
       commitTimerRef.current = null;
     }, TEXT_COMMIT_DELAY_MS);
-  }
-
-  function selectCurrentLine(editorElement: HTMLTextAreaElement) {
-    const cursorPosition = editorElement.selectionStart;
-    const lineStart = editorElement.value.lastIndexOf("\n", cursorPosition - 1) + 1;
-    const nextLineBreak = editorElement.value.indexOf("\n", cursorPosition);
-    const lineEnd =
-      nextLineBreak === -1 ? editorElement.value.length : nextLineBreak;
-
-    editorElement.setSelectionRange(lineStart, lineEnd);
   }
 
   function renderHighlightedContent() {
@@ -474,6 +451,60 @@ export const TextBlockView = memo(function TextBlockView({
     }
 
     return draftContentRef.current.length;
+  }
+
+  function handleEditorChange(editor: Editor) {
+    ctrlAStage.current = 0;
+
+    if (isContentSelected) {
+      setIsContentSelected(false);
+    }
+
+    draftContentRef.current = editor.getText({ blockSeparator: "\n" });
+    draftRichContentRef.current = editor.getJSON();
+    scheduleAutosize();
+    scheduleContentCommit();
+  }
+
+  function handleEditorBlur(editor: Editor) {
+    ctrlAStage.current = 0;
+    setIsContentSelected(false);
+    onActiveEditorChange(null);
+
+    if (commitTimerRef.current !== null) {
+      window.clearTimeout(commitTimerRef.current);
+      commitTimerRef.current = null;
+    }
+
+    draftContentRef.current = editor.getText({ blockSeparator: "\n" });
+    draftRichContentRef.current = editor.getJSON();
+
+    const nextDraftContent = draftContentRef.current;
+    const nextRichContent = draftRichContentRef.current;
+    const updates = getSizeUpdates();
+    const nextContent = nextDraftContent.trim();
+
+    if (!nextContent) {
+      onDelete(block.id);
+      onEditEnd();
+      return;
+    }
+
+    if (nextDraftContent !== committedContentRef.current) {
+      updates.content = nextDraftContent;
+      committedContentRef.current = nextDraftContent;
+    }
+
+    if (!areRichContentsEqual(nextRichContent, committedRichContentRef.current)) {
+      updates.richContent = nextRichContent;
+      committedRichContentRef.current = nextRichContent;
+    }
+
+    if (Object.keys(updates).length > 0) {
+      onUpdate(block.id, updates);
+    }
+
+    onEditEnd();
   }
 
   function startDrag(event: ReactPointerEvent<HTMLDivElement>) {
@@ -796,88 +827,39 @@ export const TextBlockView = memo(function TextBlockView({
         role="button"
         tabIndex={0}
       />
-      <textarea
-        aria-label="Text block"
-        className="text-block-editor"
-        hidden={!isEditing || Boolean(block.imageData)}
-        onBlur={() => {
-          ctrlAStage.current = 0;
-          setIsContentSelected(false);
-
-          if (commitTimerRef.current !== null) {
-            window.clearTimeout(commitTimerRef.current);
-            commitTimerRef.current = null;
-          }
-
-          if (editorRef.current) {
-            draftContentRef.current = editorRef.current.value;
-          }
-
-          const nextDraftContent = draftContentRef.current;
-          const updates = getSizeUpdates();
-          const nextContent = nextDraftContent.trim();
-
-          if (!nextContent) {
-            onDelete(block.id);
-            onEditEnd();
-            return;
-          }
-
-          if (nextDraftContent !== committedContentRef.current) {
-            updates.content = nextDraftContent;
-            committedContentRef.current = nextDraftContent;
-          }
-
-          if (Object.keys(updates).length > 0) {
-            onUpdate(block.id, updates);
-          }
-
-          onEditEnd();
-        }}
-        onInput={(event) => {
-          ctrlAStage.current = 0;
-
-          if (isContentSelected) {
+      {isEditing && !block.imageData ? (
+        <TiptapBlockEditor
+          block={block}
+          onBlur={handleEditorBlur}
+          onCanvasPanStart={onCanvasPanStart}
+          onChange={handleEditorChange}
+          initialCaretOffset={pendingCaretOffset.current}
+          onCaretOffsetHandled={() => {
+            pendingCaretOffset.current = null;
+          }}
+          onEditorReady={(editor) => {
+            editorRef.current = editor;
+            onActiveEditorChange(editor);
+          }}
+          onFocusEndHandled={onFocusEndHandled}
+          onExitToSelection={() => {
             setIsContentSelected(false);
-          }
-
-          draftContentRef.current = event.currentTarget.value;
-          scheduleAutosize();
-          scheduleContentCommit();
-        }}
-        onKeyDown={(event) => {
-          if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
-            event.preventDefault();
-
-            if (ctrlAStage.current === 0) {
-              selectCurrentLine(event.currentTarget);
-              setIsContentSelected(true);
-              ctrlAStage.current = 1;
-              return;
-            }
-
-            if (ctrlAStage.current === 1) {
-              setIsContentSelected(false);
-              ctrlAStage.current = 0;
-              onSelect(block.id);
-              onInteractionModeChange("selected");
-              event.currentTarget.blur();
-              return;
-            }
-          }
-        }}
-        onMouseDown={() => {
-          ctrlAStage.current = 0;
-          setIsContentSelected(false);
-        }}
-        onPointerDown={(event) => {
-          if (event.button === 2) {
-            onCanvasPanStart(event);
-          }
-        }}
-        ref={editorRef}
-        defaultValue={block.content}
-      />
+            ctrlAStage.current = 0;
+            onSelect(block.id);
+            onInteractionModeChange("selected");
+            editorRef.current?.commands.blur();
+          }}
+          onSelectContent={() => {
+            setIsContentSelected(true);
+            ctrlAStage.current = 1;
+          }}
+          onSelectionReset={() => {
+            ctrlAStage.current = 0;
+            setIsContentSelected(false);
+          }}
+          shouldFocusEnd={shouldFocusEnd}
+        />
+      ) : null}
       {!isEditing && !block.imageData ? (
         <div
           className="text-block-display"
@@ -925,9 +907,10 @@ export const TextBlockView = memo(function TextBlockView({
             }
           }}
           ref={displayRef}
-        >
-          {renderHighlightedContent()}
-        </div>
+          {...(searchQuery.trim()
+            ? { children: renderHighlightedContent() }
+            : { children: renderRichBlockContent(block) })}
+        />
       ) : null}
       {block.imageData ? (
         <img
@@ -990,6 +973,268 @@ function areSearchRangesEqual(
     previousRange.start === nextRange.start &&
     previousRange.end === nextRange.end
   );
+}
+
+type TiptapBlockEditorProps = {
+  block: TextBlock;
+  initialCaretOffset: number | null;
+  onBlur: (editor: Editor) => void;
+  onCaretOffsetHandled: () => void;
+  onCanvasPanStart: (event: ReactPointerEvent<HTMLElement>) => void;
+  onChange: (editor: Editor) => void;
+  onEditorReady: (editor: Editor | null) => void;
+  onFocusEndHandled: () => void;
+  onExitToSelection: () => void;
+  onSelectContent: () => void;
+  onSelectionReset: () => void;
+  shouldFocusEnd: boolean;
+};
+
+function TiptapBlockEditor({
+  block,
+  initialCaretOffset,
+  onBlur,
+  onCaretOffsetHandled,
+  onCanvasPanStart,
+  onChange,
+  onEditorReady,
+  onFocusEndHandled,
+  onExitToSelection,
+  onSelectContent,
+  onSelectionReset,
+  shouldFocusEnd,
+}: TiptapBlockEditorProps) {
+  const editor = useEditor(
+    {
+      extensions: tiptapExtensions,
+      content: getTipTapContent(block),
+      shouldRerenderOnTransaction: false,
+      editorProps: {
+        attributes: {
+          "aria-label": "Text block",
+          class: "text-block-editor-content",
+        },
+      },
+      onBlur: ({ editor }) => onBlur(editor),
+      onUpdate: ({ editor }) => onChange(editor),
+    },
+    [block.id],
+  );
+
+  useEffect(() => {
+    if (!editor) {
+      return;
+    }
+
+    onEditorReady(editor);
+    window.requestAnimationFrame(() => {
+      if (initialCaretOffset !== null) {
+        editor.commands.focus();
+        editor.commands.setTextSelection(
+          getDocumentPositionFromTextOffset(editor, initialCaretOffset),
+        );
+        onCaretOffsetHandled();
+        return;
+      }
+
+      if (shouldFocusEnd) {
+        editor.commands.focus("end");
+        onFocusEndHandled();
+        return;
+      }
+
+      editor.commands.focus();
+    });
+
+    return () => onEditorReady(null);
+  }, [
+    editor,
+    initialCaretOffset,
+    onCaretOffsetHandled,
+    onEditorReady,
+    onFocusEndHandled,
+    shouldFocusEnd,
+  ]);
+
+  if (!editor) {
+    return null;
+  }
+
+  return (
+    <>
+      <EditorContent
+        className="text-block-editor"
+        editor={editor}
+        onKeyDown={(event) => {
+          if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
+            event.preventDefault();
+
+            if (editor.state.selection.empty) {
+              editor.commands.selectAll();
+              onSelectContent();
+              return;
+            }
+
+            onExitToSelection();
+          }
+        }}
+        onMouseDown={onSelectionReset}
+        onPointerDown={(event) => {
+          if (event.button === 2) {
+            onCanvasPanStart(event);
+          }
+        }}
+      />
+    </>
+  );
+}
+
+function areRichContentsEqual(
+  firstContent: JSONContent | undefined,
+  secondContent: JSONContent | undefined,
+) {
+  return JSON.stringify(firstContent) === JSON.stringify(secondContent);
+}
+
+function getTipTapContent(block: TextBlock): JSONContent {
+  if (
+    block.richContent &&
+    (!block.content.trim() || hasTipTapText(block.richContent))
+  ) {
+    return block.richContent;
+  }
+
+  return plainTextToTipTapDoc(block.content);
+}
+
+function plainTextToTipTapDoc(text: string): JSONContent {
+  const lines = text.split("\n");
+
+  return {
+    type: "doc",
+    content: lines.map((line) => ({
+      type: "paragraph",
+      content: line ? [{ type: "text", text: line }] : undefined,
+    })),
+  };
+}
+
+function hasTipTapText(content: JSONContent): boolean {
+  if (content.type === "text" && content.text) {
+    return true;
+  }
+
+  return content.content?.some(hasTipTapText) ?? false;
+}
+
+function renderRichBlockContent(block: TextBlock) {
+  try {
+    return renderTipTapContent(getTipTapContent(block));
+  } catch {
+    return block.content.split("\n").map((line, index) => (
+      <p key={`${block.id}-fallback-${index}`}>
+        {line ? line : <br />}
+      </p>
+    ));
+  }
+}
+
+function renderTipTapContent(content: JSONContent, key = "root"): ReactNode {
+  if (content.type === "text") {
+    return renderTextMarks(content.text ?? "", content.marks ?? [], key);
+  }
+
+  const children = content.content?.map((child, index) =>
+    renderTipTapContent(child, `${key}-${index}`),
+  );
+
+  switch (content.type) {
+    case "doc":
+      return children;
+    case "paragraph":
+      return <p key={key}>{children?.length ? children : <br />}</p>;
+    case "bulletList":
+      return <ul key={key}>{children}</ul>;
+    case "orderedList":
+      return <ol key={key}>{children}</ol>;
+    case "listItem":
+      return <li key={key}>{children}</li>;
+    case "blockquote":
+      return <blockquote key={key}>{children}</blockquote>;
+    case "codeBlock":
+      return (
+        <pre key={key}>
+          <code>{children}</code>
+        </pre>
+      );
+    case "heading": {
+      const HeadingTag = `h${content.attrs?.level ?? 1}` as
+        | "h1"
+        | "h2"
+        | "h3"
+        | "h4"
+        | "h5"
+        | "h6";
+
+      return <HeadingTag key={key}>{children}</HeadingTag>;
+    }
+    case "hardBreak":
+      return <br key={key} />;
+    case "horizontalRule":
+      return <hr key={key} />;
+    default:
+      return children;
+  }
+}
+
+function renderTextMarks(
+  text: string,
+  marks: NonNullable<JSONContent["marks"]>,
+  key: string,
+) {
+  return marks.reduce<ReactNode>((currentNode, mark, index) => {
+    const markKey = `${key}-mark-${index}`;
+
+    switch (mark.type) {
+      case "bold":
+        return <strong key={markKey}>{currentNode}</strong>;
+      case "italic":
+        return <em key={markKey}>{currentNode}</em>;
+      case "strike":
+        return <s key={markKey}>{currentNode}</s>;
+      case "code":
+        return <code key={markKey}>{currentNode}</code>;
+      default:
+        return currentNode;
+    }
+  }, text);
+}
+
+function getDocumentPositionFromTextOffset(editor: Editor, textOffset: number) {
+  let remainingOffset = Math.max(0, textOffset);
+  let documentPosition = 1;
+
+  editor.state.doc.descendants((node, position) => {
+    if (!node.isText) {
+      return true;
+    }
+
+    const textLength = node.text?.length ?? 0;
+
+    if (remainingOffset <= textLength) {
+      documentPosition = position + remainingOffset;
+      return false;
+    }
+
+    remainingOffset -= textLength;
+    return true;
+  });
+
+  if (remainingOffset > 0) {
+    return editor.state.doc.content.size;
+  }
+
+  return documentPosition;
 }
 
 function areTextBlockViewPropsEqual(

@@ -1,3 +1,5 @@
+import type { JSONContent } from "@tiptap/core";
+
 export type Folder = {
   id: string;
   name: string;
@@ -17,6 +19,7 @@ export type TextBlock = {
   width: number;
   height: number;
   content: string;
+  richContent?: JSONContent;
   isWidthManuallyResized?: boolean;
   imageData?: string;
   imageName?: string;

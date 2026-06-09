@@ -1,4 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Editor } from "@tiptap/core";
+import { useEditorState } from "@tiptap/react";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 import { InlineRename } from "./components/InlineRename";
@@ -63,6 +65,7 @@ type SidebarProps = {
 
 type PageHeaderProps = {
   activeMode: InteractionMode;
+  activeTextEditor: Editor | null;
   isGridVisible: boolean;
   isDarkMode: boolean;
   isEditingHeaderTitle: boolean;
@@ -131,6 +134,7 @@ function App() {
   const [isGridVisible, setIsGridVisible] = useState(false);
   const [isSnapToGridEnabled, setIsSnapToGridEnabled] = useState(false);
   const [dragSourceBlockIds, setDragSourceBlockIds] = useState<string[]>([]);
+  const [activeTextEditor, setActiveTextEditor] = useState<Editor | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
   const [persistenceAvailable, setPersistenceAvailable] = useState(false);
   const dataRef = useRef<AppData>(data);
@@ -507,6 +511,8 @@ function App() {
         firstBlock.width === secondBlock.width &&
         firstBlock.height === secondBlock.height &&
         firstBlock.content === secondBlock.content &&
+        JSON.stringify(firstBlock.richContent) ===
+          JSON.stringify(secondBlock.richContent) &&
         firstBlock.isWidthManuallyResized ===
           secondBlock.isWidthManuallyResized &&
         firstBlock.imageData === secondBlock.imageData &&
@@ -670,6 +676,7 @@ function App() {
       width: block.width,
       height: block.height,
       content: block.content,
+      richContent: block.richContent,
       isWidthManuallyResized: block.isWidthManuallyResized,
       imageData: block.imageData,
       imageName: block.imageName,
@@ -767,6 +774,23 @@ function App() {
         return;
       }
 
+      if (
+        !editingBlockId &&
+        insertionPoint &&
+        selectedPageId &&
+        event.key.length === 1 &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !(event.target instanceof HTMLInputElement) &&
+        !(event.target instanceof HTMLTextAreaElement)
+      ) {
+        event.preventDefault();
+        createTextBlock(insertionPoint.x, insertionPoint.y, event.key);
+        setInsertionPoint(null);
+        return;
+      }
+
       if (editingBlockId || isTextEntryTarget(event.target)) {
         return;
       }
@@ -797,19 +821,6 @@ function App() {
         deleteBlocks(selectedBlockIds);
         setActiveMode("canvas");
         return;
-      }
-
-      if (
-        insertionPoint &&
-        selectedPageId &&
-        event.key.length === 1 &&
-        !event.altKey &&
-        !event.ctrlKey &&
-        !event.metaKey
-      ) {
-        event.preventDefault();
-        createTextBlock(insertionPoint.x, insertionPoint.y, event.key);
-        setInsertionPoint(null);
       }
     }
 
@@ -1924,6 +1935,7 @@ function App() {
       <section className="workspace">
         <PageHeader
           activeMode={activeMode}
+          activeTextEditor={activeTextEditor}
           isGridVisible={isGridVisible}
           isDarkMode={isDarkMode}
           isEditingHeaderTitle={isEditingHeaderTitle}
@@ -2046,6 +2058,7 @@ function App() {
                 onCanvasPanMove={updateCanvasInteraction}
                 onCanvasPanStart={startCanvasPan}
                 onFocusEndHandled={handleFocusEndHandled}
+                onActiveEditorChange={setActiveTextEditor}
                 onInteractionModeChange={setActiveMode}
                 onBlockElementChange={registerBlockElement}
                 onSelect={selectBlock}
@@ -2241,6 +2254,7 @@ function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps) {
 
 const PageHeader = memo(function PageHeader({
   activeMode,
+  activeTextEditor,
   isGridVisible,
   isDarkMode,
   isEditingHeaderTitle,
@@ -2285,6 +2299,9 @@ const PageHeader = memo(function PageHeader({
         )}
       </div>
       <div className="page-header-actions">
+        {activeTextEditor && !activeTextEditor.isDestroyed ? (
+          <GlobalTextToolbar editor={activeTextEditor} />
+        ) : null}
         <span className="zoom-indicator">{Math.round(zoomLevel * 100)}%</span>
         <span className="mode-indicator">{modeLabels[activeMode]}</span>
         <button
@@ -2317,9 +2334,134 @@ const PageHeader = memo(function PageHeader({
   );
 }, arePageHeaderPropsEqual);
 
+type ToolbarAction = {
+  isActive: boolean;
+  isDisabled?: boolean;
+  label: string;
+  title: string;
+  onClick: () => void;
+};
+
+function GlobalTextToolbar({ editor }: { editor: Editor }) {
+  const toolbarState = useEditorState({
+    editor,
+    selector: ({ editor }) => {
+      if (editor.isDestroyed) {
+        return null;
+      }
+
+      return {
+        canToggleBlockquote: editor.can().chain().focus().toggleBlockquote().run(),
+        canToggleBold: editor.can().chain().focus().toggleBold().run(),
+        canToggleBulletList: editor.can().chain().focus().toggleBulletList().run(),
+        canToggleCode: editor.can().chain().focus().toggleCode().run(),
+        canToggleItalic: editor.can().chain().focus().toggleItalic().run(),
+        canToggleOrderedList: editor.can().chain().focus().toggleOrderedList().run(),
+        canToggleStrike: editor.can().chain().focus().toggleStrike().run(),
+        isBlockquote: editor.isActive("blockquote"),
+        isBold: editor.isActive("bold"),
+        isBulletList: editor.isActive("bulletList"),
+        isCode: editor.isActive("code"),
+        isItalic: editor.isActive("italic"),
+        isOrderedList: editor.isActive("orderedList"),
+        isStrike: editor.isActive("strike"),
+      };
+    },
+  });
+
+  if (editor.isDestroyed || !toolbarState) {
+    return null;
+  }
+
+  const actions: ToolbarAction[] = [
+    {
+      isActive: toolbarState.isBold,
+      isDisabled: !toolbarState.canToggleBold,
+      label: "B",
+      title: "Bold",
+      onClick: () => editor.chain().focus().toggleBold().run(),
+    },
+    {
+      isActive: toolbarState.isItalic,
+      isDisabled: !toolbarState.canToggleItalic,
+      label: "I",
+      title: "Italic",
+      onClick: () => editor.chain().focus().toggleItalic().run(),
+    },
+    {
+      isActive: toolbarState.isStrike,
+      isDisabled: !toolbarState.canToggleStrike,
+      label: "S",
+      title: "Strikethrough",
+      onClick: () => editor.chain().focus().toggleStrike().run(),
+    },
+    {
+      isActive: toolbarState.isBulletList,
+      isDisabled: !toolbarState.canToggleBulletList,
+      label: "•",
+      title: "Bullet list",
+      onClick: () => editor.chain().focus().toggleBulletList().run(),
+    },
+    {
+      isActive: toolbarState.isOrderedList,
+      isDisabled: !toolbarState.canToggleOrderedList,
+      label: "1.",
+      title: "Ordered list",
+      onClick: () => editor.chain().focus().toggleOrderedList().run(),
+    },
+    {
+      isActive: toolbarState.isBlockquote,
+      isDisabled: !toolbarState.canToggleBlockquote,
+      label: "\"",
+      title: "Quote",
+      onClick: () => editor.chain().focus().toggleBlockquote().run(),
+    },
+    {
+      isActive: toolbarState.isCode,
+      isDisabled: !toolbarState.canToggleCode,
+      label: "</>",
+      title: "Code",
+      onClick: () => editor.chain().focus().toggleCode().run(),
+    },
+  ];
+
+  return (
+    <div
+      aria-label="Text formatting"
+      className="global-text-toolbar"
+      onMouseDown={(event) => event.preventDefault()}
+      onPointerDown={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      role="toolbar"
+    >
+      {actions.map((action) => (
+        <button
+          aria-label={action.title}
+          aria-pressed={action.isActive}
+          className={action.isActive ? "is-active" : undefined}
+          disabled={action.isDisabled}
+          key={action.title}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            action.onClick();
+          }}
+          title={action.title}
+          type="button"
+        >
+          {action.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function arePageHeaderPropsEqual(previous: PageHeaderProps, next: PageHeaderProps) {
   return (
     previous.activeMode === next.activeMode &&
+    previous.activeTextEditor === next.activeTextEditor &&
     previous.isGridVisible === next.isGridVisible &&
     previous.isDarkMode === next.isDarkMode &&
     previous.isEditingHeaderTitle === next.isEditingHeaderTitle &&

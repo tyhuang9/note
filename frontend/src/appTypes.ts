@@ -84,6 +84,7 @@ export type BlockUpdates = Partial<
     | "imageData"
     | "imageName"
     | "isWidthManuallyResized"
+    | "richContent"
     | "width"
     | "x"
     | "y"

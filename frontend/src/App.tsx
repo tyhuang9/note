@@ -38,7 +38,6 @@ import {
   getOffscreenDirection,
   getSelectionRect,
   isTextEntryTarget,
-  modeLabels,
   rectsIntersect,
 } from "./editorUtils";
 import type { AppData, TextBlock } from "./types";
@@ -61,7 +60,7 @@ type SidebarProps = {
   onDeletePage: (pageId: string) => void;
   onFolderDragLeave: (folderId: string) => void;
   onFolderDragOver: (folderId: string) => void;
-  onOpenSearch: () => void;
+  onFocusPageSearch: () => void;
   onPageDragEnd: () => void;
   onPageDragStart: (pageId: string) => boolean;
   onPageDropOnFolder: (folderId: string) => boolean;
@@ -81,7 +80,6 @@ type SidebarProps = {
 };
 
 type PageHeaderProps = {
-  activeMode: InteractionMode;
   activeTextEditor: Editor | null;
   canCreatePageFromTemplate: boolean;
   isGridVisible: boolean;
@@ -91,8 +89,10 @@ type PageHeaderProps = {
   pageTemplates: AppData["pages"];
   selectedPage: AppData["pages"][number] | undefined;
   zoomLevel: number;
+  onCreatePage: () => void;
   onCreatePageFromTemplate: (templatePageId: string) => void;
   onCreateTemplateFromPage: () => void;
+  onFocusPageSearch: () => void;
   onPointerDown: () => void;
   onRenamePage: (pageId: string, title: string) => void;
   onSetEditingHeaderTitle: (isEditing: boolean) => void;
@@ -145,17 +145,9 @@ const MAX_BLOCK_HISTORY_ENTRIES = 100;
 const PAGE_SEARCH_PREVIEW_CONTEXT = 44;
 const PAGE_TEMPLATE_FOLDER_ID = "__note_page_templates__";
 const PAGE_DRAG_MIME_TYPE = "application/x-note-page";
+const ROOT_FOLDER_ID = "";
 const PASTED_BLOCK_OFFSET = 24;
 const DEFAULT_PAN_OFFSET: PanOffset = { x: 0, y: 0 };
-const modeIcons: Record<InteractionMode, string> = {
-  canvas: "□",
-  selected: "▣",
-  editing: "I",
-  dragging: "↕",
-  resizing: "↔",
-  selecting: "◇",
-  panning: "✥",
-};
 type SidebarSortOrder =
   | "name-asc"
   | "name-desc"
@@ -165,6 +157,7 @@ type SidebarSortOrder =
   | "created-asc";
 
 type HeroIconName =
+  | "adjustments-horizontal"
   | "archive-box"
   | "arrows-up-down"
   | "bookmark"
@@ -178,10 +171,14 @@ type HeroIconName =
   | "folder"
   | "folder-plus"
   | "magnifying-glass"
+  | "moon"
   | "panel"
   | "pencil-square"
+  | "plus"
   | "rectangle-stack"
+  | "squares-2x2"
   | "star"
+  | "sun"
   | "trash";
 
 const sidebarSortOptions: Array<{ label: string; value: SidebarSortOrder }> = [
@@ -251,6 +248,12 @@ function HeroIcon({ name }: { name: HeroIconName }) {
       strokeWidth="1.8"
       viewBox="0 0 24 24"
     >
+      {name === "adjustments-horizontal" ? (
+        <>
+          <path d="M4.5 7.5h6m3 0h6M4.5 16.5h9m3 0h3" />
+          <path d="M10.5 5.25v4.5M16.5 14.25v4.5" />
+        </>
+      ) : null}
       {name === "archive-box" ? (
         <>
           <path d="M3.75 7.5h16.5" />
@@ -308,6 +311,9 @@ function HeroIcon({ name }: { name: HeroIconName }) {
       {name === "magnifying-glass" ? (
         <path d="m21 21-4.35-4.35m1.35-5.4a6.75 6.75 0 1 1-13.5 0 6.75 6.75 0 0 1 13.5 0Z" />
       ) : null}
+      {name === "moon" ? (
+        <path d="M21 14.25A8.25 8.25 0 0 1 9.75 3a7.5 7.5 0 1 0 11.25 11.25Z" />
+      ) : null}
       {name === "panel" ? (
         <>
           <path d="M4.5 5.25A1.5 1.5 0 0 1 6 3.75h12a1.5 1.5 0 0 1 1.5 1.5v13.5a1.5 1.5 0 0 1-1.5 1.5H6a1.5 1.5 0 0 1-1.5-1.5V5.25Z" />
@@ -320,14 +326,26 @@ function HeroIcon({ name }: { name: HeroIconName }) {
           <path d="M18.75 13.5v4.125a2.625 2.625 0 0 1-2.625 2.625h-9.75A2.625 2.625 0 0 1 3.75 17.625v-9.75A2.625 2.625 0 0 1 6.375 5.25H10.5" />
         </>
       ) : null}
+      {name === "plus" ? <path d="M12 5.25v13.5M5.25 12h13.5" /> : null}
       {name === "rectangle-stack" ? (
         <>
           <path d="M6.75 7.5h10.5M6.75 12h10.5M6.75 16.5h10.5" />
           <path d="M3.75 5.25A1.5 1.5 0 0 1 5.25 3.75h13.5a1.5 1.5 0 0 1 1.5 1.5v13.5a1.5 1.5 0 0 1-1.5 1.5H5.25a1.5 1.5 0 0 1-1.5-1.5V5.25Z" />
         </>
       ) : null}
+      {name === "squares-2x2" ? (
+        <>
+          <path d="M4.5 4.5h6v6h-6zM13.5 4.5h6v6h-6zM4.5 13.5h6v6h-6zM13.5 13.5h6v6h-6z" />
+        </>
+      ) : null}
       {name === "star" ? (
         <path d="m12 3.75 2.53 5.13 5.66.82-4.1 4 1 5.64L12 16.68l-5.09 2.66 1-5.64-4.1-4 5.66-.82L12 3.75Z" />
+      ) : null}
+      {name === "sun" ? (
+        <>
+          <path d="M12 4.5V3M12 21v-1.5M4.5 12H3M21 12h-1.5M6.34 6.34 5.28 5.28M18.72 18.72l-1.06-1.06M17.66 6.34l1.06-1.06M5.28 18.72l1.06-1.06" />
+          <path d="M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z" />
+        </>
       ) : null}
       {name === "trash" ? (
         <>
@@ -523,7 +541,10 @@ function App() {
       return [
         {
           contentMatchCount,
-          folderName: folderNamesById.get(page.folderId) ?? "Unknown folder",
+          folderName:
+            page.folderId === ROOT_FOLDER_ID
+              ? "Root"
+              : folderNamesById.get(page.folderId) ?? "Unknown folder",
           pageId: page.id,
           preview: preview || (titleMatches ? "Title match" : ""),
           title: page.title,
@@ -685,10 +706,10 @@ function App() {
           return;
         }
 
-        const firstFolderId = savedData.folders[0]?.id ?? "";
-        const firstPageId =
-          savedData.pages.find((page) => page.folderId === firstFolderId)?.id ??
-          "";
+        const firstPage = savedData.pages.find((page) => !isTemplatePage(page));
+        const firstFolderId =
+          firstPage?.folderId ?? savedData.folders[0]?.id ?? ROOT_FOLDER_ID;
+        const firstPageId = firstPage?.id ?? "";
 
         setData(savedData);
         setIsDarkMode(savedData.isDarkMode ?? true);
@@ -1193,11 +1214,7 @@ function App() {
     }
 
     const currentData = dataRef.current;
-    const folderId = selectedFolderIdRef.current || currentData.folders[0]?.id;
-
-    if (!folderId) {
-      return false;
-    }
+    const folderId = selectedFolderIdRef.current || ROOT_FOLDER_ID;
 
     const pastedPages: AppData["pages"] = [];
     const pastedBlocks: TextBlock[] = [];
@@ -1326,7 +1343,7 @@ function App() {
 
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
         event.preventDefault();
-        setIsSearchOpen(true);
+        focusPageSearch();
         return;
       }
 
@@ -1700,9 +1717,14 @@ function App() {
       const nextPages = currentData.pages.filter(
         (page) => page.folderId !== folderId,
       );
-      const nextFolderId = nextFolders[0]?.id ?? "";
+      const nextRootPage = nextPages.find(
+        (page) => page.folderId === ROOT_FOLDER_ID && !isTemplatePage(page),
+      );
+      const nextFolderId = nextRootPage?.folderId ?? nextFolders[0]?.id ?? ROOT_FOLDER_ID;
       const nextSelectedPageId =
-        nextPages.find((page) => page.folderId === nextFolderId)?.id ?? "";
+        nextRootPage?.id ??
+        nextPages.find((page) => page.folderId === nextFolderId)?.id ??
+        "";
 
       forgetPageViewports(deletedPageIds);
       selectedFolderIdRef.current = nextFolderId;
@@ -1750,11 +1772,7 @@ function App() {
   }
 
   function createPage() {
-    const folderId = selectedFolderId || data.folders[0]?.id;
-
-    if (!folderId) {
-      return;
-    }
+    const folderId = ROOT_FOLDER_ID;
 
     const pageId = createId("page");
 
@@ -1787,15 +1805,11 @@ function App() {
   }
 
   function createStarterPage() {
-    const folderId = createId("folder");
+    const folderId = ROOT_FOLDER_ID;
     const pageId = createId("page");
 
     setData((currentData) => ({
       ...currentData,
-      folders: [
-        ...currentData.folders,
-        { id: folderId, name: "Notes" },
-      ],
       pages: [
         ...currentData.pages,
         { id: pageId, folderId, title: "New page" },
@@ -1860,9 +1874,9 @@ function App() {
     const templatePage = currentData.pages.find(
       (page) => page.id === templatePageId && isTemplatePage(page),
     );
-    const folderId = selectedFolderIdRef.current || currentData.folders[0]?.id;
+    const folderId = selectedFolderIdRef.current || ROOT_FOLDER_ID;
 
-    if (!templatePage || !folderId) {
+    if (!templatePage) {
       return;
     }
 
@@ -2835,7 +2849,7 @@ function App() {
           }
         }}
         onFolderDragOver={setPageDropTargetFolderId}
-        onOpenSearch={() => setIsSearchOpen(true)}
+        onFocusPageSearch={focusPageSearch}
         onPageDragEnd={endPageDrag}
         onPageDragStart={beginPageDrag}
         onPageDropOnFolder={(folderId) => {
@@ -2863,9 +2877,8 @@ function App() {
 
       <section className="workspace">
         <PageHeader
-          activeMode={activeMode}
           activeTextEditor={activeTextEditor}
-          canCreatePageFromTemplate={data.folders.length > 0}
+          canCreatePageFromTemplate={true}
           isGridVisible={isGridVisible}
           isDarkMode={isDarkMode}
           isEditingHeaderTitle={isEditingHeaderTitle}
@@ -2873,8 +2886,10 @@ function App() {
           pageTemplates={pageTemplates}
           selectedPage={selectedPage}
           zoomLevel={zoomLevel}
+          onCreatePage={createPage}
           onCreatePageFromTemplate={createPageFromTemplate}
           onCreateTemplateFromPage={createTemplateFromSelectedPage}
+          onFocusPageSearch={focusPageSearch}
           onPointerDown={() => setIsCanvasKeyboardActive(false)}
           onRenamePage={renamePage}
           onSetEditingHeaderTitle={setIsEditingHeaderTitle}
@@ -3075,7 +3090,7 @@ const Sidebar = memo(function Sidebar({
   onDeletePage,
   onFolderDragLeave,
   onFolderDragOver,
-  onOpenSearch,
+  onFocusPageSearch,
   onPageDragEnd,
   onPageDragStart,
   onPageDropOnFolder,
@@ -3094,6 +3109,8 @@ const Sidebar = memo(function Sidebar({
   selectedPageIds,
 }: SidebarProps) {
   const pageSearchInputRef = useRef<HTMLInputElement>(null);
+  const [isPageSearchFocused, setIsPageSearchFocused] = useState(false);
+  const [isSearchOptionsOpen, setIsSearchOptionsOpen] = useState(false);
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -3172,6 +3189,7 @@ const Sidebar = memo(function Sidebar({
 
     return nextPagesByFolderId;
   }, [pageOrderIndexById, pages, sortOrder]);
+  const rootPages = pagesByFolderId.get(ROOT_FOLDER_ID) ?? [];
   const allFolderIds = useMemo(
     () => folders.map((folder) => folder.id),
     [folders],
@@ -3274,9 +3292,9 @@ const Sidebar = memo(function Sidebar({
         <button
           type="button"
           className="rail-button"
-          aria-label="Search current page"
-          onClick={onOpenSearch}
-          title="Search current page (Ctrl+F)"
+          aria-label="Search files"
+          onClick={onFocusPageSearch}
+          title="Search files (Ctrl+F)"
         >
           <HeroIcon name="magnifying-glass" />
         </button>
@@ -3293,7 +3311,6 @@ const Sidebar = memo(function Sidebar({
           type="button"
           className="rail-button"
           aria-label="Create page"
-          disabled={folders.length === 0}
           onClick={onCreatePage}
           title="Create page"
         >
@@ -3330,28 +3347,56 @@ const Sidebar = memo(function Sidebar({
 
         {!isCollapsed ? (
           <div className="sidebar-content">
-          <section className="sidebar-section sidebar-search" aria-labelledby="search-title">
-            <div className="section-header">
-              <h2 id="search-title">Search</h2>
+          <section className="sidebar-section sidebar-search" aria-label="File search">
+            <div
+              className={`file-search-control ${
+                isPageSearchFocused || isSearchOptionsOpen ? "is-active" : ""
+              }`}
+            >
+              <HeroIcon name="magnifying-glass" />
+              <input
+                aria-label="Search files and notes"
+                className="sidebar-search-input"
+                onBlur={() => {
+                  window.setTimeout(() => setIsPageSearchFocused(false), 80);
+                }}
+                onChange={(event) => onSearchQueryChange(event.currentTarget.value)}
+                onFocus={() => setIsPageSearchFocused(true)}
+                placeholder="Search..."
+                ref={pageSearchInputRef}
+                type="search"
+                value={pageSearchQuery}
+              />
+              <span className="file-search-case" aria-hidden="true">
+                Aa
+              </span>
               <button
                 type="button"
-                className="section-action"
-                aria-label="Search current page"
-                onClick={onOpenSearch}
-                title="Search current page (Ctrl+F)"
+                className="file-search-options-button"
+                aria-label="Toggle search options"
+                aria-pressed={isSearchOptionsOpen}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => setIsSearchOptionsOpen((currentValue) => !currentValue)}
+                title="Search options"
               >
-                <HeroIcon name="magnifying-glass" />
+                <HeroIcon name="adjustments-horizontal" />
               </button>
             </div>
-            <input
-              aria-label="Search pages and textboxes"
-              className="sidebar-search-input"
-              onChange={(event) => onSearchQueryChange(event.currentTarget.value)}
-              placeholder="Search notes"
-              ref={pageSearchInputRef}
-              type="search"
-              value={pageSearchQuery}
-            />
+            {(isSearchOptionsOpen ||
+              (isPageSearchFocused && !pageSearchQuery.trim())) ? (
+              <div className="search-options-popover">
+                <div className="search-options-title">
+                  <span>Search options</span>
+                  <span aria-hidden="true">ⓘ</span>
+                </div>
+                <p><strong>path:</strong> match path of the file</p>
+                <p><strong>file:</strong> match file name</p>
+                <p><strong>tag:</strong> search for tags</p>
+                <p><strong>line:</strong> search keywords on same line</p>
+                <p><strong>section:</strong> search keywords under same heading</p>
+                <p><strong>[property]</strong> match property</p>
+              </div>
+            ) : null}
             {pageSearchQuery.trim() ? (
               <div className="search-results" aria-label="Search results">
                 {pageSearchResults.length > 0 ? (
@@ -3393,7 +3438,6 @@ const Sidebar = memo(function Sidebar({
                   type="button"
                   className="section-action"
                   aria-label="Create page"
-                  disabled={folders.length === 0}
                   onClick={onCreatePage}
                   title="Create page"
                 >
@@ -3470,6 +3514,88 @@ const Sidebar = memo(function Sidebar({
               </div>
             </div>
             <div className="file-tree" role="tree" aria-label="Folders and pages">
+              {rootPages.map((page) => {
+                const isPageSelected = selectedPageIdSet.has(page.id);
+                const isPageOpen = page.id === selectedPageId;
+                const isPageDragging = draggedPageIdSet.has(page.id);
+
+                return (
+                  <div
+                    className={`nav-item nav-item-page file-tree-row file-tree-root-page ${
+                      isPageSelected ? "is-selected" : ""
+                    } ${isPageOpen ? "is-open" : ""} ${
+                      isPageDragging ? "is-dragging" : ""
+                    }`}
+                    draggable={editingPageId !== page.id}
+                    key={page.id}
+                    role="treeitem"
+                    onDoubleClick={() => onSetEditingPageId(page.id)}
+                    onClick={(event) =>
+                      onSelectPage(page.id, event.metaKey || event.ctrlKey)
+                    }
+                    onDragEnd={onPageDragEnd}
+                    onDragStart={(event) => {
+                      if (!onPageDragStart(page.id)) {
+                        event.preventDefault();
+                        return;
+                      }
+
+                      event.dataTransfer.effectAllowed = "move";
+                      event.dataTransfer.setData(PAGE_DRAG_MIME_TYPE, page.id);
+                      event.dataTransfer.setData("text/plain", page.title);
+                    }}
+                  >
+                    <span className="file-row-spacer" aria-hidden="true" />
+                    <span className="file-row-icon">
+                      <HeroIcon name="document-text" />
+                    </span>
+                    {editingPageId === page.id ? (
+                      <InlineRename
+                        ariaLabel="Page title"
+                        initialValue={page.title}
+                        onCancel={() => onSetEditingPageId(null)}
+                        onCommit={(value) => {
+                          onRenamePage(page.id, value);
+                          onSetEditingPageId(null);
+                        }}
+                      />
+                    ) : (
+                      <span className="nav-label">{page.title}</span>
+                    )}
+                    <span className="file-kind">CANVAS</span>
+                    <button
+                      type="button"
+                      className={`bookmark-toggle ${
+                        page.isBookmarked ? "is-bookmarked" : ""
+                      }`}
+                      aria-label={`${
+                        page.isBookmarked ? "Remove bookmark from" : "Bookmark"
+                      } ${page.title}`}
+                      aria-pressed={Boolean(page.isBookmarked)}
+                      title={page.isBookmarked ? "Remove bookmark" : "Bookmark"}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onTogglePageBookmark(page.id);
+                      }}
+                    >
+                      <HeroIcon name="bookmark" />
+                    </button>
+                    <span className="nav-actions">
+                      <button
+                        type="button"
+                        aria-label={`Delete ${page.title}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onDeletePage(page.id);
+                        }}
+                        title={`Delete ${page.title}`}
+                      >
+                        <HeroIcon name="trash" />
+                      </button>
+                    </span>
+                  </div>
+                );
+              })}
               {sortedFolders.map((folder) => {
                 const folderPages = pagesByFolderId.get(folder.id) ?? [];
                 const isFolderExpanded = expandedFolderIds.has(folder.id);
@@ -3648,8 +3774,8 @@ const Sidebar = memo(function Sidebar({
                   </div>
                 );
               })}
-              {sortedFolders.length === 0 ? (
-                <p className="empty-state">No folders yet</p>
+              {sortedFolders.length === 0 && rootPages.length === 0 ? (
+                <p className="empty-state">No pages or folders yet</p>
               ) : null}
             </div>
           </section>
@@ -3673,7 +3799,9 @@ const Sidebar = memo(function Sidebar({
                     </span>
                     <span className="nav-label">{page.title}</span>
                     <span className="bookmark-folder-label">
-                      {folderNamesById.get(page.folderId) ?? "Missing folder"}
+                      {page.folderId === ROOT_FOLDER_ID
+                        ? "Root"
+                        : folderNamesById.get(page.folderId) ?? "Missing folder"}
                     </span>
                     <button
                       type="button"
@@ -3730,7 +3858,6 @@ function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps) {
 }
 
 const PageHeader = memo(function PageHeader({
-  activeMode,
   activeTextEditor,
   canCreatePageFromTemplate,
   isGridVisible,
@@ -3740,8 +3867,10 @@ const PageHeader = memo(function PageHeader({
   pageTemplates,
   selectedPage,
   zoomLevel,
+  onCreatePage,
   onCreatePageFromTemplate,
   onCreateTemplateFromPage,
+  onFocusPageSearch,
   onPointerDown,
   onRenamePage,
   onSetEditingHeaderTitle,
@@ -3765,45 +3894,62 @@ const PageHeader = memo(function PageHeader({
       className="page-header"
       onPointerDown={onPointerDown}
     >
-      <div className="page-title-group">
-        <span className="app-title" aria-label="Note" title="Note">
-          ▦
-        </span>
+      <div className="page-tabs" role="tablist" aria-label="Open pages">
         {selectedPage && isEditingHeaderTitle ? (
-          <InlineRename
-            ariaLabel="Page title"
-            initialValue={selectedPage.title}
-            onCancel={() => onSetEditingHeaderTitle(false)}
-            onCommit={(value) => {
-              onRenamePage(selectedPage.id, value);
-              onSetEditingHeaderTitle(false);
-            }}
-          />
-        ) : (
-          <span
-            className="page-tab"
-            title={selectedPage ? "Double-click to rename page" : undefined}
-          >
-            <span className="page-tab-icon" aria-hidden="true">
-              ◇
-            </span>
-            <h2
-              className="page-title"
-              onDoubleClick={() => {
-                if (selectedPage) {
-                  onSetEditingHeaderTitle(true);
-                }
+          <div className="page-tab is-active is-editing" role="tab" aria-selected="true">
+            <HeroIcon name="document-text" />
+            <InlineRename
+              ariaLabel="Page title"
+              initialValue={selectedPage.title}
+              onCancel={() => onSetEditingHeaderTitle(false)}
+              onCommit={(value) => {
+                onRenamePage(selectedPage.id, value);
+                onSetEditingHeaderTitle(false);
               }}
-            >
+            />
+          </div>
+        ) : (
+          <button
+            className="page-tab is-active"
+            role="tab"
+            aria-selected="true"
+            onDoubleClick={() => {
+              if (selectedPage) {
+                onSetEditingHeaderTitle(true);
+              }
+            }}
+            title={selectedPage ? "Double-click to rename page" : "No page selected"}
+            type="button"
+          >
+            <HeroIcon name="document-text" />
+            <span className="page-title">
               {selectedPage?.title ?? "No page selected"}
-            </h2>
-          </span>
+            </span>
+          </button>
         )}
+        <button
+          className="page-tab-add"
+          aria-label="Create root page"
+          onClick={onCreatePage}
+          title="Create root page"
+          type="button"
+        >
+          <HeroIcon name="plus" />
+        </button>
       </div>
       <div className="page-header-actions">
         {activeTextEditor && !activeTextEditor.isDestroyed ? (
           <GlobalTextToolbar editor={activeTextEditor} />
         ) : null}
+        <button
+          aria-label="Search files"
+          className="header-toggle icon-button"
+          onClick={onFocusPageSearch}
+          title="Search files (Ctrl+F)"
+          type="button"
+        >
+          <HeroIcon name="magnifying-glass" />
+        </button>
         {selectedPage ? (
           <button
             type="button"
@@ -3817,9 +3963,7 @@ const PageHeader = memo(function PageHeader({
             title={selectedPage.isBookmarked ? "Remove bookmark" : "Bookmark"}
             onClick={() => onTogglePageBookmark(selectedPage.id)}
           >
-            <span aria-hidden="true">
-              {selectedPage.isBookmarked ? "★" : "☆"}
-            </span>
+            <HeroIcon name="bookmark" />
           </button>
         ) : null}
         <div className="template-actions">
@@ -3831,7 +3975,7 @@ const PageHeader = memo(function PageHeader({
             title="Save current page as template"
             type="button"
           >
-            <span aria-hidden="true">⧉</span>
+            <HeroIcon name="rectangle-stack" />
           </button>
           <span className="template-select-wrapper">
             <select
@@ -3858,19 +4002,12 @@ const PageHeader = memo(function PageHeader({
               ))}
             </select>
             <span className="template-select-icon" aria-hidden="true">
-              ▤
+              <HeroIcon name="document-plus" />
             </span>
           </span>
         </div>
         <span className="zoom-indicator" title="Zoom">
           {Math.round(zoomLevel * 100)}%
-        </span>
-        <span
-          aria-label={modeLabels[activeMode]}
-          className="mode-indicator"
-          title={modeLabels[activeMode]}
-        >
-          <span aria-hidden="true">{modeIcons[activeMode]}</span>
         </span>
         <button
           aria-label="Grid"
@@ -3880,7 +4017,7 @@ const PageHeader = memo(function PageHeader({
           title={gridToggleTitle}
           type="button"
         >
-          <span aria-hidden="true">▦</span>
+          <HeroIcon name="squares-2x2" />
         </button>
         <button
           aria-label="Snap to grid"
@@ -3891,7 +4028,7 @@ const PageHeader = memo(function PageHeader({
           title={snapToggleTitle}
           type="button"
         >
-          <span aria-hidden="true">⌗</span>
+          <HeroIcon name="adjustments-horizontal" />
         </button>
         <button
           aria-label="Dark mode"
@@ -3901,7 +4038,7 @@ const PageHeader = memo(function PageHeader({
           title={themeToggleTitle}
           type="button"
         >
-          <span aria-hidden="true">{isDarkMode ? "☀" : "☾"}</span>
+          <HeroIcon name={isDarkMode ? "sun" : "moon"} />
         </button>
       </div>
     </header>
@@ -4034,7 +4171,6 @@ function GlobalTextToolbar({ editor }: { editor: Editor }) {
 
 function arePageHeaderPropsEqual(previous: PageHeaderProps, next: PageHeaderProps) {
   return (
-    previous.activeMode === next.activeMode &&
     previous.activeTextEditor === next.activeTextEditor &&
     previous.canCreatePageFromTemplate === next.canCreatePageFromTemplate &&
     previous.isGridVisible === next.isGridVisible &&

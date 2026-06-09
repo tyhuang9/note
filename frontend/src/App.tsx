@@ -2722,9 +2722,10 @@ function App() {
                   setIsSearchOpen(false);
                   setSearchQuery("");
                 }}
+                title="Close search"
                 type="button"
               >
-                X
+                <span aria-hidden="true">×</span>
               </button>
             </div>
           ) : null}
@@ -2864,7 +2865,7 @@ const Sidebar = memo(function Sidebar({
           onClick={onToggleCollapse}
           title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
-          {isCollapsed ? ">" : "<"}
+          <span aria-hidden="true">{isCollapsed ? "›" : "‹"}</span>
         </button>
       </div>
 
@@ -2873,6 +2874,15 @@ const Sidebar = memo(function Sidebar({
           <section className="sidebar-section sidebar-search" aria-labelledby="search-title">
             <div className="section-header">
               <h2 id="search-title">Search</h2>
+              <button
+                type="button"
+                className="section-action"
+                aria-label="Search current page"
+                onClick={onOpenSearch}
+                title="Search current page (Ctrl+F)"
+              >
+                <span aria-hidden="true">⌕</span>
+              </button>
             </div>
             <input
               aria-label="Search pages and textboxes"
@@ -2913,14 +2923,6 @@ const Sidebar = memo(function Sidebar({
                 )}
               </div>
             ) : null}
-            <button
-              type="button"
-              className="sidebar-search-button"
-              onClick={onOpenSearch}
-            >
-              <span>Search current page</span>
-              <span className="keyboard-hint">Ctrl F</span>
-            </button>
           </section>
 
           <section className="sidebar-section" aria-labelledby="folders-title">
@@ -2933,7 +2935,7 @@ const Sidebar = memo(function Sidebar({
                 onClick={onCreateFolder}
                 title="Create folder"
               >
-                +
+                <span aria-hidden="true">+</span>
               </button>
             </div>
             <div className="nav-list">
@@ -3002,7 +3004,7 @@ const Sidebar = memo(function Sidebar({
                         }}
                         title={`Delete ${folder.name}`}
                       >
-                        X
+                        <span aria-hidden="true">×</span>
                       </button>
                     </span>
                   </div>
@@ -3042,7 +3044,7 @@ const Sidebar = memo(function Sidebar({
                       onTogglePageBookmark(page.id);
                     }}
                   >
-                    ★
+                    <span aria-hidden="true">★</span>
                   </button>
                 </div>
               ))}
@@ -3063,7 +3065,7 @@ const Sidebar = memo(function Sidebar({
                 onClick={onCreatePage}
                 title="Create page"
               >
-                +
+                <span aria-hidden="true">+</span>
               </button>
             </div>
             <div className="nav-list">
@@ -3125,7 +3127,9 @@ const Sidebar = memo(function Sidebar({
                         onTogglePageBookmark(page.id);
                       }}
                     >
-                      {page.isBookmarked ? "★" : "☆"}
+                      <span aria-hidden="true">
+                        {page.isBookmarked ? "★" : "☆"}
+                      </span>
                     </button>
                     <span className="nav-actions">
                       <button
@@ -3137,7 +3141,7 @@ const Sidebar = memo(function Sidebar({
                         }}
                         title={`Delete ${page.title}`}
                       >
-                        X
+                        <span aria-hidden="true">×</span>
                       </button>
                     </span>
                   </div>
@@ -3204,6 +3208,16 @@ const PageHeader = memo(function PageHeader({
   onToggleDarkMode,
   onToggleSnapToGrid,
 }: PageHeaderProps) {
+  const gridToggleTitle = isGridVisible ? "Hide grid" : "Show grid";
+  const snapToggleTitle = !isGridVisible
+    ? "Show grid to enable snap to grid"
+    : isSnapToGridEnabled
+      ? "Disable snap to grid"
+      : "Enable snap to grid";
+  const themeToggleTitle = isDarkMode
+    ? "Switch to light mode"
+    : "Switch to dark mode";
+
   return (
     <header
       className="page-header"
@@ -3251,69 +3265,83 @@ const PageHeader = memo(function PageHeader({
             title={selectedPage.isBookmarked ? "Remove bookmark" : "Bookmark"}
             onClick={() => onTogglePageBookmark(selectedPage.id)}
           >
-            {selectedPage.isBookmarked ? "★" : "☆"}
+            <span aria-hidden="true">
+              {selectedPage.isBookmarked ? "★" : "☆"}
+            </span>
           </button>
         ) : null}
         <div className="template-actions">
           <button
-            aria-label="Create template from current page"
-            className="template-button"
+            aria-label="Save current page as template"
+            className="template-button icon-button"
             disabled={!selectedPage}
             onClick={onCreateTemplateFromPage}
-            title="Create template from current page"
+            title="Save current page as template"
             type="button"
           >
-            Save template
+            <span aria-hidden="true">⧉</span>
           </button>
-          <select
-            aria-label="Create page from template"
-            className="template-select"
-            disabled={!canCreatePageFromTemplate || pageTemplates.length === 0}
-            onChange={(event) => {
-              const templatePageId = event.currentTarget.value;
+          <span className="template-select-wrapper">
+            <select
+              aria-label="Create page from template"
+              className="template-select"
+              disabled={!canCreatePageFromTemplate || pageTemplates.length === 0}
+              onChange={(event) => {
+                const templatePageId = event.currentTarget.value;
 
-              if (templatePageId) {
-                onCreatePageFromTemplate(templatePageId);
-              }
+                if (templatePageId) {
+                  onCreatePageFromTemplate(templatePageId);
+                }
 
-              event.currentTarget.value = "";
-            }}
-            value=""
-          >
-            <option value="">Use template</option>
-            {pageTemplates.map((templatePage) => (
-              <option key={templatePage.id} value={templatePage.id}>
-                {templatePage.title}
-              </option>
-            ))}
-          </select>
+                event.currentTarget.value = "";
+              }}
+              title="Create page from template"
+              value=""
+            >
+              <option value="">Use template</option>
+              {pageTemplates.map((templatePage) => (
+                <option key={templatePage.id} value={templatePage.id}>
+                  {templatePage.title}
+                </option>
+              ))}
+            </select>
+            <span className="template-select-icon" aria-hidden="true">
+              ▤
+            </span>
+          </span>
         </div>
         <span className="zoom-indicator">{Math.round(zoomLevel * 100)}%</span>
         <span className="mode-indicator">{modeLabels[activeMode]}</span>
         <button
+          aria-label="Grid"
           aria-pressed={isGridVisible}
-          className="header-toggle"
+          className="header-toggle icon-button"
           onClick={onToggleGrid}
+          title={gridToggleTitle}
           type="button"
         >
-          Grid
+          <span aria-hidden="true">▦</span>
         </button>
         <button
+          aria-label="Snap to grid"
           aria-pressed={isGridVisible && isSnapToGridEnabled}
-          className="header-toggle"
+          className="header-toggle icon-button"
           disabled={!isGridVisible}
           onClick={onToggleSnapToGrid}
+          title={snapToggleTitle}
           type="button"
         >
-          Snap
+          <span aria-hidden="true">⌗</span>
         </button>
         <button
+          aria-label="Dark mode"
           aria-pressed={isDarkMode}
-          className="theme-toggle"
+          className="theme-toggle icon-button"
           onClick={onToggleDarkMode}
+          title={themeToggleTitle}
           type="button"
         >
-          {isDarkMode ? "Light" : "Dark"}
+          <span aria-hidden="true">{isDarkMode ? "☀" : "☾"}</span>
         </button>
       </div>
     </header>

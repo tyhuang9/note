@@ -821,10 +821,7 @@ h2 {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background:
-    radial-gradient(circle, rgba(115, 126, 145, 0.2) 1px, transparent 1.35px)
-      0 0 / 22px 22px,
-    #f5f7fa;
+  background: #f5f7fa;
   cursor: text;
 }
 
@@ -837,10 +834,7 @@ h2 {
 }
 
 .canvas.is-canvas-selected {
-  background:
-    radial-gradient(circle, rgba(115, 126, 145, 0.2) 1px, transparent 1.35px)
-      0 0 / 22px 22px,
-    #f5f7fa;
+  background: #f5f7fa;
 }
 
 .canvas.is-canvas-selected::after {
@@ -1685,16 +1679,12 @@ h2 {
 
 .app-shell.is-dark .canvas {
   background:
-    radial-gradient(circle, rgba(167, 139, 250, 0.16) 1px, transparent 1.35px)
-      0 0 / 22px 22px,
     linear-gradient(180deg, rgba(255, 255, 255, 0.012), transparent 30%),
     var(--dark-canvas);
 }
 
 .app-shell.is-dark .canvas.is-canvas-selected {
   background:
-    radial-gradient(circle, rgba(167, 139, 250, 0.18) 1px, transparent 1.35px)
-      0 0 / 22px 22px,
     linear-gradient(180deg, rgba(255, 255, 255, 0.012), transparent 30%),
     var(--dark-canvas);
 }

@@ -2817,24 +2817,27 @@ function App() {
               className="canvas-starter"
               onPointerDown={(event) => event.stopPropagation()}
             >
-              <div className="canvas-starter-mark" aria-hidden="true">
-                +
+              <div className="canvas-starter-titlebar">
+                <span>untitled</span>
               </div>
-              <div className="canvas-starter-copy">
+              <div className="canvas-starter-body">
+                <p className="canvas-starter-kicker">Empty workspace</p>
                 <h3>No folders or pages</h3>
-                <p>Start with a page or create a folder.</p>
-              </div>
-              <div className="canvas-starter-actions">
-                <button
-                  className="canvas-starter-primary"
-                  onClick={createStarterPage}
-                  type="button"
-                >
-                  New page
-                </button>
-                <button onClick={createFolder} type="button">
-                  New folder
-                </button>
+                <p className="canvas-starter-copy">
+                  Create a first note or start by organizing a folder.
+                </p>
+                <div className="canvas-starter-actions">
+                  <button
+                    className="canvas-starter-primary"
+                    onClick={createStarterPage}
+                    type="button"
+                  >
+                    New page
+                  </button>
+                  <button onClick={createFolder} type="button">
+                    New folder
+                  </button>
+                </div>
               </div>
             </div>
           ) : !selectedPageId ? (

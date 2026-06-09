@@ -4,6 +4,7 @@ import type { DragEvent } from "react";
 import { useEditorState } from "@tiptap/react";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
+import { AssistantPanel } from "./components/AssistantPanel";
 import { InlineRename } from "./components/InlineRename";
 import { TextBlockView } from "./components/TextBlockView";
 import {
@@ -31,6 +32,12 @@ import type {
   SelectionState,
   ViewportRect,
 } from "./appTypes";
+import type {
+  AssistantActionKind,
+  AssistantMessage,
+  LlmProviderConfig,
+  SttProviderConfig,
+} from "./aiTypes";
 import {
   blurActiveTextEntry,
   createId,
@@ -84,6 +91,7 @@ type SidebarProps = {
 type PageHeaderProps = {
   activeTextEditor: Editor | null;
   canCreatePageFromTemplate: boolean;
+  isAssistantOpen: boolean;
   isGridVisible: boolean;
   isDarkMode: boolean;
   isEditingHeaderTitle: boolean;
@@ -102,6 +110,7 @@ type PageHeaderProps = {
   onRenamePage: (pageId: string, title: string) => void;
   onSelectPageTab: (pageId: string) => void;
   onSetEditingHeaderTitle: (isEditing: boolean) => void;
+  onToggleAssistant: () => void;
   onToggleGrid: () => void;
   onTogglePageBookmark: (pageId: string) => void;
   onToggleDarkMode: () => void;
@@ -158,6 +167,18 @@ const PAGE_DRAG_MIME_TYPE = "application/x-note-page";
 const ROOT_FOLDER_ID = "";
 const PASTED_BLOCK_OFFSET = 24;
 const DEFAULT_PAN_OFFSET: PanOffset = { x: 0, y: 0 };
+const DEFAULT_LLM_CONFIG: LlmProviderConfig = {
+  baseUrl: "http://localhost:11434",
+  kind: "ollama",
+  model: "llama3.2",
+  name: "Local LLM",
+};
+const DEFAULT_STT_CONFIG: SttProviderConfig = {
+  baseUrl: "http://localhost:8080/v1",
+  kind: "openai-compatible-whisper",
+  model: "whisper",
+  name: "Local STT",
+};
 type SidebarSortOrder =
   | "name-asc"
   | "name-desc"
@@ -188,6 +209,7 @@ type HeroIconName =
   | "pencil-square"
   | "plus"
   | "rectangle-stack"
+  | "sparkles"
   | "squares-2x2"
   | "star"
   | "sun"
@@ -347,6 +369,12 @@ function HeroIcon({ name }: { name: HeroIconName }) {
           <path d="M3.75 5.25A1.5 1.5 0 0 1 5.25 3.75h13.5a1.5 1.5 0 0 1 1.5 1.5v13.5a1.5 1.5 0 0 1-1.5 1.5H5.25a1.5 1.5 0 0 1-1.5-1.5V5.25Z" />
         </>
       ) : null}
+      {name === "sparkles" ? (
+        <>
+          <path d="m12 3 1.38 4.12L17.5 8.5l-4.12 1.38L12 14l-1.38-4.12L6.5 8.5l4.12-1.38L12 3Z" />
+          <path d="m18.5 13 .78 2.22L21.5 16l-2.22.78L18.5 19l-.78-2.22L15.5 16l2.22-.78L18.5 13ZM5.5 14l.58 1.42L7.5 16l-1.42.58L5.5 18l-.58-1.42L3.5 16l1.42-.58L5.5 14Z" />
+        </>
+      ) : null}
       {name === "squares-2x2" ? (
         <>
           <path d="M4.5 4.5h6v6h-6zM13.5 4.5h6v6h-6zM4.5 13.5h6v6h-6zM13.5 13.5h6v6h-6z" />
@@ -422,6 +450,7 @@ function App() {
   const [focusEndBlockId, setFocusEndBlockId] = useState<string | null>(null);
   const [isCanvasKeyboardActive, setIsCanvasKeyboardActive] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
+  const [isAssistantOpen, setIsAssistantOpen] = useState(false);
   const [isGridVisible, setIsGridVisible] = useState(false);
   const [isSnapToGridEnabled, setIsSnapToGridEnabled] = useState(false);
   const [dragSourceBlockIds, setDragSourceBlockIds] = useState<string[]>([]);
@@ -430,6 +459,16 @@ function App() {
   const [pageDropTargetFolderId, setPageDropTargetFolderId] = useState<string | null>(null);
   const [isStarterDismissed, setIsStarterDismissed] = useState(false);
   const [activeTextEditor, setActiveTextEditor] = useState<Editor | null>(null);
+  const [assistantMessages, setAssistantMessages] = useState<AssistantMessage[]>([]);
+  const [assistantInput, setAssistantInput] = useState("");
+  const [assistantStatus, setAssistantStatus] = useState<string | null>(null);
+  const [assistantError, setAssistantError] = useState<string | null>(null);
+  const [isAssistantSending] = useState(false);
+  const [isAssistantRecording, setIsAssistantRecording] = useState(false);
+  const [llmProviderConfig, setLlmProviderConfig] =
+    useState<LlmProviderConfig>(DEFAULT_LLM_CONFIG);
+  const [sttProviderConfig, setSttProviderConfig] =
+    useState<SttProviderConfig>(DEFAULT_STT_CONFIG);
   const [isLoaded, setIsLoaded] = useState(false);
   const [persistenceAvailable, setPersistenceAvailable] = useState(false);
   const dataRef = useRef<AppData>(data);
@@ -1920,6 +1959,38 @@ function App() {
     });
   }
 
+  function sendAssistantMessage() {
+    const prompt = assistantInput.trim();
+
+    if (!prompt || isAssistantSending) {
+      return;
+    }
+
+    setAssistantMessages((currentMessages) => [
+      ...currentMessages,
+      {
+        id: createId("assistant-message"),
+        role: "user",
+        content: prompt,
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+    setAssistantInput("");
+    setAssistantError(null);
+    setAssistantStatus("Provider integration pending");
+  }
+
+  function toggleAssistantRecording() {
+    setIsAssistantRecording((currentValue) => !currentValue);
+    setAssistantError(null);
+    setAssistantStatus("STT integration pending");
+  }
+
+  function runAssistantAction(kind: AssistantActionKind) {
+    setAssistantError(null);
+    setAssistantStatus(`${kind} integration pending`);
+  }
+
   function closePageTab(pageId: string) {
     const currentTabIds = openPageTabIds;
 
@@ -3000,7 +3071,7 @@ function App() {
     <main
       className={`app-shell ${isDarkMode ? "is-dark" : ""} ${
         isSidebarCollapsed ? "is-sidebar-collapsed" : ""
-      }`}
+      } ${isAssistantOpen ? "has-assistant-panel" : ""}`}
     >
       <Sidebar
         bookmarkedPages={bookmarkedPages}
@@ -3056,6 +3127,7 @@ function App() {
         <PageHeader
           activeTextEditor={activeTextEditor}
           canCreatePageFromTemplate={true}
+          isAssistantOpen={isAssistantOpen}
           isGridVisible={isGridVisible}
           isDarkMode={isDarkMode}
           isEditingHeaderTitle={isEditingHeaderTitle}
@@ -3074,6 +3146,9 @@ function App() {
           onRenamePage={renamePage}
           onSelectPageTab={selectPage}
           onSetEditingHeaderTitle={setIsEditingHeaderTitle}
+          onToggleAssistant={() =>
+            setIsAssistantOpen((currentValue) => !currentValue)
+          }
           onToggleGrid={() =>
             setIsGridVisible((currentValue) => {
               const nextValue = !currentValue;
@@ -3273,6 +3348,25 @@ function App() {
           ) : null}
         </section>
       </section>
+      {isAssistantOpen ? (
+        <AssistantPanel
+          assistantError={assistantError}
+          assistantStatus={assistantStatus}
+          inputValue={assistantInput}
+          isRecording={isAssistantRecording}
+          isSending={isAssistantSending}
+          llmConfig={llmProviderConfig}
+          messages={assistantMessages}
+          sttConfig={sttProviderConfig}
+          onClose={() => setIsAssistantOpen(false)}
+          onInputChange={setAssistantInput}
+          onLlmConfigChange={setLlmProviderConfig}
+          onRunAction={runAssistantAction}
+          onSend={sendAssistantMessage}
+          onSttConfigChange={setSttProviderConfig}
+          onToggleRecording={toggleAssistantRecording}
+        />
+      ) : null}
     </main>
   );
 }
@@ -4206,6 +4300,7 @@ function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps) {
 const PageHeader = memo(function PageHeader({
   activeTextEditor,
   canCreatePageFromTemplate,
+  isAssistantOpen,
   isGridVisible,
   isDarkMode,
   isEditingHeaderTitle,
@@ -4224,6 +4319,7 @@ const PageHeader = memo(function PageHeader({
   onRenamePage,
   onSelectPageTab,
   onSetEditingHeaderTitle,
+  onToggleAssistant,
   onToggleGrid,
   onTogglePageBookmark,
   onToggleDarkMode,
@@ -4316,6 +4412,16 @@ const PageHeader = memo(function PageHeader({
         {activeTextEditor && !activeTextEditor.isDestroyed ? (
           <GlobalTextToolbar editor={activeTextEditor} />
         ) : null}
+        <button
+          aria-label="AI assistant"
+          aria-pressed={isAssistantOpen}
+          className="header-toggle icon-button"
+          onClick={onToggleAssistant}
+          title="AI assistant"
+          type="button"
+        >
+          <HeroIcon name="sparkles" />
+        </button>
         <button
           aria-label="Find in canvas"
           className="header-toggle icon-button"
@@ -4548,6 +4654,7 @@ function arePageHeaderPropsEqual(previous: PageHeaderProps, next: PageHeaderProp
   return (
     previous.activeTextEditor === next.activeTextEditor &&
     previous.canCreatePageFromTemplate === next.canCreatePageFromTemplate &&
+    previous.isAssistantOpen === next.isAssistantOpen &&
     previous.isGridVisible === next.isGridVisible &&
     previous.isDarkMode === next.isDarkMode &&
     previous.isEditingHeaderTitle === next.isEditingHeaderTitle &&

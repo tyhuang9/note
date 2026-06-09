@@ -363,7 +363,7 @@ h2 {
 }
 
 .nav-item-page {
-  grid-template-columns: minmax(0, 1fr) 24px 66px;
+  grid-template-columns: minmax(0, 1fr) 24px 28px;
   padding-left: 16px;
 }
 
@@ -381,6 +381,22 @@ h2 {
   border-color: #d4dce6;
   color: #1d2939;
   background: #eef3f8;
+}
+
+.nav-item.is-open:not(.is-selected) {
+  border-color: #dbe3ed;
+  color: #263548;
+  background: #f8fafc;
+}
+
+.nav-item-page.is-dragging {
+  opacity: 0.58;
+}
+
+.nav-item-folder.is-drop-target {
+  border-color: #8ab4e5;
+  background: #eaf4ff;
+  box-shadow: inset 0 0 0 1px #8ab4e5;
 }
 
 .nav-item:focus-within {
@@ -411,11 +427,6 @@ h2 {
   pointer-events: none;
 }
 
-.nav-actions.is-page-actions {
-  width: 66px;
-  min-width: 66px;
-}
-
 .nav-actions button {
   display: inline-flex;
   align-items: center;
@@ -429,10 +440,6 @@ h2 {
   background: transparent;
   font-size: 11px;
   font-weight: 700;
-}
-
-.nav-actions.is-page-actions button:first-child {
-  width: 38px;
 }
 
 .nav-item:hover .nav-actions,
@@ -1403,6 +1410,18 @@ h2 {
   border-color: #4a5666;
   color: #f3f6fa;
   background: #313b48;
+}
+
+.app-shell.is-dark .nav-item.is-open:not(.is-selected) {
+  border-color: #3a4451;
+  color: #e7ecf3;
+  background: #262c35;
+}
+
+.app-shell.is-dark .nav-item-folder.is-drop-target {
+  border-color: #5d82b2;
+  background: #26364a;
+  box-shadow: inset 0 0 0 1px #5d82b2;
 }
 
 .app-shell.is-dark .bookmark-toggle {

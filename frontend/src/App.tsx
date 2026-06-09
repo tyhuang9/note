@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Editor } from "@tiptap/core";
+import type { DragEvent } from "react";
 import { useEditorState } from "@tiptap/react";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
@@ -58,18 +59,25 @@ type SidebarProps = {
   onCreatePage: () => void;
   onDeleteFolder: (folderId: string) => void;
   onDeletePage: (pageId: string) => void;
-  onDuplicatePage: (pageId: string) => void;
+  onFolderDragLeave: (folderId: string) => void;
+  onFolderDragOver: (folderId: string) => void;
   onOpenSearch: () => void;
+  onPageDragEnd: () => void;
+  onPageDragStart: (pageId: string) => boolean;
+  onPageDropOnFolder: (folderId: string) => boolean;
   onPointerDown: () => void;
   onRenameFolder: (folderId: string, name: string) => void;
   onRenamePage: (pageId: string, title: string) => void;
   onSearchQueryChange: (query: string) => void;
   onSelectFolder: (folderId: string) => void;
-  onSelectPage: (pageId: string) => void;
+  onSelectPage: (pageId: string, isMultiSelect?: boolean) => void;
   onSetEditingFolderId: (folderId: string | null) => void;
   onSetEditingPageId: (pageId: string | null) => void;
   onToggleCollapse: () => void;
   onTogglePageBookmark: (pageId: string) => void;
+  pageDropTargetFolderId: string | null;
+  draggedPageIds: string[];
+  selectedPageIds: string[];
 };
 
 type PageHeaderProps = {
@@ -115,6 +123,13 @@ type CopiedBlock = Omit<TextBlock, "id" | "pageId" | "x" | "y"> & {
   offsetY: number;
 };
 
+type CopiedPageBlock = Omit<TextBlock, "id" | "pageId">;
+
+type CopiedPage = Omit<AppData["pages"][number], "id" | "folderId"> & {
+  blocks: CopiedPageBlock[];
+  viewport?: PageViewport;
+};
+
 type PageSearchResult = {
   contentMatchCount: number;
   folderName: string;
@@ -129,6 +144,7 @@ const DRAG_AUTO_PAN_MAX_STEP_PX = 18;
 const MAX_BLOCK_HISTORY_ENTRIES = 100;
 const PAGE_SEARCH_PREVIEW_CONTEXT = 44;
 const PAGE_TEMPLATE_FOLDER_ID = "__note_page_templates__";
+const PAGE_DRAG_MIME_TYPE = "application/x-note-page";
 const PASTED_BLOCK_OFFSET = 24;
 const DEFAULT_PAN_OFFSET: PanOffset = { x: 0, y: 0 };
 
@@ -182,7 +198,7 @@ function formatPageSearchSummary(result: PageSearchResult) {
   return summaryParts.join(" + ");
 }
 
-function areBlockIdSelectionsEqual(firstIds: string[], secondIds: string[]) {
+function areIdSelectionsEqual(firstIds: string[], secondIds: string[]) {
   return (
     firstIds.length === secondIds.length &&
     firstIds.every((blockId, index) => blockId === secondIds[index])
@@ -215,6 +231,9 @@ function App() {
   const [isGridVisible, setIsGridVisible] = useState(false);
   const [isSnapToGridEnabled, setIsSnapToGridEnabled] = useState(false);
   const [dragSourceBlockIds, setDragSourceBlockIds] = useState<string[]>([]);
+  const [selectedSidebarPageIds, setSelectedSidebarPageIds] = useState<string[]>([]);
+  const [draggedPageIds, setDraggedPageIds] = useState<string[]>([]);
+  const [pageDropTargetFolderId, setPageDropTargetFolderId] = useState<string | null>(null);
   const [activeTextEditor, setActiveTextEditor] = useState<Editor | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
   const [persistenceAvailable, setPersistenceAvailable] = useState(false);
@@ -232,6 +251,8 @@ function App() {
   const pendingSelectionRect = useRef<SelectionRect | null>(null);
   const searchCache = useRef<Map<string, SearchMatch[]>>(new Map());
   const copiedBlocksRef = useRef<CopiedBlock[]>([]);
+  const copiedPagesRef = useRef<CopiedPage[]>([]);
+  const copiedContentKindRef = useRef<"blocks" | "pages" | null>(null);
   const undoBlockHistoryRef = useRef<TextBlock[][]>([]);
   const redoBlockHistoryRef = useRef<TextBlock[][]>([]);
   const blockElementsRef = useRef<Map<string, HTMLElement>>(new Map());
@@ -241,6 +262,9 @@ function App() {
   const selectedBlockIdsRef = useRef<string[]>(selectedBlockIds);
   const selectedFolderIdRef = useRef(selectedFolderId);
   const selectedPageIdRef = useRef(selectedPageId);
+  const selectedSidebarPageIdsRef = useRef<string[]>(selectedSidebarPageIds);
+  const draggedPageIdsRef = useRef<string[]>([]);
+  const draggedPrimaryPageIdRef = useRef<string | null>(null);
   const zoomLevelRef = useRef(zoomLevel);
 
   dataRef.current = data;
@@ -248,6 +272,7 @@ function App() {
   selectedBlockIdsRef.current = selectedBlockIds;
   selectedFolderIdRef.current = selectedFolderId;
   selectedPageIdRef.current = selectedPageId;
+  selectedSidebarPageIdsRef.current = selectedSidebarPageIds;
   zoomLevelRef.current = zoomLevel;
 
   const selectedPage = useMemo(
@@ -516,6 +541,7 @@ function App() {
         pageViewportsRef.current.clear();
         setSelectedFolderId(firstFolderId);
         setSelectedPageId(firstPageId);
+        setSidebarPageSelection(firstPageId ? [firstPageId] : []);
         restorePageViewport(firstPageId);
         setSelectedBlockIds([]);
         setEditingBlockId(null);
@@ -538,6 +564,21 @@ function App() {
       isMounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    const validPageIds = new Set(
+      data.pages
+        .filter((page) => !isTemplatePage(page))
+        .map((page) => page.id),
+    );
+    const retainedPageIds = selectedSidebarPageIdsRef.current.filter((pageId) =>
+      validPageIds.has(pageId),
+    );
+
+    if (!areIdSelectionsEqual(selectedSidebarPageIdsRef.current, retainedPageIds)) {
+      setSidebarPageSelection(retainedPageIds);
+    }
+  }, [data.pages]);
 
   useEffect(() => {
     if (isSearchOpen) {
@@ -611,19 +652,92 @@ function App() {
     return blocks.map((block) => ({ ...block }));
   }
 
+  function cloneRichContent(richContent: TextBlock["richContent"]) {
+    return richContent ? structuredClone(richContent) : undefined;
+  }
+
+  function cloneCopiedPageBlock(block: TextBlock): CopiedPageBlock {
+    const { id: _id, pageId: _pageId, richContent, ...blockFields } = block;
+
+    return {
+      ...blockFields,
+      ...(richContent ? { richContent: cloneRichContent(richContent) } : {}),
+    };
+  }
+
+  function clonePageViewport(pageId: string): PageViewport | undefined {
+    const sourceViewport =
+      pageId === selectedPageIdRef.current
+        ? {
+            panOffset: { ...panOffsetRef.current },
+            zoomLevel: zoomLevelRef.current,
+          }
+        : pageViewportsRef.current.get(pageId);
+
+    if (!sourceViewport) {
+      return undefined;
+    }
+
+    return {
+      panOffset: { ...sourceViewport.panOffset },
+      zoomLevel: sourceViewport.zoomLevel,
+    };
+  }
+
   function cloneBlocksForPage(blocks: TextBlock[], pageId: string) {
     return blocks.map((block) => ({
       ...block,
       id: createId("block"),
       pageId,
-      richContent: block.richContent
-        ? structuredClone(block.richContent)
-        : undefined,
+      richContent: cloneRichContent(block.richContent),
     }));
   }
 
   function isTemplatePage(page: AppData["pages"][number]) {
     return page.folderId === PAGE_TEMPLATE_FOLDER_ID;
+  }
+
+  function insertPagesAfterLastPageInFolder(
+    pages: AppData["pages"],
+    folderId: string,
+    insertedPages: AppData["pages"],
+  ) {
+    let insertIndex = pages.length;
+
+    for (let index = pages.length - 1; index >= 0; index -= 1) {
+      if (pages[index].folderId === folderId) {
+        insertIndex = index + 1;
+        break;
+      }
+    }
+
+    return [
+      ...pages.slice(0, insertIndex),
+      ...insertedPages,
+      ...pages.slice(insertIndex),
+    ];
+  }
+
+  function setSidebarPageSelection(pageIds: string[]) {
+    const nextPageIds = pageIds.filter(
+      (pageId, index) => pageId && pageIds.indexOf(pageId) === index,
+    );
+
+    selectedSidebarPageIdsRef.current = nextPageIds;
+    setSelectedSidebarPageIds((currentPageIds) =>
+      areIdSelectionsEqual(currentPageIds, nextPageIds)
+        ? currentPageIds
+        : nextPageIds,
+    );
+  }
+
+  function toggleSidebarPageSelection(pageId: string) {
+    const currentPageIds = selectedSidebarPageIdsRef.current;
+    const nextPageIds = currentPageIds.includes(pageId)
+      ? currentPageIds.filter((currentPageId) => currentPageId !== pageId)
+      : [...currentPageIds, pageId];
+
+    setSidebarPageSelection(nextPageIds);
   }
 
   function snapValue(value: number) {
@@ -802,12 +916,41 @@ function App() {
     const minY = Math.min(...blocksToCopy.map((block) => block.y));
 
     copiedBlocksRef.current = blocksToCopy.map(
-      ({ id: _id, pageId: _pageId, x, y, ...block }) => ({
+      ({ id: _id, pageId: _pageId, x, y, richContent, ...block }) => ({
         ...block,
+        ...(richContent ? { richContent: cloneRichContent(richContent) } : {}),
         offsetX: x - minX,
         offsetY: y - minY,
       }),
     );
+    copiedContentKindRef.current = "blocks";
+
+    return true;
+  }
+
+  function copySelectedPages() {
+    const currentData = dataRef.current;
+    const selectedPageIdSet = new Set(selectedSidebarPageIdsRef.current);
+    const pagesToCopy = currentData.pages.filter(
+      (page) => selectedPageIdSet.has(page.id) && !isTemplatePage(page),
+    );
+
+    if (pagesToCopy.length === 0) {
+      return false;
+    }
+
+    copiedPagesRef.current = pagesToCopy.map((page) => {
+      const { id: _id, folderId: _folderId, ...pageFields } = page;
+
+      return {
+        ...pageFields,
+        blocks: currentData.blocks
+          .filter((block) => block.pageId === page.id)
+          .map(cloneCopiedPageBlock),
+        viewport: clonePageViewport(page.id),
+      };
+    });
+    copiedContentKindRef.current = "pages";
 
     return true;
   }
@@ -830,7 +973,11 @@ function App() {
   }
 
   function pasteCopiedBlocks() {
-    if (!selectedPageId || copiedBlocksRef.current.length === 0) {
+    if (
+      copiedContentKindRef.current !== "blocks" ||
+      !selectedPageId ||
+      copiedBlocksRef.current.length === 0
+    ) {
       return false;
     }
 
@@ -858,7 +1005,7 @@ function App() {
       width: block.width,
       height: block.height,
       content: block.content,
-      richContent: block.richContent,
+      richContent: cloneRichContent(block.richContent),
       isWidthManuallyResized: block.isWidthManuallyResized,
       imageData: block.imageData,
       imageName: block.imageName,
@@ -873,6 +1020,86 @@ function App() {
     setIsCanvasKeyboardActive(true);
     setInsertionPoint(null);
     setActiveMode("selected");
+
+    return true;
+  }
+
+  function pasteCopiedPages() {
+    if (
+      copiedContentKindRef.current !== "pages" ||
+      copiedPagesRef.current.length === 0
+    ) {
+      return false;
+    }
+
+    const currentData = dataRef.current;
+    const folderId = selectedFolderIdRef.current || currentData.folders[0]?.id;
+
+    if (!folderId) {
+      return false;
+    }
+
+    const pastedPages: AppData["pages"] = [];
+    const pastedBlocks: TextBlock[] = [];
+
+    for (const copiedPage of copiedPagesRef.current) {
+      const { blocks, viewport, ...pageFields } = copiedPage;
+      const pageId = createId("page");
+
+      pastedPages.push({
+        ...pageFields,
+        id: pageId,
+        folderId,
+      });
+      pastedBlocks.push(
+        ...blocks.map((block) => ({
+          ...block,
+          id: createId("block"),
+          pageId,
+          richContent: cloneRichContent(block.richContent),
+        })),
+      );
+
+      if (viewport) {
+        pageViewportsRef.current.set(pageId, {
+          panOffset: { ...viewport.panOffset },
+          zoomLevel: viewport.zoomLevel,
+        });
+      }
+    }
+
+    if (pastedPages.length === 0) {
+      return false;
+    }
+
+    const nextData = {
+      ...currentData,
+      pages: insertPagesAfterLastPageInFolder(
+        currentData.pages,
+        folderId,
+        pastedPages,
+      ),
+      blocks: [...currentData.blocks, ...pastedBlocks],
+    };
+    const firstPastedPageId = pastedPages[0].id;
+
+    dataRef.current = nextData;
+    setData(nextData);
+    rememberPageViewport(selectedPageIdRef.current);
+    selectedFolderIdRef.current = folderId;
+    selectedPageIdRef.current = firstPastedPageId;
+    setSelectedFolderId(folderId);
+    setSelectedPageId(firstPastedPageId);
+    setSidebarPageSelection(pastedPages.map((page) => page.id));
+    restorePageViewport(firstPastedPageId);
+    setEditingFolderId(null);
+    setEditingPageId(null);
+    setIsEditingHeaderTitle(false);
+    setSelectedBlockIds([]);
+    setEditingBlockId(null);
+    setInsertionPoint(null);
+    setIsCanvasKeyboardActive(false);
+    setActiveMode("canvas");
 
     return true;
   }
@@ -931,7 +1158,11 @@ function App() {
         !editingBlockId &&
         !isTextEntryTarget(event.target)
       ) {
-        if (copySelectedBlocks()) {
+        const didCopy = isCanvasKeyboardActive
+          ? copySelectedBlocks()
+          : copySelectedPages();
+
+        if (didCopy) {
           event.preventDefault();
         }
 
@@ -953,7 +1184,7 @@ function App() {
         const visibleBlockIds = visibleBlocks.map((block) => block.id);
 
         setSelectedBlockIds((currentBlockIds) =>
-          areBlockIdSelectionsEqual(currentBlockIds, visibleBlockIds)
+          areIdSelectionsEqual(currentBlockIds, visibleBlockIds)
             ? currentBlockIds
             : visibleBlockIds,
         );
@@ -1027,7 +1258,16 @@ function App() {
 
   useEffect(() => {
     function handlePaste(event: ClipboardEvent) {
-      if (!selectedPageId || isTextEntryTarget(event.target)) {
+      if (isTextEntryTarget(event.target)) {
+        return;
+      }
+
+      if (pasteCopiedPages()) {
+        event.preventDefault();
+        return;
+      }
+
+      if (!selectedPageId) {
         return;
       }
 
@@ -1196,6 +1436,7 @@ function App() {
     }
 
     rememberPageViewport(selectedPageId);
+    selectedPageIdRef.current = nextPageId;
     setSelectedPageId(nextPageId);
     restorePageViewport(nextPageId);
   }
@@ -1214,8 +1455,11 @@ function App() {
       folders: [...currentData.folders, { id: folderId, name: "New folder" }],
     }));
     rememberPageViewport(selectedPageId);
+    selectedFolderIdRef.current = folderId;
+    selectedPageIdRef.current = "";
     setSelectedFolderId(folderId);
     setSelectedPageId("");
+    setSidebarPageSelection([]);
     restorePageViewport("");
     setEditingFolderId(folderId);
     setEditingPageId(null);
@@ -1259,8 +1503,11 @@ function App() {
         nextPages.find((page) => page.folderId === nextFolderId)?.id ?? "";
 
       forgetPageViewports(deletedPageIds);
+      selectedFolderIdRef.current = nextFolderId;
+      selectedPageIdRef.current = nextSelectedPageId;
       setSelectedFolderId(nextFolderId);
       setSelectedPageId(nextSelectedPageId);
+      setSidebarPageSelection(nextSelectedPageId ? [nextSelectedPageId] : []);
       restorePageViewport(nextSelectedPageId);
       setEditingFolderId(null);
       setEditingPageId(null);
@@ -1285,8 +1532,11 @@ function App() {
     const nextSelectedPageId = firstPage?.id ?? "";
 
     rememberPageViewport(selectedPageId);
+    selectedFolderIdRef.current = folderId;
+    selectedPageIdRef.current = nextSelectedPageId;
     setSelectedFolderId(folderId);
     setSelectedPageId(nextSelectedPageId);
+    setSidebarPageSelection(nextSelectedPageId ? [nextSelectedPageId] : []);
     restorePageViewport(nextSelectedPageId);
     setEditingFolderId(null);
     setEditingPageId(null);
@@ -1314,8 +1564,11 @@ function App() {
       ],
     }));
     rememberPageViewport(selectedPageId);
+    selectedFolderIdRef.current = folderId;
+    selectedPageIdRef.current = pageId;
     setSelectedFolderId(folderId);
     setSelectedPageId(pageId);
+    setSidebarPageSelection([pageId]);
     restorePageViewport(pageId);
     setEditingFolderId(null);
     setEditingPageId(pageId);
@@ -1398,6 +1651,7 @@ function App() {
     selectedPageIdRef.current = pageId;
     setSelectedFolderId(folderId);
     setSelectedPageId(pageId);
+    setSidebarPageSelection([pageId]);
     restorePageViewport(pageId);
     setEditingFolderId(null);
     setEditingPageId(pageId);
@@ -1408,57 +1662,85 @@ function App() {
     setActiveMode("canvas");
   }
 
-  function duplicatePage(pageId: string) {
+  function beginPageDrag(pageId: string) {
     const currentData = dataRef.current;
-    const sourcePageIndex = currentData.pages.findIndex(
+    const sourcePage = currentData.pages.find(
       (page) => page.id === pageId && !isTemplatePage(page),
     );
 
-    if (sourcePageIndex === -1) {
-      return;
+    if (!sourcePage) {
+      return false;
     }
 
-    const sourcePage = currentData.pages[sourcePageIndex];
-    const duplicatePageId = createId("page");
-    const duplicatePage = {
-      ...sourcePage,
-      id: duplicatePageId,
-    };
-    const duplicateBlocks = cloneBlocksForPage(
-      currentData.blocks.filter((block) => block.pageId === sourcePage.id),
-      duplicatePageId,
+    const selectedPageIdSet = new Set(selectedSidebarPageIdsRef.current);
+    const nextDraggedPageIds = selectedPageIdSet.has(pageId)
+      ? currentData.pages
+          .filter((page) => selectedPageIdSet.has(page.id) && !isTemplatePage(page))
+          .map((page) => page.id)
+      : [pageId];
+
+    draggedPageIdsRef.current = nextDraggedPageIds;
+    draggedPrimaryPageIdRef.current = pageId;
+    setDraggedPageIds(nextDraggedPageIds);
+
+    return true;
+  }
+
+  function endPageDrag() {
+    draggedPageIdsRef.current = [];
+    draggedPrimaryPageIdRef.current = null;
+    setDraggedPageIds([]);
+    setPageDropTargetFolderId(null);
+  }
+
+  function moveDraggedPagesToFolder(folderId: string) {
+    const currentData = dataRef.current;
+    const targetFolder = currentData.folders.find((folder) => folder.id === folderId);
+    const draggedPageIdSet = new Set(draggedPageIdsRef.current);
+
+    if (!targetFolder || draggedPageIdSet.size === 0) {
+      return false;
+    }
+
+    const draggedPages = currentData.pages.filter(
+      (page) => draggedPageIdSet.has(page.id) && !isTemplatePage(page),
     );
+
+    if (
+      draggedPages.length === 0 ||
+      draggedPages.every((page) => page.folderId === folderId)
+    ) {
+      return false;
+    }
+
+    const stationaryPages = currentData.pages.filter(
+      (page) => !draggedPageIdSet.has(page.id),
+    );
+    const movedPages = draggedPages.map((page) => ({
+      ...page,
+      folderId,
+    }));
     const nextData = {
       ...currentData,
-      pages: [
-        ...currentData.pages.slice(0, sourcePageIndex + 1),
-        duplicatePage,
-        ...currentData.pages.slice(sourcePageIndex + 1),
-      ],
-      blocks: [...currentData.blocks, ...duplicateBlocks],
+      pages: insertPagesAfterLastPageInFolder(
+        stationaryPages,
+        folderId,
+        movedPages,
+      ),
     };
-    const sourceViewport =
-      sourcePage.id === selectedPageId
-        ? {
-            panOffset: { ...panOffsetRef.current },
-            zoomLevel: zoomLevelRef.current,
-          }
-        : pageViewportsRef.current.get(sourcePage.id);
+    const primaryMovedPageId =
+      movedPages.find((page) => page.id === draggedPrimaryPageIdRef.current)?.id ??
+      movedPages[0].id;
 
+    rememberPageViewport(selectedPageIdRef.current);
     dataRef.current = nextData;
     setData(nextData);
-    rememberPageViewport(selectedPageIdRef.current);
-
-    if (sourceViewport) {
-      pageViewportsRef.current.set(duplicatePageId, {
-        panOffset: { ...sourceViewport.panOffset },
-        zoomLevel: sourceViewport.zoomLevel,
-      });
-    }
-
-    setSelectedFolderId(sourcePage.folderId);
-    setSelectedPageId(duplicatePageId);
-    restorePageViewport(duplicatePageId);
+    selectedFolderIdRef.current = folderId;
+    selectedPageIdRef.current = primaryMovedPageId;
+    setSelectedFolderId(folderId);
+    setSelectedPageId(primaryMovedPageId);
+    setSidebarPageSelection(movedPages.map((page) => page.id));
+    restorePageViewport(primaryMovedPageId);
     setEditingFolderId(null);
     setEditingPageId(null);
     setIsEditingHeaderTitle(false);
@@ -1466,6 +1748,8 @@ function App() {
     setEditingBlockId(null);
     setInsertionPoint(null);
     setActiveMode("canvas");
+
+    return true;
   }
 
   function renamePage(pageId: string, title: string) {
@@ -1503,9 +1787,21 @@ function App() {
         pageId === selectedPageId
           ? nextPages.find((page) => page.folderId === folderId)?.id ?? ""
           : selectedPageId;
+      const nextPageIdSet = new Set(nextPages.map((page) => page.id));
+      const retainedSelectedPageIds = selectedSidebarPageIdsRef.current.filter(
+        (selectedSidebarPageId) => nextPageIdSet.has(selectedSidebarPageId),
+      );
+      const nextSidebarPageIds =
+        retainedSelectedPageIds.length > 0
+          ? retainedSelectedPageIds
+          : nextSelectedPageId
+            ? [nextSelectedPageId]
+            : [];
 
       forgetPageViewports([pageId]);
+      selectedPageIdRef.current = nextSelectedPageId;
       setSelectedPageId(nextSelectedPageId);
+      setSidebarPageSelection(nextSidebarPageIds);
       if (pageId === selectedPageId) {
         restorePageViewport(nextSelectedPageId);
       }
@@ -1529,13 +1825,28 @@ function App() {
     [deleteBlocks],
   );
 
-  function selectPage(pageId: string) {
+  function selectPage(pageId: string, isMultiSelect = false) {
     const nextPage = data.pages.find((page) => page.id === pageId);
 
     if (!nextPage) {
       return;
     }
 
+    if (isMultiSelect) {
+      toggleSidebarPageSelection(pageId);
+      setEditingFolderId(null);
+      setEditingPageId(null);
+      setIsEditingHeaderTitle(false);
+      setSelectedBlockIds([]);
+      setEditingBlockId(null);
+      setInsertionPoint(null);
+      setIsCanvasKeyboardActive(false);
+      setActiveMode("canvas");
+      return;
+    }
+
+    setSidebarPageSelection([pageId]);
+    selectedFolderIdRef.current = nextPage.folderId;
     setSelectedFolderId(nextPage.folderId);
     switchSelectedPage(pageId);
     setEditingFolderId(null);
@@ -1544,6 +1855,7 @@ function App() {
     setSelectedBlockIds([]);
     setEditingBlockId(null);
     setInsertionPoint(null);
+    setIsCanvasKeyboardActive(false);
     setActiveMode("canvas");
   }
 
@@ -2279,8 +2591,21 @@ function App() {
         onCreatePage={createPage}
         onDeleteFolder={deleteFolder}
         onDeletePage={deletePage}
-        onDuplicatePage={duplicatePage}
+        onFolderDragLeave={(folderId) => {
+          if (pageDropTargetFolderId === folderId) {
+            setPageDropTargetFolderId(null);
+          }
+        }}
+        onFolderDragOver={setPageDropTargetFolderId}
         onOpenSearch={() => setIsSearchOpen(true)}
+        onPageDragEnd={endPageDrag}
+        onPageDragStart={beginPageDrag}
+        onPageDropOnFolder={(folderId) => {
+          const didMovePages = moveDraggedPagesToFolder(folderId);
+
+          endPageDrag();
+          return didMovePages;
+        }}
         onPointerDown={() => setIsCanvasKeyboardActive(false)}
         onRenameFolder={renameFolder}
         onRenamePage={renamePage}
@@ -2293,6 +2618,9 @@ function App() {
           setIsSidebarCollapsed((currentValue) => !currentValue)
         }
         onTogglePageBookmark={togglePageBookmark}
+        pageDropTargetFolderId={pageDropTargetFolderId}
+        draggedPageIds={draggedPageIds}
+        selectedPageIds={selectedSidebarPageIds}
       />
 
       <section className="workspace">
@@ -2478,8 +2806,12 @@ const Sidebar = memo(function Sidebar({
   onCreatePage,
   onDeleteFolder,
   onDeletePage,
-  onDuplicatePage,
+  onFolderDragLeave,
+  onFolderDragOver,
   onOpenSearch,
+  onPageDragEnd,
+  onPageDragStart,
+  onPageDropOnFolder,
   onPointerDown,
   onRenameFolder,
   onRenamePage,
@@ -2490,11 +2822,26 @@ const Sidebar = memo(function Sidebar({
   onSetEditingPageId,
   onToggleCollapse,
   onTogglePageBookmark,
+  pageDropTargetFolderId,
+  draggedPageIds,
+  selectedPageIds,
 }: SidebarProps) {
   const folderNamesById = useMemo(
     () => new Map(folders.map((folder) => [folder.id, folder.name])),
     [folders],
   );
+  const selectedPageIdSet = useMemo(
+    () => new Set(selectedPageIds),
+    [selectedPageIds],
+  );
+  const draggedPageIdSet = useMemo(
+    () => new Set(draggedPageIds),
+    [draggedPageIds],
+  );
+
+  function hasPageDragData(event: DragEvent<HTMLElement>) {
+    return Array.from(event.dataTransfer.types).includes(PAGE_DRAG_MIME_TYPE);
+  }
 
   return (
     <aside
@@ -2597,10 +2944,39 @@ const Sidebar = memo(function Sidebar({
                   <div
                     className={`nav-item nav-item-folder ${
                       folder.id === selectedFolderId ? "is-active" : ""
+                    } ${
+                      folder.id === pageDropTargetFolderId ? "is-drop-target" : ""
                     }`}
                     key={folder.id}
                     onDoubleClick={() => onSetEditingFolderId(folder.id)}
                     onClick={() => onSelectFolder(folder.id)}
+                    onDragLeave={(event) => {
+                      if (
+                        event.currentTarget.contains(event.relatedTarget as Node | null)
+                      ) {
+                        return;
+                      }
+
+                      onFolderDragLeave(folder.id);
+                    }}
+                    onDragOver={(event) => {
+                      if (!hasPageDragData(event)) {
+                        return;
+                      }
+
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = "move";
+                      onFolderDragOver(folder.id);
+                    }}
+                    onDrop={(event) => {
+                      if (!hasPageDragData(event)) {
+                        return;
+                      }
+
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onPageDropOnFolder(folder.id);
+                    }}
                   >
                     {editingFolderId === folder.id ? (
                       <InlineRename
@@ -2691,71 +3067,82 @@ const Sidebar = memo(function Sidebar({
               </button>
             </div>
             <div className="nav-list">
-              {visiblePages.map((page) => (
-                <div
-                  className={`nav-item nav-item-page ${
-                    page.id === selectedPageId ? "is-selected" : ""
-                  }`}
-                  key={page.id}
-                  onDoubleClick={() => onSetEditingPageId(page.id)}
-                  onClick={() => onSelectPage(page.id)}
-                >
-                  {editingPageId === page.id ? (
-                    <InlineRename
-                      ariaLabel="Page title"
-                      initialValue={page.title}
-                      onCancel={() => onSetEditingPageId(null)}
-                      onCommit={(value) => {
-                        onRenamePage(page.id, value);
-                        onSetEditingPageId(null);
-                      }}
-                    />
-                  ) : (
-                    <span className="nav-label">{page.title}</span>
-                  )}
-                  <button
-                    type="button"
-                    className={`bookmark-toggle ${
-                      page.isBookmarked ? "is-bookmarked" : ""
+              {visiblePages.map((page) => {
+                const isPageSelected = selectedPageIdSet.has(page.id);
+                const isPageOpen = page.id === selectedPageId;
+                const isPageDragging = draggedPageIdSet.has(page.id);
+
+                return (
+                  <div
+                    className={`nav-item nav-item-page ${
+                      isPageSelected ? "is-selected" : ""
+                    } ${isPageOpen ? "is-open" : ""} ${
+                      isPageDragging ? "is-dragging" : ""
                     }`}
-                    aria-label={`${
-                      page.isBookmarked ? "Remove bookmark from" : "Bookmark"
-                    } ${page.title}`}
-                    aria-pressed={Boolean(page.isBookmarked)}
-                    title={page.isBookmarked ? "Remove bookmark" : "Bookmark"}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onTogglePageBookmark(page.id);
+                    draggable={editingPageId !== page.id}
+                    key={page.id}
+                    onDoubleClick={() => onSetEditingPageId(page.id)}
+                    onClick={(event) =>
+                      onSelectPage(page.id, event.metaKey || event.ctrlKey)
+                    }
+                    onDragEnd={onPageDragEnd}
+                    onDragStart={(event) => {
+                      if (!onPageDragStart(page.id)) {
+                        event.preventDefault();
+                        return;
+                      }
+
+                      event.dataTransfer.effectAllowed = "move";
+                      event.dataTransfer.setData(PAGE_DRAG_MIME_TYPE, page.id);
+                      event.dataTransfer.setData("text/plain", page.title);
                     }}
                   >
-                    {page.isBookmarked ? "★" : "☆"}
-                  </button>
-                  <span className="nav-actions is-page-actions">
+                    {editingPageId === page.id ? (
+                      <InlineRename
+                        ariaLabel="Page title"
+                        initialValue={page.title}
+                        onCancel={() => onSetEditingPageId(null)}
+                        onCommit={(value) => {
+                          onRenamePage(page.id, value);
+                          onSetEditingPageId(null);
+                        }}
+                      />
+                    ) : (
+                      <span className="nav-label">{page.title}</span>
+                    )}
                     <button
                       type="button"
-                      aria-label={`Duplicate ${page.title}`}
+                      className={`bookmark-toggle ${
+                        page.isBookmarked ? "is-bookmarked" : ""
+                      }`}
+                      aria-label={`${
+                        page.isBookmarked ? "Remove bookmark from" : "Bookmark"
+                      } ${page.title}`}
+                      aria-pressed={Boolean(page.isBookmarked)}
+                      title={page.isBookmarked ? "Remove bookmark" : "Bookmark"}
                       onClick={(event) => {
                         event.stopPropagation();
-                        onDuplicatePage(page.id);
+                        onTogglePageBookmark(page.id);
                       }}
-                      title={`Duplicate ${page.title}`}
                     >
-                      Copy
+                      {page.isBookmarked ? "★" : "☆"}
                     </button>
-                    <button
-                      type="button"
-                      aria-label={`Delete ${page.title}`}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onDeletePage(page.id);
-                      }}
-                      title={`Delete ${page.title}`}
-                    >
-                      X
-                    </button>
-                  </span>
-                </div>
-              ))}
+                    <span className="nav-actions">
+                      <button
+                        type="button"
+                        aria-label={`Delete ${page.title}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onDeletePage(page.id);
+                        }}
+                        title={`Delete ${page.title}`}
+                      >
+                        X
+                      </button>
+                    </span>
+                  </div>
+                );
+              })}
               {selectedFolderId && visiblePages.length === 0 ? (
                 <p className="empty-state">No pages in this folder</p>
               ) : null}
@@ -2780,15 +3167,18 @@ const Sidebar = memo(function Sidebar({
 function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps) {
   return (
     previous.bookmarkedPages === next.bookmarkedPages &&
+    previous.draggedPageIds === next.draggedPageIds &&
     previous.editingFolderId === next.editingFolderId &&
     previous.editingPageId === next.editingPageId &&
     previous.folders === next.folders &&
     previous.isCollapsed === next.isCollapsed &&
     previous.pageSearchQuery === next.pageSearchQuery &&
     previous.pageSearchResults === next.pageSearchResults &&
+    previous.pageDropTargetFolderId === next.pageDropTargetFolderId &&
     previous.pageCountsByFolder === next.pageCountsByFolder &&
     previous.selectedFolderId === next.selectedFolderId &&
     previous.selectedPageId === next.selectedPageId &&
+    previous.selectedPageIds === next.selectedPageIds &&
     previous.visiblePages === next.visiblePages
   );
 }

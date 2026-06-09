@@ -363,8 +363,12 @@ h2 {
 }
 
 .nav-item-page {
-  grid-template-columns: minmax(0, 1fr) 26px;
+  grid-template-columns: minmax(0, 1fr) 24px 26px;
   padding-left: 16px;
+}
+
+.nav-item-bookmark {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 82px) 24px;
 }
 
 .nav-item:hover {
@@ -431,6 +435,52 @@ h2 {
   border-color: #c6d0dc;
   color: #344054;
   background: #ffffff;
+}
+
+.bookmark-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 24px;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  border-color: transparent;
+  padding: 0;
+  color: #98a2b3;
+  background: transparent;
+  font-size: 15px;
+}
+
+.bookmark-toggle:hover {
+  border-color: #d8dee6;
+  color: #6f7b8a;
+  background: #ffffff;
+}
+
+.bookmark-toggle.is-bookmarked,
+.bookmark-toggle[aria-pressed="true"] {
+  border-color: #ead59f;
+  color: #9a6b00;
+  background: #fff8e6;
+}
+
+.bookmark-toggle.is-bookmarked:hover,
+.bookmark-toggle[aria-pressed="true"]:hover {
+  border-color: #d0ad58;
+  color: #7a5100;
+  background: #fff1c2;
+}
+
+.bookmark-folder-label {
+  flex: 0 1 auto;
+  max-width: 82px;
+  overflow: hidden;
+  color: #7a8795;
+  font-size: 12px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .inline-input {
@@ -616,6 +666,13 @@ h2 {
   border-color: #7a8795;
   color: #1f2937;
   background: #e8eef5;
+}
+
+.header-bookmark-toggle {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  font-size: 16px;
 }
 
 .canvas {
@@ -1218,7 +1275,8 @@ h2 {
 
 .app-shell.is-dark .section-header h2,
 .app-shell.is-dark .empty-state,
-.app-shell.is-dark .item-count {
+.app-shell.is-dark .item-count,
+.app-shell.is-dark .bookmark-folder-label {
   color: #9aa6b5;
 }
 
@@ -1271,6 +1329,31 @@ h2 {
   border-color: #4a5666;
   color: #f3f6fa;
   background: #313b48;
+}
+
+.app-shell.is-dark .bookmark-toggle {
+  color: #8793a3;
+  background: transparent;
+}
+
+.app-shell.is-dark .bookmark-toggle:hover {
+  border-color: #3a4451;
+  color: #d7dde7;
+  background: #262c35;
+}
+
+.app-shell.is-dark .bookmark-toggle.is-bookmarked,
+.app-shell.is-dark .bookmark-toggle[aria-pressed="true"] {
+  border-color: #76612e;
+  color: #f4cf6a;
+  background: #3a3120;
+}
+
+.app-shell.is-dark .bookmark-toggle.is-bookmarked:hover,
+.app-shell.is-dark .bookmark-toggle[aria-pressed="true"]:hover {
+  border-color: #9b7b33;
+  color: #ffe08a;
+  background: #4a3c23;
 }
 
 .app-shell.is-dark .nav-actions button {

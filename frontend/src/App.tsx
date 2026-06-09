@@ -47,6 +47,15 @@ import {
   isTextEntryTarget,
   rectsIntersect,
 } from "./editorUtils";
+import {
+  callOllamaChat,
+  callOpenAICompatibleChat,
+  callOpenAICompatibleWhisperTranscription,
+  DEFAULT_LOCAL_LLM_CONFIG,
+  DEFAULT_LOCAL_STT_CONFIG,
+} from "./services/localModelProviders";
+import { buildAssistantActionRequest } from "./services/assistantActions";
+import { buildNotesContext } from "./services/notesContext";
 import type { AppData, TextBlock } from "./types";
 
 type SidebarProps = {
@@ -167,18 +176,6 @@ const PAGE_DRAG_MIME_TYPE = "application/x-note-page";
 const ROOT_FOLDER_ID = "";
 const PASTED_BLOCK_OFFSET = 24;
 const DEFAULT_PAN_OFFSET: PanOffset = { x: 0, y: 0 };
-const DEFAULT_LLM_CONFIG: LlmProviderConfig = {
-  baseUrl: "http://localhost:11434",
-  kind: "ollama",
-  model: "llama3.2",
-  name: "Local LLM",
-};
-const DEFAULT_STT_CONFIG: SttProviderConfig = {
-  baseUrl: "http://localhost:8080/v1",
-  kind: "openai-compatible-whisper",
-  model: "whisper",
-  name: "Local STT",
-};
 type SidebarSortOrder =
   | "name-asc"
   | "name-desc"
@@ -463,12 +460,12 @@ function App() {
   const [assistantInput, setAssistantInput] = useState("");
   const [assistantStatus, setAssistantStatus] = useState<string | null>(null);
   const [assistantError, setAssistantError] = useState<string | null>(null);
-  const [isAssistantSending] = useState(false);
+  const [isAssistantSending, setIsAssistantSending] = useState(false);
   const [isAssistantRecording, setIsAssistantRecording] = useState(false);
   const [llmProviderConfig, setLlmProviderConfig] =
-    useState<LlmProviderConfig>(DEFAULT_LLM_CONFIG);
+    useState<LlmProviderConfig>(DEFAULT_LOCAL_LLM_CONFIG);
   const [sttProviderConfig, setSttProviderConfig] =
-    useState<SttProviderConfig>(DEFAULT_STT_CONFIG);
+    useState<SttProviderConfig>(DEFAULT_LOCAL_STT_CONFIG);
   const [isLoaded, setIsLoaded] = useState(false);
   const [persistenceAvailable, setPersistenceAvailable] = useState(false);
   const dataRef = useRef<AppData>(data);
@@ -491,6 +488,9 @@ function App() {
   const redoBlockHistoryRef = useRef<TextBlock[][]>([]);
   const blockElementsRef = useRef<Map<string, HTMLElement>>(new Map());
   const dragLayerSessionRef = useRef<DragLayerSession | null>(null);
+  const assistantMediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const assistantRecordingChunksRef = useRef<Blob[]>([]);
+  const assistantRecordingStreamRef = useRef<MediaStream | null>(null);
   const pageViewportsRef = useRef<Map<string, PageViewport>>(new Map());
   const isSnapToGridEnabledRef = useRef(isSnapToGridEnabled);
   const selectedBlockIdsRef = useRef<string[]>(selectedBlockIds);
@@ -780,6 +780,8 @@ function App() {
         cleanupDragLayerSession(dragLayerSessionRef.current);
         dragLayerSessionRef.current = null;
       }
+
+      stopAssistantRecordingStream();
     };
   }, []);
 
@@ -1959,36 +1961,257 @@ function App() {
     });
   }
 
-  function sendAssistantMessage() {
+  function getAssistantErrorMessage(error: unknown) {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  function getLatestAssistantOutput() {
+    for (let index = assistantMessages.length - 1; index >= 0; index -= 1) {
+      const message = assistantMessages[index];
+
+      if (message.role === "assistant" && message.content.trim()) {
+        return message.content;
+      }
+    }
+
+    return "";
+  }
+
+  function stopAssistantRecordingStream() {
+    assistantRecordingStreamRef.current
+      ?.getTracks()
+      .forEach((track) => track.stop());
+    assistantRecordingStreamRef.current = null;
+  }
+
+  async function requestAssistantChat(messages: AssistantMessage[]) {
+    const notesContext = buildNotesContext({
+      data: dataRef.current,
+      selectedBlockIds: selectedBlockIdsRef.current,
+      selectedPageId: selectedPageIdRef.current,
+    });
+    const request = {
+      config: llmProviderConfig,
+      messages,
+      notesContext,
+    };
+
+    return llmProviderConfig.kind === "ollama"
+      ? callOllamaChat(request)
+      : callOpenAICompatibleChat(request);
+  }
+
+  async function sendAssistantMessage() {
     const prompt = assistantInput.trim();
 
     if (!prompt || isAssistantSending) {
       return;
     }
 
-    setAssistantMessages((currentMessages) => [
-      ...currentMessages,
-      {
-        id: createId("assistant-message"),
-        role: "user",
-        content: prompt,
-        createdAt: new Date().toISOString(),
-      },
-    ]);
+    const userMessage: AssistantMessage = {
+      id: createId("assistant-message"),
+      role: "user",
+      content: prompt,
+      createdAt: new Date().toISOString(),
+    };
+    const nextMessages = [...assistantMessages, userMessage];
+
+    setAssistantMessages(nextMessages);
     setAssistantInput("");
     setAssistantError(null);
-    setAssistantStatus("Provider integration pending");
+    setAssistantStatus("Sending to local LLM");
+    setIsAssistantSending(true);
+
+    try {
+      const response = await requestAssistantChat(nextMessages);
+      const assistantMessage: AssistantMessage = {
+        id: createId("assistant-message"),
+        role: "assistant",
+        content: response.content,
+        createdAt: new Date().toISOString(),
+      };
+
+      setAssistantMessages([...nextMessages, assistantMessage]);
+      setAssistantStatus(
+        response.model ? `Received response from ${response.model}` : "Received response",
+      );
+    } catch (error) {
+      setAssistantError(getAssistantErrorMessage(error));
+      setAssistantStatus(null);
+    } finally {
+      setIsAssistantSending(false);
+    }
   }
 
-  function toggleAssistantRecording() {
-    setIsAssistantRecording((currentValue) => !currentValue);
+  async function transcribeAssistantRecording(audio: Blob, fileName: string) {
+    if (audio.size === 0) {
+      setAssistantError("No audio was captured.");
+      setAssistantStatus(null);
+      return;
+    }
+
     setAssistantError(null);
-    setAssistantStatus("STT integration pending");
+    setAssistantStatus("Transcribing local audio");
+
+    try {
+      const transcription = await callOpenAICompatibleWhisperTranscription({
+        audio,
+        config: sttProviderConfig,
+        fileName,
+      });
+      const nextText = transcription.text.trim();
+
+      if (!nextText) {
+        setAssistantError("The STT provider returned an empty transcription.");
+        setAssistantStatus(null);
+        return;
+      }
+
+      setAssistantInput((currentInput) => {
+        const trimmedInput = currentInput.trimEnd();
+
+        return trimmedInput ? `${trimmedInput} ${nextText}` : nextText;
+      });
+      setAssistantStatus("Transcription added to prompt");
+    } catch (error) {
+      setAssistantError(getAssistantErrorMessage(error));
+      setAssistantStatus(null);
+    }
+  }
+
+  async function toggleAssistantRecording() {
+    if (isAssistantRecording) {
+      assistantMediaRecorderRef.current?.stop();
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setAssistantError("Audio recording is not available in this environment.");
+      setAssistantStatus(null);
+      return;
+    }
+
+    setAssistantError(null);
+    setAssistantStatus("Requesting microphone access");
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+
+      assistantRecordingStreamRef.current = stream;
+      assistantRecordingChunksRef.current = [];
+      assistantMediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          assistantRecordingChunksRef.current.push(event.data);
+        }
+      };
+      recorder.onerror = () => {
+        setAssistantError("Audio recording failed.");
+        setAssistantStatus(null);
+        setIsAssistantRecording(false);
+        stopAssistantRecordingStream();
+      };
+      recorder.onstop = () => {
+        const chunks = assistantRecordingChunksRef.current;
+        const mimeType = recorder.mimeType || "audio/webm";
+        const audio = new Blob(chunks, { type: mimeType });
+
+        assistantMediaRecorderRef.current = null;
+        assistantRecordingChunksRef.current = [];
+        setIsAssistantRecording(false);
+        stopAssistantRecordingStream();
+        void transcribeAssistantRecording(audio, "note-dictation.webm");
+      };
+
+      recorder.start();
+      setIsAssistantRecording(true);
+      setAssistantStatus("Recording audio");
+    } catch (error) {
+      stopAssistantRecordingStream();
+      setIsAssistantRecording(false);
+      setAssistantError(getAssistantErrorMessage(error));
+      setAssistantStatus(null);
+    }
   }
 
   function runAssistantAction(kind: AssistantActionKind) {
+    const action = buildAssistantActionRequest(kind, getLatestAssistantOutput());
+
+    if (!action.ok) {
+      setAssistantError(action.message);
+      setAssistantStatus(null);
+      return;
+    }
+
+    if (action.request.kind === "insert-text-block") {
+      if (!selectedPageIdRef.current) {
+        setAssistantError("Select a page before inserting assistant output.");
+        setAssistantStatus(null);
+        return;
+      }
+
+      const currentCanvasViewport = canvasViewportRef.current;
+      const origin = insertionPoint ??
+        (currentCanvasViewport
+          ? {
+              x: currentCanvasViewport.x + currentCanvasViewport.width / 2,
+              y: currentCanvasViewport.y + currentCanvasViewport.height / 2,
+            }
+          : { x: PASTED_BLOCK_OFFSET, y: PASTED_BLOCK_OFFSET });
+
+      createTextBlock(origin.x, origin.y, action.request.content);
+      setAssistantError(null);
+      setAssistantStatus("Inserted assistant output");
+      return;
+    }
+
+    const selectedBlockId = selectedBlockIdsRef.current.length === 1
+      ? selectedBlockIdsRef.current[0]
+      : null;
+
+    if (!selectedBlockId) {
+      setAssistantError("Select one text block before using this assistant action.");
+      setAssistantStatus(null);
+      return;
+    }
+
+    const selectedBlock = dataRef.current.blocks.find(
+      (block) => block.id === selectedBlockId,
+    );
+
+    if (!selectedBlock) {
+      setAssistantError("The selected text block no longer exists.");
+      setAssistantStatus(null);
+      return;
+    }
+
+    const nextContent =
+      action.request.kind === "append-to-selected-block"
+        ? [selectedBlock.content.trimEnd(), action.request.content]
+            .filter(Boolean)
+            .join("\n\n")
+        : action.request.content;
+
+    setBlocksWithHistory((currentBlocks) =>
+      currentBlocks.map((block) =>
+        block.id === selectedBlockId
+          ? { ...block, content: nextContent, richContent: undefined }
+          : block,
+      ),
+    );
+    setSelectedBlockIds([selectedBlockId]);
+    setEditingBlockId(null);
+    setInsertionPoint(null);
+    setIsCanvasKeyboardActive(true);
+    setActiveMode("selected");
     setAssistantError(null);
-    setAssistantStatus(`${kind} integration pending`);
+    setAssistantStatus(
+      action.request.kind === "append-to-selected-block"
+        ? "Appended assistant output"
+        : "Replaced selected text block",
+    );
   }
 
   function closePageTab(pageId: string) {

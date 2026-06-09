@@ -1069,13 +1069,13 @@ function TiptapBlockEditor({
           if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
             event.preventDefault();
 
-            if (editor.state.selection.empty) {
-              editor.commands.selectAll();
-              onSelectContent();
+            if (isWholeEditorDocumentSelected(editor)) {
+              onExitToSelection();
               return;
             }
 
-            onExitToSelection();
+            editor.commands.selectAll();
+            onSelectContent();
           }
         }}
         onMouseDown={onSelectionReset}
@@ -1086,6 +1086,16 @@ function TiptapBlockEditor({
         }}
       />
     </>
+  );
+}
+
+function isWholeEditorDocumentSelected(editor: Editor) {
+  const { doc, selection } = editor.state;
+
+  return (
+    !selection.empty &&
+    selection.from <= 0 &&
+    selection.to >= doc.content.size
   );
 }
 

@@ -107,8 +107,12 @@ const MAX_BLOCK_HISTORY_ENTRIES = 100;
 const PASTED_BLOCK_OFFSET = 24;
 const DEFAULT_PAN_OFFSET: PanOffset = { x: 0, y: 0 };
 
-
-
+function areBlockIdSelectionsEqual(firstIds: string[], secondIds: string[]) {
+  return (
+    firstIds.length === secondIds.length &&
+    firstIds.every((blockId, index) => blockId === secondIds[index])
+  );
+}
 
 function App() {
   const [data, setData] = useState<AppData>(emptyData);
@@ -768,7 +772,13 @@ function App() {
           return;
         }
 
-        setSelectedBlockIds(visibleBlocks.map((block) => block.id));
+        const visibleBlockIds = visibleBlocks.map((block) => block.id);
+
+        setSelectedBlockIds((currentBlockIds) =>
+          areBlockIdSelectionsEqual(currentBlockIds, visibleBlockIds)
+            ? currentBlockIds
+            : visibleBlockIds,
+        );
         setEditingBlockId(null);
         setActiveMode("selected");
         return;

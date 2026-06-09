@@ -329,13 +329,30 @@ h2 {
 }
 
 .sidebar-tab-panel {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   min-height: 0;
+}
+
+.sidebar-tab-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 24px;
+  gap: 8px;
+}
+
+.sidebar-tab-header h2 {
+  color: #475467;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  text-transform: uppercase;
 }
 
 .sidebar-search {
   position: relative;
-  gap: 6px;
+  gap: 8px;
+  min-height: 100%;
 }
 
 .file-search-control {
@@ -2040,6 +2057,7 @@ h2 {
 }
 
 .app-shell.is-dark .section-header h2,
+.app-shell.is-dark .sidebar-tab-header h2,
 .app-shell.is-dark .file-explorer-header h2,
 .app-shell.is-dark .empty-state,
 .app-shell.is-dark .item-count,

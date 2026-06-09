@@ -3623,9 +3623,12 @@ const Sidebar = memo(function Sidebar({
           {activeSidebarTab === "search" ? (
           <section
             className="sidebar-section sidebar-tab-panel sidebar-search"
-            aria-label="File search"
+            aria-labelledby="sidebar-search-title"
             role="tabpanel"
           >
+            <div className="sidebar-tab-header">
+              <h2 id="sidebar-search-title">Search</h2>
+            </div>
             <div
               className={`file-search-control ${
                 isPageSearchFocused || isSearchOptionsOpen ? "is-active" : ""

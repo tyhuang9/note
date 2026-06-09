@@ -182,8 +182,12 @@ function formatPageSearchSummary(result: PageSearchResult) {
   return summaryParts.join(" + ");
 }
 
-
-
+function areBlockIdSelectionsEqual(firstIds: string[], secondIds: string[]) {
+  return (
+    firstIds.length === secondIds.length &&
+    firstIds.every((blockId, index) => blockId === secondIds[index])
+  );
+}
 
 function App() {
   const [data, setData] = useState<AppData>(emptyData);
@@ -946,7 +950,13 @@ function App() {
           return;
         }
 
-        setSelectedBlockIds(visibleBlocks.map((block) => block.id));
+        const visibleBlockIds = visibleBlocks.map((block) => block.id);
+
+        setSelectedBlockIds((currentBlockIds) =>
+          areBlockIdSelectionsEqual(currentBlockIds, visibleBlockIds)
+            ? currentBlockIds
+            : visibleBlockIds,
+        );
         setEditingBlockId(null);
         setActiveMode("selected");
         return;

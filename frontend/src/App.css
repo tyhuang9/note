@@ -739,8 +739,21 @@ h2 {
   cursor: text;
 }
 
+.canvas::after {
+  position: absolute;
+  inset: 0;
+  border: 2px solid transparent;
+  content: "";
+  pointer-events: none;
+}
+
 .canvas.is-canvas-selected {
   background: #f5f7fa;
+}
+
+.canvas.is-canvas-selected::after {
+  border-color: rgba(79, 86, 97, 0.22);
+  box-shadow: inset 0 0 0 1px rgba(79, 86, 97, 0.08);
 }
 
 .canvas.is-panning {
@@ -1015,7 +1028,7 @@ h2 {
   border-style: solid;
   outline: 0;
   background: #ffffff;
-  box-shadow: none;
+  box-shadow: 0 0 0 2px rgba(79, 86, 97, 0.14);
   z-index: 5;
 }
 
@@ -1024,11 +1037,11 @@ h2 {
 }
 
 .text-block.is-multi-selected {
-  border-color: #3f4650;
+  border-color: #2563eb;
   border-style: solid;
   outline: 0;
   background: #ffffff;
-  box-shadow: none;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.18);
 }
 
 .text-block.is-editing {
@@ -1037,6 +1050,13 @@ h2 {
   outline: 0;
   background: #ffffff;
   z-index: 6;
+}
+
+.text-block.is-content-selected {
+  border-color: #2563eb;
+  box-shadow:
+    0 0 0 2px rgba(37, 99, 235, 0.22),
+    inset 0 0 0 1px rgba(37, 99, 235, 0.12);
 }
 
 .text-block.is-dragging {
@@ -1130,8 +1150,8 @@ h2 {
 
 .text-block.is-content-selected .text-block-editor .ProseMirror::selection,
 .text-block.is-content-selected .text-block-editor .ProseMirror *::selection {
-  color: inherit;
-  background: transparent;
+  color: #111827;
+  background: rgba(37, 99, 235, 0.26);
 }
 
 .text-block-editor .ProseMirror p,
@@ -1549,6 +1569,11 @@ h2 {
   background: #181c22;
 }
 
+.app-shell.is-dark .canvas.is-canvas-selected::after {
+  border-color: rgba(163, 172, 183, 0.28);
+  box-shadow: inset 0 0 0 1px rgba(163, 172, 183, 0.1);
+}
+
 .app-shell.is-dark .canvas-grid {
   background-image: radial-gradient(
     circle,
@@ -1580,16 +1605,31 @@ h2 {
 .app-shell.is-dark .text-block.is-canvas-mode {
   border-color: #88919d;
   background: #262c35;
+  box-shadow: 0 0 0 2px rgba(163, 172, 183, 0.18);
 }
 
 .app-shell.is-dark .text-block.is-multi-selected {
-  border-color: #a3acb7;
+  border-color: #60a5fa;
   background: #262c35;
+  box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.24);
 }
 
 .app-shell.is-dark .text-block.is-editing {
   border-color: #5b6470;
   background: #262c35;
+}
+
+.app-shell.is-dark .text-block.is-content-selected {
+  border-color: #60a5fa;
+  box-shadow:
+    0 0 0 2px rgba(96, 165, 250, 0.28),
+    inset 0 0 0 1px rgba(96, 165, 250, 0.14);
+}
+
+.app-shell.is-dark .text-block.is-content-selected .text-block-editor .ProseMirror::selection,
+.app-shell.is-dark .text-block.is-content-selected .text-block-editor .ProseMirror *::selection {
+  color: #f8fafc;
+  background: rgba(96, 165, 250, 0.38);
 }
 
 .app-shell.is-dark .text-block:hover .text-block-header,

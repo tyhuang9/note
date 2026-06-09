@@ -36,6 +36,16 @@ Run the web frontend only:
 npm run dev
 ```
 
+Connect local AI services by starting the model servers separately before
+launching Note. The initial assistant provider shapes are:
+
+- Ollama chat, for example `http://localhost:11434/api/chat`
+- OpenAI-compatible chat, for example `http://localhost:1234/v1/chat/completions`
+- OpenAI-compatible Whisper transcription, for example `http://localhost:8000/v1/audio/transcriptions`
+
+Use the matching local base URL and model name in the assistant provider
+configuration. Note does not start or bundle the LLM or STT servers.
+
 Build the frontend:
 
 ```bash

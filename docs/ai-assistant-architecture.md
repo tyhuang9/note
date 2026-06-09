@@ -49,6 +49,13 @@ Supported initial provider shapes:
   - OpenAI-compatible Whisper endpoint: `POST /audio/transcriptions`.
 
 Provider base URLs are user-configurable and default to common local ports.
+The app assumes the model servers are already running locally; it does not
+start Ollama, OpenAI-compatible chat servers, or Whisper-compatible STT servers.
+Example local endpoints are:
+
+- Ollama chat: `http://localhost:11434/api/chat`.
+- OpenAI-compatible chat: `http://localhost:1234/v1/chat/completions`.
+- OpenAI-compatible Whisper transcription: `http://localhost:8000/v1/audio/transcriptions`.
 
 ## Notes Context Contract
 

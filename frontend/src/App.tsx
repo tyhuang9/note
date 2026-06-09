@@ -211,7 +211,7 @@ function App() {
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
   const [focusEndBlockId, setFocusEndBlockId] = useState<string | null>(null);
   const [isCanvasKeyboardActive, setIsCanvasKeyboardActive] = useState(false);
-  const [isDarkMode, setIsDarkMode] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(true);
   const [isGridVisible, setIsGridVisible] = useState(false);
   const [isSnapToGridEnabled, setIsSnapToGridEnabled] = useState(false);
   const [dragSourceBlockIds, setDragSourceBlockIds] = useState<string[]>([]);
@@ -512,7 +512,7 @@ function App() {
           "";
 
         setData(savedData);
-        setIsDarkMode(Boolean(savedData.isDarkMode));
+        setIsDarkMode(savedData.isDarkMode ?? true);
         pageViewportsRef.current.clear();
         setSelectedFolderId(firstFolderId);
         setSelectedPageId(firstPageId);

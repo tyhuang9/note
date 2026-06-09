@@ -88,15 +88,19 @@ type PageHeaderProps = {
   isDarkMode: boolean;
   isEditingHeaderTitle: boolean;
   isSnapToGridEnabled: boolean;
+  openPages: AppData["pages"];
   pageTemplates: AppData["pages"];
   selectedPage: AppData["pages"][number] | undefined;
+  selectedPageId: string;
   zoomLevel: number;
+  onClosePageTab: (pageId: string) => void;
   onCreatePage: () => void;
   onCreatePageFromTemplate: (templatePageId: string) => void;
   onCreateTemplateFromPage: () => void;
-  onFocusPageSearch: () => void;
+  onFocusCanvasSearch: () => void;
   onPointerDown: () => void;
   onRenamePage: (pageId: string, title: string) => void;
+  onSelectPageTab: (pageId: string) => void;
   onSetEditingHeaderTitle: (isEditing: boolean) => void;
   onToggleGrid: () => void;
   onTogglePageBookmark: (pageId: string) => void;
@@ -141,6 +145,10 @@ type PageSearchResult = {
   titleMatches: boolean;
 };
 
+type CanvasSearchMatch =
+  | ({ kind: "block" } & SearchMatch)
+  | { end: number; kind: "title"; start: number };
+
 const DRAG_AUTO_PAN_EDGE_PX = 56;
 const DRAG_AUTO_PAN_MAX_STEP_PX = 18;
 const MAX_BLOCK_HISTORY_ENTRIES = 100;
@@ -167,6 +175,7 @@ type HeroIconName =
   | "check"
   | "chevron-down"
   | "chevron-right"
+  | "chevron-up"
   | "document-plus"
   | "document-text"
   | "eye"
@@ -182,7 +191,8 @@ type HeroIconName =
   | "squares-2x2"
   | "star"
   | "sun"
-  | "trash";
+  | "trash"
+  | "x-mark";
 
 const sidebarSortOptions: Array<{ label: string; value: SidebarSortOrder }> = [
   { label: "File name (A to Z)", value: "name-asc" },
@@ -276,6 +286,7 @@ function HeroIcon({ name }: { name: HeroIconName }) {
       {name === "check" ? <path d="m4.5 12.75 6 6 9-13.5" /> : null}
       {name === "chevron-down" ? <path d="m6 9 6 6 6-6" /> : null}
       {name === "chevron-right" ? <path d="m9 6 6 6-6 6" /> : null}
+      {name === "chevron-up" ? <path d="m6 15 6-6 6 6" /> : null}
       {name === "document-plus" ? (
         <>
           <path d="M14.25 3.75H7.5A2.25 2.25 0 0 0 5.25 6v12A2.25 2.25 0 0 0 7.5 20.25h9A2.25 2.25 0 0 0 18.75 18V8.25L14.25 3.75Z" />
@@ -356,6 +367,7 @@ function HeroIcon({ name }: { name: HeroIconName }) {
           <path d="m9 10.5.45 7.5m5.55-7.5-.45 7.5M6.75 6.75l.75 12A1.5 1.5 0 0 0 9 20.25h6a1.5 1.5 0 0 0 1.5-1.5l.75-12" />
         </>
       ) : null}
+      {name === "x-mark" ? <path d="M6 6l12 12M18 6 6 18" /> : null}
     </svg>
   );
 }
@@ -406,6 +418,7 @@ function App() {
   const [pageSearchFocusRequest, setPageSearchFocusRequest] = useState(0);
   const [pageSearchQuery, setPageSearchQuery] = useState("");
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
+  const [openPageTabIds, setOpenPageTabIds] = useState<string[]>([]);
   const [focusEndBlockId, setFocusEndBlockId] = useState<string | null>(null);
   const [isCanvasKeyboardActive, setIsCanvasKeyboardActive] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
@@ -479,6 +492,21 @@ function App() {
     () => data.blocks.filter((block) => block.pageId === selectedPageId),
     [data.blocks, selectedPageId],
   );
+  const openPages = useMemo(() => {
+    const pagesById = new Map(
+      data.pages
+        .filter((page) => !isTemplatePage(page))
+        .map((page) => [page.id, page]),
+    );
+
+    return openPageTabIds.flatMap((pageId) => {
+      const page = pagesById.get(pageId);
+
+      return page ? [page] : [];
+    });
+  }, [data.pages, openPageTabIds]);
+  const shouldShowStarterShortcuts =
+    !isStarterDismissed && (isWorkspaceEmpty || openPages.length === 0);
   const folderNamesById = useMemo(() => {
     const folderNames = new Map<string, string>();
 
@@ -556,7 +584,7 @@ function App() {
       ];
     });
   }, [blocksByPageId, data.pages, folderNamesById, pageSearchQuery]);
-  const searchMatches = useMemo<SearchMatch[]>(() => {
+  const blockSearchMatches = useMemo<SearchMatch[]>(() => {
     const nextQuery = searchQuery.trim().toLowerCase();
 
     if (!nextQuery) {
@@ -616,7 +644,41 @@ function App() {
 
     return nextMatches;
   }, [searchQuery, selectedPageId, visibleBlocks]);
-  const activeSearchMatch = searchMatches[activeSearchIndex] ?? null;
+  const titleSearchMatches = useMemo<CanvasSearchMatch[]>(() => {
+    const nextQuery = searchQuery.trim().toLowerCase();
+
+    if (!nextQuery || !selectedPage) {
+      return [];
+    }
+
+    const title = selectedPage.title.toLowerCase();
+    const matches: CanvasSearchMatch[] = [];
+    let start = title.indexOf(nextQuery);
+
+    while (start !== -1) {
+      matches.push({
+        end: start + nextQuery.length,
+        kind: "title",
+        start,
+      });
+      start = title.indexOf(nextQuery, start + nextQuery.length);
+    }
+
+    return matches;
+  }, [searchQuery, selectedPage]);
+  const searchMatches = useMemo<CanvasSearchMatch[]>(
+    () => [
+      ...titleSearchMatches,
+      ...blockSearchMatches.map((match) => ({
+        ...match,
+        kind: "block" as const,
+      })),
+    ],
+    [blockSearchMatches, titleSearchMatches],
+  );
+  const activeCanvasSearchMatch = searchMatches[activeSearchIndex] ?? null;
+  const activeSearchMatch =
+    activeCanvasSearchMatch?.kind === "block" ? activeCanvasSearchMatch : null;
   const canvasViewport = useMemo<ViewportRect | null>(() => {
     if (canvasSize.width === 0 || canvasSize.height === 0) {
       return null;
@@ -719,6 +781,7 @@ function App() {
         pageViewportsRef.current.clear();
         setSelectedFolderId(firstFolderId);
         setSelectedPageId(firstPageId);
+        setOpenPageTabIds(firstPageId ? [firstPageId] : []);
         setSidebarPageSelection(firstPageId ? [firstPageId] : []);
         restorePageViewport(firstPageId);
         setSelectedBlockIds([]);
@@ -766,10 +829,52 @@ function App() {
   }, [isSearchOpen]);
 
   useEffect(() => {
+    const validPageIds = new Set(
+      data.pages
+        .filter((page) => !isTemplatePage(page))
+        .map((page) => page.id),
+    );
+
+    setOpenPageTabIds((currentPageIds) => {
+      const nextPageIds = currentPageIds.filter((pageId) => validPageIds.has(pageId));
+
+      return areIdSelectionsEqual(currentPageIds, nextPageIds)
+        ? currentPageIds
+        : nextPageIds;
+    });
+  }, [data.pages]);
+
+  useEffect(() => {
+    if (!selectedPageId) {
+      return;
+    }
+
+    const selectedPageExists = data.pages.some(
+      (page) => page.id === selectedPageId && !isTemplatePage(page),
+    );
+
+    if (!selectedPageExists) {
+      return;
+    }
+
+    setOpenPageTabIds((currentPageIds) =>
+      currentPageIds.includes(selectedPageId)
+        ? currentPageIds
+        : [...currentPageIds, selectedPageId],
+    );
+  }, [data.pages, selectedPageId]);
+
+  useEffect(() => {
     if (!isWorkspaceEmpty) {
       setIsStarterDismissed(false);
     }
   }, [isWorkspaceEmpty]);
+
+  useEffect(() => {
+    if (openPages.length > 0) {
+      setIsStarterDismissed(false);
+    }
+  }, [openPages.length]);
 
   useEffect(() => {
     setActiveSearchIndex(0);
@@ -1334,8 +1439,7 @@ function App() {
 
       if (
         event.key === "Escape" &&
-        isWorkspaceEmpty &&
-        !isStarterDismissed &&
+        shouldShowStarterShortcuts &&
         !editingBlockId &&
         !isTextEntryTarget(event.target)
       ) {
@@ -1346,7 +1450,7 @@ function App() {
 
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
         event.preventDefault();
-        focusPageSearch();
+        focusCanvasSearch();
         return;
       }
 
@@ -1475,6 +1579,7 @@ function App() {
     isWorkspaceEmpty,
     selectedBlockIds,
     selectedPageId,
+    shouldShowStarterShortcuts,
     visibleBlocks,
   ]);
 
@@ -1805,6 +1910,54 @@ function App() {
   function focusPageSearch() {
     setIsSidebarCollapsed(false);
     setPageSearchFocusRequest((currentRequest) => currentRequest + 1);
+  }
+
+  function focusCanvasSearch() {
+    setIsSearchOpen(true);
+    window.requestAnimationFrame(() => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    });
+  }
+
+  function closePageTab(pageId: string) {
+    const currentTabIds = openPageTabIds;
+
+    if (!currentTabIds.includes(pageId)) {
+      return;
+    }
+
+    const closedTabIndex = currentTabIds.indexOf(pageId);
+    const nextTabIds = currentTabIds.filter((currentPageId) => currentPageId !== pageId);
+
+    setOpenPageTabIds(nextTabIds);
+
+    if (selectedPageIdRef.current !== pageId) {
+      return;
+    }
+
+    const nextSelectedPageId =
+      nextTabIds[closedTabIndex] ?? nextTabIds[closedTabIndex - 1] ?? "";
+    const nextPage = nextSelectedPageId
+      ? dataRef.current.pages.find((page) => page.id === nextSelectedPageId)
+      : undefined;
+    const nextFolderId = nextPage?.folderId ?? ROOT_FOLDER_ID;
+
+    rememberPageViewport(pageId);
+    selectedFolderIdRef.current = nextFolderId;
+    selectedPageIdRef.current = nextSelectedPageId;
+    setSelectedFolderId(nextFolderId);
+    setSelectedPageId(nextSelectedPageId);
+    setSidebarPageSelection(nextSelectedPageId ? [nextSelectedPageId] : []);
+    restorePageViewport(nextSelectedPageId);
+    setEditingFolderId(null);
+    setEditingPageId(null);
+    setIsEditingHeaderTitle(false);
+    setSelectedBlockIds([]);
+    setEditingBlockId(null);
+    setInsertionPoint(null);
+    setIsCanvasKeyboardActive(false);
+    setActiveMode("canvas");
   }
 
   function createStarterPage() {
@@ -2761,11 +2914,6 @@ function App() {
       ((matchIndex % searchMatches.length) + searchMatches.length) %
       searchMatches.length;
     const match = searchMatches[normalizedIndex];
-    const block = visibleBlocks.find((currentBlock) => currentBlock.id === match.blockId);
-
-    if (!block) {
-      return;
-    }
 
     blurActiveTextEntry();
     setActiveSearchIndex(normalizedIndex);
@@ -2774,6 +2922,18 @@ function App() {
     setInsertionPoint(null);
     setIsCanvasKeyboardActive(true);
     setActiveMode("canvas");
+
+    if (match.kind === "title") {
+      window.requestAnimationFrame(() => searchInputRef.current?.focus());
+      return;
+    }
+
+    const block = visibleBlocks.find((currentBlock) => currentBlock.id === match.blockId);
+
+    if (!block) {
+      return;
+    }
+
     setPanOffset({
       x: canvasSize.width / 2 - (block.x + block.width / 2) * zoomLevel,
       y: canvasSize.height / 2 - (block.y + block.height / 2) * zoomLevel,
@@ -2823,6 +2983,18 @@ function App() {
       y: canvasSize.height / 2 - targetCenter.y * zoomLevel,
     });
   }
+
+  const hasCanvasSearchQuery = Boolean(searchQuery.trim());
+  const activeSearchDisplayIndex =
+    searchMatches.length > 0
+      ? Math.min(activeSearchIndex, searchMatches.length - 1) + 1
+      : 0;
+  const canvasSearchResultLabel =
+    hasCanvasSearchQuery && searchMatches.length > 0
+      ? `${activeSearchDisplayIndex} / ${searchMatches.length}`
+      : "0 / 0";
+  const canvasSearchSourceLabel =
+    activeCanvasSearchMatch?.kind === "title" ? "Title" : "Text";
 
   return (
     <main
@@ -2888,15 +3060,19 @@ function App() {
           isDarkMode={isDarkMode}
           isEditingHeaderTitle={isEditingHeaderTitle}
           isSnapToGridEnabled={isSnapToGridEnabled}
+          openPages={openPages}
           pageTemplates={pageTemplates}
           selectedPage={selectedPage}
+          selectedPageId={selectedPageId}
           zoomLevel={zoomLevel}
+          onClosePageTab={closePageTab}
           onCreatePage={createPage}
           onCreatePageFromTemplate={createPageFromTemplate}
           onCreateTemplateFromPage={createTemplateFromSelectedPage}
-          onFocusPageSearch={focusPageSearch}
+          onFocusCanvasSearch={focusCanvasSearch}
           onPointerDown={() => setIsCanvasKeyboardActive(false)}
           onRenamePage={renamePage}
+          onSelectPageTab={selectPage}
           onSetEditingHeaderTitle={setIsEditingHeaderTitle}
           onToggleGrid={() =>
             setIsGridVisible((currentValue) => {
@@ -2953,8 +3129,9 @@ function App() {
           ) : null}
           {isSearchOpen ? (
             <div className="search-panel" onPointerDown={(event) => event.stopPropagation()}>
+              <HeroIcon name="magnifying-glass" />
               <input
-                aria-label="Search textboxes"
+                aria-label="Find in canvas"
                 onChange={(event) => setSearchQuery(event.currentTarget.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") {
@@ -2969,11 +3146,34 @@ function App() {
                     setSearchQuery("");
                   }
                 }}
-                placeholder="Search"
+                placeholder="Find in canvas"
                 ref={searchInputRef}
                 value={searchQuery}
               />
-              <span>{searchMatches.length}</span>
+              <span className="search-panel-count">
+                {canvasSearchResultLabel}
+                {hasCanvasSearchQuery && searchMatches.length > 0 ? (
+                  <small>{canvasSearchSourceLabel}</small>
+                ) : null}
+              </span>
+              <button
+                aria-label="Previous match"
+                disabled={searchMatches.length === 0}
+                onClick={() => focusSearchMatch(activeSearchIndex - 1)}
+                title="Previous match"
+                type="button"
+              >
+                <HeroIcon name="chevron-up" />
+              </button>
+              <button
+                aria-label="Next match"
+                disabled={searchMatches.length === 0}
+                onClick={() => focusSearchMatch(activeSearchIndex + 1)}
+                title="Next match"
+                type="button"
+              >
+                <HeroIcon name="chevron-down" />
+              </button>
               <button
                 aria-label="Close search"
                 onClick={() => {
@@ -2983,7 +3183,7 @@ function App() {
                 title="Close search"
                 type="button"
               >
-                <span aria-hidden="true">×</span>
+                <HeroIcon name="x-mark" />
               </button>
             </div>
           ) : null}
@@ -3038,7 +3238,7 @@ function App() {
               />
             ) : null}
           </div>
-          {isWorkspaceEmpty && !isStarterDismissed ? (
+          {shouldShowStarterShortcuts ? (
             <div
               className="canvas-starter"
               aria-label="Empty workspace shortcuts"
@@ -3066,7 +3266,7 @@ function App() {
                 Close
               </button>
             </div>
-          ) : !isWorkspaceEmpty && !selectedPageId ? (
+          ) : !isWorkspaceEmpty && openPages.length > 0 && !selectedPageId ? (
             <div className="canvas-empty">
               <p>Select or create a page</p>
             </div>
@@ -4007,15 +4207,19 @@ const PageHeader = memo(function PageHeader({
   isDarkMode,
   isEditingHeaderTitle,
   isSnapToGridEnabled,
+  openPages,
   pageTemplates,
   selectedPage,
+  selectedPageId,
   zoomLevel,
+  onClosePageTab,
   onCreatePage,
   onCreatePageFromTemplate,
   onCreateTemplateFromPage,
-  onFocusPageSearch,
+  onFocusCanvasSearch,
   onPointerDown,
   onRenamePage,
+  onSelectPageTab,
   onSetEditingHeaderTitle,
   onToggleGrid,
   onTogglePageBookmark,
@@ -4038,38 +4242,63 @@ const PageHeader = memo(function PageHeader({
       onPointerDown={onPointerDown}
     >
       <div className="page-tabs" role="tablist" aria-label="Open pages">
-        {selectedPage && isEditingHeaderTitle ? (
-          <div className="page-tab is-active is-editing" role="tab" aria-selected="true">
-            <HeroIcon name="document-text" />
-            <InlineRename
-              ariaLabel="Page title"
-              initialValue={selectedPage.title}
-              onCancel={() => onSetEditingHeaderTitle(false)}
-              onCommit={(value) => {
-                onRenamePage(selectedPage.id, value);
-                onSetEditingHeaderTitle(false);
-              }}
-            />
-          </div>
-        ) : (
-          <button
-            className="page-tab is-active"
-            role="tab"
-            aria-selected="true"
-            onDoubleClick={() => {
-              if (selectedPage) {
-                onSetEditingHeaderTitle(true);
-              }
-            }}
-            title={selectedPage ? "Double-click to rename page" : "No page selected"}
-            type="button"
-          >
-            <HeroIcon name="document-text" />
-            <span className="page-title">
-              {selectedPage?.title ?? "No page selected"}
-            </span>
-          </button>
-        )}
+        {openPages.map((page) => {
+          const isActive = page.id === selectedPageId;
+          const isEditingThisTab = isActive && isEditingHeaderTitle;
+
+          return (
+            <div
+              aria-selected={isActive}
+              className={`page-tab ${isActive ? "is-active" : ""} ${
+                isEditingThisTab ? "is-editing" : ""
+              }`}
+              key={page.id}
+              role="tab"
+            >
+              {isEditingThisTab ? (
+                <>
+                  <HeroIcon name="document-text" />
+                  <InlineRename
+                    ariaLabel="Page title"
+                    initialValue={page.title}
+                    onCancel={() => onSetEditingHeaderTitle(false)}
+                    onCommit={(value) => {
+                      onRenamePage(page.id, value);
+                      onSetEditingHeaderTitle(false);
+                    }}
+                  />
+                </>
+              ) : (
+                <button
+                  className="page-tab-main"
+                  onClick={() => onSelectPageTab(page.id)}
+                  onDoubleClick={() => {
+                    if (isActive) {
+                      onSetEditingHeaderTitle(true);
+                    }
+                  }}
+                  title={isActive ? "Double-click to rename page" : page.title}
+                  type="button"
+                >
+                  <HeroIcon name="document-text" />
+                  <span className="page-title">{page.title}</span>
+                </button>
+              )}
+              <button
+                aria-label={`Close ${page.title}`}
+                className="page-tab-close"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onClosePageTab(page.id);
+                }}
+                title="Close tab"
+                type="button"
+              >
+                <HeroIcon name="x-mark" />
+              </button>
+            </div>
+          );
+        })}
         <button
           className="page-tab-add"
           aria-label="Create root page"
@@ -4085,10 +4314,10 @@ const PageHeader = memo(function PageHeader({
           <GlobalTextToolbar editor={activeTextEditor} />
         ) : null}
         <button
-          aria-label="Search files"
+          aria-label="Find in canvas"
           className="header-toggle icon-button"
-          onClick={onFocusPageSearch}
-          title="Search files (Ctrl+F)"
+          onClick={onFocusCanvasSearch}
+          title="Find in canvas (Ctrl+F)"
           type="button"
         >
           <HeroIcon name="magnifying-glass" />
@@ -4320,8 +4549,10 @@ function arePageHeaderPropsEqual(previous: PageHeaderProps, next: PageHeaderProp
     previous.isDarkMode === next.isDarkMode &&
     previous.isEditingHeaderTitle === next.isEditingHeaderTitle &&
     previous.isSnapToGridEnabled === next.isSnapToGridEnabled &&
+    previous.openPages === next.openPages &&
     previous.pageTemplates === next.pageTemplates &&
     previous.selectedPage === next.selectedPage &&
+    previous.selectedPageId === next.selectedPageId &&
     previous.zoomLevel === next.zoomLevel
   );
 }

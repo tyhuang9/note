@@ -147,6 +147,15 @@ const PAGE_TEMPLATE_FOLDER_ID = "__note_page_templates__";
 const PAGE_DRAG_MIME_TYPE = "application/x-note-page";
 const PASTED_BLOCK_OFFSET = 24;
 const DEFAULT_PAN_OFFSET: PanOffset = { x: 0, y: 0 };
+const modeIcons: Record<InteractionMode, string> = {
+  canvas: "□",
+  selected: "▣",
+  editing: "I",
+  dragging: "↕",
+  resizing: "↔",
+  selecting: "◇",
+  panning: "✥",
+};
 
 function countSearchOccurrences(content: string, normalizedQuery: string) {
   let count = 0;
@@ -2722,9 +2731,10 @@ function App() {
                   setIsSearchOpen(false);
                   setSearchQuery("");
                 }}
+                title="Close search"
                 type="button"
               >
-                X
+                <span aria-hidden="true">×</span>
               </button>
             </div>
           ) : null}
@@ -2849,30 +2859,88 @@ const Sidebar = memo(function Sidebar({
       aria-label="Workspace navigation"
       onPointerDown={onPointerDown}
     >
-      <div className="sidebar-header">
-        <div className="sidebar-brand">
-          <span className="sidebar-brand-mark" aria-hidden="true">
-            N
-          </span>
-          <h1 className="sidebar-title">Note</h1>
-        </div>
+      <nav className="activity-rail" aria-label="Primary workspace tools">
         <button
           type="button"
-          className="sidebar-toggle"
+          className="rail-button"
           aria-expanded={!isCollapsed}
           aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           onClick={onToggleCollapse}
           title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
-          {isCollapsed ? ">" : "<"}
+          <span aria-hidden="true">{isCollapsed ? "☰" : "▮"}</span>
         </button>
-      </div>
+        <button
+          type="button"
+          className="rail-button"
+          aria-label="Search current page"
+          onClick={onOpenSearch}
+          title="Search current page (Ctrl+F)"
+        >
+          <span aria-hidden="true">⌕</span>
+        </button>
+        <button
+          type="button"
+          className="rail-button"
+          aria-label="Create folder"
+          onClick={onCreateFolder}
+          title="Create folder"
+        >
+          <span aria-hidden="true">▣</span>
+        </button>
+        <button
+          type="button"
+          className="rail-button"
+          aria-label="Create page"
+          disabled={folders.length === 0}
+          onClick={onCreatePage}
+          title="Create page"
+        >
+          <span aria-hidden="true">✎</span>
+        </button>
+        <span className="rail-divider" aria-hidden="true" />
+        <span
+          className={`rail-status ${bookmarkedPages.length > 0 ? "is-active" : ""}`}
+          aria-label={`${bookmarkedPages.length} favorites`}
+          role="status"
+          title={`${bookmarkedPages.length} favorites`}
+        >
+          ☆
+        </span>
+        <span
+          className="rail-status"
+          aria-label="Templates"
+          role="status"
+          title="Templates"
+        >
+          ▤
+        </span>
+      </nav>
 
-      {!isCollapsed ? (
-        <div className="sidebar-content">
+      <div className="sidebar-main">
+        <div className="sidebar-header">
+          <div className="sidebar-brand">
+            <span className="sidebar-brand-mark" aria-hidden="true">
+              N
+            </span>
+            <h1 className="sidebar-title">Note</h1>
+          </div>
+        </div>
+
+        {!isCollapsed ? (
+          <div className="sidebar-content">
           <section className="sidebar-section sidebar-search" aria-labelledby="search-title">
             <div className="section-header">
               <h2 id="search-title">Search</h2>
+              <button
+                type="button"
+                className="section-action"
+                aria-label="Search current page"
+                onClick={onOpenSearch}
+                title="Search current page (Ctrl+F)"
+              >
+                <span aria-hidden="true">⌕</span>
+              </button>
             </div>
             <input
               aria-label="Search pages and textboxes"
@@ -2913,14 +2981,6 @@ const Sidebar = memo(function Sidebar({
                 )}
               </div>
             ) : null}
-            <button
-              type="button"
-              className="sidebar-search-button"
-              onClick={onOpenSearch}
-            >
-              <span>Search current page</span>
-              <span className="keyboard-hint">Ctrl F</span>
-            </button>
           </section>
 
           <section className="sidebar-section" aria-labelledby="folders-title">
@@ -2933,7 +2993,7 @@ const Sidebar = memo(function Sidebar({
                 onClick={onCreateFolder}
                 title="Create folder"
               >
-                +
+                <span aria-hidden="true">+</span>
               </button>
             </div>
             <div className="nav-list">
@@ -3002,7 +3062,7 @@ const Sidebar = memo(function Sidebar({
                         }}
                         title={`Delete ${folder.name}`}
                       >
-                        X
+                        <span aria-hidden="true">×</span>
                       </button>
                     </span>
                   </div>
@@ -3042,7 +3102,7 @@ const Sidebar = memo(function Sidebar({
                       onTogglePageBookmark(page.id);
                     }}
                   >
-                    ★
+                    <span aria-hidden="true">★</span>
                   </button>
                 </div>
               ))}
@@ -3063,7 +3123,7 @@ const Sidebar = memo(function Sidebar({
                 onClick={onCreatePage}
                 title="Create page"
               >
-                +
+                <span aria-hidden="true">+</span>
               </button>
             </div>
             <div className="nav-list">
@@ -3125,7 +3185,9 @@ const Sidebar = memo(function Sidebar({
                         onTogglePageBookmark(page.id);
                       }}
                     >
-                      {page.isBookmarked ? "★" : "☆"}
+                      <span aria-hidden="true">
+                        {page.isBookmarked ? "★" : "☆"}
+                      </span>
                     </button>
                     <span className="nav-actions">
                       <button
@@ -3137,7 +3199,7 @@ const Sidebar = memo(function Sidebar({
                         }}
                         title={`Delete ${page.title}`}
                       >
-                        X
+                        <span aria-hidden="true">×</span>
                       </button>
                     </span>
                   </div>
@@ -3158,8 +3220,9 @@ const Sidebar = memo(function Sidebar({
             </div>
             <p className="sidebar-placeholder">No templates yet</p>
           </section>
-        </div>
-      ) : null}
+          </div>
+        ) : null}
+      </div>
     </aside>
   );
 }, areSidebarPropsEqual);
@@ -3204,13 +3267,25 @@ const PageHeader = memo(function PageHeader({
   onToggleDarkMode,
   onToggleSnapToGrid,
 }: PageHeaderProps) {
+  const gridToggleTitle = isGridVisible ? "Hide grid" : "Show grid";
+  const snapToggleTitle = !isGridVisible
+    ? "Show grid to enable snap to grid"
+    : isSnapToGridEnabled
+      ? "Disable snap to grid"
+      : "Enable snap to grid";
+  const themeToggleTitle = isDarkMode
+    ? "Switch to light mode"
+    : "Switch to dark mode";
+
   return (
     <header
       className="page-header"
       onPointerDown={onPointerDown}
     >
       <div className="page-title-group">
-        <span className="app-title">Note</span>
+        <span className="app-title" aria-label="Note" title="Note">
+          ▦
+        </span>
         {selectedPage && isEditingHeaderTitle ? (
           <InlineRename
             ariaLabel="Page title"
@@ -3222,16 +3297,24 @@ const PageHeader = memo(function PageHeader({
             }}
           />
         ) : (
-          <h2
-            className="page-title"
-            onDoubleClick={() => {
-              if (selectedPage) {
-                onSetEditingHeaderTitle(true);
-              }
-            }}
+          <span
+            className="page-tab"
+            title={selectedPage ? "Double-click to rename page" : undefined}
           >
-            {selectedPage?.title ?? "No page selected"}
-          </h2>
+            <span className="page-tab-icon" aria-hidden="true">
+              ◇
+            </span>
+            <h2
+              className="page-title"
+              onDoubleClick={() => {
+                if (selectedPage) {
+                  onSetEditingHeaderTitle(true);
+                }
+              }}
+            >
+              {selectedPage?.title ?? "No page selected"}
+            </h2>
+          </span>
         )}
       </div>
       <div className="page-header-actions">
@@ -3251,69 +3334,91 @@ const PageHeader = memo(function PageHeader({
             title={selectedPage.isBookmarked ? "Remove bookmark" : "Bookmark"}
             onClick={() => onTogglePageBookmark(selectedPage.id)}
           >
-            {selectedPage.isBookmarked ? "★" : "☆"}
+            <span aria-hidden="true">
+              {selectedPage.isBookmarked ? "★" : "☆"}
+            </span>
           </button>
         ) : null}
         <div className="template-actions">
           <button
-            aria-label="Create template from current page"
-            className="template-button"
+            aria-label="Save current page as template"
+            className="template-button icon-button"
             disabled={!selectedPage}
             onClick={onCreateTemplateFromPage}
-            title="Create template from current page"
+            title="Save current page as template"
             type="button"
           >
-            Save template
+            <span aria-hidden="true">⧉</span>
           </button>
-          <select
-            aria-label="Create page from template"
-            className="template-select"
-            disabled={!canCreatePageFromTemplate || pageTemplates.length === 0}
-            onChange={(event) => {
-              const templatePageId = event.currentTarget.value;
+          <span className="template-select-wrapper">
+            <select
+              aria-label="Create page from template"
+              className="template-select"
+              disabled={!canCreatePageFromTemplate || pageTemplates.length === 0}
+              onChange={(event) => {
+                const templatePageId = event.currentTarget.value;
 
-              if (templatePageId) {
-                onCreatePageFromTemplate(templatePageId);
-              }
+                if (templatePageId) {
+                  onCreatePageFromTemplate(templatePageId);
+                }
 
-              event.currentTarget.value = "";
-            }}
-            value=""
-          >
-            <option value="">Use template</option>
-            {pageTemplates.map((templatePage) => (
-              <option key={templatePage.id} value={templatePage.id}>
-                {templatePage.title}
-              </option>
-            ))}
-          </select>
+                event.currentTarget.value = "";
+              }}
+              title="Create page from template"
+              value=""
+            >
+              <option value="">Use template</option>
+              {pageTemplates.map((templatePage) => (
+                <option key={templatePage.id} value={templatePage.id}>
+                  {templatePage.title}
+                </option>
+              ))}
+            </select>
+            <span className="template-select-icon" aria-hidden="true">
+              ▤
+            </span>
+          </span>
         </div>
-        <span className="zoom-indicator">{Math.round(zoomLevel * 100)}%</span>
-        <span className="mode-indicator">{modeLabels[activeMode]}</span>
+        <span className="zoom-indicator" title="Zoom">
+          {Math.round(zoomLevel * 100)}%
+        </span>
+        <span
+          aria-label={modeLabels[activeMode]}
+          className="mode-indicator"
+          title={modeLabels[activeMode]}
+        >
+          <span aria-hidden="true">{modeIcons[activeMode]}</span>
+        </span>
         <button
+          aria-label="Grid"
           aria-pressed={isGridVisible}
-          className="header-toggle"
+          className="header-toggle icon-button"
           onClick={onToggleGrid}
+          title={gridToggleTitle}
           type="button"
         >
-          Grid
+          <span aria-hidden="true">▦</span>
         </button>
         <button
+          aria-label="Snap to grid"
           aria-pressed={isGridVisible && isSnapToGridEnabled}
-          className="header-toggle"
+          className="header-toggle icon-button"
           disabled={!isGridVisible}
           onClick={onToggleSnapToGrid}
+          title={snapToggleTitle}
           type="button"
         >
-          Snap
+          <span aria-hidden="true">⌗</span>
         </button>
         <button
+          aria-label="Dark mode"
           aria-pressed={isDarkMode}
-          className="theme-toggle"
+          className="theme-toggle icon-button"
           onClick={onToggleDarkMode}
+          title={themeToggleTitle}
           type="button"
         >
-          {isDarkMode ? "Light" : "Dark"}
+          <span aria-hidden="true">{isDarkMode ? "☀" : "☾"}</span>
         </button>
       </div>
     </header>

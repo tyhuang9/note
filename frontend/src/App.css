@@ -1034,10 +1034,6 @@ h2 {
   padding: 0 6px 0 12px;
 }
 
-.page-tab.is-new-tab {
-  flex-basis: 252px;
-}
-
 .page-tab-close {
   display: inline-flex;
   align-items: center;
@@ -1057,14 +1053,6 @@ h2 {
 .page-tab-close:focus-visible {
   color: #2f3b4a;
   background: rgba(42, 51, 63, 0.08);
-}
-
-.page-tab-placeholder-main {
-  cursor: default;
-}
-
-.page-tab-placeholder-close {
-  pointer-events: none;
 }
 
 .page-tab-add {

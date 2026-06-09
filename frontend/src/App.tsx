@@ -502,6 +502,8 @@ function App() {
       return page ? [page] : [];
     });
   }, [data.pages, openPageTabIds]);
+  const shouldShowStarterShortcuts =
+    !isStarterDismissed && (isWorkspaceEmpty || openPages.length === 0);
   const folderNamesById = useMemo(() => {
     const folderNames = new Map<string, string>();
 
@@ -864,6 +866,12 @@ function App() {
       setIsStarterDismissed(false);
     }
   }, [isWorkspaceEmpty]);
+
+  useEffect(() => {
+    if (openPages.length > 0) {
+      setIsStarterDismissed(false);
+    }
+  }, [openPages.length]);
 
   useEffect(() => {
     setActiveSearchIndex(0);
@@ -1428,8 +1436,7 @@ function App() {
 
       if (
         event.key === "Escape" &&
-        isWorkspaceEmpty &&
-        !isStarterDismissed &&
+        shouldShowStarterShortcuts &&
         !editingBlockId &&
         !isTextEntryTarget(event.target)
       ) {
@@ -1569,6 +1576,7 @@ function App() {
     isWorkspaceEmpty,
     selectedBlockIds,
     selectedPageId,
+    shouldShowStarterShortcuts,
     visibleBlocks,
   ]);
 
@@ -3225,7 +3233,7 @@ function App() {
               />
             ) : null}
           </div>
-          {isWorkspaceEmpty && !isStarterDismissed ? (
+          {shouldShowStarterShortcuts ? (
             <div
               className="canvas-starter"
               aria-label="Empty workspace shortcuts"
@@ -3253,7 +3261,7 @@ function App() {
                 Close
               </button>
             </div>
-          ) : !isWorkspaceEmpty && !selectedPageId ? (
+          ) : !isWorkspaceEmpty && openPages.length > 0 && !selectedPageId ? (
             <div className="canvas-empty">
               <p>Select or create a page</p>
             </div>
@@ -4148,24 +4156,6 @@ const PageHeader = memo(function PageHeader({
             </div>
           );
         })}
-        {openPages.length === 0 ? (
-          <div
-            className="page-tab is-active is-new-tab"
-            role="tab"
-            aria-selected="true"
-            title="New tab"
-          >
-            <span className="page-tab-main page-tab-placeholder-main">
-              <span className="page-title">New tab</span>
-            </span>
-            <span
-              className="page-tab-close page-tab-placeholder-close"
-              aria-hidden="true"
-            >
-              <HeroIcon name="x-mark" />
-            </span>
-          </div>
-        ) : null}
         <button
           className="page-tab-add"
           aria-label="Create root page"

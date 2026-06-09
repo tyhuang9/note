@@ -74,12 +74,16 @@ type SidebarProps = {
 type PageHeaderProps = {
   activeMode: InteractionMode;
   activeTextEditor: Editor | null;
+  canCreatePageFromTemplate: boolean;
   isGridVisible: boolean;
   isDarkMode: boolean;
   isEditingHeaderTitle: boolean;
   isSnapToGridEnabled: boolean;
+  pageTemplates: AppData["pages"];
   selectedPage: AppData["pages"][number] | undefined;
   zoomLevel: number;
+  onCreatePageFromTemplate: (templatePageId: string) => void;
+  onCreateTemplateFromPage: () => void;
   onPointerDown: () => void;
   onRenamePage: (pageId: string, title: string) => void;
   onSetEditingHeaderTitle: (isEditing: boolean) => void;
@@ -123,6 +127,7 @@ const DRAG_AUTO_PAN_EDGE_PX = 56;
 const DRAG_AUTO_PAN_MAX_STEP_PX = 18;
 const MAX_BLOCK_HISTORY_ENTRIES = 100;
 const PAGE_SEARCH_PREVIEW_CONTEXT = 44;
+const PAGE_TEMPLATE_FOLDER_ID = "__note_page_templates__";
 const PASTED_BLOCK_OFFSET = 24;
 const DEFAULT_PAN_OFFSET: PanOffset = { x: 0, y: 0 };
 
@@ -229,16 +234,24 @@ function App() {
   const pageViewportsRef = useRef<Map<string, PageViewport>>(new Map());
   const isSnapToGridEnabledRef = useRef(isSnapToGridEnabled);
   const selectedBlockIdsRef = useRef<string[]>(selectedBlockIds);
+  const selectedFolderIdRef = useRef(selectedFolderId);
+  const selectedPageIdRef = useRef(selectedPageId);
   const zoomLevelRef = useRef(zoomLevel);
 
   dataRef.current = data;
   isSnapToGridEnabledRef.current = isGridVisible && isSnapToGridEnabled;
   selectedBlockIdsRef.current = selectedBlockIds;
+  selectedFolderIdRef.current = selectedFolderId;
+  selectedPageIdRef.current = selectedPageId;
   zoomLevelRef.current = zoomLevel;
 
   const selectedPage = useMemo(
     () => data.pages.find((page) => page.id === selectedPageId),
     [data.pages, selectedPageId],
+  );
+  const pageTemplates = useMemo(
+    () => data.pages.filter((page) => page.folderId === PAGE_TEMPLATE_FOLDER_ID),
+    [data.pages],
   );
   const visiblePages = useMemo(
     () => data.pages.filter((page) => page.folderId === selectedFolderId),
@@ -293,6 +306,10 @@ function App() {
     }
 
     return data.pages.flatMap((page) => {
+      if (isTemplatePage(page)) {
+        return [];
+      }
+
       const titleMatches = page.title.toLowerCase().includes(normalizedQuery);
       const pageBlocks = blocksByPageId.get(page.id) ?? [];
       let contentMatchCount = 0;
@@ -587,6 +604,21 @@ function App() {
 
   function cloneBlocks(blocks: TextBlock[]) {
     return blocks.map((block) => ({ ...block }));
+  }
+
+  function cloneBlocksForPage(blocks: TextBlock[], pageId: string) {
+    return blocks.map((block) => ({
+      ...block,
+      id: createId("block"),
+      pageId,
+      richContent: block.richContent
+        ? structuredClone(block.richContent)
+        : undefined,
+    }));
+  }
+
+  function isTemplatePage(page: AppData["pages"][number]) {
+    return page.folderId === PAGE_TEMPLATE_FOLDER_ID;
   }
 
   function snapValue(value: number) {
@@ -1271,6 +1303,88 @@ function App() {
       ],
     }));
     rememberPageViewport(selectedPageId);
+    setSelectedFolderId(folderId);
+    setSelectedPageId(pageId);
+    restorePageViewport(pageId);
+    setEditingFolderId(null);
+    setEditingPageId(pageId);
+    setIsEditingHeaderTitle(false);
+    setSelectedBlockIds([]);
+    setEditingBlockId(null);
+    setInsertionPoint(null);
+    setActiveMode("canvas");
+  }
+
+  function createTemplateFromSelectedPage() {
+    const sourcePageId = selectedPageIdRef.current;
+
+    if (!sourcePageId) {
+      return;
+    }
+
+    const currentData = dataRef.current;
+    const sourcePage = currentData.pages.find(
+      (page) => page.id === sourcePageId && !isTemplatePage(page),
+    );
+
+    if (!sourcePage) {
+      return;
+    }
+
+    const templatePageId = createId("template-page");
+    const templateBlocks = cloneBlocksForPage(
+      currentData.blocks.filter((block) => block.pageId === sourcePageId),
+      templatePageId,
+    );
+    const nextData = {
+      ...currentData,
+      pages: [
+        ...currentData.pages,
+        {
+          id: templatePageId,
+          folderId: PAGE_TEMPLATE_FOLDER_ID,
+          title: sourcePage.title,
+        },
+      ],
+      blocks: [...currentData.blocks, ...templateBlocks],
+    };
+
+    dataRef.current = nextData;
+    setData(nextData);
+  }
+
+  function createPageFromTemplate(templatePageId: string) {
+    const currentData = dataRef.current;
+    const templatePage = currentData.pages.find(
+      (page) => page.id === templatePageId && isTemplatePage(page),
+    );
+    const folderId = selectedFolderIdRef.current || currentData.folders[0]?.id;
+
+    if (!templatePage || !folderId) {
+      return;
+    }
+
+    const pageId = createId("page");
+    const nextData = {
+      ...currentData,
+      pages: [
+        ...currentData.pages,
+        { id: pageId, folderId, title: templatePage.title },
+      ],
+      blocks: [
+        ...currentData.blocks,
+        ...cloneBlocksForPage(
+          currentData.blocks.filter((block) => block.pageId === templatePageId),
+          pageId,
+        ),
+      ],
+    };
+
+    dataRef.current = nextData;
+    setData(nextData);
+    rememberPageViewport(selectedPageIdRef.current);
+    selectedFolderIdRef.current = folderId;
+    selectedPageIdRef.current = pageId;
     setSelectedFolderId(folderId);
     setSelectedPageId(pageId);
     restorePageViewport(pageId);
@@ -2113,12 +2227,16 @@ function App() {
         <PageHeader
           activeMode={activeMode}
           activeTextEditor={activeTextEditor}
+          canCreatePageFromTemplate={data.folders.length > 0}
           isGridVisible={isGridVisible}
           isDarkMode={isDarkMode}
           isEditingHeaderTitle={isEditingHeaderTitle}
           isSnapToGridEnabled={isSnapToGridEnabled}
+          pageTemplates={pageTemplates}
           selectedPage={selectedPage}
           zoomLevel={zoomLevel}
+          onCreatePageFromTemplate={createPageFromTemplate}
+          onCreateTemplateFromPage={createTemplateFromSelectedPage}
           onPointerDown={() => setIsCanvasKeyboardActive(false)}
           onRenamePage={renamePage}
           onSetEditingHeaderTitle={setIsEditingHeaderTitle}
@@ -2594,12 +2712,16 @@ function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps) {
 const PageHeader = memo(function PageHeader({
   activeMode,
   activeTextEditor,
+  canCreatePageFromTemplate,
   isGridVisible,
   isDarkMode,
   isEditingHeaderTitle,
   isSnapToGridEnabled,
+  pageTemplates,
   selectedPage,
   zoomLevel,
+  onCreatePageFromTemplate,
+  onCreateTemplateFromPage,
   onPointerDown,
   onRenamePage,
   onSetEditingHeaderTitle,
@@ -2658,6 +2780,40 @@ const PageHeader = memo(function PageHeader({
             {selectedPage.isBookmarked ? "★" : "☆"}
           </button>
         ) : null}
+        <div className="template-actions">
+          <button
+            aria-label="Create template from current page"
+            className="template-button"
+            disabled={!selectedPage}
+            onClick={onCreateTemplateFromPage}
+            title="Create template from current page"
+            type="button"
+          >
+            Save template
+          </button>
+          <select
+            aria-label="Create page from template"
+            className="template-select"
+            disabled={!canCreatePageFromTemplate || pageTemplates.length === 0}
+            onChange={(event) => {
+              const templatePageId = event.currentTarget.value;
+
+              if (templatePageId) {
+                onCreatePageFromTemplate(templatePageId);
+              }
+
+              event.currentTarget.value = "";
+            }}
+            value=""
+          >
+            <option value="">Use template</option>
+            {pageTemplates.map((templatePage) => (
+              <option key={templatePage.id} value={templatePage.id}>
+                {templatePage.title}
+              </option>
+            ))}
+          </select>
+        </div>
         <span className="zoom-indicator">{Math.round(zoomLevel * 100)}%</span>
         <span className="mode-indicator">{modeLabels[activeMode]}</span>
         <button
@@ -2818,10 +2974,12 @@ function arePageHeaderPropsEqual(previous: PageHeaderProps, next: PageHeaderProp
   return (
     previous.activeMode === next.activeMode &&
     previous.activeTextEditor === next.activeTextEditor &&
+    previous.canCreatePageFromTemplate === next.canCreatePageFromTemplate &&
     previous.isGridVisible === next.isGridVisible &&
     previous.isDarkMode === next.isDarkMode &&
     previous.isEditingHeaderTitle === next.isEditingHeaderTitle &&
     previous.isSnapToGridEnabled === next.isSnapToGridEnabled &&
+    previous.pageTemplates === next.pageTemplates &&
     previous.selectedPage === next.selectedPage &&
     previous.zoomLevel === next.zoomLevel
   );

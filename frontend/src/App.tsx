@@ -47,6 +47,8 @@ type SidebarProps = {
   editingPageId: string | null;
   folders: AppData["folders"];
   isCollapsed: boolean;
+  pageSearchQuery: string;
+  pageSearchResults: PageSearchResult[];
   pageCountsByFolder: Map<string, number>;
   selectedFolderId: string;
   selectedPageId: string;
@@ -59,6 +61,7 @@ type SidebarProps = {
   onPointerDown: () => void;
   onRenameFolder: (folderId: string, name: string) => void;
   onRenamePage: (pageId: string, title: string) => void;
+  onSearchQueryChange: (query: string) => void;
   onSelectFolder: (folderId: string) => void;
   onSelectPage: (pageId: string) => void;
   onSetEditingFolderId: (folderId: string | null) => void;
@@ -104,11 +107,71 @@ type CopiedBlock = Omit<TextBlock, "id" | "pageId" | "x" | "y"> & {
   offsetY: number;
 };
 
+type PageSearchResult = {
+  contentMatchCount: number;
+  folderName: string;
+  pageId: string;
+  preview: string;
+  title: string;
+  titleMatches: boolean;
+};
+
 const DRAG_AUTO_PAN_EDGE_PX = 56;
 const DRAG_AUTO_PAN_MAX_STEP_PX = 18;
 const MAX_BLOCK_HISTORY_ENTRIES = 100;
+const PAGE_SEARCH_PREVIEW_CONTEXT = 44;
 const PASTED_BLOCK_OFFSET = 24;
 const DEFAULT_PAN_OFFSET: PanOffset = { x: 0, y: 0 };
+
+function countSearchOccurrences(content: string, normalizedQuery: string) {
+  let count = 0;
+  let start = content.indexOf(normalizedQuery);
+
+  while (start !== -1) {
+    count += 1;
+    start = content.indexOf(normalizedQuery, start + normalizedQuery.length);
+  }
+
+  return count;
+}
+
+function createPageSearchPreview(content: string, normalizedQuery: string) {
+  const normalizedContent = content.toLowerCase();
+  const matchIndex = normalizedContent.indexOf(normalizedQuery);
+
+  if (matchIndex === -1) {
+    return "";
+  }
+
+  const start = Math.max(0, matchIndex - PAGE_SEARCH_PREVIEW_CONTEXT);
+  const end = Math.min(
+    content.length,
+    matchIndex + normalizedQuery.length + PAGE_SEARCH_PREVIEW_CONTEXT,
+  );
+  const prefix = start > 0 ? "... " : "";
+  const suffix = end < content.length ? " ..." : "";
+  const snippet = content.slice(start, end).replace(/\s+/g, " ").trim();
+
+  return `${prefix}${snippet}${suffix}`;
+}
+
+function formatPageSearchSummary(result: PageSearchResult) {
+  const summaryParts: string[] = [];
+
+  if (result.titleMatches) {
+    summaryParts.push("Title");
+  }
+
+  if (result.contentMatchCount > 0) {
+    summaryParts.push(
+      `${result.contentMatchCount} text ${
+        result.contentMatchCount === 1 ? "match" : "matches"
+      }`,
+    );
+  }
+
+  return summaryParts.join(" + ");
+}
 
 
 
@@ -131,6 +194,7 @@ function App() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [pageSearchQuery, setPageSearchQuery] = useState("");
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
   const [focusEndBlockId, setFocusEndBlockId] = useState<string | null>(null);
   const [isCanvasKeyboardActive, setIsCanvasKeyboardActive] = useState(false);
@@ -190,6 +254,76 @@ function App() {
 
     return pageCounts;
   }, [data.pages]);
+  const folderNamesById = useMemo(() => {
+    const folderNames = new Map<string, string>();
+
+    for (const folder of data.folders) {
+      folderNames.set(folder.id, folder.name);
+    }
+
+    return folderNames;
+  }, [data.folders]);
+  const blocksByPageId = useMemo(() => {
+    const pageBlocks = new Map<string, TextBlock[]>();
+
+    for (const block of data.blocks) {
+      const currentBlocks = pageBlocks.get(block.pageId);
+
+      if (currentBlocks) {
+        currentBlocks.push(block);
+      } else {
+        pageBlocks.set(block.pageId, [block]);
+      }
+    }
+
+    return pageBlocks;
+  }, [data.blocks]);
+  const pageSearchResults = useMemo<PageSearchResult[]>(() => {
+    const normalizedQuery = pageSearchQuery.trim().toLowerCase();
+
+    if (!normalizedQuery) {
+      return [];
+    }
+
+    return data.pages.flatMap((page) => {
+      const titleMatches = page.title.toLowerCase().includes(normalizedQuery);
+      const pageBlocks = blocksByPageId.get(page.id) ?? [];
+      let contentMatchCount = 0;
+      let preview = "";
+
+      for (const block of pageBlocks) {
+        const normalizedContent = block.content.toLowerCase();
+
+        if (!normalizedContent.includes(normalizedQuery)) {
+          continue;
+        }
+
+        contentMatchCount += countSearchOccurrences(
+          normalizedContent,
+          normalizedQuery,
+        );
+
+        if (!preview) {
+          preview = createPageSearchPreview(block.content, normalizedQuery);
+        }
+      }
+
+      if (!titleMatches && contentMatchCount === 0) {
+        return [];
+      }
+
+      return [
+        {
+          contentMatchCount,
+          folderName: folderNamesById.get(page.folderId) ?? "Unknown folder",
+          pageId: page.id,
+          preview: preview || (titleMatches ? "Title match" : ""),
+          title: page.title,
+          titleMatches,
+        },
+      ];
+    });
+  }, [blocksByPageId, data.pages, folderNamesById, pageSearchQuery]);
   const searchMatches = useMemo<SearchMatch[]>(() => {
     const nextQuery = searchQuery.trim().toLowerCase();
 
@@ -1193,6 +1327,13 @@ function App() {
   );
 
   function selectPage(pageId: string) {
+    const nextPage = data.pages.find((page) => page.id === pageId);
+
+    if (!nextPage) {
+      return;
+    }
+
+    setSelectedFolderId(nextPage.folderId);
     switchSelectedPage(pageId);
     setEditingFolderId(null);
     setEditingPageId(null);
@@ -1924,6 +2065,8 @@ function App() {
         editingPageId={editingPageId}
         folders={data.folders}
         isCollapsed={isSidebarCollapsed}
+        pageSearchQuery={pageSearchQuery}
+        pageSearchResults={pageSearchResults}
         pageCountsByFolder={pageCountsByFolder}
         selectedFolderId={selectedFolderId}
         selectedPageId={selectedPageId}
@@ -1936,6 +2079,7 @@ function App() {
         onPointerDown={() => setIsCanvasKeyboardActive(false)}
         onRenameFolder={renameFolder}
         onRenamePage={renamePage}
+        onSearchQueryChange={setPageSearchQuery}
         onSelectFolder={selectFolder}
         onSelectPage={selectPage}
         onSetEditingFolderId={setEditingFolderId}
@@ -2112,6 +2256,8 @@ const Sidebar = memo(function Sidebar({
   editingPageId,
   folders,
   isCollapsed,
+  pageSearchQuery,
+  pageSearchResults,
   pageCountsByFolder,
   selectedFolderId,
   selectedPageId,
@@ -2124,6 +2270,7 @@ const Sidebar = memo(function Sidebar({
   onPointerDown,
   onRenameFolder,
   onRenamePage,
+  onSearchQueryChange,
   onSelectFolder,
   onSelectPage,
   onSetEditingFolderId,
@@ -2157,10 +2304,49 @@ const Sidebar = memo(function Sidebar({
 
       {!isCollapsed ? (
         <div className="sidebar-content">
-          <section className="sidebar-section" aria-labelledby="search-title">
+          <section className="sidebar-section sidebar-search" aria-labelledby="search-title">
             <div className="section-header">
               <h2 id="search-title">Search</h2>
             </div>
+            <input
+              aria-label="Search pages and textboxes"
+              className="sidebar-search-input"
+              onChange={(event) => onSearchQueryChange(event.currentTarget.value)}
+              placeholder="Search notes"
+              type="search"
+              value={pageSearchQuery}
+            />
+            {pageSearchQuery.trim() ? (
+              <div className="search-results" aria-label="Search results">
+                {pageSearchResults.length > 0 ? (
+                  pageSearchResults.map((result) => (
+                    <button
+                      className={`search-result ${
+                        result.pageId === selectedPageId ? "is-selected" : ""
+                      }`}
+                      key={result.pageId}
+                      onClick={() => onSelectPage(result.pageId)}
+                      type="button"
+                    >
+                      <span className="search-result-title-row">
+                        <span className="search-result-title">{result.title}</span>
+                        <span className="search-result-count">
+                          {formatPageSearchSummary(result)}
+                        </span>
+                      </span>
+                      <span className="search-result-folder">
+                        {result.folderName}
+                      </span>
+                      <span className="search-result-preview">
+                        {result.preview}
+                      </span>
+                    </button>
+                  ))
+                ) : (
+                  <p className="empty-state">No matching pages</p>
+                )}
+              </div>
+            ) : null}
             <button
               type="button"
               className="sidebar-search-button"
@@ -2319,6 +2505,8 @@ function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps) {
     previous.editingPageId === next.editingPageId &&
     previous.folders === next.folders &&
     previous.isCollapsed === next.isCollapsed &&
+    previous.pageSearchQuery === next.pageSearchQuery &&
+    previous.pageSearchResults === next.pageSearchResults &&
     previous.pageCountsByFolder === next.pageCountsByFolder &&
     previous.selectedFolderId === next.selectedFolderId &&
     previous.selectedPageId === next.selectedPageId &&

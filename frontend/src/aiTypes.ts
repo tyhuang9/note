@@ -1,5 +1,11 @@
 import type { AppData, TextBlock } from "./types";
 
+export type ProviderType =
+  | "ollama"
+  | "lm-studio"
+  | "openai-compatible"
+  | "openai";
+
 export type LlmProviderKind = "ollama" | "openai-compatible";
 
 export type SttProviderKind = "openai-compatible-whisper";
@@ -19,6 +25,28 @@ export type SttProviderConfig = {
 };
 
 export type AssistantRole = "system" | "user" | "assistant";
+
+export type ChatMessage = {
+  content: string;
+  role: AssistantRole;
+};
+
+export type ChatResponse = {
+  content: string;
+  modelId: string;
+  providerId: string;
+};
+
+export type ChatChunk = {
+  content: string;
+  done: boolean;
+};
+
+export type ConnectionTestResult = {
+  latencyMs?: number;
+  message: string;
+  ok: boolean;
+};
 
 export type AssistantMessage = {
   content: string;
@@ -89,4 +117,50 @@ export type AssistantActionRequest = {
 export type AssistantActionResult = {
   message: string;
   ok: boolean;
+};
+
+export type AIProvider = {
+  id: string;
+  name: string;
+  type: ProviderType;
+  baseUrl: string;
+  apiKey?: string;
+  enabled: boolean;
+};
+
+export type AIModelCapabilities = {
+  chat: boolean;
+  embeddings: boolean;
+  vision: boolean;
+  tools: boolean;
+  streaming: boolean;
+};
+
+export type AIModel = {
+  id: string;
+  providerId: string;
+  name: string;
+  capabilities: AIModelCapabilities;
+};
+
+export type AIProviderAdapter = {
+  testConnection(provider: AIProvider): Promise<ConnectionTestResult>;
+  listModels(provider: AIProvider): Promise<AIModel[]>;
+  sendChat(
+    provider: AIProvider,
+    model: AIModel,
+    messages: ChatMessage[],
+  ): Promise<ChatResponse>;
+  streamChat?(
+    provider: AIProvider,
+    model: AIModel,
+    messages: ChatMessage[],
+  ): AsyncIterable<ChatChunk>;
+};
+
+export type AIProviderSettingsData = {
+  defaultChatModelId?: string;
+  defaultEmbeddingModelId?: string;
+  models: AIModel[];
+  providers: AIProvider[];
 };

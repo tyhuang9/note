@@ -37,6 +37,7 @@ struct TextBlock {
     width: f64,
     height: f64,
     content: String,
+    rich_content: Option<serde_json::Value>,
     is_width_manually_resized: Option<bool>,
     image_data: Option<String>,
     image_name: Option<String>,

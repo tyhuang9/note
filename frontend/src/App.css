@@ -1184,105 +1184,51 @@ h2 {
   position: absolute;
   inset: 0;
   z-index: 16;
-  display: grid;
-  grid-template-rows: 34px minmax(0, 1fr);
-  gap: 0;
-  padding: 0 26px 26px;
-  color: #263241;
-  background:
-    linear-gradient(to bottom, transparent 33px, rgba(38, 50, 65, 0.08) 34px, transparent 35px),
-    repeating-linear-gradient(
-      to bottom,
-      transparent 0,
-      transparent 27px,
-      rgba(38, 50, 65, 0.08) 28px
-    ),
-    #f5f7fa;
-  cursor: default;
-}
-
-.canvas-starter-titlebar {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-width: 0;
-  color: #667385;
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 16px;
-}
-
-.canvas-starter-body {
-  min-width: 0;
-  width: min(460px, 68vw);
-  margin-top: 22px;
-  padding-left: 8px;
-}
-
-.canvas-starter-body h3,
-.canvas-starter-body p {
-  margin: 0;
-}
-
-.canvas-starter-kicker {
-  color: #7a8795;
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 16px;
-  text-transform: uppercase;
-}
-
-.canvas-starter-body h3 {
-  margin-top: 8px;
-  color: #202936;
-  font-size: 16px;
-  line-height: 22px;
-}
-
-.canvas-starter-copy p {
-  margin-top: 4px;
-}
-
-.canvas-starter-copy {
-  color: #667385;
-  font-size: 12px;
-  line-height: 18px;
-}
-
-.canvas-starter-actions {
-  display: flex;
-  align-items: flex-start;
   flex-direction: column;
-  gap: 4px;
-  margin-top: 14px;
+  gap: 20px;
+  padding: 24px;
+  color: #263241;
+  background: #f5f7fa;
+  cursor: default;
 }
 
-.canvas-starter-actions button {
-  justify-content: flex-start;
-  width: max-content;
+.canvas-starter-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: auto;
   min-width: 0;
-  height: 20px;
+  height: 26px;
   border-color: transparent;
   padding: 0;
   color: #6d28d9;
   background: transparent;
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 16px;
+  font-size: 21px;
+  font-weight: 500;
+  line-height: 26px;
+  text-align: center;
+  white-space: nowrap;
 }
 
-.canvas-starter-actions .canvas-starter-primary {
-  color: #5b21b6;
-  background: transparent;
+.canvas-starter-action span {
+  color: inherit;
 }
 
-.canvas-starter-actions button:hover,
-.canvas-starter-actions .canvas-starter-primary:hover {
+.canvas-starter-action:hover,
+.canvas-starter-action:focus-visible {
   border-color: transparent;
   color: #4c1d95;
   background: transparent;
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+.canvas-starter-close {
+  margin-top: 4px;
 }
 
 .text-block {
@@ -1948,41 +1894,20 @@ h2 {
 
 .app-shell.is-dark .canvas-starter {
   color: var(--dark-text);
-  background:
-    linear-gradient(to bottom, transparent 33px, rgba(255, 255, 255, 0.035) 34px, transparent 35px),
-    repeating-linear-gradient(
-      to bottom,
-      transparent 0,
-      transparent 27px,
-      rgba(255, 255, 255, 0.035) 28px
-    ),
-    var(--dark-canvas);
+  background: #1e1e1e;
 }
 
-.app-shell.is-dark .canvas-starter-titlebar,
-.app-shell.is-dark .canvas-starter-kicker {
-  color: #898391;
-}
-
-.app-shell.is-dark .canvas-starter-body h3 {
-  color: #f1edf8;
-}
-
-.app-shell.is-dark .canvas-starter-copy {
-  color: var(--dark-muted);
-}
-
-.app-shell.is-dark .canvas-starter-actions button,
-.app-shell.is-dark .canvas-starter-actions .canvas-starter-primary {
+.app-shell.is-dark .canvas-starter-action,
+.app-shell.is-dark .canvas-starter-action span {
   border-color: transparent;
   color: #a78bfa;
   background: transparent;
 }
 
-.app-shell.is-dark .canvas-starter-actions button:hover,
-.app-shell.is-dark .canvas-starter-actions .canvas-starter-primary:hover {
+.app-shell.is-dark .canvas-starter-action:hover,
+.app-shell.is-dark .canvas-starter-action:focus-visible {
   border-color: transparent;
-  color: #c4b5fd;
+  color: #cbbdff;
   background: transparent;
 }
 

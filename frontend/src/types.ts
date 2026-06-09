@@ -9,6 +9,7 @@ export type Page = {
   id: string;
   folderId: string;
   title: string;
+  isBookmarked?: boolean;
 };
 
 export type TextBlock = {

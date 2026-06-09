@@ -43,6 +43,7 @@ import {
 import type { AppData, TextBlock } from "./types";
 
 type SidebarProps = {
+  bookmarkedPages: AppData["pages"];
   editingFolderId: string | null;
   editingPageId: string | null;
   folders: AppData["folders"];
@@ -61,6 +62,7 @@ type SidebarProps = {
   onSelectPage: (pageId: string) => void;
   onSetEditingFolderId: (folderId: string | null) => void;
   onSetEditingPageId: (pageId: string | null) => void;
+  onTogglePageBookmark: (pageId: string) => void;
 };
 
 type PageHeaderProps = {
@@ -76,6 +78,7 @@ type PageHeaderProps = {
   onRenamePage: (pageId: string, title: string) => void;
   onSetEditingHeaderTitle: (isEditing: boolean) => void;
   onToggleGrid: () => void;
+  onTogglePageBookmark: (pageId: string) => void;
   onToggleDarkMode: () => void;
   onToggleSnapToGrid: () => void;
 };
@@ -172,6 +175,10 @@ function App() {
   const visiblePages = useMemo(
     () => data.pages.filter((page) => page.folderId === selectedFolderId),
     [data.pages, selectedFolderId],
+  );
+  const bookmarkedPages = useMemo(
+    () => data.pages.filter((page) => page.isBookmarked),
+    [data.pages],
   );
   const visibleBlocks = useMemo(
     () => data.blocks.filter((block) => block.pageId === selectedPageId),
@@ -1153,6 +1160,17 @@ function App() {
     }));
   }
 
+  function togglePageBookmark(pageId: string) {
+    setData((currentData) => ({
+      ...currentData,
+      pages: currentData.pages.map((page) =>
+        page.id === pageId
+          ? { ...page, isBookmarked: !page.isBookmarked }
+          : page,
+      ),
+    }));
+  }
+
   function deletePage(pageId: string) {
     setData((currentData) => {
       const pageToDelete = currentData.pages.find((page) => page.id === pageId);
@@ -1189,6 +1207,12 @@ function App() {
   );
 
   function selectPage(pageId: string) {
+    const nextPage = data.pages.find((page) => page.id === pageId);
+
+    if (nextPage) {
+      setSelectedFolderId(nextPage.folderId);
+    }
+
     switchSelectedPage(pageId);
     setEditingFolderId(null);
     setEditingPageId(null);
@@ -1912,6 +1936,7 @@ function App() {
   return (
     <main className={`app-shell ${isDarkMode ? "is-dark" : ""}`}>
       <Sidebar
+        bookmarkedPages={bookmarkedPages}
         editingFolderId={editingFolderId}
         editingPageId={editingPageId}
         folders={data.folders}
@@ -1930,6 +1955,7 @@ function App() {
         onSelectPage={selectPage}
         onSetEditingFolderId={setEditingFolderId}
         onSetEditingPageId={setEditingPageId}
+        onTogglePageBookmark={togglePageBookmark}
       />
 
       <section className="workspace">
@@ -1957,6 +1983,7 @@ function App() {
             })
           }
           onToggleDarkMode={() => setIsDarkMode((currentMode) => !currentMode)}
+          onTogglePageBookmark={togglePageBookmark}
           onToggleSnapToGrid={() =>
             setIsSnapToGridEnabled((currentValue) =>
               isGridVisible ? !currentValue : false,
@@ -2095,6 +2122,7 @@ function App() {
 }
 
 const Sidebar = memo(function Sidebar({
+  bookmarkedPages,
   editingFolderId,
   editingPageId,
   folders,
@@ -2113,7 +2141,13 @@ const Sidebar = memo(function Sidebar({
   onSelectPage,
   onSetEditingFolderId,
   onSetEditingPageId,
+  onTogglePageBookmark,
 }: SidebarProps) {
+  const folderNamesById = useMemo(
+    () => new Map(folders.map((folder) => [folder.id, folder.name])),
+    [folders],
+  );
+
   return (
     <aside
       className="sidebar"
@@ -2179,6 +2213,44 @@ const Sidebar = memo(function Sidebar({
         </div>
       </section>
 
+      <section className="sidebar-section" aria-labelledby="bookmarks-title">
+        <div className="section-header">
+          <h2 id="bookmarks-title">Bookmarks</h2>
+        </div>
+        <div className="nav-list">
+          {bookmarkedPages.map((page) => (
+            <div
+              className={`nav-item ${
+                page.id === selectedPageId ? "is-selected" : ""
+              }`}
+              key={page.id}
+              onClick={() => onSelectPage(page.id)}
+            >
+              <span className="nav-label">{page.title}</span>
+              <span className="bookmark-folder-label">
+                {folderNamesById.get(page.folderId) ?? "Missing folder"}
+              </span>
+              <button
+                type="button"
+                className="bookmark-toggle is-bookmarked"
+                aria-label={`Remove bookmark from ${page.title}`}
+                aria-pressed="true"
+                title="Remove bookmark"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onTogglePageBookmark(page.id);
+                }}
+              >
+                ★
+              </button>
+            </div>
+          ))}
+          {bookmarkedPages.length === 0 ? (
+            <p className="empty-state">No bookmarks yet</p>
+          ) : null}
+        </div>
+      </section>
+
       <section className="sidebar-section" aria-labelledby="pages-title">
         <div className="section-header">
           <h2 id="pages-title">Pages</h2>
@@ -2214,6 +2286,23 @@ const Sidebar = memo(function Sidebar({
               ) : (
                 <span className="nav-label">{page.title}</span>
               )}
+              <button
+                type="button"
+                className={`bookmark-toggle ${
+                  page.isBookmarked ? "is-bookmarked" : ""
+                }`}
+                aria-label={`${
+                  page.isBookmarked ? "Remove bookmark from" : "Bookmark"
+                } ${page.title}`}
+                aria-pressed={Boolean(page.isBookmarked)}
+                title={page.isBookmarked ? "Remove bookmark" : "Bookmark"}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onTogglePageBookmark(page.id);
+                }}
+              >
+                {page.isBookmarked ? "★" : "☆"}
+              </button>
               <span className="nav-actions">
                 <button
                   type="button"
@@ -2242,6 +2331,7 @@ const Sidebar = memo(function Sidebar({
 
 function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps) {
   return (
+    previous.bookmarkedPages === next.bookmarkedPages &&
     previous.editingFolderId === next.editingFolderId &&
     previous.editingPageId === next.editingPageId &&
     previous.folders === next.folders &&
@@ -2265,6 +2355,7 @@ const PageHeader = memo(function PageHeader({
   onRenamePage,
   onSetEditingHeaderTitle,
   onToggleGrid,
+  onTogglePageBookmark,
   onToggleDarkMode,
   onToggleSnapToGrid,
 }: PageHeaderProps) {
@@ -2301,6 +2392,22 @@ const PageHeader = memo(function PageHeader({
       <div className="page-header-actions">
         {activeTextEditor && !activeTextEditor.isDestroyed ? (
           <GlobalTextToolbar editor={activeTextEditor} />
+        ) : null}
+        {selectedPage ? (
+          <button
+            type="button"
+            className={`bookmark-toggle header-bookmark-toggle ${
+              selectedPage.isBookmarked ? "is-bookmarked" : ""
+            }`}
+            aria-label={`${
+              selectedPage.isBookmarked ? "Remove bookmark from" : "Bookmark"
+            } ${selectedPage.title}`}
+            aria-pressed={Boolean(selectedPage.isBookmarked)}
+            title={selectedPage.isBookmarked ? "Remove bookmark" : "Bookmark"}
+            onClick={() => onTogglePageBookmark(selectedPage.id)}
+          >
+            {selectedPage.isBookmarked ? "★" : "☆"}
+          </button>
         ) : null}
         <span className="zoom-indicator">{Math.round(zoomLevel * 100)}%</span>
         <span className="mode-indicator">{modeLabels[activeMode]}</span>

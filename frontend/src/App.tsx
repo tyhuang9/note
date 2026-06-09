@@ -46,6 +46,7 @@ type SidebarProps = {
   editingFolderId: string | null;
   editingPageId: string | null;
   folders: AppData["folders"];
+  isCollapsed: boolean;
   pageCountsByFolder: Map<string, number>;
   selectedFolderId: string;
   selectedPageId: string;
@@ -54,6 +55,7 @@ type SidebarProps = {
   onCreatePage: () => void;
   onDeleteFolder: (folderId: string) => void;
   onDeletePage: (pageId: string) => void;
+  onOpenSearch: () => void;
   onPointerDown: () => void;
   onRenameFolder: (folderId: string, name: string) => void;
   onRenamePage: (pageId: string, title: string) => void;
@@ -61,6 +63,7 @@ type SidebarProps = {
   onSelectPage: (pageId: string) => void;
   onSetEditingFolderId: (folderId: string | null) => void;
   onSetEditingPageId: (pageId: string | null) => void;
+  onToggleCollapse: () => void;
 };
 
 type PageHeaderProps = {
@@ -125,6 +128,7 @@ function App() {
   const [insertionPoint, setInsertionPoint] = useState<InsertionPoint | null>(null);
   const [canvasSize, setCanvasSize] = useState<CanvasSize>({ width: 0, height: 0 });
   const [zoomLevel, setZoomLevel] = useState(DEFAULT_ZOOM);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
@@ -1910,11 +1914,16 @@ function App() {
   }
 
   return (
-    <main className={`app-shell ${isDarkMode ? "is-dark" : ""}`}>
+    <main
+      className={`app-shell ${isDarkMode ? "is-dark" : ""} ${
+        isSidebarCollapsed ? "is-sidebar-collapsed" : ""
+      }`}
+    >
       <Sidebar
         editingFolderId={editingFolderId}
         editingPageId={editingPageId}
         folders={data.folders}
+        isCollapsed={isSidebarCollapsed}
         pageCountsByFolder={pageCountsByFolder}
         selectedFolderId={selectedFolderId}
         selectedPageId={selectedPageId}
@@ -1923,6 +1932,7 @@ function App() {
         onCreatePage={createPage}
         onDeleteFolder={deleteFolder}
         onDeletePage={deletePage}
+        onOpenSearch={() => setIsSearchOpen(true)}
         onPointerDown={() => setIsCanvasKeyboardActive(false)}
         onRenameFolder={renameFolder}
         onRenamePage={renamePage}
@@ -1930,6 +1940,9 @@ function App() {
         onSelectPage={selectPage}
         onSetEditingFolderId={setEditingFolderId}
         onSetEditingPageId={setEditingPageId}
+        onToggleCollapse={() =>
+          setIsSidebarCollapsed((currentValue) => !currentValue)
+        }
       />
 
       <section className="workspace">
@@ -2098,6 +2111,7 @@ const Sidebar = memo(function Sidebar({
   editingFolderId,
   editingPageId,
   folders,
+  isCollapsed,
   pageCountsByFolder,
   selectedFolderId,
   selectedPageId,
@@ -2106,6 +2120,7 @@ const Sidebar = memo(function Sidebar({
   onCreatePage,
   onDeleteFolder,
   onDeletePage,
+  onOpenSearch,
   onPointerDown,
   onRenameFolder,
   onRenamePage,
@@ -2113,129 +2128,187 @@ const Sidebar = memo(function Sidebar({
   onSelectPage,
   onSetEditingFolderId,
   onSetEditingPageId,
+  onToggleCollapse,
 }: SidebarProps) {
   return (
     <aside
-      className="sidebar"
+      className={`sidebar ${isCollapsed ? "is-collapsed" : ""}`}
       aria-label="Workspace navigation"
       onPointerDown={onPointerDown}
     >
       <div className="sidebar-header">
-        <h1>Note</h1>
+        <div className="sidebar-brand">
+          <span className="sidebar-brand-mark" aria-hidden="true">
+            N
+          </span>
+          <h1 className="sidebar-title">Note</h1>
+        </div>
+        <button
+          type="button"
+          className="sidebar-toggle"
+          aria-expanded={!isCollapsed}
+          aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          onClick={onToggleCollapse}
+          title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+        >
+          {isCollapsed ? ">" : "<"}
+        </button>
       </div>
 
-      <section className="sidebar-section" aria-labelledby="folders-title">
-        <div className="section-header">
-          <h2 id="folders-title">Folders</h2>
-          <button type="button" aria-label="Create folder" onClick={onCreateFolder}>
-            +
-          </button>
-        </div>
-        <div className="nav-list">
-          {folders.map((folder) => {
-            const pageCount = pageCountsByFolder.get(folder.id) ?? 0;
-
-            return (
-              <div
-                className={`nav-item ${
-                  folder.id === selectedFolderId ? "is-active" : ""
-                }`}
-                key={folder.id}
-                onDoubleClick={() => onSetEditingFolderId(folder.id)}
-                onClick={() => onSelectFolder(folder.id)}
-              >
-                {editingFolderId === folder.id ? (
-                  <InlineRename
-                    ariaLabel="Folder name"
-                    initialValue={folder.name}
-                    onCancel={() => onSetEditingFolderId(null)}
-                    onCommit={(value) => {
-                      onRenameFolder(folder.id, value);
-                      onSetEditingFolderId(null);
-                    }}
-                  />
-                ) : (
-                  <span className="nav-label">{folder.name}</span>
-                )}
-                <span className="item-count">{pageCount}</span>
-                <span className="nav-actions">
-                  <button
-                    type="button"
-                    aria-label={`Delete ${folder.name}`}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onDeleteFolder(folder.id);
-                    }}
-                  >
-                    X
-                  </button>
-                </span>
-              </div>
-            );
-          })}
-          {folders.length === 0 ? (
-            <p className="empty-state">No folders yet</p>
-          ) : null}
-        </div>
-      </section>
-
-      <section className="sidebar-section" aria-labelledby="pages-title">
-        <div className="section-header">
-          <h2 id="pages-title">Pages</h2>
-          <button
-            type="button"
-            aria-label="Create page"
-            disabled={folders.length === 0}
-            onClick={onCreatePage}
-          >
-            +
-          </button>
-        </div>
-        <div className="nav-list">
-          {visiblePages.map((page) => (
-            <div
-              className={`nav-item ${
-                page.id === selectedPageId ? "is-selected" : ""
-              }`}
-              key={page.id}
-              onDoubleClick={() => onSetEditingPageId(page.id)}
-              onClick={() => onSelectPage(page.id)}
-            >
-              {editingPageId === page.id ? (
-                <InlineRename
-                  ariaLabel="Page title"
-                  initialValue={page.title}
-                  onCancel={() => onSetEditingPageId(null)}
-                  onCommit={(value) => {
-                    onRenamePage(page.id, value);
-                    onSetEditingPageId(null);
-                  }}
-                />
-              ) : (
-                <span className="nav-label">{page.title}</span>
-              )}
-              <span className="nav-actions">
-                <button
-                  type="button"
-                  aria-label={`Delete ${page.title}`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onDeletePage(page.id);
-                  }}
-                >
-                  X
-                </button>
-              </span>
+      {!isCollapsed ? (
+        <div className="sidebar-content">
+          <section className="sidebar-section" aria-labelledby="search-title">
+            <div className="section-header">
+              <h2 id="search-title">Search</h2>
             </div>
-          ))}
-          {selectedFolderId && visiblePages.length === 0 ? (
-            <p className="empty-state">No pages in this folder</p>
-          ) : null}
-          {!selectedFolderId ? (
-            <p className="empty-state">Select or create a folder</p>
-          ) : null}
+            <button
+              type="button"
+              className="sidebar-search-button"
+              onClick={onOpenSearch}
+            >
+              <span>Search current page</span>
+              <span className="keyboard-hint">Ctrl F</span>
+            </button>
+          </section>
+
+          <section className="sidebar-section" aria-labelledby="folders-title">
+            <div className="section-header">
+              <h2 id="folders-title">Folders</h2>
+              <button
+                type="button"
+                className="section-action"
+                aria-label="Create folder"
+                onClick={onCreateFolder}
+                title="Create folder"
+              >
+                +
+              </button>
+            </div>
+            <div className="nav-list">
+              {folders.map((folder) => {
+                const pageCount = pageCountsByFolder.get(folder.id) ?? 0;
+
+                return (
+                  <div
+                    className={`nav-item nav-item-folder ${
+                      folder.id === selectedFolderId ? "is-active" : ""
+                    }`}
+                    key={folder.id}
+                    onDoubleClick={() => onSetEditingFolderId(folder.id)}
+                    onClick={() => onSelectFolder(folder.id)}
+                  >
+                    {editingFolderId === folder.id ? (
+                      <InlineRename
+                        ariaLabel="Folder name"
+                        initialValue={folder.name}
+                        onCancel={() => onSetEditingFolderId(null)}
+                        onCommit={(value) => {
+                          onRenameFolder(folder.id, value);
+                          onSetEditingFolderId(null);
+                        }}
+                      />
+                    ) : (
+                      <span className="nav-label">{folder.name}</span>
+                    )}
+                    <span className="item-count">{pageCount}</span>
+                    <span className="nav-actions">
+                      <button
+                        type="button"
+                        aria-label={`Delete ${folder.name}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onDeleteFolder(folder.id);
+                        }}
+                        title={`Delete ${folder.name}`}
+                      >
+                        X
+                      </button>
+                    </span>
+                  </div>
+                );
+              })}
+              {folders.length === 0 ? (
+                <p className="empty-state">No folders yet</p>
+              ) : null}
+            </div>
+          </section>
+
+          <section className="sidebar-section" aria-labelledby="pages-title">
+            <div className="section-header">
+              <h2 id="pages-title">Pages</h2>
+              <button
+                type="button"
+                className="section-action"
+                aria-label="Create page"
+                disabled={folders.length === 0}
+                onClick={onCreatePage}
+                title="Create page"
+              >
+                +
+              </button>
+            </div>
+            <div className="nav-list">
+              {visiblePages.map((page) => (
+                <div
+                  className={`nav-item nav-item-page ${
+                    page.id === selectedPageId ? "is-selected" : ""
+                  }`}
+                  key={page.id}
+                  onDoubleClick={() => onSetEditingPageId(page.id)}
+                  onClick={() => onSelectPage(page.id)}
+                >
+                  {editingPageId === page.id ? (
+                    <InlineRename
+                      ariaLabel="Page title"
+                      initialValue={page.title}
+                      onCancel={() => onSetEditingPageId(null)}
+                      onCommit={(value) => {
+                        onRenamePage(page.id, value);
+                        onSetEditingPageId(null);
+                      }}
+                    />
+                  ) : (
+                    <span className="nav-label">{page.title}</span>
+                  )}
+                  <span className="nav-actions">
+                    <button
+                      type="button"
+                      aria-label={`Delete ${page.title}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onDeletePage(page.id);
+                      }}
+                      title={`Delete ${page.title}`}
+                    >
+                      X
+                    </button>
+                  </span>
+                </div>
+              ))}
+              {selectedFolderId && visiblePages.length === 0 ? (
+                <p className="empty-state">No pages in this folder</p>
+              ) : null}
+              {!selectedFolderId ? (
+                <p className="empty-state">Select or create a folder</p>
+              ) : null}
+            </div>
+          </section>
+
+          <section className="sidebar-section" aria-labelledby="favorites-title">
+            <div className="section-header">
+              <h2 id="favorites-title">Favorites</h2>
+            </div>
+            <p className="sidebar-placeholder">No favorites yet</p>
+          </section>
+
+          <section className="sidebar-section" aria-labelledby="templates-title">
+            <div className="section-header">
+              <h2 id="templates-title">Templates</h2>
+            </div>
+            <p className="sidebar-placeholder">No templates yet</p>
+          </section>
         </div>
-      </section>
+      ) : null}
     </aside>
   );
 }, areSidebarPropsEqual);
@@ -2245,6 +2318,7 @@ function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps) {
     previous.editingFolderId === next.editingFolderId &&
     previous.editingPageId === next.editingPageId &&
     previous.folders === next.folders &&
+    previous.isCollapsed === next.isCollapsed &&
     previous.pageCountsByFolder === next.pageCountsByFolder &&
     previous.selectedFolderId === next.selectedFolderId &&
     previous.selectedPageId === next.selectedPageId &&

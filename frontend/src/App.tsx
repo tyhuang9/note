@@ -58,6 +58,7 @@ type SidebarProps = {
   onCreatePage: () => void;
   onDeleteFolder: (folderId: string) => void;
   onDeletePage: (pageId: string) => void;
+  onDuplicatePage: (pageId: string) => void;
   onOpenSearch: () => void;
   onPointerDown: () => void;
   onRenameFolder: (folderId: string, name: string) => void;
@@ -1397,6 +1398,66 @@ function App() {
     setActiveMode("canvas");
   }
 
+  function duplicatePage(pageId: string) {
+    const currentData = dataRef.current;
+    const sourcePageIndex = currentData.pages.findIndex(
+      (page) => page.id === pageId && !isTemplatePage(page),
+    );
+
+    if (sourcePageIndex === -1) {
+      return;
+    }
+
+    const sourcePage = currentData.pages[sourcePageIndex];
+    const duplicatePageId = createId("page");
+    const duplicatePage = {
+      ...sourcePage,
+      id: duplicatePageId,
+    };
+    const duplicateBlocks = cloneBlocksForPage(
+      currentData.blocks.filter((block) => block.pageId === sourcePage.id),
+      duplicatePageId,
+    );
+    const nextData = {
+      ...currentData,
+      pages: [
+        ...currentData.pages.slice(0, sourcePageIndex + 1),
+        duplicatePage,
+        ...currentData.pages.slice(sourcePageIndex + 1),
+      ],
+      blocks: [...currentData.blocks, ...duplicateBlocks],
+    };
+    const sourceViewport =
+      sourcePage.id === selectedPageId
+        ? {
+            panOffset: { ...panOffsetRef.current },
+            zoomLevel: zoomLevelRef.current,
+          }
+        : pageViewportsRef.current.get(sourcePage.id);
+
+    dataRef.current = nextData;
+    setData(nextData);
+    rememberPageViewport(selectedPageIdRef.current);
+
+    if (sourceViewport) {
+      pageViewportsRef.current.set(duplicatePageId, {
+        panOffset: { ...sourceViewport.panOffset },
+        zoomLevel: sourceViewport.zoomLevel,
+      });
+    }
+
+    setSelectedFolderId(sourcePage.folderId);
+    setSelectedPageId(duplicatePageId);
+    restorePageViewport(duplicatePageId);
+    setEditingFolderId(null);
+    setEditingPageId(null);
+    setIsEditingHeaderTitle(false);
+    setSelectedBlockIds([]);
+    setEditingBlockId(null);
+    setInsertionPoint(null);
+    setActiveMode("canvas");
+  }
+
   function renamePage(pageId: string, title: string) {
     const nextTitle = title.trim();
 
@@ -2208,6 +2269,7 @@ function App() {
         onCreatePage={createPage}
         onDeleteFolder={deleteFolder}
         onDeletePage={deletePage}
+        onDuplicatePage={duplicatePage}
         onOpenSearch={() => setIsSearchOpen(true)}
         onPointerDown={() => setIsCanvasKeyboardActive(false)}
         onRenameFolder={renameFolder}
@@ -2406,6 +2468,7 @@ const Sidebar = memo(function Sidebar({
   onCreatePage,
   onDeleteFolder,
   onDeletePage,
+  onDuplicatePage,
   onOpenSearch,
   onPointerDown,
   onRenameFolder,
@@ -2657,7 +2720,18 @@ const Sidebar = memo(function Sidebar({
                   >
                     {page.isBookmarked ? "★" : "☆"}
                   </button>
-                  <span className="nav-actions">
+                  <span className="nav-actions is-page-actions">
+                    <button
+                      type="button"
+                      aria-label={`Duplicate ${page.title}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onDuplicatePage(page.id);
+                      }}
+                      title={`Duplicate ${page.title}`}
+                    >
+                      Copy
+                    </button>
                     <button
                       type="button"
                       aria-label={`Delete ${page.title}`}

@@ -137,9 +137,12 @@ button:disabled {
 }
 
 .sidebar-main {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
-  padding: 8px 8px 10px;
+  height: 100%;
+  padding: 10px 8px 10px;
   overflow: hidden;
 }
 
@@ -151,16 +154,23 @@ button:disabled {
   display: flex;
   align-items: center;
   flex-direction: column;
-  gap: 5px;
+  gap: 8px;
   min-height: 0;
   border-right: 1px solid #e0e5ec;
   padding: 8px 6px;
   background: #f1f4f8;
 }
 
-.rail-button,
-.rail-status {
+.rail-tabs {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rail-button {
   display: inline-flex;
+  position: relative;
   align-items: center;
   justify-content: center;
   flex: 0 0 26px;
@@ -177,24 +187,32 @@ button:disabled {
 }
 
 .rail-button:hover,
-.rail-button:focus-visible {
+.rail-button:focus-visible,
+.rail-button.is-active {
   border-color: #d2d8e1;
   color: #263241;
   background: #ffffff;
+}
+
+.rail-button.is-active {
+  box-shadow: inset 2px 0 0 var(--accent-purple);
+}
+
+.rail-button.has-count::after {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--accent-purple);
+  content: "";
 }
 
 .rail-button:disabled {
   color: #a9b2bf;
   background: transparent;
   opacity: 0.56;
-}
-
-.rail-status {
-  cursor: default;
-}
-
-.rail-status.is-active {
-  color: #7c3aed;
 }
 
 .rail-divider {
@@ -301,11 +319,18 @@ h2 {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 8px;
+  gap: 0;
+  height: 100%;
   min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
-  padding: 4px 1px 8px 0;
+  padding: 0 1px 12px 0;
   scrollbar-width: thin;
+}
+
+.sidebar-tab-panel {
+  flex: 0 0 auto;
+  min-height: 0;
 }
 
 .sidebar-search {
@@ -412,10 +437,9 @@ h2 {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  max-height: min(34vh, 280px);
-  overflow: auto;
+  max-height: none;
+  overflow: visible;
   padding-right: 2px;
-  scrollbar-width: thin;
 }
 
 .search-result {
@@ -558,13 +582,13 @@ h2 {
 }
 
 .sort-menu-popover {
-  position: absolute;
-  top: calc(100% + 5px);
-  right: -42px;
-  z-index: 40;
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 80;
   display: flex;
   flex-direction: column;
-  min-width: 232px;
+  width: 236px;
   border: 1px solid #cfd7e1;
   border-radius: 8px;
   padding: 5px 0;
@@ -615,6 +639,7 @@ h2 {
   flex-direction: column;
   gap: 1px;
   min-height: 0;
+  padding-bottom: 12px;
 }
 
 .file-tree-group {
@@ -661,13 +686,16 @@ h2 {
   position: relative;
   align-items: center;
   gap: 6px;
+  width: 100%;
   min-height: 22px;
   padding: 2px 4px;
   border: 1px solid transparent;
   border-radius: 4px;
   color: #344054;
+  background: transparent;
   font-size: 12px;
   line-height: 16px;
+  text-align: left;
   cursor: pointer;
 }
 
@@ -681,6 +709,10 @@ h2 {
 
 .nav-item-bookmark {
   grid-template-columns: 18px minmax(0, 1fr) minmax(0, 70px) 22px;
+}
+
+.nav-item-template {
+  grid-template-columns: 18px minmax(0, 1fr) minmax(0, 70px);
 }
 
 .nav-item::before {
@@ -1822,10 +1854,19 @@ h2 {
 }
 
 .app-shell.is-dark .rail-button:hover,
-.app-shell.is-dark .rail-button:focus-visible {
+.app-shell.is-dark .rail-button:focus-visible,
+.app-shell.is-dark .rail-button.is-active {
   border-color: #3d3d3d;
   color: #d4d4d4;
   background: #262626;
+}
+
+.app-shell.is-dark .rail-button.is-active {
+  box-shadow: inset 2px 0 0 #8b5cf6;
+}
+
+.app-shell.is-dark .rail-button.has-count::after {
+  background: #a78bfa;
 }
 
 .app-shell.is-dark .rail-button:disabled {

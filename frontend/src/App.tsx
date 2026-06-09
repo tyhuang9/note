@@ -49,6 +49,7 @@ type SidebarProps = {
   folders: AppData["folders"];
   isCollapsed: boolean;
   pageSearchFocusRequest: number;
+  pageTemplates: AppData["pages"];
   pages: AppData["pages"];
   pageSearchQuery: string;
   pageSearchResults: PageSearchResult[];
@@ -56,6 +57,7 @@ type SidebarProps = {
   selectedPageId: string;
   onCreateFolder: () => void;
   onCreatePage: () => void;
+  onCreatePageFromTemplate: (templatePageId: string) => void;
   onDeleteFolder: (folderId: string) => void;
   onDeletePage: (pageId: string) => void;
   onFolderDragLeave: (folderId: string) => void;
@@ -155,6 +157,7 @@ type SidebarSortOrder =
   | "modified-asc"
   | "created-desc"
   | "created-asc";
+type SidebarTabId = "files" | "search" | "bookmarks" | "templates";
 
 type HeroIconName =
   | "adjustments-horizontal"
@@ -2834,6 +2837,7 @@ function App() {
         folders={data.folders}
         isCollapsed={isSidebarCollapsed}
         pageSearchFocusRequest={pageSearchFocusRequest}
+        pageTemplates={pageTemplates}
         pages={explorerPages}
         pageSearchQuery={pageSearchQuery}
         pageSearchResults={pageSearchResults}
@@ -2841,6 +2845,7 @@ function App() {
         selectedPageId={selectedPageId}
         onCreateFolder={createFolder}
         onCreatePage={createPage}
+        onCreatePageFromTemplate={createPageFromTemplate}
         onDeleteFolder={deleteFolder}
         onDeletePage={deletePage}
         onFolderDragLeave={(folderId) => {
@@ -3079,6 +3084,7 @@ const Sidebar = memo(function Sidebar({
   folders,
   isCollapsed,
   pageSearchFocusRequest,
+  pageTemplates,
   pages,
   pageSearchQuery,
   pageSearchResults,
@@ -3086,6 +3092,7 @@ const Sidebar = memo(function Sidebar({
   selectedPageId,
   onCreateFolder,
   onCreatePage,
+  onCreatePageFromTemplate,
   onDeleteFolder,
   onDeletePage,
   onFolderDragLeave,
@@ -3109,8 +3116,14 @@ const Sidebar = memo(function Sidebar({
   selectedPageIds,
 }: SidebarProps) {
   const pageSearchInputRef = useRef<HTMLInputElement>(null);
+  const sortMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const [activeSidebarTab, setActiveSidebarTab] = useState<SidebarTabId>("files");
   const [isPageSearchFocused, setIsPageSearchFocused] = useState(false);
   const [isSearchOptionsOpen, setIsSearchOptionsOpen] = useState(false);
+  const [sortMenuPosition, setSortMenuPosition] = useState<{
+    left: number;
+    top: number;
+  } | null>(null);
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -3202,14 +3215,77 @@ const Sidebar = memo(function Sidebar({
     return Array.from(event.dataTransfer.types).includes(PAGE_DRAG_MIME_TYPE);
   }
 
-  useEffect(() => {
-    if (isCollapsed || pageSearchFocusRequest === 0) {
+  function updateSortMenuPosition() {
+    const buttonBounds = sortMenuButtonRef.current?.getBoundingClientRect();
+
+    if (!buttonBounds) {
       return;
     }
 
-    pageSearchInputRef.current?.focus();
-    pageSearchInputRef.current?.select();
-  }, [isCollapsed, pageSearchFocusRequest]);
+    const menuWidth = 236;
+    const left = Math.max(
+      8,
+      Math.min(buttonBounds.right - menuWidth + 8, window.innerWidth - menuWidth - 8),
+    );
+
+    setSortMenuPosition({
+      left,
+      top: buttonBounds.bottom + 6,
+    });
+  }
+
+  function openSidebarTab(tabId: SidebarTabId) {
+    setActiveSidebarTab(tabId);
+
+    if (isCollapsed && tabId !== "search") {
+      onToggleCollapse();
+    }
+
+    if (tabId === "search") {
+      onFocusPageSearch();
+    }
+  }
+
+  function closeSortMenu() {
+    setIsSortMenuOpen(false);
+    setSortMenuPosition(null);
+  }
+
+  useEffect(() => {
+    if (pageSearchFocusRequest === 0) {
+      return;
+    }
+
+    setActiveSidebarTab("search");
+  }, [pageSearchFocusRequest]);
+
+  useEffect(() => {
+    if (
+      isCollapsed ||
+      activeSidebarTab !== "search" ||
+      pageSearchFocusRequest === 0
+    ) {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      pageSearchInputRef.current?.focus();
+      pageSearchInputRef.current?.select();
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [activeSidebarTab, isCollapsed, pageSearchFocusRequest]);
+
+  useEffect(() => {
+    if (!isSortMenuOpen) {
+      return;
+    }
+
+    updateSortMenuPosition();
+    window.addEventListener("resize", updateSortMenuPosition);
+
+    return () => window.removeEventListener("resize", updateSortMenuPosition);
+  }, [isSortMenuOpen]);
 
   useEffect(() => {
     setExpandedFolderIds((currentFolderIds) => {
@@ -3289,65 +3365,67 @@ const Sidebar = memo(function Sidebar({
         >
           <HeroIcon name="panel" />
         </button>
-        <button
-          type="button"
-          className="rail-button"
-          aria-label="Search files"
-          onClick={onFocusPageSearch}
-          title="Search files (Ctrl+F)"
-        >
-          <HeroIcon name="magnifying-glass" />
-        </button>
-        <button
-          type="button"
-          className="rail-button"
-          aria-label="Create folder"
-          onClick={onCreateFolder}
-          title="Create folder"
-        >
-          <HeroIcon name="folder-plus" />
-        </button>
-        <button
-          type="button"
-          className="rail-button"
-          aria-label="Create page"
-          onClick={onCreatePage}
-          title="Create page"
-        >
-          <HeroIcon name="document-plus" />
-        </button>
-        <span className="rail-divider" aria-hidden="true" />
-        <span
-          className={`rail-status ${bookmarkedPages.length > 0 ? "is-active" : ""}`}
-          aria-label={`${bookmarkedPages.length} favorites`}
-          role="status"
-          title={`${bookmarkedPages.length} favorites`}
-        >
-          <HeroIcon name="star" />
-        </span>
-        <span
-          className="rail-status"
-          aria-label="Templates"
-          role="status"
-          title="Templates"
-        >
-          <HeroIcon name="rectangle-stack" />
-        </span>
+        <div className="rail-tabs" role="tablist" aria-label="Sidebar tabs">
+          <button
+            type="button"
+            className={`rail-button ${activeSidebarTab === "files" ? "is-active" : ""}`}
+            aria-label="File explorer"
+            aria-selected={activeSidebarTab === "files"}
+            onClick={() => openSidebarTab("files")}
+            role="tab"
+            title="File explorer"
+          >
+            <HeroIcon name="folder" />
+          </button>
+          <button
+            type="button"
+            className={`rail-button ${activeSidebarTab === "search" ? "is-active" : ""}`}
+            aria-label="Search files"
+            aria-selected={activeSidebarTab === "search"}
+            onClick={() => openSidebarTab("search")}
+            role="tab"
+            title="Search files"
+          >
+            <HeroIcon name="magnifying-glass" />
+          </button>
+          <button
+            type="button"
+            className={`rail-button ${
+              activeSidebarTab === "bookmarks" ? "is-active" : ""
+            } ${bookmarkedPages.length > 0 ? "has-count" : ""}`}
+            aria-label={`${bookmarkedPages.length} favorites`}
+            aria-selected={activeSidebarTab === "bookmarks"}
+            onClick={() => openSidebarTab("bookmarks")}
+            role="tab"
+            title="Favorites"
+          >
+            <HeroIcon name="bookmark" />
+          </button>
+          <button
+            type="button"
+            className={`rail-button ${
+              activeSidebarTab === "templates" ? "is-active" : ""
+            } ${pageTemplates.length > 0 ? "has-count" : ""}`}
+            aria-label={`${pageTemplates.length} templates`}
+            aria-selected={activeSidebarTab === "templates"}
+            onClick={() => openSidebarTab("templates")}
+            role="tab"
+            title="Templates"
+          >
+            <HeroIcon name="rectangle-stack" />
+          </button>
+        </div>
       </nav>
 
       <div className="sidebar-main">
-        <div className="sidebar-header">
-          <div className="sidebar-brand">
-            <span className="sidebar-brand-mark" aria-hidden="true">
-              N
-            </span>
-            <h1 className="sidebar-title">Note</h1>
-          </div>
-        </div>
-
         {!isCollapsed ? (
           <div className="sidebar-content">
-          <section className="sidebar-section sidebar-search" aria-label="File search">
+          {activeSidebarTab === "search" ? (
+          <section
+            className="sidebar-section sidebar-tab-panel sidebar-search"
+            aria-label="File search"
+            role="tabpanel"
+          >
             <div
               className={`file-search-control ${
                 isPageSearchFocused || isSearchOptionsOpen ? "is-active" : ""
@@ -3429,8 +3507,14 @@ const Sidebar = memo(function Sidebar({
               </div>
             ) : null}
           </section>
+          ) : null}
 
-          <section className="sidebar-section file-explorer" aria-labelledby="explorer-title">
+          {activeSidebarTab === "files" ? (
+          <section
+            className="sidebar-section sidebar-tab-panel file-explorer"
+            aria-labelledby="explorer-title"
+            role="tabpanel"
+          >
             <div className="file-explorer-header">
               <h2 id="explorer-title">Files</h2>
               <div className="file-explorer-toolbar" aria-label="File explorer actions">
@@ -3459,20 +3543,40 @@ const Sidebar = memo(function Sidebar({
                     aria-expanded={isSortMenuOpen}
                     aria-haspopup="menu"
                     aria-label="Change sort order"
-                    onClick={() => setIsSortMenuOpen((currentValue) => !currentValue)}
+                    onClick={() => {
+                      if (!isSortMenuOpen) {
+                        updateSortMenuPosition();
+                      } else {
+                        setSortMenuPosition(null);
+                      }
+
+                      setIsSortMenuOpen((currentValue) => !currentValue);
+                    }}
+                    ref={sortMenuButtonRef}
                     title="Change sort order"
                   >
                     <HeroIcon name="arrows-up-down" />
                   </button>
                   {isSortMenuOpen ? (
-                    <div className="sort-menu-popover" role="menu">
+                    <div
+                      className="sort-menu-popover"
+                      role="menu"
+                      style={
+                        sortMenuPosition
+                          ? {
+                              left: sortMenuPosition.left,
+                              top: sortMenuPosition.top,
+                            }
+                          : undefined
+                      }
+                    >
                       {sidebarSortOptions.map((sortOption, index) => (
                         <button
                           className="sort-menu-item"
                           key={sortOption.value}
                           onClick={() => {
                             setSortOrder(sortOption.value);
-                            setIsSortMenuOpen(false);
+                            closeSortMenu();
                           }}
                           role="menuitemradio"
                           aria-checked={sortOrder === sortOption.value}
@@ -3779,58 +3883,96 @@ const Sidebar = memo(function Sidebar({
               ) : null}
             </div>
           </section>
+          ) : null}
 
-          {bookmarkedPages.length > 0 ? (
-            <section className="sidebar-section compact-section" aria-labelledby="favorites-title">
+          {activeSidebarTab === "bookmarks" ? (
+            <section
+              className="sidebar-section sidebar-tab-panel compact-section"
+              aria-labelledby="favorites-title"
+              role="tabpanel"
+            >
               <div className="section-header">
                 <h2 id="favorites-title">Favorites</h2>
               </div>
-              <div className="nav-list">
-                {bookmarkedPages.map((page) => (
-                  <div
-                    className={`nav-item nav-item-bookmark ${
-                      page.id === selectedPageId ? "is-selected" : ""
-                    }`}
-                    key={page.id}
-                    onClick={() => onSelectPage(page.id)}
-                  >
-                    <span className="file-row-icon">
-                      <HeroIcon name="star" />
-                    </span>
-                    <span className="nav-label">{page.title}</span>
-                    <span className="bookmark-folder-label">
-                      {page.folderId === ROOT_FOLDER_ID
-                        ? "Root"
-                        : folderNamesById.get(page.folderId) ?? "Missing folder"}
-                    </span>
-                    <button
-                      type="button"
-                      className="bookmark-toggle is-bookmarked"
-                      aria-label={`Remove bookmark from ${page.title}`}
-                      aria-pressed="true"
-                      title="Remove bookmark"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onTogglePageBookmark(page.id);
-                      }}
+              {bookmarkedPages.length > 0 ? (
+                <div className="nav-list">
+                  {bookmarkedPages.map((page) => (
+                    <div
+                      className={`nav-item nav-item-bookmark ${
+                        page.id === selectedPageId ? "is-selected" : ""
+                      }`}
+                      key={page.id}
+                      onClick={() => onSelectPage(page.id)}
                     >
-                      <HeroIcon name="bookmark" />
-                    </button>
-                  </div>
-                ))}
-              </div>
+                      <span className="file-row-icon">
+                        <HeroIcon name="bookmark" />
+                      </span>
+                      <span className="nav-label">{page.title}</span>
+                      <span className="bookmark-folder-label">
+                        {page.folderId === ROOT_FOLDER_ID
+                          ? "Root"
+                          : folderNamesById.get(page.folderId) ?? "Missing folder"}
+                      </span>
+                      <button
+                        type="button"
+                        className="bookmark-toggle is-bookmarked"
+                        aria-label={`Remove bookmark from ${page.title}`}
+                        aria-pressed="true"
+                        title="Remove bookmark"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onTogglePageBookmark(page.id);
+                        }}
+                      >
+                        <HeroIcon name="bookmark" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="sidebar-placeholder">
+                  <HeroIcon name="bookmark" />
+                  No favorites
+                </p>
+              )}
             </section>
           ) : null}
 
-          <section className="sidebar-section compact-section" aria-labelledby="templates-title">
-            <div className="section-header">
-              <h2 id="templates-title">Templates</h2>
-            </div>
-            <p className="sidebar-placeholder">
-              <HeroIcon name="rectangle-stack" />
-              No templates yet
-            </p>
-          </section>
+          {activeSidebarTab === "templates" ? (
+            <section
+              className="sidebar-section sidebar-tab-panel compact-section"
+              aria-labelledby="templates-title"
+              role="tabpanel"
+            >
+              <div className="section-header">
+                <h2 id="templates-title">Templates</h2>
+              </div>
+              {pageTemplates.length > 0 ? (
+                <div className="nav-list">
+                  {pageTemplates.map((templatePage) => (
+                    <button
+                      className="nav-item nav-item-template"
+                      key={templatePage.id}
+                      onClick={() => onCreatePageFromTemplate(templatePage.id)}
+                      title={`Create page from ${templatePage.title}`}
+                      type="button"
+                    >
+                      <span className="file-row-icon">
+                        <HeroIcon name="rectangle-stack" />
+                      </span>
+                      <span className="nav-label">{templatePage.title}</span>
+                      <span className="file-kind">TEMPLATE</span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="sidebar-placeholder">
+                  <HeroIcon name="rectangle-stack" />
+                  No templates
+                </p>
+              )}
+            </section>
+          ) : null}
           </div>
         ) : null}
       </div>
@@ -3847,6 +3989,7 @@ function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps) {
     previous.folders === next.folders &&
     previous.isCollapsed === next.isCollapsed &&
     previous.pageSearchFocusRequest === next.pageSearchFocusRequest &&
+    previous.pageTemplates === next.pageTemplates &&
     previous.pages === next.pages &&
     previous.pageSearchQuery === next.pageSearchQuery &&
     previous.pageSearchResults === next.pageSearchResults &&

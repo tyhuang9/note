@@ -4149,16 +4149,22 @@ const PageHeader = memo(function PageHeader({
           );
         })}
         {openPages.length === 0 ? (
-          <button
-            className="page-tab-empty"
+          <div
+            className="page-tab is-active is-new-tab"
             role="tab"
-            aria-selected="false"
-            disabled
-            title="No page selected"
-            type="button"
+            aria-selected="true"
+            title="New tab"
           >
-            No page selected
-          </button>
+            <span className="page-tab-main page-tab-placeholder-main">
+              <span className="page-title">New tab</span>
+            </span>
+            <span
+              className="page-tab-close page-tab-placeholder-close"
+              aria-hidden="true"
+            >
+              <HeroIcon name="x-mark" />
+            </span>
+          </div>
         ) : null}
         <button
           className="page-tab-add"

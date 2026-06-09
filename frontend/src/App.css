@@ -1034,6 +1034,10 @@ h2 {
   padding: 0 6px 0 12px;
 }
 
+.page-tab.is-new-tab {
+  flex-basis: 252px;
+}
+
 .page-tab-close {
   display: inline-flex;
   align-items: center;
@@ -1055,15 +1059,12 @@ h2 {
   background: rgba(42, 51, 63, 0.08);
 }
 
-.page-tab-empty {
-  align-self: center;
-  height: 28px;
-  border: 0;
-  border-radius: 6px;
-  padding: 0 10px;
-  color: #7a8795;
-  background: transparent;
-  font-size: 12px;
+.page-tab-placeholder-main {
+  cursor: default;
+}
+
+.page-tab-placeholder-close {
+  pointer-events: none;
 }
 
 .page-tab-add {
@@ -1992,10 +1993,6 @@ h2 {
 .app-shell.is-dark .page-tab-close:focus-visible {
   color: #f2f2f2;
   background: rgba(255, 255, 255, 0.09);
-}
-
-.app-shell.is-dark .page-tab-empty {
-  color: #8d8d8d;
 }
 
 .app-shell.is-dark .page-tab-add {

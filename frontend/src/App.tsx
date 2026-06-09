@@ -49,6 +49,7 @@ type SidebarProps = {
   editingPageId: string | null;
   folders: AppData["folders"];
   isCollapsed: boolean;
+  pageSearchFocusRequest: number;
   pageSearchQuery: string;
   pageSearchResults: PageSearchResult[];
   pageCountsByFolder: Map<string, number>;
@@ -232,6 +233,7 @@ function App() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [pageSearchFocusRequest, setPageSearchFocusRequest] = useState(0);
   const [pageSearchQuery, setPageSearchQuery] = useState("");
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
   const [focusEndBlockId, setFocusEndBlockId] = useState<string | null>(null);
@@ -243,6 +245,7 @@ function App() {
   const [selectedSidebarPageIds, setSelectedSidebarPageIds] = useState<string[]>([]);
   const [draggedPageIds, setDraggedPageIds] = useState<string[]>([]);
   const [pageDropTargetFolderId, setPageDropTargetFolderId] = useState<string | null>(null);
+  const [isStarterDismissed, setIsStarterDismissed] = useState(false);
   const [activeTextEditor, setActiveTextEditor] = useState<Editor | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
   const [persistenceAvailable, setPersistenceAvailable] = useState(false);
@@ -597,6 +600,12 @@ function App() {
       searchInputRef.current?.select();
     }
   }, [isSearchOpen]);
+
+  useEffect(() => {
+    if (!isWorkspaceEmpty) {
+      setIsStarterDismissed(false);
+    }
+  }, [isWorkspaceEmpty]);
 
   useEffect(() => {
     setActiveSearchIndex(0);
@@ -1135,6 +1144,46 @@ function App() {
 
   useEffect(() => {
     function handleKeyboard(event: KeyboardEvent) {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.key.toLowerCase() === "n" &&
+        !editingBlockId &&
+        !isTextEntryTarget(event.target)
+      ) {
+        event.preventDefault();
+
+        if (isWorkspaceEmpty) {
+          createStarterPage();
+        } else {
+          createPage();
+        }
+
+        return;
+      }
+
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.key.toLowerCase() === "o" &&
+        !editingBlockId &&
+        !isTextEntryTarget(event.target)
+      ) {
+        event.preventDefault();
+        focusPageSearch();
+        return;
+      }
+
+      if (
+        event.key === "Escape" &&
+        isWorkspaceEmpty &&
+        !isStarterDismissed &&
+        !editingBlockId &&
+        !isTextEntryTarget(event.target)
+      ) {
+        event.preventDefault();
+        setIsStarterDismissed(true);
+        return;
+      }
+
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
         event.preventDefault();
         setIsSearchOpen(true);
@@ -1262,6 +1311,8 @@ function App() {
     editingBlockId,
     insertionPoint,
     isCanvasKeyboardActive,
+    isStarterDismissed,
+    isWorkspaceEmpty,
     selectedBlockIds,
     selectedPageId,
     visibleBlocks,
@@ -1588,6 +1639,11 @@ function App() {
     setEditingBlockId(null);
     setInsertionPoint(null);
     setActiveMode("canvas");
+  }
+
+  function focusPageSearch() {
+    setIsSidebarCollapsed(false);
+    setPageSearchFocusRequest((currentRequest) => currentRequest + 1);
   }
 
   function createStarterPage() {
@@ -2623,6 +2679,7 @@ function App() {
         editingPageId={editingPageId}
         folders={data.folders}
         isCollapsed={isSidebarCollapsed}
+        pageSearchFocusRequest={pageSearchFocusRequest}
         pageSearchQuery={pageSearchQuery}
         pageSearchResults={pageSearchResults}
         pageCountsByFolder={pageCountsByFolder}
@@ -2822,35 +2879,35 @@ function App() {
               />
             ) : null}
           </div>
-          {isWorkspaceEmpty ? (
+          {isWorkspaceEmpty && !isStarterDismissed ? (
             <div
               className="canvas-starter"
+              aria-label="Empty workspace shortcuts"
               onPointerDown={(event) => event.stopPropagation()}
             >
-              <div className="canvas-starter-titlebar">
-                <span>untitled</span>
-              </div>
-              <div className="canvas-starter-body">
-                <p className="canvas-starter-kicker">Empty workspace</p>
-                <h3>No folders or pages</h3>
-                <p className="canvas-starter-copy">
-                  Create a first note or start by organizing a folder.
-                </p>
-                <div className="canvas-starter-actions">
-                  <button
-                    className="canvas-starter-primary"
-                    onClick={createStarterPage}
-                    type="button"
-                  >
-                    New page
-                  </button>
-                  <button onClick={createFolder} type="button">
-                    New folder
-                  </button>
-                </div>
-              </div>
+              <button
+                className="canvas-starter-action"
+                onClick={createStarterPage}
+                type="button"
+              >
+                Create new note <span>Ctrl + N</span>
+              </button>
+              <button
+                className="canvas-starter-action"
+                onClick={focusPageSearch}
+                type="button"
+              >
+                Go to file <span>Ctrl + O</span>
+              </button>
+              <button
+                className="canvas-starter-action canvas-starter-close"
+                onClick={() => setIsStarterDismissed(true)}
+                type="button"
+              >
+                Close
+              </button>
             </div>
-          ) : !selectedPageId ? (
+          ) : !isWorkspaceEmpty && !selectedPageId ? (
             <div className="canvas-empty">
               <p>Select or create a page</p>
             </div>
@@ -2867,6 +2924,7 @@ const Sidebar = memo(function Sidebar({
   editingPageId,
   folders,
   isCollapsed,
+  pageSearchFocusRequest,
   pageSearchQuery,
   pageSearchResults,
   pageCountsByFolder,
@@ -2897,6 +2955,7 @@ const Sidebar = memo(function Sidebar({
   draggedPageIds,
   selectedPageIds,
 }: SidebarProps) {
+  const pageSearchInputRef = useRef<HTMLInputElement>(null);
   const folderNamesById = useMemo(
     () => new Map(folders.map((folder) => [folder.id, folder.name])),
     [folders],
@@ -2913,6 +2972,15 @@ const Sidebar = memo(function Sidebar({
   function hasPageDragData(event: DragEvent<HTMLElement>) {
     return Array.from(event.dataTransfer.types).includes(PAGE_DRAG_MIME_TYPE);
   }
+
+  useEffect(() => {
+    if (isCollapsed || pageSearchFocusRequest === 0) {
+      return;
+    }
+
+    pageSearchInputRef.current?.focus();
+    pageSearchInputRef.current?.select();
+  }, [isCollapsed, pageSearchFocusRequest]);
 
   return (
     <aside
@@ -3008,6 +3076,7 @@ const Sidebar = memo(function Sidebar({
               className="sidebar-search-input"
               onChange={(event) => onSearchQueryChange(event.currentTarget.value)}
               placeholder="Search notes"
+              ref={pageSearchInputRef}
               type="search"
               value={pageSearchQuery}
             />
@@ -3296,6 +3365,7 @@ function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps) {
     previous.editingPageId === next.editingPageId &&
     previous.folders === next.folders &&
     previous.isCollapsed === next.isCollapsed &&
+    previous.pageSearchFocusRequest === next.pageSearchFocusRequest &&
     previous.pageSearchQuery === next.pageSearchQuery &&
     previous.pageSearchResults === next.pageSearchResults &&
     previous.pageDropTargetFolderId === next.pageDropTargetFolderId &&

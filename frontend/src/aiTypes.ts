@@ -1,0 +1,92 @@
+import type { AppData, TextBlock } from "./types";
+
+export type LlmProviderKind = "ollama" | "openai-compatible";
+
+export type SttProviderKind = "openai-compatible-whisper";
+
+export type LlmProviderConfig = {
+  baseUrl: string;
+  kind: LlmProviderKind;
+  model: string;
+  name: string;
+};
+
+export type SttProviderConfig = {
+  baseUrl: string;
+  kind: SttProviderKind;
+  model: string;
+  name: string;
+};
+
+export type AssistantRole = "system" | "user" | "assistant";
+
+export type AssistantMessage = {
+  content: string;
+  createdAt: string;
+  id: string;
+  role: AssistantRole;
+};
+
+export type LlmChatRequest = {
+  config: LlmProviderConfig;
+  messages: AssistantMessage[];
+  notesContext?: NotesContextSnapshot;
+};
+
+export type LlmChatResponse = {
+  content: string;
+  model?: string;
+  provider: LlmProviderKind;
+};
+
+export type SttTranscriptionRequest = {
+  audio: Blob;
+  config: SttProviderConfig;
+  fileName: string;
+};
+
+export type SttTranscriptionResponse = {
+  provider: SttProviderKind;
+  text: string;
+};
+
+export type NotesContextBlock = Pick<
+  TextBlock,
+  "content" | "height" | "id" | "pageId" | "width" | "x" | "y"
+>;
+
+export type NotesContextPage = {
+  folderName: string;
+  id: string;
+  isActive: boolean;
+  title: string;
+};
+
+export type NotesContextSnapshot = {
+  activePage?: NotesContextPage;
+  activePageBlocks: NotesContextBlock[];
+  appData: Pick<AppData, "folders" | "pages">;
+  promptSummary: string;
+  selectedBlocks: NotesContextBlock[];
+};
+
+export type NotesContextInput = {
+  data: AppData;
+  selectedBlockIds: string[];
+  selectedPageId: string;
+};
+
+export type AssistantActionKind =
+  | "insert-text-block"
+  | "append-to-selected-block"
+  | "replace-selected-block";
+
+export type AssistantActionRequest = {
+  content: string;
+  kind: AssistantActionKind;
+};
+
+export type AssistantActionResult = {
+  message: string;
+  ok: boolean;
+};

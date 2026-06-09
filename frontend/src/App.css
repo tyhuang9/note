@@ -1070,6 +1070,88 @@ h2 {
   margin: 0;
 }
 
+.canvas-starter {
+  position: absolute;
+  top: 28px;
+  left: 28px;
+  z-index: 16;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 10px 12px;
+  width: min(360px, calc(100% - 56px));
+  border: 1px solid #cfd7e1;
+  border-radius: 8px;
+  padding: 12px;
+  color: #263241;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 14px 34px rgba(21, 28, 39, 0.14);
+  cursor: default;
+}
+
+.canvas-starter-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgba(139, 92, 246, 0.28);
+  border-radius: 7px;
+  color: var(--accent-purple);
+  background: rgba(139, 92, 246, 0.08);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.canvas-starter-copy {
+  min-width: 0;
+}
+
+.canvas-starter-copy h3,
+.canvas-starter-copy p {
+  margin: 0;
+}
+
+.canvas-starter-copy h3 {
+  color: #202936;
+  font-size: 14px;
+  line-height: 18px;
+}
+
+.canvas-starter-copy p {
+  margin-top: 3px;
+  color: #667385;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.canvas-starter-actions {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.canvas-starter-actions button {
+  width: auto;
+  min-width: 88px;
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.canvas-starter-actions .canvas-starter-primary {
+  border-color: rgba(139, 92, 246, 0.42);
+  color: #4c1d95;
+  background: rgba(139, 92, 246, 0.12);
+}
+
+.canvas-starter-actions .canvas-starter-primary:hover {
+  border-color: rgba(109, 40, 217, 0.56);
+  background: rgba(139, 92, 246, 0.18);
+}
+
 .text-block {
   --text-block-border-width: 1px;
   --text-block-resize-margin: 2px;
@@ -1694,6 +1776,38 @@ h2 {
 
 .app-shell.is-dark .canvas-caret {
   background: var(--accent-purple-strong);
+}
+
+.app-shell.is-dark .canvas-starter {
+  border-color: var(--dark-border-strong);
+  color: var(--dark-text);
+  background: rgba(35, 33, 42, 0.96);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.32);
+}
+
+.app-shell.is-dark .canvas-starter-mark {
+  border-color: rgba(167, 139, 250, 0.32);
+  color: var(--accent-purple-strong);
+  background: rgba(139, 92, 246, 0.14);
+}
+
+.app-shell.is-dark .canvas-starter-copy h3 {
+  color: #f1edf8;
+}
+
+.app-shell.is-dark .canvas-starter-copy p {
+  color: var(--dark-muted);
+}
+
+.app-shell.is-dark .canvas-starter-actions .canvas-starter-primary {
+  border-color: rgba(167, 139, 250, 0.48);
+  color: #f0eaff;
+  background: rgba(139, 92, 246, 0.22);
+}
+
+.app-shell.is-dark .canvas-starter-actions .canvas-starter-primary:hover {
+  border-color: rgba(196, 181, 253, 0.62);
+  background: rgba(139, 92, 246, 0.3);
 }
 
 .app-shell.is-dark .text-block {

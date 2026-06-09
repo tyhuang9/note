@@ -178,11 +178,17 @@ h2 {
 
 .nav-actions {
   display: flex;
+  gap: 4px;
   justify-content: flex-end;
   width: 28px;
   min-width: 28px;
   opacity: 0;
   pointer-events: none;
+}
+
+.nav-actions.is-page-actions {
+  width: 66px;
+  min-width: 66px;
 }
 
 .nav-actions button {
@@ -193,6 +199,10 @@ h2 {
   background: #ffffff;
   font-size: 11px;
   font-weight: 700;
+}
+
+.nav-actions.is-page-actions button:first-child {
+  width: 38px;
 }
 
 .nav-item:hover .nav-actions,

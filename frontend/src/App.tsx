@@ -54,6 +54,7 @@ type SidebarProps = {
   onCreatePage: () => void;
   onDeleteFolder: (folderId: string) => void;
   onDeletePage: (pageId: string) => void;
+  onDuplicatePage: (pageId: string) => void;
   onPointerDown: () => void;
   onRenameFolder: (folderId: string, name: string) => void;
   onRenamePage: (pageId: string, title: string) => void;
@@ -442,6 +443,14 @@ function App() {
 
   function cloneBlocks(blocks: TextBlock[]) {
     return blocks.map((block) => ({ ...block }));
+  }
+
+  function cloneRichContent(richContent: TextBlock["richContent"]) {
+    if (!richContent) {
+      return richContent;
+    }
+
+    return JSON.parse(JSON.stringify(richContent)) as TextBlock["richContent"];
   }
 
   function snapValue(value: number) {
@@ -1131,6 +1140,70 @@ function App() {
     restorePageViewport(pageId);
     setEditingFolderId(null);
     setEditingPageId(pageId);
+    setIsEditingHeaderTitle(false);
+    setSelectedBlockIds([]);
+    setEditingBlockId(null);
+    setInsertionPoint(null);
+    setActiveMode("canvas");
+  }
+
+  function duplicatePage(pageId: string) {
+    const currentData = dataRef.current;
+    const sourcePageIndex = currentData.pages.findIndex(
+      (page) => page.id === pageId,
+    );
+
+    if (sourcePageIndex === -1) {
+      return;
+    }
+
+    const sourcePage = currentData.pages[sourcePageIndex];
+    const duplicatePageId = createId("page");
+    const duplicatePage = {
+      ...sourcePage,
+      id: duplicatePageId,
+    };
+    const duplicateBlocks = currentData.blocks
+      .filter((block) => block.pageId === sourcePage.id)
+      .map((block) => ({
+        ...block,
+        id: createId("block"),
+        pageId: duplicatePageId,
+        richContent: cloneRichContent(block.richContent),
+      }));
+    const nextData = {
+      ...currentData,
+      pages: [
+        ...currentData.pages.slice(0, sourcePageIndex + 1),
+        duplicatePage,
+        ...currentData.pages.slice(sourcePageIndex + 1),
+      ],
+      blocks: [...currentData.blocks, ...duplicateBlocks],
+    };
+    const sourceViewport =
+      sourcePage.id === selectedPageId
+        ? {
+            panOffset: { ...panOffsetRef.current },
+            zoomLevel: zoomLevelRef.current,
+          }
+        : pageViewportsRef.current.get(sourcePage.id);
+
+    dataRef.current = nextData;
+    setData(nextData);
+    rememberPageViewport(selectedPageId);
+
+    if (sourceViewport) {
+      pageViewportsRef.current.set(duplicatePageId, {
+        panOffset: { ...sourceViewport.panOffset },
+        zoomLevel: sourceViewport.zoomLevel,
+      });
+    }
+
+    setSelectedFolderId(sourcePage.folderId);
+    setSelectedPageId(duplicatePageId);
+    restorePageViewport(duplicatePageId);
+    setEditingFolderId(null);
+    setEditingPageId(null);
     setIsEditingHeaderTitle(false);
     setSelectedBlockIds([]);
     setEditingBlockId(null);
@@ -1923,6 +1996,7 @@ function App() {
         onCreatePage={createPage}
         onDeleteFolder={deleteFolder}
         onDeletePage={deletePage}
+        onDuplicatePage={duplicatePage}
         onPointerDown={() => setIsCanvasKeyboardActive(false)}
         onRenameFolder={renameFolder}
         onRenamePage={renamePage}
@@ -2106,6 +2180,7 @@ const Sidebar = memo(function Sidebar({
   onCreatePage,
   onDeleteFolder,
   onDeletePage,
+  onDuplicatePage,
   onPointerDown,
   onRenameFolder,
   onRenamePage,
@@ -2214,7 +2289,17 @@ const Sidebar = memo(function Sidebar({
               ) : (
                 <span className="nav-label">{page.title}</span>
               )}
-              <span className="nav-actions">
+              <span className="nav-actions is-page-actions">
+                <button
+                  type="button"
+                  aria-label={`Duplicate ${page.title}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDuplicatePage(page.id);
+                  }}
+                >
+                  Copy
+                </button>
                 <button
                   type="button"
                   aria-label={`Delete ${page.title}`}

@@ -37,14 +37,20 @@ npm run dev
 ```
 
 Connect local AI services by starting the model servers separately before
-launching Note. The initial assistant provider shapes are:
+launching Note, then open the Assistant panel and choose **AI Providers**.
+The AI Providers screen can add, test, enable, refresh, and select defaults
+for these provider shapes:
 
-- Ollama chat, for example `http://localhost:11434/api/chat`
-- OpenAI-compatible chat, for example `http://localhost:1234/v1/chat/completions`
+- Ollama local server, default base URL `http://localhost:11434`
+- LM Studio local server, default base URL `http://localhost:1234/v1`
+- Generic OpenAI-compatible API, using its `/models` and `/chat/completions`
+  endpoints when available
+- OpenAI API, default base URL `https://api.openai.com/v1`
 - OpenAI-compatible Whisper transcription, for example `http://localhost:8000/v1/audio/transcriptions`
 
-Use the matching local base URL and model name in the assistant provider
-configuration. Note does not start or bundle the LLM or STT servers.
+Use the provider base URL only; Note appends endpoint paths internally. API keys
+are entered in AI Providers when a provider requires them. Note does not start
+or bundle the LLM or STT servers.
 
 Build the frontend:
 
@@ -84,6 +90,8 @@ npm run tauri:build
 - Offscreen textbox indicators with click-to-pan navigation
 - Light/dark mode toggle with persisted preference
 - Local JSON autosave and restore
+- AI Providers settings for Ollama, LM Studio, OpenAI-compatible servers, and OpenAI
+- Assistant chat that uses the selected default provider/model with current note context
 
 ## Project Structure
 

@@ -2,25 +2,21 @@ import { memo } from "react";
 import type {
   AssistantActionKind,
   AssistantMessage,
-  LlmProviderConfig,
-  SttProviderConfig,
 } from "../aiTypes";
 
 type AssistantPanelProps = {
   assistantError: string | null;
   assistantStatus: string | null;
+  defaultChatModelLabel: string;
   inputValue: string;
   isRecording: boolean;
   isSending: boolean;
-  llmConfig: LlmProviderConfig;
   messages: AssistantMessage[];
-  sttConfig: SttProviderConfig;
   onClose: () => void;
   onInputChange: (value: string) => void;
-  onLlmConfigChange: (config: LlmProviderConfig) => void;
+  onOpenProviderSettings: () => void;
   onRunAction: (kind: AssistantActionKind) => void;
   onSend: () => void;
-  onSttConfigChange: (config: SttProviderConfig) => void;
   onToggleRecording: () => void;
 };
 
@@ -30,15 +26,6 @@ type AssistantIconName =
   | "paper-airplane"
   | "sparkles"
   | "x-mark";
-
-const llmProviderOptions: Array<{ label: string; value: LlmProviderConfig["kind"] }> = [
-  { label: "Ollama", value: "ollama" },
-  { label: "OpenAI-compatible", value: "openai-compatible" },
-];
-
-const sttProviderOptions: Array<{ label: string; value: SttProviderConfig["kind"] }> = [
-  { label: "Whisper-compatible", value: "openai-compatible-whisper" },
-];
 
 const assistantActions: Array<{ kind: AssistantActionKind; label: string }> = [
   { kind: "insert-text-block", label: "Insert" },
@@ -97,18 +84,16 @@ function getLatestAssistantOutput(messages: AssistantMessage[]) {
 export const AssistantPanel = memo(function AssistantPanel({
   assistantError,
   assistantStatus,
+  defaultChatModelLabel,
   inputValue,
   isRecording,
   isSending,
-  llmConfig,
   messages,
-  sttConfig,
   onClose,
   onInputChange,
-  onLlmConfigChange,
+  onOpenProviderSettings,
   onRunAction,
   onSend,
-  onSttConfigChange,
   onToggleRecording,
 }: AssistantPanelProps) {
   const canSend = inputValue.trim().length > 0 && !isSending;
@@ -133,95 +118,14 @@ export const AssistantPanel = memo(function AssistantPanel({
         </button>
       </header>
 
-      <section className="assistant-settings" aria-label="Model settings">
-        <label className="assistant-field">
-          <span>LLM</span>
-          <select
-            value={llmConfig.kind}
-            onChange={(event) =>
-              onLlmConfigChange({
-                ...llmConfig,
-                kind: event.currentTarget.value as LlmProviderConfig["kind"],
-              })
-            }
-          >
-            {llmProviderOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="assistant-field">
-          <span>LLM URL</span>
-          <input
-            value={llmConfig.baseUrl}
-            onChange={(event) =>
-              onLlmConfigChange({
-                ...llmConfig,
-                baseUrl: event.currentTarget.value,
-              })
-            }
-            placeholder="http://localhost:11434"
-          />
-        </label>
-        <label className="assistant-field">
-          <span>LLM model</span>
-          <input
-            value={llmConfig.model}
-            onChange={(event) =>
-              onLlmConfigChange({
-                ...llmConfig,
-                model: event.currentTarget.value,
-              })
-            }
-            placeholder="llama3.2"
-          />
-        </label>
-        <label className="assistant-field">
-          <span>STT</span>
-          <select
-            value={sttConfig.kind}
-            onChange={(event) =>
-              onSttConfigChange({
-                ...sttConfig,
-                kind: event.currentTarget.value as SttProviderConfig["kind"],
-              })
-            }
-          >
-            {sttProviderOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="assistant-field">
-          <span>STT URL</span>
-          <input
-            value={sttConfig.baseUrl}
-            onChange={(event) =>
-              onSttConfigChange({
-                ...sttConfig,
-                baseUrl: event.currentTarget.value,
-              })
-            }
-            placeholder="http://localhost:8080/v1"
-          />
-        </label>
-        <label className="assistant-field">
-          <span>STT model</span>
-          <input
-            value={sttConfig.model}
-            onChange={(event) =>
-              onSttConfigChange({
-                ...sttConfig,
-                model: event.currentTarget.value,
-              })
-            }
-            placeholder="whisper"
-          />
-        </label>
+      <section className="assistant-provider-summary" aria-label="Default AI model">
+        <div>
+          <span>Default model</span>
+          <strong>{defaultChatModelLabel}</strong>
+        </div>
+        <button onClick={onOpenProviderSettings} type="button">
+          AI Providers
+        </button>
       </section>
 
       <section className="assistant-messages" aria-label="Assistant messages">

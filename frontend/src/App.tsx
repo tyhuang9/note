@@ -4,6 +4,10 @@ import type { DragEvent } from "react";
 import { useEditorState } from "@tiptap/react";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
+import {
+  AIProvidersSettings,
+  type ProviderConnectionState,
+} from "./components/AIProvidersSettings";
 import { AssistantPanel } from "./components/AssistantPanel";
 import { InlineRename } from "./components/InlineRename";
 import { TextBlockView } from "./components/TextBlockView";
@@ -33,9 +37,11 @@ import type {
   ViewportRect,
 } from "./appTypes";
 import type {
+  AIModel,
+  AIProvider,
   AssistantActionKind,
   AssistantMessage,
-  LlmProviderConfig,
+  ProviderType,
   SttProviderConfig,
 } from "./aiTypes";
 import {
@@ -48,13 +54,18 @@ import {
   rectsIntersect,
 } from "./editorUtils";
 import {
-  callOllamaChat,
-  callOpenAICompatibleChat,
   callOpenAICompatibleWhisperTranscription,
-  DEFAULT_LOCAL_LLM_CONFIG,
   DEFAULT_LOCAL_STT_CONFIG,
 } from "./services/localModelProviders";
+import { listAIProviderModels, testAIProvider } from "./services/aiProviderAdapters";
 import { buildAssistantActionRequest } from "./services/assistantActions";
+import { sendAssistantChat } from "./services/assistantService";
+import {
+  createAIProvider,
+  deleteProviderCredential,
+  loadAIProviderSettings,
+  saveAIProviderSettings,
+} from "./services/aiProviderStorage";
 import { buildNotesContext } from "./services/notesContext";
 import type { AppData, TextBlock } from "./types";
 
@@ -462,10 +473,18 @@ function App() {
   const [assistantError, setAssistantError] = useState<string | null>(null);
   const [isAssistantSending, setIsAssistantSending] = useState(false);
   const [isAssistantRecording, setIsAssistantRecording] = useState(false);
-  const [llmProviderConfig, setLlmProviderConfig] =
-    useState<LlmProviderConfig>(DEFAULT_LOCAL_LLM_CONFIG);
-  const [sttProviderConfig, setSttProviderConfig] =
-    useState<SttProviderConfig>(DEFAULT_LOCAL_STT_CONFIG);
+  const [sttProviderConfig] = useState<SttProviderConfig>(DEFAULT_LOCAL_STT_CONFIG);
+  const [isAIProvidersOpen, setIsAIProvidersOpen] = useState(false);
+  const [isAIProviderSettingsLoaded, setIsAIProviderSettingsLoaded] =
+    useState(false);
+  const [aiProviders, setAIProviders] = useState<AIProvider[]>([]);
+  const [aiModels, setAIModels] = useState<AIModel[]>([]);
+  const [selectedAIProviderId, setSelectedAIProviderId] = useState("");
+  const [defaultChatModelId, setDefaultChatModelId] = useState("");
+  const [defaultEmbeddingModelId, setDefaultEmbeddingModelId] = useState("");
+  const [providerConnectionStates, setProviderConnectionStates] = useState<
+    Record<string, ProviderConnectionState>
+  >({});
   const [isLoaded, setIsLoaded] = useState(false);
   const [persistenceAvailable, setPersistenceAvailable] = useState(false);
   const dataRef = useRef<AppData>(data);
@@ -759,6 +778,25 @@ function App() {
       count,
     }));
   }, [canvasViewport, visibleBlocks]);
+  const defaultChatModel = useMemo(
+    () =>
+      aiModels.find(
+        (model) => model.id === defaultChatModelId && model.capabilities.chat,
+      ) ?? null,
+    [aiModels, defaultChatModelId],
+  );
+  const defaultChatProvider = useMemo(
+    () =>
+      defaultChatModel
+        ? aiProviders.find((provider) => provider.id === defaultChatModel.providerId) ??
+          null
+        : null,
+    [aiProviders, defaultChatModel],
+  );
+  const defaultChatModelLabel =
+    defaultChatProvider && defaultChatModel
+      ? `${defaultChatProvider.name} / ${defaultChatModel.name}`
+      : "No default model selected";
 
   useEffect(() => {
     panOffsetRef.current = panOffset;
@@ -846,6 +884,57 @@ function App() {
       isMounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadProviderSettings() {
+      try {
+        const settings = await loadAIProviderSettings();
+
+        if (!isMounted) {
+          return;
+        }
+
+        setAIProviders(settings.providers);
+        setAIModels(settings.models);
+        setDefaultChatModelId(settings.defaultChatModelId ?? "");
+        setDefaultEmbeddingModelId(settings.defaultEmbeddingModelId ?? "");
+        setSelectedAIProviderId(settings.providers[0]?.id ?? "");
+      } finally {
+        if (isMounted) {
+          setIsAIProviderSettingsLoaded(true);
+        }
+      }
+    }
+
+    loadProviderSettings();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isAIProviderSettingsLoaded) {
+      return;
+    }
+
+    saveAIProviderSettings({
+      defaultChatModelId: defaultChatModelId || undefined,
+      defaultEmbeddingModelId: defaultEmbeddingModelId || undefined,
+      models: aiModels,
+      providers: aiProviders,
+    }).catch((error) => {
+      console.warn("Could not save AI provider settings.", error);
+    });
+  }, [
+    aiModels,
+    aiProviders,
+    defaultChatModelId,
+    defaultEmbeddingModelId,
+    isAIProviderSettingsLoaded,
+  ]);
 
   useEffect(() => {
     const validPageIds = new Set(
@@ -1984,21 +2073,177 @@ function App() {
     assistantRecordingStreamRef.current = null;
   }
 
+  function setProviderConnectionState(
+    providerId: string,
+    updates: ProviderConnectionState,
+  ) {
+    setProviderConnectionStates((currentStates) => ({
+      ...currentStates,
+      [providerId]: updates,
+    }));
+  }
+
+  function addAIProvider(type: ProviderType) {
+    const provider = createAIProvider(type);
+
+    setAIProviders((currentProviders) => [...currentProviders, provider]);
+    setSelectedAIProviderId(provider.id);
+    setProviderConnectionState(provider.id, { status: "idle" });
+    setIsAIProvidersOpen(true);
+  }
+
+  function updateAIProvider(
+    providerId: string,
+    updates: Partial<AIProvider>,
+  ) {
+    setAIProviders((currentProviders) =>
+      currentProviders.map((provider) =>
+        provider.id === providerId ? { ...provider, ...updates } : provider,
+      ),
+    );
+    setProviderConnectionState(providerId, { status: "idle" });
+  }
+
+  function deleteAIProvider(providerId: string) {
+    setAIProviders((currentProviders) =>
+      currentProviders.filter((provider) => provider.id !== providerId),
+    );
+    setAIModels((currentModels) =>
+      currentModels.filter((model) => model.providerId !== providerId),
+    );
+    setProviderConnectionStates((currentStates) => {
+      const nextStates = { ...currentStates };
+
+      delete nextStates[providerId];
+      return nextStates;
+    });
+    setDefaultChatModelId((currentModelId) => {
+      const currentModel = aiModels.find((model) => model.id === currentModelId);
+
+      return currentModel?.providerId === providerId ? "" : currentModelId;
+    });
+    setDefaultEmbeddingModelId((currentModelId) => {
+      const currentModel = aiModels.find((model) => model.id === currentModelId);
+
+      return currentModel?.providerId === providerId ? "" : currentModelId;
+    });
+    setSelectedAIProviderId((currentProviderId) => {
+      if (currentProviderId !== providerId) {
+        return currentProviderId;
+      }
+
+      return aiProviders.find((provider) => provider.id !== providerId)?.id ?? "";
+    });
+    deleteProviderCredential(providerId).catch((error) => {
+      console.warn("Could not delete AI provider credential.", error);
+    });
+  }
+
+  async function testProviderConnection(providerId: string) {
+    const provider = aiProviders.find(
+      (currentProvider) => currentProvider.id === providerId,
+    );
+
+    if (!provider) {
+      return;
+    }
+
+    setProviderConnectionState(providerId, {
+      isTesting: true,
+      message: "Testing connection...",
+      status: "idle",
+    });
+
+    try {
+      const result = await testAIProvider(provider);
+      const latencyMessage = result.latencyMs ? ` (${result.latencyMs} ms)` : "";
+
+      setProviderConnectionState(providerId, {
+        message: `${result.message}${latencyMessage}`,
+        status: result.ok ? "ok" : "error",
+      });
+    } catch (error) {
+      setProviderConnectionState(providerId, {
+        message: getAssistantErrorMessage(error),
+        status: "error",
+      });
+    }
+  }
+
+  async function refreshProviderModels(providerId: string) {
+    const provider = aiProviders.find(
+      (currentProvider) => currentProvider.id === providerId,
+    );
+
+    if (!provider) {
+      return;
+    }
+
+    setProviderConnectionState(providerId, {
+      isRefreshing: true,
+      message: "Refreshing models...",
+      status: "idle",
+    });
+
+    try {
+      const providerModels = await listAIProviderModels(provider);
+
+      setAIModels((currentModels) => {
+        const retainedModels = currentModels.filter(
+          (model) => model.providerId !== providerId,
+        );
+
+        return [...retainedModels, ...providerModels];
+      });
+      setDefaultChatModelId((currentModelId) => {
+        if (currentModelId) {
+          return currentModelId;
+        }
+
+        return providerModels.find((model) => model.capabilities.chat)?.id ?? "";
+      });
+      setDefaultEmbeddingModelId((currentModelId) => {
+        if (currentModelId) {
+          return currentModelId;
+        }
+
+        return (
+          providerModels.find((model) => model.capabilities.embeddings)?.id ?? ""
+        );
+      });
+      setProviderConnectionState(providerId, {
+        message: `Found ${providerModels.length} models.`,
+        status: "ok",
+      });
+    } catch (error) {
+      setProviderConnectionState(providerId, {
+        message: getAssistantErrorMessage(error),
+        status: "error",
+      });
+    }
+  }
+
   async function requestAssistantChat(messages: AssistantMessage[]) {
+    if (!defaultChatProvider || !defaultChatModel) {
+      throw new Error("Choose a default AI chat model in AI Providers.");
+    }
+
+    if (!defaultChatProvider.enabled) {
+      throw new Error("The selected AI provider is disabled.");
+    }
+
     const notesContext = buildNotesContext({
       data: dataRef.current,
       selectedBlockIds: selectedBlockIdsRef.current,
       selectedPageId: selectedPageIdRef.current,
     });
-    const request = {
-      config: llmProviderConfig,
+
+    return sendAssistantChat({
       messages,
       notesContext,
-    };
-
-    return llmProviderConfig.kind === "ollama"
-      ? callOllamaChat(request)
-      : callOpenAICompatibleChat(request);
+      model: defaultChatModel,
+      provider: defaultChatProvider,
+    });
   }
 
   async function sendAssistantMessage() {
@@ -2032,9 +2277,7 @@ function App() {
       };
 
       setAssistantMessages([...nextMessages, assistantMessage]);
-      setAssistantStatus(
-        response.model ? `Received response from ${response.model}` : "Received response",
-      );
+      setAssistantStatus(`Received response from ${defaultChatModelLabel}`);
     } catch (error) {
       setAssistantError(getAssistantErrorMessage(error));
       setAssistantStatus(null);
@@ -3571,22 +3814,39 @@ function App() {
           ) : null}
         </section>
       </section>
+      {isAIProvidersOpen ? (
+        <AIProvidersSettings
+          connectionStates={providerConnectionStates}
+          defaultChatModelId={defaultChatModelId}
+          defaultEmbeddingModelId={defaultEmbeddingModelId}
+          models={aiModels}
+          providers={aiProviders}
+          selectedProviderId={selectedAIProviderId}
+          onAddProvider={addAIProvider}
+          onClose={() => setIsAIProvidersOpen(false)}
+          onDeleteProvider={deleteAIProvider}
+          onRefreshModels={refreshProviderModels}
+          onSelectProvider={setSelectedAIProviderId}
+          onSetDefaultChatModel={setDefaultChatModelId}
+          onSetDefaultEmbeddingModel={setDefaultEmbeddingModelId}
+          onTestConnection={testProviderConnection}
+          onUpdateProvider={updateAIProvider}
+        />
+      ) : null}
       {isAssistantOpen ? (
         <AssistantPanel
           assistantError={assistantError}
           assistantStatus={assistantStatus}
+          defaultChatModelLabel={defaultChatModelLabel}
           inputValue={assistantInput}
           isRecording={isAssistantRecording}
           isSending={isAssistantSending}
-          llmConfig={llmProviderConfig}
           messages={assistantMessages}
-          sttConfig={sttProviderConfig}
           onClose={() => setIsAssistantOpen(false)}
           onInputChange={setAssistantInput}
-          onLlmConfigChange={setLlmProviderConfig}
+          onOpenProviderSettings={() => setIsAIProvidersOpen(true)}
           onRunAction={runAssistantAction}
           onSend={sendAssistantMessage}
-          onSttConfigChange={setSttProviderConfig}
           onToggleRecording={toggleAssistantRecording}
         />
       ) : null}

@@ -288,6 +288,8 @@ function App() {
     () => data.pages.find((page) => page.id === selectedPageId),
     [data.pages, selectedPageId],
   );
+  const isWorkspaceEmpty =
+    isLoaded && data.folders.length === 0 && data.pages.length === 0;
   const pageTemplates = useMemo(
     () => data.pages.filter((page) => page.folderId === PAGE_TEMPLATE_FOLDER_ID),
     [data.pages],
@@ -1588,6 +1590,37 @@ function App() {
     setActiveMode("canvas");
   }
 
+  function createStarterPage() {
+    const folderId = createId("folder");
+    const pageId = createId("page");
+
+    setData((currentData) => ({
+      ...currentData,
+      folders: [
+        ...currentData.folders,
+        { id: folderId, name: "Notes" },
+      ],
+      pages: [
+        ...currentData.pages,
+        { id: pageId, folderId, title: "New page" },
+      ],
+    }));
+    rememberPageViewport(selectedPageId);
+    selectedFolderIdRef.current = folderId;
+    selectedPageIdRef.current = pageId;
+    setSelectedFolderId(folderId);
+    setSelectedPageId(pageId);
+    setSidebarPageSelection([pageId]);
+    restorePageViewport(pageId);
+    setEditingFolderId(null);
+    setEditingPageId(pageId);
+    setIsEditingHeaderTitle(false);
+    setSelectedBlockIds([]);
+    setEditingBlockId(null);
+    setInsertionPoint(null);
+    setActiveMode("canvas");
+  }
+
   function createTemplateFromSelectedPage() {
     const sourcePageId = selectedPageIdRef.current;
 
@@ -2789,7 +2822,35 @@ function App() {
               />
             ) : null}
           </div>
-          {!selectedPageId ? (
+          {isWorkspaceEmpty ? (
+            <div
+              className="canvas-starter"
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              <div className="canvas-starter-titlebar">
+                <span>untitled</span>
+              </div>
+              <div className="canvas-starter-body">
+                <p className="canvas-starter-kicker">Empty workspace</p>
+                <h3>No folders or pages</h3>
+                <p className="canvas-starter-copy">
+                  Create a first note or start by organizing a folder.
+                </p>
+                <div className="canvas-starter-actions">
+                  <button
+                    className="canvas-starter-primary"
+                    onClick={createStarterPage}
+                    type="button"
+                  >
+                    New page
+                  </button>
+                  <button onClick={createFolder} type="button">
+                    New folder
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : !selectedPageId ? (
             <div className="canvas-empty">
               <p>Select or create a page</p>
             </div>

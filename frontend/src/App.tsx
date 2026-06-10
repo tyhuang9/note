@@ -1,6 +1,14 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Editor } from "@tiptap/core";
-import type { DragEvent } from "react";
+import {
+  Fragment,
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import type { Editor, JSONContent } from "@tiptap/core";
+import type { DragEvent, PointerEvent as ReactPointerEvent } from "react";
 import { useEditorState } from "@tiptap/react";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
@@ -93,7 +101,7 @@ type SidebarProps = {
   onPageDragEnd: () => void;
   onPageDragStart: (pageId: string) => boolean;
   onPageDropOnFolder: (folderId: string) => boolean;
-  onPointerDown: () => void;
+  onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
   onRenameFolder: (folderId: string, name: string) => void;
   onRenamePage: (pageId: string, title: string) => void;
   onSearchQueryChange: (query: string) => void;
@@ -116,17 +124,18 @@ type PageHeaderProps = {
   isDarkMode: boolean;
   isEditingHeaderTitle: boolean;
   isSnapToGridEnabled: boolean;
-  openPages: AppData["pages"];
+  openPages: OpenPageTab[];
   pageTemplates: AppData["pages"];
   selectedPage: AppData["pages"][number] | undefined;
   selectedPageId: string;
+  textFormatState: TextFormatState;
   zoomLevel: number;
   onClosePageTab: (pageId: string) => void;
   onCreatePage: () => void;
   onCreatePageFromTemplate: (templatePageId: string) => void;
   onCreateTemplateFromPage: () => void;
   onFocusCanvasSearch: () => void;
-  onPointerDown: () => void;
+  onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
   onRenamePage: (pageId: string, title: string) => void;
   onSelectPageTab: (pageId: string) => void;
   onSetEditingHeaderTitle: (isEditing: boolean) => void;
@@ -135,6 +144,37 @@ type PageHeaderProps = {
   onTogglePageBookmark: (pageId: string) => void;
   onToggleDarkMode: () => void;
   onToggleSnapToGrid: () => void;
+  onSetTextFontFamily: (fontFamily: TextFontFamily) => void;
+  onSetTextFontSize: (fontSize: TextFontSize) => void;
+  onToggleTextFormat: (formatId: ToolbarActionId) => void;
+};
+
+type OpenPageTab = AppData["pages"][number] & {
+  isBlankPlaceholder: boolean;
+};
+
+type ToolbarActionId =
+  | "bold"
+  | "italic"
+  | "strike"
+  | "underline"
+  | "bulletList"
+  | "orderedList"
+  | "blockquote"
+  | "code";
+
+type TextFontFamily =
+  | "system-ui"
+  | "Arial"
+  | "Georgia"
+  | "Times New Roman"
+  | "Courier New";
+
+type TextFontSize = "12px" | "14px" | "16px" | "18px" | "24px" | "32px";
+
+type TextFormatState = Record<ToolbarActionId, boolean> & {
+  fontFamily: TextFontFamily;
+  fontSize: TextFontSize;
 };
 
 type DragLayerSession = {
@@ -201,27 +241,35 @@ type HeroIconName =
   | "archive-box"
   | "arrows-up-down"
   | "bookmark"
+  | "bold"
   | "check"
   | "chevron-down"
   | "chevron-right"
   | "chevron-up"
+  | "code-bracket"
   | "document-plus"
   | "document-text"
   | "eye"
   | "eye-slash"
   | "folder"
   | "folder-plus"
+  | "italic"
+  | "list-bullet"
   | "magnifying-glass"
   | "moon"
+  | "numbered-list"
   | "panel"
   | "pencil-square"
   | "plus"
+  | "quote"
   | "rectangle-stack"
   | "sparkles"
   | "squares-2x2"
   | "star"
+  | "strikethrough"
   | "sun"
   | "trash"
+  | "underline"
   | "x-mark";
 
 const sidebarSortOptions: Array<{ label: string; value: SidebarSortOrder }> = [
@@ -313,10 +361,22 @@ function HeroIcon({ name }: { name: HeroIconName }) {
       {name === "bookmark" ? (
         <path d="M17.25 21 12 17.25 6.75 21V5.25A2.25 2.25 0 0 1 9 3h6a2.25 2.25 0 0 1 2.25 2.25V21Z" />
       ) : null}
+      {name === "bold" ? (
+        <>
+          <path d="M7.5 4.75h5.25a3.25 3.25 0 0 1 0 6.5H7.5z" />
+          <path d="M7.5 11.25h6.25a4 4 0 0 1 0 8H7.5z" />
+        </>
+      ) : null}
       {name === "check" ? <path d="m4.5 12.75 6 6 9-13.5" /> : null}
       {name === "chevron-down" ? <path d="m6 9 6 6 6-6" /> : null}
       {name === "chevron-right" ? <path d="m9 6 6 6-6 6" /> : null}
       {name === "chevron-up" ? <path d="m6 15 6-6 6 6" /> : null}
+      {name === "code-bracket" ? (
+        <>
+          <path d="m9 7.5-4.5 4.5L9 16.5" />
+          <path d="m15 7.5 4.5 4.5-4.5 4.5" />
+        </>
+      ) : null}
       {name === "document-plus" ? (
         <>
           <path d="M14.25 3.75H7.5A2.25 2.25 0 0 0 5.25 6v12A2.25 2.25 0 0 0 7.5 20.25h9A2.25 2.25 0 0 0 18.75 18V8.25L14.25 3.75Z" />
@@ -352,11 +412,26 @@ function HeroIcon({ name }: { name: HeroIconName }) {
           <path d="M12 10.5v5.25m2.625-2.625h-5.25" />
         </>
       ) : null}
+      {name === "italic" ? <path d="M10.5 5.25h6M7.5 18.75h6M14.25 5.25l-4.5 13.5" /> : null}
+      {name === "list-bullet" ? (
+        <>
+          <path d="M8.25 6.75h11.25M8.25 12h11.25M8.25 17.25h11.25" />
+          <path d="M4.5 6.75h.01M4.5 12h.01M4.5 17.25h.01" />
+        </>
+      ) : null}
       {name === "magnifying-glass" ? (
         <path d="m21 21-4.35-4.35m1.35-5.4a6.75 6.75 0 1 1-13.5 0 6.75 6.75 0 0 1 13.5 0Z" />
       ) : null}
       {name === "moon" ? (
         <path d="M21 14.25A8.25 8.25 0 0 1 9.75 3a7.5 7.5 0 1 0 11.25 11.25Z" />
+      ) : null}
+      {name === "numbered-list" ? (
+        <>
+          <path d="M9 6.75h10.5M9 12h10.5M9 17.25h10.5" />
+          <path d="M4.5 5.25h1.5v3M4.5 8.25h3" />
+          <path d="M4.5 11.25h2.25L4.5 14.25h2.25" />
+          <path d="M4.5 16.5h2.25a.75.75 0 0 1 0 1.5H5.25m1.5 0a.75.75 0 0 1 0 1.5H4.5" />
+        </>
       ) : null}
       {name === "panel" ? (
         <>
@@ -371,6 +446,12 @@ function HeroIcon({ name }: { name: HeroIconName }) {
         </>
       ) : null}
       {name === "plus" ? <path d="M12 5.25v13.5M5.25 12h13.5" /> : null}
+      {name === "quote" ? (
+        <>
+          <path d="M8.75 7.5H6.5A2.5 2.5 0 0 0 4 10v1.75h4.75v4.75H4" />
+          <path d="M18.5 7.5h-2.25a2.5 2.5 0 0 0-2.5 2.5v1.75h4.75v4.75h-4.75" />
+        </>
+      ) : null}
       {name === "rectangle-stack" ? (
         <>
           <path d="M6.75 7.5h10.5M6.75 12h10.5M6.75 16.5h10.5" />
@@ -391,6 +472,12 @@ function HeroIcon({ name }: { name: HeroIconName }) {
       {name === "star" ? (
         <path d="m12 3.75 2.53 5.13 5.66.82-4.1 4 1 5.64L12 16.68l-5.09 2.66 1-5.64-4.1-4 5.66-.82L12 3.75Z" />
       ) : null}
+      {name === "strikethrough" ? (
+        <>
+          <path d="M5.25 12h13.5" />
+          <path d="M16.5 6.75A4.5 4.5 0 0 0 12.75 5.25h-1a3.25 3.25 0 0 0-1.5 6.13l3.5 1.5a3.25 3.25 0 0 1-1.5 6.12h-1a4.5 4.5 0 0 1-3.75-1.5" />
+        </>
+      ) : null}
       {name === "sun" ? (
         <>
           <path d="M12 4.5V3M12 21v-1.5M4.5 12H3M21 12h-1.5M6.34 6.34 5.28 5.28M18.72 18.72l-1.06-1.06M17.66 6.34l1.06-1.06M5.28 18.72l1.06-1.06" />
@@ -401,6 +488,12 @@ function HeroIcon({ name }: { name: HeroIconName }) {
         <>
           <path d="M4.5 6.75h15M9.75 6.75V5.25A1.5 1.5 0 0 1 11.25 3.75h1.5a1.5 1.5 0 0 1 1.5 1.5v1.5" />
           <path d="m9 10.5.45 7.5m5.55-7.5-.45 7.5M6.75 6.75l.75 12A1.5 1.5 0 0 0 9 20.25h6a1.5 1.5 0 0 0 1.5-1.5l.75-12" />
+        </>
+      ) : null}
+      {name === "underline" ? (
+        <>
+          <path d="M7.5 5.25v6a4.5 4.5 0 0 0 9 0v-6" />
+          <path d="M6 20.25h12" />
         </>
       ) : null}
       {name === "x-mark" ? <path d="M6 6l12 12M18 6 6 18" /> : null}
@@ -431,6 +524,302 @@ function areIdSelectionsEqual(firstIds: string[], secondIds: string[]) {
     firstIds.length === secondIds.length &&
     firstIds.every((blockId, index) => blockId === secondIds[index])
   );
+}
+
+function markToolbarInteraction() {
+  document.body.dataset.noteToolbarInteraction = "true";
+  window.setTimeout(() => {
+    delete document.body.dataset.noteToolbarInteraction;
+  }, 100);
+}
+
+const defaultTextFormatState: TextFormatState = {
+  bold: false,
+  italic: false,
+  strike: false,
+  underline: false,
+  bulletList: false,
+  orderedList: false,
+  blockquote: false,
+  code: false,
+  fontFamily: "system-ui",
+  fontSize: "16px",
+};
+
+const inlineFormatMarks: Partial<Record<ToolbarActionId, string>> = {
+  bold: "bold",
+  italic: "italic",
+  strike: "strike",
+  underline: "underline",
+  code: "code",
+};
+
+const textFontFamilyOptions: Array<{ label: string; value: TextFontFamily }> = [
+  { label: "System", value: "system-ui" },
+  { label: "Arial", value: "Arial" },
+  { label: "Georgia", value: "Georgia" },
+  { label: "Times", value: "Times New Roman" },
+  { label: "Mono", value: "Courier New" },
+];
+
+const textFontSizeOptions: TextFontSize[] = [
+  "12px",
+  "14px",
+  "16px",
+  "18px",
+  "24px",
+  "32px",
+];
+
+function normalizeTextFontFamily(value: unknown): TextFontFamily {
+  return textFontFamilyOptions.some((option) => option.value === value)
+    ? (value as TextFontFamily)
+    : defaultTextFormatState.fontFamily;
+}
+
+function normalizeTextFontSize(value: unknown): TextFontSize {
+  return textFontSizeOptions.includes(value as TextFontSize)
+    ? (value as TextFontSize)
+    : defaultTextFormatState.fontSize;
+}
+
+function getNextTextFormatState(
+  currentState: TextFormatState,
+  formatId: ToolbarActionId,
+): TextFormatState {
+  const nextState = {
+    ...currentState,
+    [formatId]: !currentState[formatId],
+  };
+
+  if (formatId === "bulletList" && nextState.bulletList) {
+    nextState.orderedList = false;
+  }
+
+  if (formatId === "orderedList" && nextState.orderedList) {
+    nextState.bulletList = false;
+  }
+
+  return nextState;
+}
+
+function hasActiveTextFormat(formatState: TextFormatState) {
+  return (
+    formatState.bold ||
+    formatState.italic ||
+    formatState.strike ||
+    formatState.underline ||
+    formatState.bulletList ||
+    formatState.orderedList ||
+    formatState.blockquote ||
+    formatState.code ||
+    formatState.fontFamily !== defaultTextFormatState.fontFamily ||
+    formatState.fontSize !== defaultTextFormatState.fontSize
+  );
+}
+
+function getTextStyleAttrs(formatState: TextFormatState) {
+  const attrs: Record<string, string> = {};
+
+  if (formatState.fontFamily !== defaultTextFormatState.fontFamily) {
+    attrs.fontFamily = formatState.fontFamily;
+  }
+
+  if (formatState.fontSize !== defaultTextFormatState.fontSize) {
+    attrs.fontSize = formatState.fontSize;
+  }
+
+  return attrs;
+}
+
+function createTextMarks(formatState: TextFormatState) {
+  const marks: NonNullable<JSONContent["marks"]> = (
+    Object.entries(inlineFormatMarks) as [ToolbarActionId, string][]
+  )
+    .filter(([formatId]) => formatState[formatId])
+    .map(([, type]) => ({ type }));
+  const textStyleAttrs = getTextStyleAttrs(formatState);
+
+  if (Object.keys(textStyleAttrs).length > 0) {
+    marks.push({ type: "textStyle", attrs: textStyleAttrs });
+  }
+
+  return marks;
+}
+
+function createFormattedParagraph(
+  text: string,
+  formatState: TextFormatState,
+): JSONContent {
+  const marks = createTextMarks(formatState);
+
+  return {
+    type: "paragraph",
+    content: text
+      ? [
+          {
+            type: "text",
+            text,
+            ...(marks.length ? { marks } : {}),
+          },
+        ]
+      : undefined,
+  };
+}
+
+function createFormattedRichContent(
+  text: string,
+  formatState: TextFormatState,
+): JSONContent | undefined {
+  if (!hasActiveTextFormat(formatState)) {
+    return undefined;
+  }
+
+  const paragraphs = text.split("\n").map((line) =>
+    createFormattedParagraph(line, formatState),
+  );
+  let content: JSONContent["content"] = paragraphs;
+
+  if (formatState.bulletList || formatState.orderedList) {
+    content = [
+      {
+        type: formatState.bulletList ? "bulletList" : "orderedList",
+        content: paragraphs.map((paragraph) => ({
+          type: "listItem",
+          content: [paragraph],
+        })),
+      },
+    ];
+  }
+
+  if (formatState.blockquote) {
+    content = [
+      {
+        type: "blockquote",
+        content,
+      },
+    ];
+  }
+
+  return {
+    type: "doc",
+    content,
+  };
+}
+
+function plainTextToRichContent(text: string): JSONContent {
+  return {
+    type: "doc",
+    content: text.split("\n").map((line) => ({
+      type: "paragraph",
+      content: line ? [{ type: "text", text: line }] : undefined,
+    })),
+  };
+}
+
+function getBlockRichContent(block: TextBlock) {
+  return block.richContent ?? plainTextToRichContent(block.content);
+}
+
+function applyInlineMarkToRichContent(
+  content: JSONContent,
+  markType: string,
+  shouldApply: boolean,
+): JSONContent {
+  if (content.type === "text") {
+    const nextMarks = (content.marks ?? []).filter(
+      (mark) => mark.type !== markType,
+    );
+    const { marks: _marks, ...contentWithoutMarks } = content;
+
+    if (shouldApply) {
+      nextMarks.push({ type: markType });
+    }
+
+    return nextMarks.length
+      ? { ...contentWithoutMarks, marks: nextMarks }
+      : contentWithoutMarks;
+  }
+
+  if (!content.content) {
+    return content;
+  }
+
+  return {
+    ...content,
+    content: content.content.map((child) =>
+      applyInlineMarkToRichContent(child, markType, shouldApply),
+    ),
+  };
+}
+
+function applyTextStyleToRichContent(
+  content: JSONContent,
+  formatState: TextFormatState,
+): JSONContent {
+  if (content.type === "text") {
+    const textStyleAttrs = getTextStyleAttrs(formatState);
+    const nextMarks = (content.marks ?? []).filter(
+      (mark) => mark.type !== "textStyle",
+    );
+    const { marks: _marks, ...contentWithoutMarks } = content;
+
+    if (Object.keys(textStyleAttrs).length > 0) {
+      nextMarks.push({ type: "textStyle", attrs: textStyleAttrs });
+    }
+
+    return nextMarks.length
+      ? { ...contentWithoutMarks, marks: nextMarks }
+      : contentWithoutMarks;
+  }
+
+  if (!content.content) {
+    return content;
+  }
+
+  return {
+    ...content,
+    content: content.content.map((child) =>
+      applyTextStyleToRichContent(child, formatState),
+    ),
+  };
+}
+
+function applyTextStyleStateToBlock(
+  block: TextBlock,
+  formatState: TextFormatState,
+): TextBlock {
+  return {
+    ...block,
+    richContent: applyTextStyleToRichContent(
+      getBlockRichContent(block),
+      formatState,
+    ),
+  };
+}
+
+function applyFormatStateToBlock(
+  block: TextBlock,
+  formatId: ToolbarActionId,
+  formatState: TextFormatState,
+): TextBlock {
+  const inlineMark = inlineFormatMarks[formatId];
+
+  if (inlineMark) {
+    return {
+      ...block,
+      richContent: applyInlineMarkToRichContent(
+        getBlockRichContent(block),
+        inlineMark,
+        formatState[formatId],
+      ),
+    };
+  }
+
+  return {
+    ...block,
+    richContent: createFormattedRichContent(block.content, formatState),
+  };
 }
 
 function App() {
@@ -467,6 +856,8 @@ function App() {
   const [pageDropTargetFolderId, setPageDropTargetFolderId] = useState<string | null>(null);
   const [isStarterDismissed, setIsStarterDismissed] = useState(false);
   const [activeTextEditor, setActiveTextEditor] = useState<Editor | null>(null);
+  const [textFormatState, setTextFormatState] =
+    useState<TextFormatState>(defaultTextFormatState);
   const [assistantMessages, setAssistantMessages] = useState<AssistantMessage[]>([]);
   const [assistantInput, setAssistantInput] = useState("");
   const [assistantStatus, setAssistantStatus] = useState<string | null>(null);
@@ -516,6 +907,7 @@ function App() {
   const selectedFolderIdRef = useRef(selectedFolderId);
   const selectedPageIdRef = useRef(selectedPageId);
   const selectedSidebarPageIdsRef = useRef<string[]>(selectedSidebarPageIds);
+  const textFormatStateRef = useRef<TextFormatState>(textFormatState);
   const draggedPageIdsRef = useRef<string[]>([]);
   const draggedPrimaryPageIdRef = useRef<string | null>(null);
   const zoomLevelRef = useRef(zoomLevel);
@@ -526,6 +918,7 @@ function App() {
   selectedFolderIdRef.current = selectedFolderId;
   selectedPageIdRef.current = selectedPageId;
   selectedSidebarPageIdsRef.current = selectedSidebarPageIds;
+  textFormatStateRef.current = textFormatState;
   zoomLevelRef.current = zoomLevel;
 
   const selectedPage = useMemo(
@@ -550,19 +943,28 @@ function App() {
     () => data.blocks.filter((block) => block.pageId === selectedPageId),
     [data.blocks, selectedPageId],
   );
-  const openPages = useMemo(() => {
+  const openPages = useMemo<OpenPageTab[]>(() => {
     const pagesById = new Map(
       data.pages
         .filter((page) => !isTemplatePage(page))
         .map((page) => [page.id, page]),
     );
+    const pageIdsWithBlocks = new Set(data.blocks.map((block) => block.pageId));
 
     return openPageTabIds.flatMap((pageId) => {
       const page = pagesById.get(pageId);
 
-      return page ? [page] : [];
+      return page
+        ? [
+            {
+              ...page,
+              isBlankPlaceholder:
+                page.title.trim() === "New page" && !pageIdsWithBlocks.has(page.id),
+            },
+          ]
+        : [];
     });
-  }, [data.pages, openPageTabIds]);
+  }, [data.blocks, data.pages, openPageTabIds]);
   const shouldShowStarterShortcuts =
     !isStarterDismissed && (isWorkspaceEmpty || openPages.length === 0);
   const folderNamesById = useMemo(() => {
@@ -1567,17 +1969,6 @@ function App() {
         return;
       }
 
-      if (
-        event.key === "Escape" &&
-        shouldShowStarterShortcuts &&
-        !editingBlockId &&
-        !isTextEntryTarget(event.target)
-      ) {
-        event.preventDefault();
-        setIsStarterDismissed(true);
-        return;
-      }
-
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
         event.preventDefault();
         focusCanvasSearch();
@@ -1709,7 +2100,6 @@ function App() {
     isWorkspaceEmpty,
     selectedBlockIds,
     selectedPageId,
-    shouldShowStarterShortcuts,
     visibleBlocks,
   ]);
 
@@ -2811,6 +3201,10 @@ function App() {
 
     const blockId = createId("block");
     const blockPosition = snapPoint({ x, y });
+    const formattedRichContent = createFormattedRichContent(
+      content,
+      textFormatStateRef.current,
+    );
 
     setBlocksWithHistory((currentBlocks) => [
       ...currentBlocks,
@@ -2822,6 +3216,7 @@ function App() {
         width: DEFAULT_BLOCK_WIDTH,
         height: DEFAULT_BLOCK_HEIGHT,
         content,
+        ...(formattedRichContent ? { richContent: formattedRichContent } : {}),
         isWidthManuallyResized: false,
       },
     ]);
@@ -3267,19 +3662,168 @@ function App() {
     setFocusEndBlockId(null);
   }, []);
 
-  function selectCanvas() {
+  function getActiveWritableTextEditor() {
+    return activeTextEditor && !activeTextEditor.isDestroyed
+      ? activeTextEditor
+      : null;
+  }
+
+  function applyFormattingToSelectedBlocks(
+    updateBlockFormat: (block: TextBlock) => TextBlock,
+  ) {
+    const selectedIds = new Set(selectedBlockIdsRef.current);
+
+    if (selectedIds.size === 0) {
+      return;
+    }
+
+    setBlocksWithHistory((currentBlocks) =>
+      currentBlocks.map((block) =>
+        selectedIds.has(block.id) && !block.imageData
+          ? updateBlockFormat(block)
+          : block,
+      ),
+    );
+  }
+
+  function leaveTextEditing() {
     blurActiveTextEntry();
-    setSelectedBlockIds([]);
+    window.getSelection()?.removeAllRanges();
+    setActiveTextEditor(null);
     setEditingBlockId(null);
+  }
+
+  function setTextFontFamily(fontFamily: TextFontFamily) {
+    const nextFormatState = {
+      ...textFormatStateRef.current,
+      fontFamily,
+    };
+    const editor = getActiveWritableTextEditor();
+
+    textFormatStateRef.current = nextFormatState;
+    setTextFormatState(nextFormatState);
+
+    if (editor) {
+      editor
+        .chain()
+        .focus()
+        .setMark("textStyle", getTextStyleAttrs(nextFormatState))
+        .run();
+      return;
+    }
+
+    applyFormattingToSelectedBlocks((block) =>
+      applyTextStyleStateToBlock(block, nextFormatState),
+    );
+  }
+
+  function setTextFontSize(fontSize: TextFontSize) {
+    const nextFormatState = {
+      ...textFormatStateRef.current,
+      fontSize,
+    };
+    const editor = getActiveWritableTextEditor();
+
+    textFormatStateRef.current = nextFormatState;
+    setTextFormatState(nextFormatState);
+
+    if (editor) {
+      editor
+        .chain()
+        .focus()
+        .setMark("textStyle", getTextStyleAttrs(nextFormatState))
+        .run();
+      return;
+    }
+
+    applyFormattingToSelectedBlocks((block) =>
+      applyTextStyleStateToBlock(block, nextFormatState),
+    );
+  }
+
+  function toggleTextFormat(formatId: ToolbarActionId) {
+    const nextFormatState = getNextTextFormatState(
+      textFormatStateRef.current,
+      formatId,
+    );
+    const editor = getActiveWritableTextEditor();
+
+    textFormatStateRef.current = nextFormatState;
+    setTextFormatState(nextFormatState);
+
+    if (editor) {
+      switch (formatId) {
+        case "bold":
+          editor.chain().focus().toggleBold().run();
+          return;
+        case "italic":
+          editor.chain().focus().toggleItalic().run();
+          return;
+        case "strike":
+          editor.chain().focus().toggleStrike().run();
+          return;
+        case "underline":
+          editor.chain().focus().toggleUnderline().run();
+          return;
+        case "bulletList":
+          editor.chain().focus().toggleBulletList().run();
+          return;
+        case "orderedList":
+          editor.chain().focus().toggleOrderedList().run();
+          return;
+        case "blockquote":
+          editor.chain().focus().toggleBlockquote().run();
+          return;
+        case "code":
+          editor.chain().focus().toggleCode().run();
+          return;
+      }
+    }
+
+    applyFormattingToSelectedBlocks((block) =>
+      applyFormatStateToBlock(block, formatId, nextFormatState),
+    );
+  }
+
+  function selectCanvas() {
+    leaveTextEditing();
+    setSelectedBlockIds([]);
     hideSelectionRectangle();
     setIsCanvasKeyboardActive(true);
     setActiveMode("canvas");
   }
 
+  function isCanvasBackgroundTarget(target: EventTarget | null) {
+    if (!(target instanceof HTMLElement)) {
+      return false;
+    }
+
+    if (
+      target.closest(
+        ".text-block, .offscreen-indicators, .search-panel, .canvas-starter",
+      )
+    ) {
+      return false;
+    }
+
+    return target.closest(".canvas, .canvas-content, .canvas-grid") !== null;
+  }
+
+  function handleChromePointerDown(event: ReactPointerEvent<HTMLElement>) {
+    if (!isTextEntryTarget(event.target)) {
+      leaveTextEditing();
+      setActiveMode((currentMode) =>
+        currentMode === "editing" ? "selected" : currentMode,
+      );
+    }
+
+    setIsCanvasKeyboardActive(false);
+  }
+
   function startCanvasPan(event: React.PointerEvent<HTMLElement>) {
     event.preventDefault();
     event.stopPropagation();
-    blurActiveTextEntry();
+    leaveTextEditing();
     panState.current = {
       startClientX: event.clientX,
       startClientY: event.clientY,
@@ -3295,7 +3839,7 @@ function App() {
   }
 
   function startCanvasInteraction(event: React.PointerEvent<HTMLElement>) {
-    if (event.target !== event.currentTarget) {
+    if (!isCanvasBackgroundTarget(event.target)) {
       return;
     }
 
@@ -3572,7 +4116,7 @@ function App() {
           endPageDrag();
           return didMovePages;
         }}
-        onPointerDown={() => setIsCanvasKeyboardActive(false)}
+        onPointerDown={handleChromePointerDown}
         onRenameFolder={renameFolder}
         onRenamePage={renamePage}
         onSearchQueryChange={setPageSearchQuery}
@@ -3602,13 +4146,14 @@ function App() {
           pageTemplates={pageTemplates}
           selectedPage={selectedPage}
           selectedPageId={selectedPageId}
+          textFormatState={textFormatState}
           zoomLevel={zoomLevel}
           onClosePageTab={closePageTab}
           onCreatePage={createPage}
           onCreatePageFromTemplate={createPageFromTemplate}
           onCreateTemplateFromPage={createTemplateFromSelectedPage}
           onFocusCanvasSearch={focusCanvasSearch}
-          onPointerDown={() => setIsCanvasKeyboardActive(false)}
+          onPointerDown={handleChromePointerDown}
           onRenamePage={renamePage}
           onSelectPageTab={selectPage}
           onSetEditingHeaderTitle={setIsEditingHeaderTitle}
@@ -3633,6 +4178,9 @@ function App() {
               isGridVisible ? !currentValue : false,
             )
           }
+          onSetTextFontFamily={setTextFontFamily}
+          onSetTextFontSize={setTextFontSize}
+          onToggleTextFormat={toggleTextFormat}
         />
 
         <section
@@ -3783,7 +4331,10 @@ function App() {
             <div
               className="canvas-starter"
               aria-label="Empty workspace shortcuts"
-              onPointerDown={(event) => event.stopPropagation()}
+              onPointerDown={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+              }}
             >
               <button
                 className="canvas-starter-action"
@@ -3798,13 +4349,6 @@ function App() {
                 type="button"
               >
                 Go to file <span>Ctrl + O</span>
-              </button>
-              <button
-                className="canvas-starter-action canvas-starter-close"
-                onClick={() => setIsStarterDismissed(true)}
-                type="button"
-              >
-                Close
               </button>
             </div>
           ) : !isWorkspaceEmpty && openPages.length > 0 && !selectedPageId ? (
@@ -4792,6 +5336,7 @@ const PageHeader = memo(function PageHeader({
   pageTemplates,
   selectedPage,
   selectedPageId,
+  textFormatState,
   zoomLevel,
   onClosePageTab,
   onCreatePage,
@@ -4807,6 +5352,9 @@ const PageHeader = memo(function PageHeader({
   onTogglePageBookmark,
   onToggleDarkMode,
   onToggleSnapToGrid,
+  onSetTextFontFamily,
+  onSetTextFontSize,
+  onToggleTextFormat,
 }: PageHeaderProps) {
   const gridToggleTitle = isGridVisible ? "Hide grid" : "Show grid";
   const snapToggleTitle = !isGridVisible
@@ -4833,7 +5381,7 @@ const PageHeader = memo(function PageHeader({
               aria-selected={isActive}
               className={`page-tab ${isActive ? "is-active" : ""} ${
                 isEditingThisTab ? "is-editing" : ""
-              }`}
+              } has-close`}
               key={page.id}
               role="tab"
             >
@@ -4892,9 +5440,13 @@ const PageHeader = memo(function PageHeader({
         </button>
       </div>
       <div className="page-header-actions">
-        {activeTextEditor && !activeTextEditor.isDestroyed ? (
-          <GlobalTextToolbar editor={activeTextEditor} />
-        ) : null}
+        <GlobalTextToolbar
+          editor={activeTextEditor && !activeTextEditor.isDestroyed ? activeTextEditor : null}
+          formatState={textFormatState}
+          onSetFontFamily={onSetTextFontFamily}
+          onSetFontSize={onSetTextFontSize}
+          onToggleFormat={onToggleTextFormat}
+        />
         <button
           aria-label="AI assistant"
           aria-pressed={isAssistantOpen}
@@ -5010,18 +5562,30 @@ const PageHeader = memo(function PageHeader({
 }, arePageHeaderPropsEqual);
 
 type ToolbarAction = {
+  icon: HeroIconName;
+  id: ToolbarActionId;
   isActive: boolean;
   isDisabled?: boolean;
-  label: string;
   title: string;
-  onClick: () => void;
 };
 
-function GlobalTextToolbar({ editor }: { editor: Editor }) {
+function GlobalTextToolbar({
+  editor,
+  formatState,
+  onSetFontFamily,
+  onSetFontSize,
+  onToggleFormat,
+}: {
+  editor: Editor | null;
+  formatState: TextFormatState;
+  onSetFontFamily: (fontFamily: TextFontFamily) => void;
+  onSetFontSize: (fontSize: TextFontSize) => void;
+  onToggleFormat: (formatId: ToolbarActionId) => void;
+}) {
   const toolbarState = useEditorState({
     editor,
     selector: ({ editor }) => {
-      if (editor.isDestroyed) {
+      if (!editor || editor.isDestroyed) {
         return null;
       }
 
@@ -5033,6 +5597,13 @@ function GlobalTextToolbar({ editor }: { editor: Editor }) {
         canToggleItalic: editor.can().chain().focus().toggleItalic().run(),
         canToggleOrderedList: editor.can().chain().focus().toggleOrderedList().run(),
         canToggleStrike: editor.can().chain().focus().toggleStrike().run(),
+        canToggleUnderline: editor.can().chain().focus().toggleUnderline().run(),
+        fontFamily: normalizeTextFontFamily(
+          editor.getAttributes("textStyle").fontFamily,
+        ),
+        fontSize: normalizeTextFontSize(
+          editor.getAttributes("textStyle").fontSize,
+        ),
         isBlockquote: editor.isActive("blockquote"),
         isBold: editor.isActive("bold"),
         isBulletList: editor.isActive("bulletList"),
@@ -5040,63 +5611,69 @@ function GlobalTextToolbar({ editor }: { editor: Editor }) {
         isItalic: editor.isActive("italic"),
         isOrderedList: editor.isActive("orderedList"),
         isStrike: editor.isActive("strike"),
+        isUnderline: editor.isActive("underline"),
       };
     },
   });
-
-  if (editor.isDestroyed || !toolbarState) {
-    return null;
-  }
+  const activeFontFamily = toolbarState?.fontFamily ?? formatState.fontFamily;
+  const activeFontSize = toolbarState?.fontSize ?? formatState.fontSize;
 
   const actions: ToolbarAction[] = [
     {
-      isActive: toolbarState.isBold,
-      isDisabled: !toolbarState.canToggleBold,
-      label: "B",
+      icon: "bold",
+      id: "bold",
+      isActive: toolbarState?.isBold ?? formatState.bold,
+      isDisabled: toolbarState ? !toolbarState.canToggleBold : false,
       title: "Bold",
-      onClick: () => editor.chain().focus().toggleBold().run(),
     },
     {
-      isActive: toolbarState.isItalic,
-      isDisabled: !toolbarState.canToggleItalic,
-      label: "I",
+      icon: "italic",
+      id: "italic",
+      isActive: toolbarState?.isItalic ?? formatState.italic,
+      isDisabled: toolbarState ? !toolbarState.canToggleItalic : false,
       title: "Italic",
-      onClick: () => editor.chain().focus().toggleItalic().run(),
     },
     {
-      isActive: toolbarState.isStrike,
-      isDisabled: !toolbarState.canToggleStrike,
-      label: "S",
+      icon: "strikethrough",
+      id: "strike",
+      isActive: toolbarState?.isStrike ?? formatState.strike,
+      isDisabled: toolbarState ? !toolbarState.canToggleStrike : false,
       title: "Strikethrough",
-      onClick: () => editor.chain().focus().toggleStrike().run(),
     },
     {
-      isActive: toolbarState.isBulletList,
-      isDisabled: !toolbarState.canToggleBulletList,
-      label: "•",
+      icon: "underline",
+      id: "underline",
+      isActive: toolbarState?.isUnderline ?? formatState.underline,
+      isDisabled: toolbarState ? !toolbarState.canToggleUnderline : false,
+      title: "Underline",
+    },
+    {
+      icon: "list-bullet",
+      id: "bulletList",
+      isActive: toolbarState?.isBulletList ?? formatState.bulletList,
+      isDisabled: toolbarState ? !toolbarState.canToggleBulletList : false,
       title: "Bullet list",
-      onClick: () => editor.chain().focus().toggleBulletList().run(),
     },
     {
-      isActive: toolbarState.isOrderedList,
-      isDisabled: !toolbarState.canToggleOrderedList,
-      label: "1.",
+      icon: "numbered-list",
+      id: "orderedList",
+      isActive: toolbarState?.isOrderedList ?? formatState.orderedList,
+      isDisabled: toolbarState ? !toolbarState.canToggleOrderedList : false,
       title: "Ordered list",
-      onClick: () => editor.chain().focus().toggleOrderedList().run(),
     },
     {
-      isActive: toolbarState.isBlockquote,
-      isDisabled: !toolbarState.canToggleBlockquote,
-      label: "\"",
+      icon: "quote",
+      id: "blockquote",
+      isActive: toolbarState?.isBlockquote ?? formatState.blockquote,
+      isDisabled: toolbarState ? !toolbarState.canToggleBlockquote : false,
       title: "Quote",
-      onClick: () => editor.chain().focus().toggleBlockquote().run(),
     },
     {
-      isActive: toolbarState.isCode,
-      isDisabled: !toolbarState.canToggleCode,
-      label: "</>",
+      icon: "code-bracket",
+      id: "code",
+      isActive: toolbarState?.isCode ?? formatState.code,
+      isDisabled: toolbarState ? !toolbarState.canToggleCode : false,
       title: "Code",
-      onClick: () => editor.chain().focus().toggleCode().run(),
     },
   ];
 
@@ -5104,30 +5681,76 @@ function GlobalTextToolbar({ editor }: { editor: Editor }) {
     <div
       aria-label="Text formatting"
       className="global-text-toolbar"
-      onMouseDown={(event) => event.preventDefault()}
+      onMouseDown={(event) => {
+        markToolbarInteraction();
+
+        if (!(event.target instanceof HTMLSelectElement)) {
+          event.preventDefault();
+        }
+      }}
       onPointerDown={(event) => {
-        event.preventDefault();
+        markToolbarInteraction();
         event.stopPropagation();
+
+        if (!(event.target instanceof HTMLSelectElement)) {
+          event.preventDefault();
+        }
       }}
       role="toolbar"
     >
-      {actions.map((action) => (
-        <button
-          aria-label={action.title}
-          aria-pressed={action.isActive}
-          className={action.isActive ? "is-active" : undefined}
-          disabled={action.isDisabled}
-          key={action.title}
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            action.onClick();
-          }}
-          title={action.title}
-          type="button"
-        >
-          {action.label}
-        </button>
+      <select
+        aria-label="Font family"
+        className="text-toolbar-select text-toolbar-font"
+        onChange={(event) =>
+          onSetFontFamily(event.currentTarget.value as TextFontFamily)
+        }
+        title="Font family"
+        value={activeFontFamily}
+      >
+        {textFontFamilyOptions.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <span className="toolbar-divider" aria-hidden="true" />
+      <select
+        aria-label="Font size"
+        className="text-toolbar-select text-toolbar-size"
+        onChange={(event) =>
+          onSetFontSize(event.currentTarget.value as TextFontSize)
+        }
+        title="Font size"
+        value={activeFontSize}
+      >
+        {textFontSizeOptions.map((fontSize) => (
+          <option key={fontSize} value={fontSize}>
+            {fontSize.replace("px", "")}
+          </option>
+        ))}
+      </select>
+      <span className="toolbar-divider" aria-hidden="true" />
+      {actions.map((action, index) => (
+        <Fragment key={action.title}>
+          <button
+            aria-label={action.title}
+            aria-pressed={action.isActive}
+            className={action.isActive ? "is-active" : undefined}
+            disabled={action.isDisabled}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onToggleFormat(action.id);
+            }}
+            title={action.title}
+            type="button"
+          >
+            <HeroIcon name={action.icon} />
+          </button>
+          {index === 3 || index === 5 ? (
+            <span className="toolbar-divider" aria-hidden="true" />
+          ) : null}
+        </Fragment>
       ))}
     </div>
   );
@@ -5146,6 +5769,7 @@ function arePageHeaderPropsEqual(previous: PageHeaderProps, next: PageHeaderProp
     previous.pageTemplates === next.pageTemplates &&
     previous.selectedPage === next.selectedPage &&
     previous.selectedPageId === next.selectedPageId &&
+    previous.textFormatState === next.textFormatState &&
     previous.zoomLevel === next.zoomLevel
   );
 }

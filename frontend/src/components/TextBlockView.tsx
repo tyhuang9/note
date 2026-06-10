@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
-import type { Editor, JSONContent } from "@tiptap/core";
+import { Mark, mergeAttributes, type Editor, type JSONContent } from "@tiptap/core";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import {
@@ -47,7 +47,59 @@ type PointerLike = {
   preventDefault: () => void;
 };
 
-const tiptapExtensions = [StarterKit];
+const TextStyle = Mark.create({
+  name: "textStyle",
+
+  addAttributes() {
+    return {
+      fontFamily: {
+        default: null,
+        parseHTML: (element: HTMLElement) => element.style.fontFamily || null,
+      },
+      fontSize: {
+        default: null,
+        parseHTML: (element: HTMLElement) => element.style.fontSize || null,
+      },
+    };
+  },
+
+  parseHTML() {
+    return [
+      {
+        tag: "span",
+        getAttrs: (node) => {
+          if (!(node instanceof HTMLElement)) {
+            return false;
+          }
+
+          return node.style.fontFamily || node.style.fontSize ? null : false;
+        },
+      },
+    ];
+  },
+
+  renderHTML({ mark, HTMLAttributes }) {
+    const attrs = mark.attrs as {
+      fontFamily?: string | null;
+      fontSize?: string | null;
+    };
+    const styleParts = [
+      attrs.fontFamily ? `font-family: ${attrs.fontFamily}` : "",
+      attrs.fontSize ? `font-size: ${attrs.fontSize}` : "",
+    ].filter(Boolean);
+
+    return [
+      "span",
+      mergeAttributes(
+        HTMLAttributes,
+        styleParts.length ? { style: styleParts.join("; ") } : {},
+      ),
+      0,
+    ];
+  },
+});
+
+const tiptapExtensions = [StarterKit, TextStyle];
 
 type TextBlockViewProps = {
   block: TextBlock;
@@ -82,6 +134,11 @@ type TextBlockViewProps = {
     clientY: number,
   ) => boolean;
   zoomLevel: number;
+};
+
+type CaretPoint = {
+  clientX: number;
+  clientY: number;
 };
 
 export const TextBlockView = memo(function TextBlockView({
@@ -123,6 +180,7 @@ export const TextBlockView = memo(function TextBlockView({
   const ctrlAStage = useRef(0);
   const hasManualWidth = useRef(Boolean(block.isWidthManuallyResized));
   const pendingCaretOffset = useRef<number | null>(null);
+  const pendingCaretPoint = useRef<CaretPoint | null>(null);
   const draftContentRef = useRef(block.content);
   const draftRichContentRef = useRef<JSONContent>(
     getTipTapContent(block),
@@ -265,7 +323,14 @@ export const TextBlockView = memo(function TextBlockView({
 
     heightMeasureElement.style.width = `${measuredWidth}px`;
 
-    const measuredHeight = heightMeasureElement.scrollHeight;
+    const renderedEditorHeight =
+      isEditing && editorRef.current && !editorRef.current.isDestroyed
+        ? editorRef.current.view.dom.scrollHeight
+        : 0;
+    const measuredHeight = Math.max(
+      heightMeasureElement.scrollHeight,
+      renderedEditorHeight,
+    );
 
     return {
       width: measuredWidth,
@@ -466,11 +531,14 @@ export const TextBlockView = memo(function TextBlockView({
     scheduleContentCommit();
   }
 
-  function handleEditorBlur(editor: Editor) {
-    ctrlAStage.current = 0;
-    setIsContentSelected(false);
-    onActiveEditorChange(null);
-
+  function commitEditorDraft(
+    editor: Editor,
+    options: {
+      deleteEmpty: boolean;
+      endEdit: boolean;
+      includeSizeUpdates: boolean;
+    },
+  ) {
     if (commitTimerRef.current !== null) {
       window.clearTimeout(commitTimerRef.current);
       commitTimerRef.current = null;
@@ -481,12 +549,17 @@ export const TextBlockView = memo(function TextBlockView({
 
     const nextDraftContent = draftContentRef.current;
     const nextRichContent = draftRichContentRef.current;
-    const updates = getSizeUpdates();
+    const updates: BlockUpdates = options.includeSizeUpdates
+      ? getSizeUpdates()
+      : {};
     const nextContent = nextDraftContent.trim();
 
     if (!nextContent) {
-      onDelete(block.id);
-      onEditEnd();
+      if (options.deleteEmpty) {
+        onDelete(block.id);
+        onEditEnd();
+      }
+
       return;
     }
 
@@ -504,7 +577,41 @@ export const TextBlockView = memo(function TextBlockView({
       onUpdate(block.id, updates);
     }
 
-    onEditEnd();
+    if (options.endEdit) {
+      onEditEnd();
+    }
+  }
+
+  function isToolbarBlurTarget(target: EventTarget | null) {
+    return (
+      target instanceof HTMLElement &&
+      target.closest(".global-text-toolbar") !== null
+    );
+  }
+
+  function handleEditorBlur(editor: Editor, event: FocusEvent) {
+    if (
+      document.body.dataset.noteToolbarInteraction === "true" ||
+      isToolbarBlurTarget(event.relatedTarget) ||
+      isToolbarBlurTarget(document.activeElement)
+    ) {
+      commitEditorDraft(editor, {
+        deleteEmpty: false,
+        endEdit: false,
+        includeSizeUpdates: false,
+      });
+      onActiveEditorChange(editor);
+      return;
+    }
+
+    ctrlAStage.current = 0;
+    setIsContentSelected(false);
+    onActiveEditorChange(null);
+    commitEditorDraft(editor, {
+      deleteEmpty: true,
+      endEdit: true,
+      includeSizeUpdates: true,
+    });
   }
 
   function startDrag(event: ReactPointerEvent<HTMLDivElement>) {
@@ -834,12 +941,20 @@ export const TextBlockView = memo(function TextBlockView({
           onCanvasPanStart={onCanvasPanStart}
           onChange={handleEditorChange}
           initialCaretOffset={pendingCaretOffset.current}
+          initialCaretPoint={pendingCaretPoint.current}
           onCaretOffsetHandled={() => {
             pendingCaretOffset.current = null;
+          }}
+          onCaretPointHandled={() => {
+            pendingCaretPoint.current = null;
           }}
           onEditorReady={(editor) => {
             editorRef.current = editor;
             onActiveEditorChange(editor);
+
+            if (editor) {
+              scheduleAutosize();
+            }
           }}
           onFocusEndHandled={onFocusEndHandled}
           onExitToSelection={() => {
@@ -887,6 +1002,8 @@ export const TextBlockView = memo(function TextBlockView({
             event.stopPropagation();
 
             if (event.ctrlKey || event.metaKey) {
+              pendingCaretOffset.current = null;
+              pendingCaretPoint.current = null;
               onSelect(block.id, true);
               return;
             }
@@ -895,6 +1012,10 @@ export const TextBlockView = memo(function TextBlockView({
               event.clientX,
               event.clientY,
             );
+            pendingCaretPoint.current = {
+              clientX: event.clientX,
+              clientY: event.clientY,
+            };
           }}
           onPointerMove={(event) => {
             if (event.buttons !== 2) {
@@ -978,8 +1099,10 @@ function areSearchRangesEqual(
 type TiptapBlockEditorProps = {
   block: TextBlock;
   initialCaretOffset: number | null;
-  onBlur: (editor: Editor) => void;
+  initialCaretPoint: CaretPoint | null;
+  onBlur: (editor: Editor, event: FocusEvent) => void;
   onCaretOffsetHandled: () => void;
+  onCaretPointHandled: () => void;
   onCanvasPanStart: (event: ReactPointerEvent<HTMLElement>) => void;
   onChange: (editor: Editor) => void;
   onEditorReady: (editor: Editor | null) => void;
@@ -993,8 +1116,10 @@ type TiptapBlockEditorProps = {
 function TiptapBlockEditor({
   block,
   initialCaretOffset,
+  initialCaretPoint,
   onBlur,
   onCaretOffsetHandled,
+  onCaretPointHandled,
   onCanvasPanStart,
   onChange,
   onEditorReady,
@@ -1015,7 +1140,7 @@ function TiptapBlockEditor({
           class: "text-block-editor-content",
         },
       },
-      onBlur: ({ editor }) => onBlur(editor),
+      onBlur: ({ editor, event }) => onBlur(editor, event),
       onUpdate: ({ editor }) => onChange(editor),
     },
     [block.id],
@@ -1028,6 +1153,24 @@ function TiptapBlockEditor({
 
     onEditorReady(editor);
     window.requestAnimationFrame(() => {
+      if (initialCaretPoint !== null) {
+        editor.commands.focus();
+
+        const clickedPosition = editor.view.posAtCoords({
+          left: initialCaretPoint.clientX,
+          top: initialCaretPoint.clientY,
+        });
+
+        if (clickedPosition) {
+          editor.commands.setTextSelection(clickedPosition.pos);
+          onCaretPointHandled();
+          onCaretOffsetHandled();
+          return;
+        }
+
+        onCaretPointHandled();
+      }
+
       if (initialCaretOffset !== null) {
         editor.commands.focus();
         editor.commands.setTextSelection(
@@ -1050,7 +1193,9 @@ function TiptapBlockEditor({
   }, [
     editor,
     initialCaretOffset,
+    initialCaretPoint,
     onCaretOffsetHandled,
+    onCaretPointHandled,
     onEditorReady,
     onFocusEndHandled,
     shouldFocusEnd,
@@ -1212,8 +1357,27 @@ function renderTextMarks(
         return <em key={markKey}>{currentNode}</em>;
       case "strike":
         return <s key={markKey}>{currentNode}</s>;
+      case "underline":
+        return <u key={markKey}>{currentNode}</u>;
       case "code":
         return <code key={markKey}>{currentNode}</code>;
+      case "textStyle": {
+        const style: CSSProperties = {};
+
+        if (typeof mark.attrs?.fontFamily === "string") {
+          style.fontFamily = mark.attrs.fontFamily;
+        }
+
+        if (typeof mark.attrs?.fontSize === "string") {
+          style.fontSize = mark.attrs.fontSize;
+        }
+
+        return (
+          <span key={markKey} style={style}>
+            {currentNode}
+          </span>
+        );
+      }
       default:
         return currentNode;
     }

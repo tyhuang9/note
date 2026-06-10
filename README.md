@@ -27,30 +27,17 @@ npm install
 Run the full desktop app from the repo root:
 
 ```bash
-npm run tauri:dev
-```
-
-Run the web frontend only:
-
-```bash
 npm run dev
 ```
 
-Connect local AI services by starting the model servers separately before
-launching Note, then open the Assistant panel and choose **AI Providers**.
-The AI Providers screen can add, test, enable, refresh, and select defaults
-for these provider shapes:
+This starts the Tauri desktop shell. The Vite web server is started only as the
+frontend renderer for that desktop window.
 
-- Ollama local server, default base URL `http://localhost:11434`
-- LM Studio local server, default base URL `http://localhost:1234/v1`
-- Generic OpenAI-compatible API, using its `/models` and `/chat/completions`
-  endpoints when available
-- OpenAI API, default base URL `https://api.openai.com/v1`
-- OpenAI-compatible Whisper transcription, for example `http://localhost:8000/v1/audio/transcriptions`
+Run the web frontend only in a browser:
 
-Use the provider base URL only; Note appends endpoint paths internally. API keys
-are entered in AI Providers when a provider requires them. Note does not start
-or bundle the LLM or STT servers.
+```bash
+npm run web:dev
+```
 
 Build the frontend:
 
@@ -71,13 +58,25 @@ Build the Tauri app:
 npm run tauri:build
 ```
 
+## Screenshots
+
+Screenshots are planned under `docs/screenshots/` once the app can be captured
+from a local desktop/browser session.
+
+Suggested captures:
+
+- Canvas editing with several textboxes
+- Sidebar folders, search, and open page tabs
+- Dark mode with the global text formatting toolbar
+
 ## Features
 
 - Folder and page organization
 - Inline folder, page, and page-title renaming
 - Freeform canvas per page
 - Textbox creation from canvas insertion point
-- Plain-text editing
+- Rich text editing powered by TipTap
+- Header-level formatting toolbar for selected or newly-created textboxes
 - Textbox selection and multi-selection
 - Header-based textbox dragging
 - Right-edge textbox resizing
@@ -90,8 +89,12 @@ npm run tauri:build
 - Offscreen textbox indicators with click-to-pan navigation
 - Light/dark mode toggle with persisted preference
 - Local JSON autosave and restore
-- AI Providers settings for Ollama, LM Studio, OpenAI-compatible servers, and OpenAI
-- Assistant chat that uses the selected default provider/model with current note context
+
+## AI Direction
+
+Built-in AI model/provider management is intentionally deferred for now. The plan
+is to integrate with a separate service that manages local LLM runtimes and model
+performance, then connect Note to that service when the contract is ready.
 
 ## Project Structure
 

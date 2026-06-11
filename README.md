@@ -58,6 +58,16 @@ Build the Tauri app:
 npm run tauri:build
 ```
 
+## Building Installers
+
+Cross-platform installer builds are handled by the `Build Desktop Installers`
+GitHub Actions workflow. It builds Windows, macOS, and Linux packages on native
+GitHub-hosted runners and uploads the generated installers as workflow
+artifacts.
+
+See [docs/RELEASE.md](docs/RELEASE.md) for trigger instructions, artifact
+locations, supported package formats, and known platform-specific limitations.
+
 ## Screenshots
 
 Screenshots are planned under `docs/screenshots/` once the app can be captured

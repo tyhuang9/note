@@ -543,7 +543,7 @@ const defaultTextFormatState: TextFormatState = {
   blockquote: false,
   code: false,
   fontFamily: "system-ui",
-  fontSize: "16px",
+  fontSize: "18px",
 };
 
 const inlineFormatMarks: Partial<Record<ToolbarActionId, string>> = {
@@ -3976,8 +3976,14 @@ function App() {
       return;
     }
 
+    const shiftScrollDelta =
+      Math.abs(event.deltaX) > Math.abs(event.deltaY)
+        ? event.deltaX
+        : event.deltaY;
     const nextPanOffset = {
-      x: panOffsetRef.current.x - (event.shiftKey ? event.deltaY : event.deltaX),
+      x:
+        panOffsetRef.current.x -
+        (event.shiftKey ? shiftScrollDelta : event.deltaX),
       y: panOffsetRef.current.y - (event.shiftKey ? 0 : event.deltaY),
     };
 

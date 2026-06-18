@@ -629,11 +629,20 @@ export const TextBlockView = memo(function TextBlockView({
 
     setIsContentSelected(false);
     onActiveEditorChange(null);
+    window.getSelection()?.removeAllRanges();
     commitEditorDraft(editor, {
       deleteEmpty: true,
       endEdit: true,
       includeSizeUpdates: true,
     });
+  }
+
+  function leaveEditorForBlockSelection(additive = false) {
+    setIsContentSelected(false);
+    blurActiveTextEntry();
+    window.getSelection()?.removeAllRanges();
+    onActiveEditorChange(null);
+    onSelect(block.id, additive);
   }
 
   function startDrag(event: ReactPointerEvent<HTMLDivElement>) {
@@ -645,7 +654,7 @@ export const TextBlockView = memo(function TextBlockView({
     if (event.ctrlKey || event.metaKey) {
       event.preventDefault();
       event.stopPropagation();
-      onSelect(block.id, true);
+      leaveEditorForBlockSelection(true);
       return;
     }
 
@@ -655,7 +664,7 @@ export const TextBlockView = memo(function TextBlockView({
 
     event.preventDefault();
     event.stopPropagation();
-    blurActiveTextEntry();
+    leaveEditorForBlockSelection();
 
     const didStartDrag = onVisualDragStart(
       block.id,
@@ -664,7 +673,6 @@ export const TextBlockView = memo(function TextBlockView({
     );
 
     if (!didStartDrag) {
-      onSelect(block.id);
       return;
     }
 
@@ -918,9 +926,7 @@ export const TextBlockView = memo(function TextBlockView({
 
         event.preventDefault();
         event.stopPropagation();
-        blurActiveTextEntry();
-        setIsContentSelected(false);
-        onSelect(block.id, event.ctrlKey || event.metaKey);
+        leaveEditorForBlockSelection(event.ctrlKey || event.metaKey);
       }}
       ref={setBlockElement}
       onContextMenu={(event) => event.preventDefault()}
@@ -945,8 +951,7 @@ export const TextBlockView = memo(function TextBlockView({
             return;
           }
 
-          blurActiveTextEntry();
-          onSelect(block.id);
+          leaveEditorForBlockSelection();
         }}
         onDoubleClick={(event) => {
           event.stopPropagation();
@@ -1243,44 +1248,46 @@ function TiptapBlockEditor({
 
     ctrlAStageRef.current = "none";
     onEditorReady(editor);
-    window.requestAnimationFrame(() => {
-      if (initialCaretPoint !== null) {
-        editor.commands.focus();
+    let focusRafId: number | null = null;
+    let placementRafId: number | null = null;
 
-        const clickedPosition = editor.view.posAtCoords({
-          left: initialCaretPoint.clientX,
-          top: initialCaretPoint.clientY,
-        });
+    focusRafId = window.requestAnimationFrame(() => {
+      placementRafId = window.requestAnimationFrame(() => {
+        const initialCaretPosition = getInitialCaretPosition(
+          editor,
+          initialCaretPoint,
+          initialCaretOffset,
+        );
 
-        if (clickedPosition) {
-          editor.commands.setTextSelection(clickedPosition.pos);
+        if (initialCaretPosition !== null) {
+          editor.commands.focus();
+          editor.commands.setTextSelection(initialCaretPosition);
           onCaretPointHandled();
           onCaretOffsetHandled();
           return;
         }
 
-        onCaretPointHandled();
-      }
+        if (shouldFocusEnd) {
+          editor.commands.focus("end");
+          onFocusEndHandled();
+          return;
+        }
 
-      if (initialCaretOffset !== null) {
         editor.commands.focus();
-        editor.commands.setTextSelection(
-          getDocumentPositionFromTextOffset(editor, initialCaretOffset),
-        );
-        onCaretOffsetHandled();
-        return;
-      }
-
-      if (shouldFocusEnd) {
-        editor.commands.focus("end");
-        onFocusEndHandled();
-        return;
-      }
-
-      editor.commands.focus();
+      });
     });
 
-    return () => onEditorReady(null);
+    return () => {
+      if (focusRafId !== null) {
+        window.cancelAnimationFrame(focusRafId);
+      }
+
+      if (placementRafId !== null) {
+        window.cancelAnimationFrame(placementRafId);
+      }
+
+      onEditorReady(null);
+    };
   }, [
     editor,
     initialCaretOffset,
@@ -1603,6 +1610,37 @@ function renderTextMarks(
         return currentNode;
     }
   }, text);
+}
+
+function getInitialCaretPosition(
+  editor: Editor,
+  caretPoint: CaretPoint | null,
+  textOffset: number | null,
+) {
+  const offsetPosition =
+    textOffset !== null
+      ? getDocumentPositionFromTextOffset(editor, textOffset)
+      : null;
+  const pointPosition = caretPoint
+    ? editor.view.posAtCoords({
+        left: caretPoint.clientX,
+        top: caretPoint.clientY,
+      })?.pos ?? null
+    : null;
+
+  if (pointPosition !== null) {
+    if (
+      pointPosition <= 1 &&
+      offsetPosition !== null &&
+      offsetPosition > 1
+    ) {
+      return offsetPosition;
+    }
+
+    return pointPosition;
+  }
+
+  return offsetPosition;
 }
 
 function getDocumentPositionFromTextOffset(editor: Editor, textOffset: number) {

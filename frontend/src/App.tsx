@@ -3724,8 +3724,17 @@ function App() {
 
         cloneElement.removeAttribute("data-block-id");
         cloneElement.setAttribute("aria-hidden", "true");
-        cloneElement.classList.remove("is-drag-source-hidden");
-        cloneElement.classList.add("is-dragging", "drag-layer-clone");
+        cloneElement.classList.remove(
+          "is-content-selected",
+          "is-drag-source-hidden",
+          "is-editing",
+        );
+        cloneElement.classList.add(
+          "is-canvas-mode",
+          "is-dragging",
+          "is-selected",
+          "drag-layer-clone",
+        );
         cloneElement.style.position = "absolute";
         cloneElement.style.left = `${elementRect.left - canvasRect.left}px`;
         cloneElement.style.top = `${elementRect.top - canvasRect.top}px`;

@@ -1,4 +1,8 @@
 # Logs
+graphify-out/
+.graphify/
+.graphifyignore
+.graphifyinclude
 PROJECT.md
 RESPONSIVENESS_REFACTOR_PLAN.md
 OBSIDIAN_FEATURE_PLAN.md

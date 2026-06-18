@@ -1,6 +1,7 @@
 # Logs
 graphify-out/
 .graphify/
+.agent/
 .graphifyignore
 .graphifyinclude
 PROJECT.md

@@ -27,6 +27,7 @@ import {
   MAX_ZOOM,
   MIN_ZOOM,
   SAVE_DELAY_MS,
+  TEXT_BLOCK_HEADER_HEIGHT,
   ZOOM_STEP,
 } from "./constants";
 import type {
@@ -194,6 +195,10 @@ type TextFormatState = Record<ToolbarActionId, boolean> & {
   fontSize: TextFontSize;
 };
 
+type CreateTextBlockOptions = {
+  placement?: "block-origin" | "text-caret";
+};
+
 type DragLayerSession = {
   autoPanRafId: number | null;
   blockIds: string[];
@@ -244,6 +249,9 @@ const PAGE_DRAG_MIME_TYPE = "application/x-note-page";
 const PAGE_TAB_DRAG_MIME_TYPE = "application/x-note-page-tab";
 const ROOT_FOLDER_ID = "";
 const PASTED_BLOCK_OFFSET = 24;
+const TEXT_BLOCK_BORDER_WIDTH = 1;
+const TEXT_BLOCK_CONTENT_PADDING_LEFT = 10;
+const TEXT_BLOCK_CONTENT_PADDING_TOP = 5;
 const LLAMA_HARNESS_SELECTED_AGENT_KEY = "note.llamaHarness.selectedAgentId.v1";
 const DEFAULT_PAN_OFFSET: PanOffset = { x: 0, y: 0 };
 type SidebarSortOrder =
@@ -2344,11 +2352,12 @@ function App() {
         !event.altKey &&
         !event.ctrlKey &&
         !event.metaKey &&
-        !(event.target instanceof HTMLInputElement) &&
-        !(event.target instanceof HTMLTextAreaElement)
+        !isTextEntryTarget(event.target)
       ) {
         event.preventDefault();
-        createTextBlock(insertionPoint.x, insertionPoint.y, event.key);
+        createTextBlock(insertionPoint.x, insertionPoint.y, event.key, {
+          placement: "text-caret",
+        });
         setInsertionPoint(null);
         return;
       }
@@ -2460,7 +2469,9 @@ function App() {
 
       if (pastedText) {
         event.preventDefault();
-        createTextBlock(insertionPoint.x, insertionPoint.y, pastedText);
+        createTextBlock(insertionPoint.x, insertionPoint.y, pastedText, {
+          placement: "text-caret",
+        });
       }
     }
 
@@ -3144,7 +3155,9 @@ function App() {
             }
           : { x: PASTED_BLOCK_OFFSET, y: PASTED_BLOCK_OFFSET });
 
-      createTextBlock(origin.x, origin.y, action.content);
+      createTextBlock(origin.x, origin.y, action.content, {
+        placement: insertionPoint ? "text-caret" : "block-origin",
+      });
       setAssistantError(null);
       setAssistantStatus("Inserted assistant output");
       return true;
@@ -3624,13 +3637,36 @@ function App() {
     setActiveMode("canvas");
   }
 
-  function createTextBlock(x: number, y: number, content: string) {
+  function getTextBlockPositionForCreation(
+    point: CanvasPoint,
+    options: CreateTextBlockOptions = {},
+  ) {
+    if (options.placement === "text-caret") {
+      return {
+        x: point.x - TEXT_BLOCK_BORDER_WIDTH - TEXT_BLOCK_CONTENT_PADDING_LEFT,
+        y:
+          point.y -
+          TEXT_BLOCK_BORDER_WIDTH -
+          TEXT_BLOCK_HEADER_HEIGHT -
+          TEXT_BLOCK_CONTENT_PADDING_TOP,
+      };
+    }
+
+    return snapPoint(point);
+  }
+
+  function createTextBlock(
+    x: number,
+    y: number,
+    content: string,
+    options: CreateTextBlockOptions = {},
+  ) {
     if (!selectedPageId) {
       return;
     }
 
     const blockId = createId("block");
-    const blockPosition = snapPoint({ x, y });
+    const blockPosition = getTextBlockPositionForCreation({ x, y }, options);
     const formattedRichContent = createFormattedRichContent(
       content,
       textFormatStateRef.current,

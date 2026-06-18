@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use tauri::Manager;
@@ -10,6 +11,7 @@ struct AppData {
     pages: Vec<Page>,
     blocks: Vec<TextBlock>,
     is_dark_mode: Option<bool>,
+    session_state: Option<AppSessionState>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -42,6 +44,29 @@ struct TextBlock {
     is_width_manually_resized: Option<bool>,
     image_data: Option<String>,
     image_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppSessionState {
+    selected_folder_id: Option<String>,
+    selected_page_id: Option<String>,
+    open_page_tab_ids: Option<Vec<String>>,
+    page_viewports: Option<HashMap<String, PageViewport>>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PageViewport {
+    pan_offset: PanOffset,
+    zoom_level: f64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PanOffset {
+    x: f64,
+    y: f64,
 }
 
 fn app_data_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {

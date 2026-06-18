@@ -26,9 +26,25 @@ export type TextBlock = {
   imageName?: string;
 };
 
+export type PersistedPageViewport = {
+  panOffset: {
+    x: number;
+    y: number;
+  };
+  zoomLevel: number;
+};
+
+export type AppSessionState = {
+  selectedFolderId?: string;
+  selectedPageId?: string;
+  openPageTabIds?: string[];
+  pageViewports?: Record<string, PersistedPageViewport>;
+};
+
 export type AppData = {
   folders: Folder[];
   pages: Page[];
   blocks: TextBlock[];
   isDarkMode?: boolean;
+  sessionState?: AppSessionState;
 };

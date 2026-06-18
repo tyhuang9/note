@@ -85,7 +85,7 @@ import {
   type LlamaHarnessSetupStatus,
   type LlamaHarnessToolCall,
 } from "./services/llamaHarnessAssistant";
-import type { AppData, TextBlock } from "./types";
+import type { AppData, AppSessionState, TextBlock } from "./types";
 
 type SidebarProps = {
   bookmarkedPages: AppData["pages"];
@@ -670,6 +670,79 @@ function normalizeTextFontSize(value: unknown): TextFontSize {
     : defaultTextFormatState.fontSize;
 }
 
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function normalizePageViewport(
+  viewport: NonNullable<AppSessionState["pageViewports"]>[string] | undefined,
+): PageViewport | null {
+  if (!viewport) {
+    return null;
+  }
+
+  const panOffset = viewport.panOffset;
+
+  if (
+    !panOffset ||
+    !isFiniteNumber(panOffset.x) ||
+    !isFiniteNumber(panOffset.y)
+  ) {
+    return null;
+  }
+
+  const zoomLevel = isFiniteNumber(viewport.zoomLevel)
+    ? Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, viewport.zoomLevel))
+    : DEFAULT_ZOOM;
+
+  return {
+    panOffset: {
+      x: panOffset.x,
+      y: panOffset.y,
+    },
+    zoomLevel,
+  };
+}
+
+function normalizePageViewports(
+  pageViewports: AppSessionState["pageViewports"] | undefined,
+  validPageIds: Set<string>,
+) {
+  const normalizedViewports = new Map<string, PageViewport>();
+
+  if (!pageViewports) {
+    return normalizedViewports;
+  }
+
+  for (const [pageId, viewport] of Object.entries(pageViewports)) {
+    if (!validPageIds.has(pageId)) {
+      continue;
+    }
+
+    const normalizedViewport = normalizePageViewport(viewport);
+
+    if (normalizedViewport) {
+      normalizedViewports.set(pageId, normalizedViewport);
+    }
+  }
+
+  return normalizedViewports;
+}
+
+function getValidUniquePageIds(
+  pageIds: string[] | undefined,
+  validPageIds: Set<string>,
+) {
+  if (!pageIds) {
+    return [];
+  }
+
+  return pageIds.filter(
+    (pageId, index) =>
+      validPageIds.has(pageId) && pageIds.indexOf(pageId) === index,
+  );
+}
+
 function getNextTextFormatState(
   currentState: TextFormatState,
   formatId: ToolbarActionId,
@@ -995,6 +1068,7 @@ function App() {
   const assistantMediaRecorderRef = useRef<MediaRecorder | null>(null);
   const assistantRecordingChunksRef = useRef<Blob[]>([]);
   const assistantRecordingStreamRef = useRef<MediaStream | null>(null);
+  const openPageTabIdsRef = useRef<string[]>(openPageTabIds);
   const pageViewportsRef = useRef<Map<string, PageViewport>>(new Map());
   const isSnapToGridEnabledRef = useRef(isSnapToGridEnabled);
   const editingBlockIdRef = useRef<string | null>(editingBlockId);
@@ -1010,6 +1084,7 @@ function App() {
   dataRef.current = data;
   isSnapToGridEnabledRef.current = isGridVisible && isSnapToGridEnabled;
   editingBlockIdRef.current = editingBlockId;
+  openPageTabIdsRef.current = openPageTabIds;
   selectedBlockIdsRef.current = selectedBlockIds;
   selectedFolderIdRef.current = selectedFolderId;
   selectedPageIdRef.current = selectedPageId;
@@ -1345,19 +1420,66 @@ function App() {
           return;
         }
 
-        const firstPage = savedData.pages.find((page) => !isTemplatePage(page));
-        const firstFolderId =
-          firstPage?.folderId ?? savedData.folders[0]?.id ?? ROOT_FOLDER_ID;
-        const firstPageId = firstPage?.id ?? "";
+        const validPages = savedData.pages.filter((page) => !isTemplatePage(page));
+        const validPageIds = new Set(validPages.map((page) => page.id));
+        const validFolderIds = new Set([
+          ROOT_FOLDER_ID,
+          ...savedData.folders.map((folder) => folder.id),
+        ]);
+        const savedSessionState = savedData.sessionState;
+        const hasSavedSessionState = Boolean(savedSessionState);
+        const savedOpenPageIds = getValidUniquePageIds(
+          savedSessionState?.openPageTabIds,
+          validPageIds,
+        );
+        let nextSelectedPageId =
+          savedSessionState?.selectedPageId &&
+          validPageIds.has(savedSessionState.selectedPageId)
+            ? savedSessionState.selectedPageId
+            : "";
+
+        if (!nextSelectedPageId && savedOpenPageIds.length > 0) {
+          nextSelectedPageId = savedOpenPageIds[0];
+        }
+
+        if (!hasSavedSessionState && !nextSelectedPageId) {
+          nextSelectedPageId = validPages[0]?.id ?? "";
+        }
+
+        const nextOpenPageIds = hasSavedSessionState
+          ? [...savedOpenPageIds]
+          : nextSelectedPageId
+            ? [nextSelectedPageId]
+            : [];
+
+        if (
+          nextSelectedPageId &&
+          !nextOpenPageIds.includes(nextSelectedPageId)
+        ) {
+          nextOpenPageIds.push(nextSelectedPageId);
+        }
+
+        const nextSelectedPage = validPages.find(
+          (page) => page.id === nextSelectedPageId,
+        );
+        const savedFolderId = savedSessionState?.selectedFolderId;
+        const nextFolderId =
+          nextSelectedPage?.folderId ??
+          (savedFolderId && validFolderIds.has(savedFolderId)
+            ? savedFolderId
+            : savedData.folders[0]?.id ?? ROOT_FOLDER_ID);
 
         setData(savedData);
         setIsDarkMode(savedData.isDarkMode ?? true);
-        pageViewportsRef.current.clear();
-        setSelectedFolderId(firstFolderId);
-        setSelectedPageId(firstPageId);
-        setOpenPageTabIds(firstPageId ? [firstPageId] : []);
-        setSidebarPageSelection(firstPageId ? [firstPageId] : []);
-        restorePageViewport(firstPageId);
+        pageViewportsRef.current = normalizePageViewports(
+          savedSessionState?.pageViewports,
+          validPageIds,
+        );
+        setSelectedFolderId(nextFolderId);
+        setSelectedPageId(nextSelectedPageId);
+        setOpenPageTabIds(nextOpenPageIds);
+        setSidebarPageSelection(nextSelectedPageId ? [nextSelectedPageId] : []);
+        restorePageViewport(nextSelectedPageId);
         setSelectedBlockIds([]);
         setEditingBlockId(null);
         setActiveMode("canvas");
@@ -1440,6 +1562,12 @@ function App() {
     const retainedPageIds = selectedSidebarPageIdsRef.current.filter((pageId) =>
       validPageIds.has(pageId),
     );
+
+    for (const pageId of pageViewportsRef.current.keys()) {
+      if (!validPageIds.has(pageId)) {
+        pageViewportsRef.current.delete(pageId);
+      }
+    }
 
     if (!areIdSelectionsEqual(selectedSidebarPageIdsRef.current, retainedPageIds)) {
       setSidebarPageSelection(retainedPageIds);
@@ -1538,13 +1666,30 @@ function App() {
     }
 
     const saveTimer = window.setTimeout(() => {
-      invoke("save_app_data", { data: { ...data, isDarkMode } }).catch((error) => {
+      invoke("save_app_data", {
+        data: {
+          ...data,
+          isDarkMode,
+          sessionState: getSessionState(),
+        },
+      }).catch((error) => {
         console.warn("Could not save local note data.", error);
       });
     }, SAVE_DELAY_MS);
 
     return () => window.clearTimeout(saveTimer);
-  }, [data, isDarkMode, isLoaded, persistenceAvailable]);
+  }, [
+    data,
+    isDarkMode,
+    isLoaded,
+    openPageTabIds,
+    panOffset.x,
+    panOffset.y,
+    persistenceAvailable,
+    selectedFolderId,
+    selectedPageId,
+    zoomLevel,
+  ]);
 
   useEffect(() => {
     writeSelectedLlamaHarnessAgentId(selectedLlamaHarnessAgentId);
@@ -1605,6 +1750,38 @@ function App() {
     return {
       panOffset: { ...sourceViewport.panOffset },
       zoomLevel: sourceViewport.zoomLevel,
+    };
+  }
+
+  function getSessionState(): AppSessionState {
+    rememberPageViewport(selectedPageIdRef.current);
+
+    const validPageIds = new Set(
+      dataRef.current.pages
+        .filter((page) => !isTemplatePage(page))
+        .map((page) => page.id),
+    );
+    const pageViewports: NonNullable<AppSessionState["pageViewports"]> = {};
+
+    for (const [pageId, viewport] of pageViewportsRef.current.entries()) {
+      if (!validPageIds.has(pageId)) {
+        continue;
+      }
+
+      pageViewports[pageId] = {
+        panOffset: { ...viewport.panOffset },
+        zoomLevel: viewport.zoomLevel,
+      };
+    }
+
+    return {
+      selectedFolderId: selectedFolderIdRef.current || undefined,
+      selectedPageId: selectedPageIdRef.current || undefined,
+      openPageTabIds: getValidUniquePageIds(
+        openPageTabIdsRef.current,
+        validPageIds,
+      ),
+      pageViewports,
     };
   }
 
@@ -2042,6 +2219,30 @@ function App() {
     );
   }, []);
 
+  const selectAllVisibleBlocks = useCallback(() => {
+    const currentPageId = selectedPageIdRef.current;
+    const visibleBlockIds = dataRef.current.blocks
+      .filter((block) => block.pageId === currentPageId)
+      .map((block) => block.id);
+
+    if (visibleBlockIds.length === 0) {
+      return false;
+    }
+
+    selectedBlockIdsRef.current = visibleBlockIds;
+    setSelectedBlockIds((currentBlockIds) =>
+      areIdSelectionsEqual(currentBlockIds, visibleBlockIds)
+        ? currentBlockIds
+        : visibleBlockIds,
+    );
+    editingBlockIdRef.current = null;
+    setEditingBlockId(null);
+    setInsertionPoint(null);
+    setIsCanvasKeyboardActive(true);
+    setActiveMode("selected");
+    return true;
+  }, []);
+
   useEffect(() => {
     function handleKeyboard(event: KeyboardEvent) {
       const currentEditingBlockId = editingBlockIdRef.current;
@@ -2131,15 +2332,7 @@ function App() {
           return;
         }
 
-        const visibleBlockIds = visibleBlocks.map((block) => block.id);
-
-        setSelectedBlockIds((currentBlockIds) =>
-          areIdSelectionsEqual(currentBlockIds, visibleBlockIds)
-            ? currentBlockIds
-            : visibleBlockIds,
-        );
-        setEditingBlockId(null);
-        setActiveMode("selected");
+        selectAllVisibleBlocks();
         return;
       }
 
@@ -2202,6 +2395,7 @@ function App() {
     isCanvasKeyboardActive,
     isStarterDismissed,
     isWorkspaceEmpty,
+    selectAllVisibleBlocks,
     selectedBlockIds,
     selectedPageId,
     visibleBlocks,
@@ -3886,6 +4080,7 @@ function App() {
   }, []);
 
   const editBlock = useCallback((blockId: string) => {
+    editingBlockIdRef.current = blockId;
     setSelectedBlockIds((currentBlockIds) =>
       currentBlockIds.length === 1 && currentBlockIds[0] === blockId
         ? currentBlockIds
@@ -3897,7 +4092,12 @@ function App() {
     setActiveMode("editing");
   }, []);
 
-  const endBlockEdit = useCallback(() => {
+  const endBlockEdit = useCallback((blockId: string) => {
+    if (editingBlockIdRef.current !== blockId) {
+      return;
+    }
+
+    editingBlockIdRef.current = null;
     setEditingBlockId(null);
     setActiveMode((currentMode) =>
       currentMode === "editing" ? "selected" : currentMode,
@@ -4551,6 +4751,7 @@ function App() {
                 onDelete={deleteBlock}
                 onEdit={editBlock}
                 onEditEnd={endBlockEdit}
+                onSelectAllBlocks={selectAllVisibleBlocks}
                 onCanvasPanEnd={endCanvasInteraction}
                 onCanvasPanMove={updateCanvasInteraction}
                 onCanvasPanStart={startCanvasPan}

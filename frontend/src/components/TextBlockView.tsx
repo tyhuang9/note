@@ -111,7 +111,7 @@ type TextBlockViewProps = {
   isSelected: boolean;
   searchQuery: string;
   shouldFocusEnd: boolean;
-  onEditEnd: () => void;
+  onEditEnd: (blockId: string) => void;
   onDelete: (blockId: string) => void;
   onEdit: (blockId: string) => void;
   onActiveEditorChange: (editor: Editor | null) => void;
@@ -125,6 +125,7 @@ type TextBlockViewProps = {
     element: HTMLDivElement | null,
   ) => void;
   onSelect: (blockId: string, additive?: boolean) => void;
+  onSelectAllBlocks: () => void;
   onUpdate: (blockId: string, updates: BlockUpdates) => void;
   onVisualDragCancel: () => void;
   onVisualDragEnd: (clientX: number, clientY: number) => void;
@@ -162,6 +163,7 @@ export const TextBlockView = memo(function TextBlockView({
   onInteractionModeChange,
   onBlockElementChange,
   onSelect,
+  onSelectAllBlocks,
   onUpdate,
   onVisualDragCancel,
   onVisualDragEnd,
@@ -580,7 +582,7 @@ export const TextBlockView = memo(function TextBlockView({
     if (!nextContent) {
       if (options.deleteEmpty) {
         onDelete(block.id);
-        onEditEnd();
+        onEditEnd(block.id);
       }
 
       return;
@@ -601,7 +603,7 @@ export const TextBlockView = memo(function TextBlockView({
     }
 
     if (options.endEdit) {
-      onEditEnd();
+      onEditEnd(block.id);
     }
   }
 
@@ -643,6 +645,18 @@ export const TextBlockView = memo(function TextBlockView({
     window.getSelection()?.removeAllRanges();
     onActiveEditorChange(null);
     onSelect(block.id, additive);
+  }
+
+  function handleSelectAllBlocksFromEditor(editor: Editor) {
+    setIsContentSelected(false);
+    onActiveEditorChange(null);
+    window.getSelection()?.removeAllRanges();
+    commitEditorDraft(editor, {
+      deleteEmpty: true,
+      endEdit: true,
+      includeSizeUpdates: true,
+    });
+    onSelectAllBlocks();
   }
 
   function startDrag(event: ReactPointerEvent<HTMLDivElement>) {
@@ -986,6 +1000,7 @@ export const TextBlockView = memo(function TextBlockView({
           onSelectContent={() => {
             setIsContentSelected(true);
           }}
+          onSelectAllBlocks={handleSelectAllBlocksFromEditor}
           onSelectionReset={() => {
             setIsContentSelected(false);
           }}
@@ -1125,6 +1140,7 @@ type TiptapBlockEditorProps = {
   onEditorReady: (editor: Editor | null) => void;
   onFocusEndHandled: () => void;
   onSelectContent: () => void;
+  onSelectAllBlocks: (editor: Editor) => void;
   onSelectionReset: () => void;
   shouldFocusEnd: boolean;
 };
@@ -1143,14 +1159,17 @@ function TiptapBlockEditor({
   onEditorReady,
   onFocusEndHandled,
   onSelectContent,
+  onSelectAllBlocks,
   onSelectionReset,
   shouldFocusEnd,
 }: TiptapBlockEditorProps) {
   const ctrlAStageRef = useRef<CtrlASelectionStage>("none");
   const onSelectContentRef = useRef(onSelectContent);
+  const onSelectAllBlocksRef = useRef(onSelectAllBlocks);
   const onSelectionResetRef = useRef(onSelectionReset);
 
   onSelectContentRef.current = onSelectContent;
+  onSelectAllBlocksRef.current = onSelectAllBlocks;
   onSelectionResetRef.current = onSelectionReset;
 
   const editor = useEditor(
@@ -1176,6 +1195,15 @@ function TiptapBlockEditor({
           event.preventDefault();
           event.stopPropagation();
 
+          if (isWholeEditorDocumentSelected(view.state)) {
+            if (editor) {
+              ctrlAStageRef.current = "none";
+              onSelectAllBlocksRef.current(editor);
+            }
+
+            return true;
+          }
+
           const selectAllContent = () => {
             view.dispatch(
               view.state.tr
@@ -1197,7 +1225,7 @@ function TiptapBlockEditor({
 
           const selectionScope = getSelectionLineScope(view.state);
 
-          if (selectionScope === "all" || selectionScope === "multi-line") {
+          if (selectionScope === "multi-line") {
             selectAllContent();
             return true;
           }

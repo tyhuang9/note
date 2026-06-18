@@ -23,14 +23,21 @@ export function createId(prefix: string) {
 }
 
 export function isTextEntryTarget(target: EventTarget | null) {
-  if (!(target instanceof HTMLElement)) {
+  const element = target instanceof HTMLElement
+    ? target
+    : target instanceof Node
+      ? target.parentElement
+      : null;
+
+  if (!element) {
     return false;
   }
 
   return (
-    target instanceof HTMLInputElement ||
-    target instanceof HTMLTextAreaElement ||
-    target.isContentEditable
+    element instanceof HTMLInputElement ||
+    element instanceof HTMLTextAreaElement ||
+    element.isContentEditable ||
+    element.closest('[contenteditable="true"]') !== null
   );
 }
 

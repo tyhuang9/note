@@ -48,6 +48,7 @@ import type {
   AIModel,
   AIProvider,
   AssistantActionKind,
+  AssistantActionRequest,
   AssistantMessage,
   ProviderType,
   SttProviderConfig,
@@ -66,8 +67,7 @@ import {
   DEFAULT_LOCAL_STT_CONFIG,
 } from "./services/localModelProviders";
 import { listAIProviderModels, testAIProvider } from "./services/aiProviderAdapters";
-import { buildAssistantActionRequest } from "./services/assistantActions";
-import { sendAssistantChat } from "./services/assistantService";
+import { buildAssistantActionRequest, validateAssistantActionRequest } from "./services/assistantActions";
 import {
   createAIProvider,
   deleteProviderCredential,
@@ -75,6 +75,16 @@ import {
   saveAIProviderSettings,
 } from "./services/aiProviderStorage";
 import { buildNotesContext } from "./services/notesContext";
+import {
+  getLlamaHarnessSetupStatus,
+  listLlamaHarnessAgents,
+  patchLlamaHarnessAgent,
+  sendLlamaHarnessAgentChat,
+  type LlamaHarnessAgent,
+  type LlamaHarnessAgentPatch,
+  type LlamaHarnessSetupStatus,
+  type LlamaHarnessToolCall,
+} from "./services/llamaHarnessAssistant";
 import type { AppData, TextBlock } from "./types";
 
 type SidebarProps = {
@@ -137,6 +147,11 @@ type PageHeaderProps = {
   onFocusCanvasSearch: () => void;
   onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
   onRenamePage: (pageId: string, title: string) => void;
+  onReorderPageTab: (
+    sourcePageId: string,
+    targetPageId: string,
+    placement: PageTabDropPlacement,
+  ) => void;
   onSelectPageTab: (pageId: string) => void;
   onSetEditingHeaderTitle: (isEditing: boolean) => void;
   onToggleAssistant: () => void;
@@ -152,6 +167,8 @@ type PageHeaderProps = {
 type OpenPageTab = AppData["pages"][number] & {
   isBlankPlaceholder: boolean;
 };
+
+type PageTabDropPlacement = "before" | "after";
 
 type ToolbarActionId =
   | "bold"
@@ -224,8 +241,10 @@ const MAX_BLOCK_HISTORY_ENTRIES = 100;
 const PAGE_SEARCH_PREVIEW_CONTEXT = 44;
 const PAGE_TEMPLATE_FOLDER_ID = "__note_page_templates__";
 const PAGE_DRAG_MIME_TYPE = "application/x-note-page";
+const PAGE_TAB_DRAG_MIME_TYPE = "application/x-note-page-tab";
 const ROOT_FOLDER_ID = "";
 const PASTED_BLOCK_OFFSET = 24;
+const LLAMA_HARNESS_SELECTED_AGENT_KEY = "note.llamaHarness.selectedAgentId.v1";
 const DEFAULT_PAN_OFFSET: PanOffset = { x: 0, y: 0 };
 type SidebarSortOrder =
   | "name-asc"
@@ -271,6 +290,74 @@ type HeroIconName =
   | "trash"
   | "underline"
   | "x-mark";
+
+function readSelectedLlamaHarnessAgentId() {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  return window.localStorage.getItem(LLAMA_HARNESS_SELECTED_AGENT_KEY) ?? "";
+}
+
+function writeSelectedLlamaHarnessAgentId(agentId: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  if (agentId) {
+    window.localStorage.setItem(LLAMA_HARNESS_SELECTED_AGENT_KEY, agentId);
+  } else {
+    window.localStorage.removeItem(LLAMA_HARNESS_SELECTED_AGENT_KEY);
+  }
+}
+
+function llamaHarnessSetupMessage(status: LlamaHarnessSetupStatus) {
+  switch (status.next_step) {
+    case "start_litellm":
+      return "Finish setup in llama-harness: start or enable LiteLLM.";
+    case "add_provider":
+      return "Finish setup in llama-harness: add or verify a provider.";
+    case "select_model":
+      return "Finish setup in llama-harness: choose an available model.";
+    case "create_agent":
+      return "Finish setup in llama-harness: create or activate an agent.";
+    case "ready":
+      return "llama-harness is ready.";
+  }
+}
+
+function assistantActionKindFromToolName(name: string | undefined): AssistantActionKind | null {
+  switch (name) {
+    case "insert_text_block":
+      return "insert-text-block";
+    case "append_to_selected_block":
+      return "append-to-selected-block";
+    case "replace_selected_block":
+      return "replace-selected-block";
+    default:
+      return null;
+  }
+}
+
+function parseToolCallArguments(args: string | Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!args) {
+    return {};
+  }
+
+  if (typeof args !== "string") {
+    return args;
+  }
+
+  try {
+    const parsed = JSON.parse(args) as unknown;
+
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
 
 const sidebarSortOptions: Array<{ label: string; value: SidebarSortOrder }> = [
   { label: "File name (A to Z)", value: "name-asc" },
@@ -864,6 +951,13 @@ function App() {
   const [assistantError, setAssistantError] = useState<string | null>(null);
   const [isAssistantSending, setIsAssistantSending] = useState(false);
   const [isAssistantRecording, setIsAssistantRecording] = useState(false);
+  const [llamaHarnessSetupStatus, setLlamaHarnessSetupStatus] =
+    useState<LlamaHarnessSetupStatus | null>(null);
+  const [llamaHarnessAgents, setLlamaHarnessAgents] = useState<LlamaHarnessAgent[]>([]);
+  const [selectedLlamaHarnessAgentId, setSelectedLlamaHarnessAgentId] = useState(
+    readSelectedLlamaHarnessAgentId,
+  );
+  const [isLlamaHarnessLoading, setIsLlamaHarnessLoading] = useState(false);
   const [sttProviderConfig] = useState<SttProviderConfig>(DEFAULT_LOCAL_STT_CONFIG);
   const [isAIProvidersOpen, setIsAIProvidersOpen] = useState(false);
   const [isAIProviderSettingsLoaded, setIsAIProviderSettingsLoaded] =
@@ -903,6 +997,7 @@ function App() {
   const assistantRecordingStreamRef = useRef<MediaStream | null>(null);
   const pageViewportsRef = useRef<Map<string, PageViewport>>(new Map());
   const isSnapToGridEnabledRef = useRef(isSnapToGridEnabled);
+  const editingBlockIdRef = useRef<string | null>(editingBlockId);
   const selectedBlockIdsRef = useRef<string[]>(selectedBlockIds);
   const selectedFolderIdRef = useRef(selectedFolderId);
   const selectedPageIdRef = useRef(selectedPageId);
@@ -914,6 +1009,7 @@ function App() {
 
   dataRef.current = data;
   isSnapToGridEnabledRef.current = isGridVisible && isSnapToGridEnabled;
+  editingBlockIdRef.current = editingBlockId;
   selectedBlockIdsRef.current = selectedBlockIds;
   selectedFolderIdRef.current = selectedFolderId;
   selectedPageIdRef.current = selectedPageId;
@@ -1180,25 +1276,22 @@ function App() {
       count,
     }));
   }, [canvasViewport, visibleBlocks]);
-  const defaultChatModel = useMemo(
-    () =>
-      aiModels.find(
-        (model) => model.id === defaultChatModelId && model.capabilities.chat,
-      ) ?? null,
-    [aiModels, defaultChatModelId],
+  const activeLlamaHarnessAgents = useMemo(
+    () => llamaHarnessAgents.filter((agent) => agent.status === "active"),
+    [llamaHarnessAgents],
   );
-  const defaultChatProvider = useMemo(
+  const selectedLlamaHarnessAgent = useMemo(
     () =>
-      defaultChatModel
-        ? aiProviders.find((provider) => provider.id === defaultChatModel.providerId) ??
-          null
-        : null,
-    [aiProviders, defaultChatModel],
+      activeLlamaHarnessAgents.find((agent) => agent.id === selectedLlamaHarnessAgentId) ??
+      activeLlamaHarnessAgents[0] ??
+      null,
+    [activeLlamaHarnessAgents, selectedLlamaHarnessAgentId],
   );
-  const defaultChatModelLabel =
-    defaultChatProvider && defaultChatModel
-      ? `${defaultChatProvider.name} / ${defaultChatModel.name}`
-      : "No default model selected";
+  const assistantAgentLabel = selectedLlamaHarnessAgent
+    ? `${selectedLlamaHarnessAgent.name} / ${selectedLlamaHarnessAgent.default_model || "model not set"}`
+    : llamaHarnessSetupStatus?.ready
+      ? "No active agent selected"
+      : "llama-harness setup incomplete";
 
   useEffect(() => {
     panOffsetRef.current = panOffset;
@@ -1452,6 +1545,16 @@ function App() {
 
     return () => window.clearTimeout(saveTimer);
   }, [data, isDarkMode, isLoaded, persistenceAvailable]);
+
+  useEffect(() => {
+    writeSelectedLlamaHarnessAgentId(selectedLlamaHarnessAgentId);
+  }, [selectedLlamaHarnessAgentId]);
+
+  useEffect(() => {
+    if (isAssistantOpen) {
+      void refreshLlamaHarnessAssistant();
+    }
+  }, [isAssistantOpen]);
 
   useEffect(() => {
     const shouldDisableSelection =
@@ -1941,10 +2044,12 @@ function App() {
 
   useEffect(() => {
     function handleKeyboard(event: KeyboardEvent) {
+      const currentEditingBlockId = editingBlockIdRef.current;
+
       if (
         (event.metaKey || event.ctrlKey) &&
         event.key.toLowerCase() === "n" &&
-        !editingBlockId &&
+        !currentEditingBlockId &&
         !isTextEntryTarget(event.target)
       ) {
         event.preventDefault();
@@ -1961,7 +2066,7 @@ function App() {
       if (
         (event.metaKey || event.ctrlKey) &&
         event.key.toLowerCase() === "o" &&
-        !editingBlockId &&
+        !currentEditingBlockId &&
         !isTextEntryTarget(event.target)
       ) {
         event.preventDefault();
@@ -1978,7 +2083,7 @@ function App() {
       if (
         (event.metaKey || event.ctrlKey) &&
         event.key.toLowerCase() === "z" &&
-        !editingBlockId &&
+        !currentEditingBlockId &&
         !isTextEntryTarget(event.target)
       ) {
         event.preventDefault();
@@ -1989,7 +2094,7 @@ function App() {
       if (
         (event.metaKey || event.ctrlKey) &&
         event.key.toLowerCase() === "y" &&
-        !editingBlockId &&
+        !currentEditingBlockId &&
         !isTextEntryTarget(event.target)
       ) {
         event.preventDefault();
@@ -2000,7 +2105,7 @@ function App() {
       if (
         (event.metaKey || event.ctrlKey) &&
         event.key.toLowerCase() === "c" &&
-        !editingBlockId &&
+        !currentEditingBlockId &&
         !isTextEntryTarget(event.target)
       ) {
         const didCopy = isCanvasKeyboardActive
@@ -2017,7 +2122,7 @@ function App() {
       if (
         (event.metaKey || event.ctrlKey) &&
         event.key.toLowerCase() === "a" &&
-        !editingBlockId &&
+        !currentEditingBlockId &&
         !isTextEntryTarget(event.target)
       ) {
         event.preventDefault();
@@ -2039,7 +2144,7 @@ function App() {
       }
 
       if (
-        !editingBlockId &&
+        !currentEditingBlockId &&
         insertionPoint &&
         selectedPageId &&
         event.key.length === 1 &&
@@ -2055,7 +2160,7 @@ function App() {
         return;
       }
 
-      if (editingBlockId || isTextEntryTarget(event.target)) {
+      if (currentEditingBlockId || isTextEntryTarget(event.target)) {
         return;
       }
 
@@ -2093,7 +2198,6 @@ function App() {
     return () => document.removeEventListener("keydown", handleKeyboard);
   }, [
     deleteBlocks,
-    editingBlockId,
     insertionPoint,
     isCanvasKeyboardActive,
     isStarterDismissed,
@@ -2444,6 +2548,60 @@ function App() {
     return error instanceof Error ? error.message : String(error);
   }
 
+  async function refreshLlamaHarnessAssistant() {
+    setIsLlamaHarnessLoading(true);
+    setAssistantError(null);
+
+    try {
+      const setupStatus = await getLlamaHarnessSetupStatus();
+      setLlamaHarnessSetupStatus(setupStatus);
+
+      if (!setupStatus.ready) {
+        setLlamaHarnessAgents([]);
+        setAssistantStatus(llamaHarnessSetupMessage(setupStatus));
+        return;
+      }
+
+      const agents = await listLlamaHarnessAgents();
+      const activeAgents = agents.filter((agent) => agent.status === "active");
+      setLlamaHarnessAgents(agents);
+      setSelectedLlamaHarnessAgentId((currentAgentId) => {
+        if (activeAgents.some((agent) => agent.id === currentAgentId)) {
+          return currentAgentId;
+        }
+
+        return activeAgents[0]?.id ?? "";
+      });
+      setAssistantStatus(activeAgents.length ? null : "Create or activate an agent in llama-harness.");
+    } catch (error) {
+      setLlamaHarnessSetupStatus(null);
+      setLlamaHarnessAgents([]);
+      setAssistantError(`llama-harness is not reachable at http://127.0.0.1:8787. ${getAssistantErrorMessage(error)}`);
+      setAssistantStatus(null);
+    } finally {
+      setIsLlamaHarnessLoading(false);
+    }
+  }
+
+  async function updateSelectedLlamaHarnessAgent(patch: LlamaHarnessAgentPatch) {
+    if (!selectedLlamaHarnessAgent || Object.keys(patch).length === 0) {
+      return;
+    }
+
+    try {
+      const updated = await patchLlamaHarnessAgent(selectedLlamaHarnessAgent.id, patch);
+      setLlamaHarnessAgents((agents) =>
+        agents.map((agent) => (agent.id === updated.id ? updated : agent)),
+      );
+      setAssistantStatus("Agent saved in llama-harness");
+      setAssistantError(null);
+    } catch (error) {
+      setAssistantError(getAssistantErrorMessage(error));
+      setAssistantStatus(null);
+      await refreshLlamaHarnessAssistant().catch(() => undefined);
+    }
+  }
+
   function getLatestAssistantOutput() {
     for (let index = assistantMessages.length - 1; index >= 0; index -= 1) {
       const message = assistantMessages[index];
@@ -2614,12 +2772,16 @@ function App() {
   }
 
   async function requestAssistantChat(messages: AssistantMessage[]) {
-    if (!defaultChatProvider || !defaultChatModel) {
-      throw new Error("Choose a default AI chat model in AI Providers.");
+    if (!llamaHarnessSetupStatus?.ready) {
+      throw new Error(
+        llamaHarnessSetupStatus
+          ? llamaHarnessSetupMessage(llamaHarnessSetupStatus)
+          : "llama-harness setup status has not loaded.",
+      );
     }
 
-    if (!defaultChatProvider.enabled) {
-      throw new Error("The selected AI provider is disabled.");
+    if (!selectedLlamaHarnessAgent) {
+      throw new Error("Create or activate an agent in llama-harness.");
     }
 
     const notesContext = buildNotesContext({
@@ -2628,11 +2790,10 @@ function App() {
       selectedPageId: selectedPageIdRef.current,
     });
 
-    return sendAssistantChat({
+    return sendLlamaHarnessAgentChat({
+      agentId: selectedLlamaHarnessAgent.id,
       messages,
       notesContext,
-      model: defaultChatModel,
-      provider: defaultChatProvider,
     });
   }
 
@@ -2667,7 +2828,10 @@ function App() {
       };
 
       setAssistantMessages([...nextMessages, assistantMessage]);
-      setAssistantStatus(`Received response from ${defaultChatModelLabel}`);
+      const executedToolCallCount = executeAssistantToolCalls(response.toolCalls);
+      if (executedToolCallCount === 0) {
+        setAssistantStatus(`Received response from ${assistantAgentLabel}`);
+      }
     } catch (error) {
       setAssistantError(getAssistantErrorMessage(error));
       setAssistantStatus(null);
@@ -2769,20 +2933,12 @@ function App() {
     }
   }
 
-  function runAssistantAction(kind: AssistantActionKind) {
-    const action = buildAssistantActionRequest(kind, getLatestAssistantOutput());
-
-    if (!action.ok) {
-      setAssistantError(action.message);
-      setAssistantStatus(null);
-      return;
-    }
-
-    if (action.request.kind === "insert-text-block") {
+  function executeAssistantActionRequest(action: AssistantActionRequest) {
+    if (action.kind === "insert-text-block") {
       if (!selectedPageIdRef.current) {
         setAssistantError("Select a page before inserting assistant output.");
         setAssistantStatus(null);
-        return;
+        return false;
       }
 
       const currentCanvasViewport = canvasViewportRef.current;
@@ -2794,10 +2950,10 @@ function App() {
             }
           : { x: PASTED_BLOCK_OFFSET, y: PASTED_BLOCK_OFFSET });
 
-      createTextBlock(origin.x, origin.y, action.request.content);
+      createTextBlock(origin.x, origin.y, action.content);
       setAssistantError(null);
       setAssistantStatus("Inserted assistant output");
-      return;
+      return true;
     }
 
     const selectedBlockId = selectedBlockIdsRef.current.length === 1
@@ -2807,7 +2963,7 @@ function App() {
     if (!selectedBlockId) {
       setAssistantError("Select one text block before using this assistant action.");
       setAssistantStatus(null);
-      return;
+      return false;
     }
 
     const selectedBlock = dataRef.current.blocks.find(
@@ -2817,15 +2973,15 @@ function App() {
     if (!selectedBlock) {
       setAssistantError("The selected text block no longer exists.");
       setAssistantStatus(null);
-      return;
+      return false;
     }
 
     const nextContent =
-      action.request.kind === "append-to-selected-block"
-        ? [selectedBlock.content.trimEnd(), action.request.content]
+      action.kind === "append-to-selected-block"
+        ? [selectedBlock.content.trimEnd(), action.content]
             .filter(Boolean)
             .join("\n\n")
-        : action.request.content;
+        : action.content;
 
     setBlocksWithHistory((currentBlocks) =>
       currentBlocks.map((block) =>
@@ -2841,10 +2997,52 @@ function App() {
     setActiveMode("selected");
     setAssistantError(null);
     setAssistantStatus(
-      action.request.kind === "append-to-selected-block"
+      action.kind === "append-to-selected-block"
         ? "Appended assistant output"
         : "Replaced selected text block",
     );
+    return true;
+  }
+
+  function executeAssistantToolCalls(toolCalls: LlamaHarnessToolCall[]) {
+    let executedCount = 0;
+
+    for (const toolCall of toolCalls) {
+      const actionKind = assistantActionKindFromToolName(toolCall.function?.name);
+      if (!actionKind) {
+        continue;
+      }
+
+      const args = parseToolCallArguments(toolCall.function?.arguments);
+      const action = validateAssistantActionRequest({
+        ...args,
+        kind: actionKind,
+      });
+
+      if (!action.ok) {
+        setAssistantError(action.message);
+        setAssistantStatus(null);
+        continue;
+      }
+
+      if (executeAssistantActionRequest(action.request)) {
+        executedCount += 1;
+      }
+    }
+
+    return executedCount;
+  }
+
+  function runAssistantAction(kind: AssistantActionKind) {
+    const action = buildAssistantActionRequest(kind, getLatestAssistantOutput());
+
+    if (!action.ok) {
+      setAssistantError(action.message);
+      setAssistantStatus(null);
+      return;
+    }
+
+    executeAssistantActionRequest(action.request);
   }
 
   function closePageTab(pageId: string) {
@@ -2885,6 +3083,44 @@ function App() {
     setInsertionPoint(null);
     setIsCanvasKeyboardActive(false);
     setActiveMode("canvas");
+  }
+
+  function reorderPageTab(
+    sourcePageId: string,
+    targetPageId: string,
+    placement: PageTabDropPlacement,
+  ) {
+    if (sourcePageId === targetPageId) {
+      return;
+    }
+
+    setOpenPageTabIds((currentPageIds) => {
+      if (
+        !currentPageIds.includes(sourcePageId) ||
+        !currentPageIds.includes(targetPageId)
+      ) {
+        return currentPageIds;
+      }
+
+      const nextPageIds = currentPageIds.filter(
+        (pageId) => pageId !== sourcePageId,
+      );
+      const targetIndex = nextPageIds.indexOf(targetPageId);
+
+      if (targetIndex === -1) {
+        return currentPageIds;
+      }
+
+      nextPageIds.splice(
+        placement === "after" ? targetIndex + 1 : targetIndex,
+        0,
+        sourcePageId,
+      );
+
+      return areIdSelectionsEqual(currentPageIds, nextPageIds)
+        ? currentPageIds
+        : nextPageIds;
+    });
   }
 
   function createStarterPage() {
@@ -3220,6 +3456,7 @@ function App() {
         isWidthManuallyResized: false,
       },
     ]);
+    editingBlockIdRef.current = blockId;
     setSelectedBlockIds([blockId]);
     setEditingBlockId(blockId);
     setFocusEndBlockId(blockId);
@@ -4161,6 +4398,7 @@ function App() {
           onFocusCanvasSearch={focusCanvasSearch}
           onPointerDown={handleChromePointerDown}
           onRenamePage={renamePage}
+          onReorderPageTab={reorderPageTab}
           onSelectPageTab={selectPage}
           onSetEditingHeaderTitle={setIsEditingHeaderTitle}
           onToggleAssistant={() =>
@@ -4387,17 +4625,26 @@ function App() {
         <AssistantPanel
           assistantError={assistantError}
           assistantStatus={assistantStatus}
-          defaultChatModelLabel={defaultChatModelLabel}
+          defaultChatModelLabel={assistantAgentLabel}
+          harnessAgents={activeLlamaHarnessAgents}
+          harnessAgentModel={selectedLlamaHarnessAgent?.default_model ?? ""}
+          harnessAgentName={selectedLlamaHarnessAgent?.name ?? ""}
+          harnessAgentSystemPrompt={selectedLlamaHarnessAgent?.system_prompt ?? ""}
+          isHarnessLoading={isLlamaHarnessLoading}
+          isHarnessReady={Boolean(llamaHarnessSetupStatus?.ready)}
           inputValue={assistantInput}
           isRecording={isAssistantRecording}
           isSending={isAssistantSending}
           messages={assistantMessages}
           onClose={() => setIsAssistantOpen(false)}
           onInputChange={setAssistantInput}
-          onOpenProviderSettings={() => setIsAIProvidersOpen(true)}
+          onRefreshHarness={refreshLlamaHarnessAssistant}
           onRunAction={runAssistantAction}
+          onSaveHarnessAgent={updateSelectedLlamaHarnessAgent}
           onSend={sendAssistantMessage}
+          onSelectHarnessAgent={setSelectedLlamaHarnessAgentId}
           onToggleRecording={toggleAssistantRecording}
+          selectedHarnessAgentId={selectedLlamaHarnessAgent?.id ?? ""}
         />
       ) : null}
     </main>
@@ -5351,6 +5598,7 @@ const PageHeader = memo(function PageHeader({
   onFocusCanvasSearch,
   onPointerDown,
   onRenamePage,
+  onReorderPageTab,
   onSelectPageTab,
   onSetEditingHeaderTitle,
   onToggleAssistant,
@@ -5371,6 +5619,23 @@ const PageHeader = memo(function PageHeader({
   const themeToggleTitle = isDarkMode
     ? "Switch to light mode"
     : "Switch to dark mode";
+  const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
+  const [tabDropTarget, setTabDropTarget] = useState<{
+    pageId: string;
+    placement: PageTabDropPlacement;
+  } | null>(null);
+
+  function getTabDropPlacement(event: DragEvent<HTMLElement>) {
+    const tabBounds = event.currentTarget.getBoundingClientRect();
+
+    return event.clientX > tabBounds.left + tabBounds.width / 2
+      ? "after"
+      : "before";
+  }
+
+  function hasPageTabDragData(event: DragEvent<HTMLElement>) {
+    return Array.from(event.dataTransfer.types).includes(PAGE_TAB_DRAG_MIME_TYPE);
+  }
 
   return (
     <header
@@ -5381,14 +5646,102 @@ const PageHeader = memo(function PageHeader({
         {openPages.map((page) => {
           const isActive = page.id === selectedPageId;
           const isEditingThisTab = isActive && isEditingHeaderTitle;
+          const isDraggedTab = draggedTabId === page.id;
+          const tabDropPlacement =
+            tabDropTarget?.pageId === page.id ? tabDropTarget.placement : null;
 
           return (
             <div
               aria-selected={isActive}
               className={`page-tab ${isActive ? "is-active" : ""} ${
                 isEditingThisTab ? "is-editing" : ""
+              } ${isDraggedTab ? "is-tab-dragging" : ""} ${
+                tabDropPlacement === "before" ? "is-tab-drop-before" : ""
+              } ${
+                tabDropPlacement === "after" ? "is-tab-drop-after" : ""
               } has-close`}
+              draggable={!isEditingThisTab}
               key={page.id}
+              onAuxClick={(event) => {
+                if (event.button !== 1) {
+                  return;
+                }
+
+                event.preventDefault();
+                event.stopPropagation();
+                onClosePageTab(page.id);
+              }}
+              onDragEnd={() => {
+                setDraggedTabId(null);
+                setTabDropTarget(null);
+              }}
+              onDragLeave={(event) => {
+                if (
+                  event.currentTarget.contains(event.relatedTarget as Node | null)
+                ) {
+                  return;
+                }
+
+                setTabDropTarget((currentTarget) =>
+                  currentTarget?.pageId === page.id ? null : currentTarget,
+                );
+              }}
+              onDragOver={(event) => {
+                if (!hasPageTabDragData(event)) {
+                  return;
+                }
+
+                event.preventDefault();
+                event.stopPropagation();
+                event.dataTransfer.dropEffect = "move";
+
+                const placement = getTabDropPlacement(event);
+
+                setTabDropTarget({
+                  pageId: page.id,
+                  placement,
+                });
+              }}
+              onDragStart={(event) => {
+                if (isEditingThisTab) {
+                  event.preventDefault();
+                  return;
+                }
+
+                event.stopPropagation();
+                setDraggedTabId(page.id);
+                event.dataTransfer.effectAllowed = "move";
+                event.dataTransfer.setData(PAGE_TAB_DRAG_MIME_TYPE, page.id);
+                event.dataTransfer.setData("text/plain", page.title);
+              }}
+              onDrop={(event) => {
+                if (!hasPageTabDragData(event)) {
+                  return;
+                }
+
+                event.preventDefault();
+                event.stopPropagation();
+
+                const sourcePageId =
+                  event.dataTransfer.getData(PAGE_TAB_DRAG_MIME_TYPE) ||
+                  draggedTabId;
+
+                if (sourcePageId && sourcePageId !== page.id) {
+                  onReorderPageTab(
+                    sourcePageId,
+                    page.id,
+                    getTabDropPlacement(event),
+                  );
+                }
+
+                setDraggedTabId(null);
+                setTabDropTarget(null);
+              }}
+              onMouseDown={(event) => {
+                if (event.button === 1) {
+                  event.preventDefault();
+                }
+              }}
               role="tab"
             >
               {isEditingThisTab ? (

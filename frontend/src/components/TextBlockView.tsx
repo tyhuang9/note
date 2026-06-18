@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { Mark, mergeAttributes, type Editor, type JSONContent } from "@tiptap/core";
+import { AllSelection, TextSelection, type EditorState } from "@tiptap/pm/state";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import {
@@ -177,7 +178,6 @@ export const TextBlockView = memo(function TextBlockView({
   const resizeState = useRef<ResizeState | null>(null);
   const isResizingRef = useRef(false);
   const activePointerId = useRef<number | null>(null);
-  const ctrlAStage = useRef(0);
   const hasManualWidth = useRef(Boolean(block.isWidthManuallyResized));
   const pendingCaretOffset = useRef<number | null>(null);
   const pendingCaretPoint = useRef<CaretPoint | null>(null);
@@ -185,12 +185,19 @@ export const TextBlockView = memo(function TextBlockView({
   const draftRichContentRef = useRef<JSONContent>(
     getTipTapContent(block),
   );
+  const draftMeasureTextRef = useRef(
+    getTipTapMeasureText(getTipTapContent(block)),
+  );
   const committedContentRef = useRef(block.content);
   const committedRichContentRef = useRef<JSONContent>(
     getTipTapContent(block),
   );
   const commitTimerRef = useRef<number | null>(null);
   const autosizeRafId = useRef<number | null>(null);
+  const lastAppliedSizeRef = useRef<{
+    width: number;
+    height: number;
+  } | null>(null);
   const latestAutosizeText = useRef(block.content);
   const [isContentSelected, setIsContentSelected] = useState(false);
 
@@ -200,6 +207,7 @@ export const TextBlockView = memo(function TextBlockView({
       onBlockElementChange(block.id, element);
 
       if (!element) {
+        lastAppliedSizeRef.current = null;
         return;
       }
 
@@ -215,6 +223,9 @@ export const TextBlockView = memo(function TextBlockView({
     if (!isEditing) {
       draftContentRef.current = block.content;
       draftRichContentRef.current = getTipTapContent(block);
+      draftMeasureTextRef.current = getTipTapMeasureText(
+        draftRichContentRef.current,
+      );
       latestAutosizeText.current = "";
     }
   }, [block.content, block.id, block.richContent, isEditing]);
@@ -236,16 +247,7 @@ export const TextBlockView = memo(function TextBlockView({
   }, []);
 
   useEffect(() => {
-    const blockElement = blockRef.current;
-
-    if (!blockElement) {
-      return;
-    }
-
-    const size = getAutoSize(undefined, false, draftContentRef.current);
-
-    blockElement.style.width = `${size.width}px`;
-    blockElement.style.height = `${size.height}px`;
+    updateBlockElementSize();
   }, [
     block.content,
     block.height,
@@ -255,7 +257,7 @@ export const TextBlockView = memo(function TextBlockView({
   ]);
 
   function getSizeUpdates() {
-    const size = getAutoSize(undefined, false, draftContentRef.current);
+    const size = getAutoSize(undefined, false, draftMeasureTextRef.current);
     const updates: BlockUpdates = {};
 
     if (size.width !== block.width) {
@@ -290,7 +292,7 @@ export const TextBlockView = memo(function TextBlockView({
   function getAutoSize(
     widthOverride?: number,
     forceFixedWidth = false,
-    content = draftContentRef.current,
+    measureText = draftMeasureTextRef.current,
   ) {
     if (block.imageData) {
       return {
@@ -303,7 +305,7 @@ export const TextBlockView = memo(function TextBlockView({
     const heightMeasureElement = heightMeasureRef.current;
     const nextWidth = widthOverride ?? block.width;
 
-    setMeasureText(content);
+    setMeasureText(measureText);
 
     if (!widthMeasureElement || !heightMeasureElement) {
       return {
@@ -323,14 +325,7 @@ export const TextBlockView = memo(function TextBlockView({
 
     heightMeasureElement.style.width = `${measuredWidth}px`;
 
-    const renderedEditorHeight =
-      isEditing && editorRef.current && !editorRef.current.isDestroyed
-        ? editorRef.current.view.dom.scrollHeight
-        : 0;
-    const measuredHeight = Math.max(
-      heightMeasureElement.scrollHeight,
-      renderedEditorHeight,
-    );
+    const measuredHeight = heightMeasureElement.scrollHeight;
 
     return {
       width: measuredWidth,
@@ -345,12 +340,44 @@ export const TextBlockView = memo(function TextBlockView({
     return getAutoSize(
       widthOverride,
       forceFixedWidth,
-      draftContentRef.current,
+      draftMeasureTextRef.current,
     ).height;
   }
 
   function getMeasureText() {
-    return draftContentRef.current.length > 0 ? draftContentRef.current : " ";
+    return draftMeasureTextRef.current.length > 0
+      ? draftMeasureTextRef.current
+      : " ";
+  }
+
+  function updateBlockElementSize() {
+    const blockElement = blockRef.current;
+
+    if (!blockElement) {
+      return;
+    }
+
+    const size = getAutoSize(undefined, false, draftMeasureTextRef.current);
+
+    if (
+      lastAppliedSizeRef.current?.width === size.width &&
+      lastAppliedSizeRef.current.height === size.height
+    ) {
+      return;
+    }
+
+    blockElement.style.width = `${size.width}px`;
+    blockElement.style.height = `${size.height}px`;
+    lastAppliedSizeRef.current = size;
+  }
+
+  function applyAutosize() {
+    if (autosizeRafId.current !== null) {
+      window.cancelAnimationFrame(autosizeRafId.current);
+      autosizeRafId.current = null;
+    }
+
+    updateBlockElementSize();
   }
 
   function scheduleAutosize() {
@@ -359,16 +386,8 @@ export const TextBlockView = memo(function TextBlockView({
     }
 
     autosizeRafId.current = window.requestAnimationFrame(() => {
-      const blockElement = blockRef.current;
-
-      if (blockElement) {
-        const size = getAutoSize(undefined, false, draftContentRef.current);
-
-        blockElement.style.width = `${size.width}px`;
-        blockElement.style.height = `${size.height}px`;
-      }
-
       autosizeRafId.current = null;
+      updateBlockElementSize();
     });
   }
 
@@ -389,7 +408,7 @@ export const TextBlockView = memo(function TextBlockView({
         return;
       }
 
-      const size = getAutoSize(undefined, false, nextContent);
+      const size = getAutoSize(undefined, false, draftMeasureTextRef.current);
 
       committedContentRef.current = nextContent;
       committedRichContentRef.current = nextRichContent;
@@ -519,15 +538,16 @@ export const TextBlockView = memo(function TextBlockView({
   }
 
   function handleEditorChange(editor: Editor) {
-    ctrlAStage.current = 0;
-
     if (isContentSelected) {
       setIsContentSelected(false);
     }
 
     draftContentRef.current = editor.getText({ blockSeparator: "\n" });
     draftRichContentRef.current = editor.getJSON();
-    scheduleAutosize();
+    draftMeasureTextRef.current = getTipTapMeasureText(
+      draftRichContentRef.current,
+    );
+    applyAutosize();
     scheduleContentCommit();
   }
 
@@ -546,6 +566,9 @@ export const TextBlockView = memo(function TextBlockView({
 
     draftContentRef.current = editor.getText({ blockSeparator: "\n" });
     draftRichContentRef.current = editor.getJSON();
+    draftMeasureTextRef.current = getTipTapMeasureText(
+      draftRichContentRef.current,
+    );
 
     const nextDraftContent = draftContentRef.current;
     const nextRichContent = draftRichContentRef.current;
@@ -604,7 +627,6 @@ export const TextBlockView = memo(function TextBlockView({
       return;
     }
 
-    ctrlAStage.current = 0;
     setIsContentSelected(false);
     onActiveEditorChange(null);
     commitEditorDraft(editor, {
@@ -898,7 +920,6 @@ export const TextBlockView = memo(function TextBlockView({
         event.stopPropagation();
         blurActiveTextEntry();
         setIsContentSelected(false);
-        ctrlAStage.current = 0;
         onSelect(block.id, event.ctrlKey || event.metaKey);
       }}
       ref={setBlockElement}
@@ -957,19 +978,10 @@ export const TextBlockView = memo(function TextBlockView({
             }
           }}
           onFocusEndHandled={onFocusEndHandled}
-          onExitToSelection={() => {
-            setIsContentSelected(false);
-            ctrlAStage.current = 0;
-            onSelect(block.id);
-            onInteractionModeChange("selected");
-            editorRef.current?.commands.blur();
-          }}
           onSelectContent={() => {
             setIsContentSelected(true);
-            ctrlAStage.current = 1;
           }}
           onSelectionReset={() => {
-            ctrlAStage.current = 0;
             setIsContentSelected(false);
           }}
           shouldFocusEnd={shouldFocusEnd}
@@ -1107,11 +1119,12 @@ type TiptapBlockEditorProps = {
   onChange: (editor: Editor) => void;
   onEditorReady: (editor: Editor | null) => void;
   onFocusEndHandled: () => void;
-  onExitToSelection: () => void;
   onSelectContent: () => void;
   onSelectionReset: () => void;
   shouldFocusEnd: boolean;
 };
+
+type CtrlASelectionStage = "none" | "line" | "manual-line-confirmed" | "all";
 
 function TiptapBlockEditor({
   block,
@@ -1124,11 +1137,17 @@ function TiptapBlockEditor({
   onChange,
   onEditorReady,
   onFocusEndHandled,
-  onExitToSelection,
   onSelectContent,
   onSelectionReset,
   shouldFocusEnd,
 }: TiptapBlockEditorProps) {
+  const ctrlAStageRef = useRef<CtrlASelectionStage>("none");
+  const onSelectContentRef = useRef(onSelectContent);
+  const onSelectionResetRef = useRef(onSelectionReset);
+
+  onSelectContentRef.current = onSelectContent;
+  onSelectionResetRef.current = onSelectionReset;
+
   const editor = useEditor(
     {
       extensions: tiptapExtensions,
@@ -1139,9 +1158,80 @@ function TiptapBlockEditor({
           "aria-label": "Text block",
           class: "text-block-editor-content",
         },
+        handleKeyDown: (view, event) => {
+          const isCtrlA =
+            (event.metaKey || event.ctrlKey) &&
+            event.key.toLowerCase() === "a";
+
+          if (!isCtrlA) {
+            ctrlAStageRef.current = "none";
+            return false;
+          }
+
+          event.preventDefault();
+          event.stopPropagation();
+
+          const selectAllContent = () => {
+            view.dispatch(
+              view.state.tr
+                .setSelection(new AllSelection(view.state.doc))
+                .scrollIntoView(),
+            );
+            ctrlAStageRef.current = "all";
+            onSelectContentRef.current();
+          };
+
+          if (
+            ctrlAStageRef.current === "line" ||
+            ctrlAStageRef.current === "manual-line-confirmed" ||
+            ctrlAStageRef.current === "all"
+          ) {
+            selectAllContent();
+            return true;
+          }
+
+          const selectionScope = getSelectionLineScope(view.state);
+
+          if (selectionScope === "all" || selectionScope === "multi-line") {
+            selectAllContent();
+            return true;
+          }
+
+          const currentLineRange = getCurrentLineSelectionRange(view.state);
+
+          view.dispatch(
+            view.state.tr
+              .setSelection(
+                TextSelection.create(
+                  view.state.doc,
+                  currentLineRange.from,
+                  currentLineRange.to,
+                ),
+              )
+              .scrollIntoView(),
+          );
+          ctrlAStageRef.current =
+            selectionScope === "single-line" ? "manual-line-confirmed" : "line";
+          onSelectionResetRef.current();
+          return true;
+        },
       },
-      onBlur: ({ editor, event }) => onBlur(editor, event),
-      onUpdate: ({ editor }) => onChange(editor),
+      onBlur: ({ editor, event }) => {
+        ctrlAStageRef.current = "none";
+        onBlur(editor, event);
+      },
+      onSelectionUpdate: ({ editor }) => {
+        if (isWholeEditorDocumentSelected(editor.state)) {
+          onSelectContentRef.current();
+          return;
+        }
+
+        onSelectionResetRef.current();
+      },
+      onUpdate: ({ editor }) => {
+        ctrlAStageRef.current = "none";
+        onChange(editor);
+      },
     },
     [block.id],
   );
@@ -1151,6 +1241,7 @@ function TiptapBlockEditor({
       return;
     }
 
+    ctrlAStageRef.current = "none";
     onEditorReady(editor);
     window.requestAnimationFrame(() => {
       if (initialCaretPoint !== null) {
@@ -1205,25 +1296,24 @@ function TiptapBlockEditor({
     return null;
   }
 
+  function resetCtrlAStage() {
+    ctrlAStageRef.current = "none";
+  }
+
   return (
     <>
       <EditorContent
         className="text-block-editor"
         editor={editor}
         onKeyDown={(event) => {
-          if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
-            event.preventDefault();
-
-            if (isWholeEditorDocumentSelected(editor)) {
-              onExitToSelection();
-              return;
-            }
-
-            editor.commands.selectAll();
-            onSelectContent();
+          if (!((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a")) {
+            resetCtrlAStage();
           }
         }}
-        onMouseDown={onSelectionReset}
+        onMouseDown={() => {
+          resetCtrlAStage();
+          onSelectionReset();
+        }}
         onPointerDown={(event) => {
           if (event.button === 2) {
             onCanvasPanStart(event);
@@ -1234,8 +1324,59 @@ function TiptapBlockEditor({
   );
 }
 
-function isWholeEditorDocumentSelected(editor: Editor) {
-  const { doc, selection } = editor.state;
+type SelectionLineScope = "caret" | "single-line" | "multi-line" | "all";
+
+function getCurrentLineSelectionRange(state: EditorState) {
+  return getTextblockRangeAtPosition(state, state.selection.$anchor.pos);
+}
+
+function getSelectionLineScope(state: EditorState): SelectionLineScope {
+  const { selection } = state;
+
+  if (isWholeEditorDocumentSelected(state)) {
+    return "all";
+  }
+
+  if (selection.empty) {
+    return "caret";
+  }
+
+  const fromRange = getTextblockRangeAtPosition(state, selection.from);
+  const toRange = getTextblockRangeAtPosition(
+    state,
+    Math.max(selection.from, selection.to - 1),
+  );
+
+  return fromRange.from === toRange.from && fromRange.to === toRange.to
+    ? "single-line"
+    : "multi-line";
+}
+
+function getTextblockRangeAtPosition(state: EditorState, position: number) {
+  const { doc } = state;
+  const resolvedPosition = doc.resolve(
+    Math.max(0, Math.min(position, doc.content.size)),
+  );
+
+  for (let depth = resolvedPosition.depth; depth > 0; depth -= 1) {
+    const node = resolvedPosition.node(depth);
+
+    if (node.isTextblock) {
+      return {
+        from: resolvedPosition.start(depth),
+        to: resolvedPosition.end(depth),
+      };
+    }
+  }
+
+  return {
+    from: 1,
+    to: Math.max(1, doc.content.size - 1),
+  };
+}
+
+function isWholeEditorDocumentSelected(state: EditorState) {
+  const { doc, selection } = state;
 
   return (
     !selection.empty &&
@@ -1272,6 +1413,86 @@ function plainTextToTipTapDoc(text: string): JSONContent {
       content: line ? [{ type: "text", text: line }] : undefined,
     })),
   };
+}
+
+function getTipTapMeasureText(content: JSONContent) {
+  const lines: string[] = [];
+
+  collectTipTapMeasureLines(content, lines);
+
+  return lines.join("\n");
+}
+
+function collectTipTapMeasureLines(content: JSONContent, lines: string[]) {
+  switch (content.type) {
+    case "doc":
+    case "bulletList":
+    case "orderedList":
+      content.content?.forEach((child) =>
+        collectTipTapMeasureLines(child, lines),
+      );
+      return;
+    case "paragraph":
+    case "heading":
+    case "codeBlock":
+      lines.push(getInlineMeasureText(content));
+      return;
+    case "blockquote":
+    case "listItem": {
+      const blockChildren =
+        content.content?.filter((child) => isMeasureBlockNode(child)) ?? [];
+
+      if (blockChildren.length > 0) {
+        blockChildren.forEach((child) =>
+          collectTipTapMeasureLines(child, lines),
+        );
+      } else {
+        lines.push(getInlineMeasureText(content));
+      }
+
+      return;
+    }
+    default:
+      if (!content.content || content.content.length === 0) {
+        return;
+      }
+
+      lines.push(getInlineMeasureText(content));
+  }
+}
+
+function isMeasureBlockNode(content: JSONContent) {
+  return (
+    content.type === "paragraph" ||
+    content.type === "heading" ||
+    content.type === "codeBlock" ||
+    content.type === "blockquote" ||
+    content.type === "bulletList" ||
+    content.type === "orderedList" ||
+    content.type === "listItem"
+  );
+}
+
+function getInlineMeasureText(content: JSONContent) {
+  const parts: string[] = [];
+
+  collectInlineMeasureText(content, parts);
+
+  return parts.join("") || " ";
+}
+
+function collectInlineMeasureText(content: JSONContent, parts: string[]) {
+  if (content.type === "text") {
+    parts.push(content.text ?? "");
+    return;
+  }
+
+  if (content.type === "hardBreak") {
+    parts.push("\n");
+    return;
+  }
+
+  content.content?.forEach((child) => collectInlineMeasureText(child, parts));
 }
 
 function hasTipTapText(content: JSONContent): boolean {

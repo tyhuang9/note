@@ -68,7 +68,7 @@ import {
   DEFAULT_LOCAL_STT_CONFIG,
 } from "./services/localModelProviders";
 import { listAIProviderModels, testAIProvider } from "./services/aiProviderAdapters";
-import { buildAssistantActionRequest, validateAssistantActionRequest } from "./services/assistantActions";
+import { buildAssistantActionRequest } from "./services/assistantActions";
 import {
   createAIProvider,
   deleteProviderCredential,
@@ -77,14 +77,16 @@ import {
 } from "./services/aiProviderStorage";
 import { buildNotesContext } from "./services/notesContext";
 import {
+  createLlamaHarnessNoteRun,
+  getLlamaHarnessNoteCapabilities,
   getLlamaHarnessSetupStatus,
-  listLlamaHarnessAgents,
-  patchLlamaHarnessAgent,
-  sendLlamaHarnessAgentChat,
   type LlamaHarnessAgent,
-  type LlamaHarnessAgentPatch,
+  type LlamaHarnessAppCapabilities,
+  type LlamaHarnessRunResponse,
+  type LlamaHarnessRunToolRequest,
+  type LlamaHarnessRunToolResult,
   type LlamaHarnessSetupStatus,
-  type LlamaHarnessToolCall,
+  submitLlamaHarnessNoteToolResults,
 } from "./services/llamaHarnessAssistant";
 import type { AppData, AppSessionState, TextBlock } from "./types";
 
@@ -197,6 +199,23 @@ type TextFormatState = Record<ToolbarActionId, boolean> & {
 
 type CreateTextBlockOptions = {
   placement?: "block-origin" | "text-caret";
+};
+
+type ClipboardImage =
+  | {
+      file: File;
+      kind: "file";
+      name: string;
+    }
+  | {
+      kind: "source";
+      name: string;
+      source: string;
+    };
+
+type ClipboardReadItem = {
+  getType: (type: string) => Promise<Blob>;
+  types: string[];
 };
 
 type DragLayerSession = {
@@ -331,39 +350,6 @@ function llamaHarnessSetupMessage(status: LlamaHarnessSetupStatus) {
       return "Finish setup in llama-harness: create or activate an agent.";
     case "ready":
       return "llama-harness is ready.";
-  }
-}
-
-function assistantActionKindFromToolName(name: string | undefined): AssistantActionKind | null {
-  switch (name) {
-    case "insert_text_block":
-      return "insert-text-block";
-    case "append_to_selected_block":
-      return "append-to-selected-block";
-    case "replace_selected_block":
-      return "replace-selected-block";
-    default:
-      return null;
-  }
-}
-
-function parseToolCallArguments(args: string | Record<string, unknown> | undefined): Record<string, unknown> {
-  if (!args) {
-    return {};
-  }
-
-  if (typeof args !== "string") {
-    return args;
-  }
-
-  try {
-    const parsed = JSON.parse(args) as unknown;
-
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
   }
 }
 
@@ -1034,6 +1020,8 @@ function App() {
   const [isAssistantRecording, setIsAssistantRecording] = useState(false);
   const [llamaHarnessSetupStatus, setLlamaHarnessSetupStatus] =
     useState<LlamaHarnessSetupStatus | null>(null);
+  const [llamaHarnessCapabilities, setLlamaHarnessCapabilities] =
+    useState<LlamaHarnessAppCapabilities | null>(null);
   const [llamaHarnessAgents, setLlamaHarnessAgents] = useState<LlamaHarnessAgent[]>([]);
   const [selectedLlamaHarnessAgentId, setSelectedLlamaHarnessAgentId] = useState(
     readSelectedLlamaHarnessAgentId,
@@ -1360,8 +1348,8 @@ function App() {
     }));
   }, [canvasViewport, visibleBlocks]);
   const activeLlamaHarnessAgents = useMemo(
-    () => llamaHarnessAgents.filter((agent) => agent.status === "active"),
-    [llamaHarnessAgents],
+    () => llamaHarnessCapabilities?.allowedAgents ?? llamaHarnessAgents,
+    [llamaHarnessAgents, llamaHarnessCapabilities],
   );
   const selectedLlamaHarnessAgent = useMemo(
     () =>
@@ -1371,7 +1359,7 @@ function App() {
     [activeLlamaHarnessAgents, selectedLlamaHarnessAgentId],
   );
   const assistantAgentLabel = selectedLlamaHarnessAgent
-    ? `${selectedLlamaHarnessAgent.name} / ${selectedLlamaHarnessAgent.default_model || "model not set"}`
+    ? `${selectedLlamaHarnessAgent.name} / ${llamaHarnessCapabilities?.model.modelName || "model not set"}`
     : llamaHarnessSetupStatus?.ready
       ? "No active agent selected"
       : "llama-harness setup incomplete";
@@ -2081,6 +2069,205 @@ function App() {
     return { x: PASTED_BLOCK_OFFSET, y: PASTED_BLOCK_OFFSET };
   }
 
+  function getImagePasteOrigin() {
+    if (insertionPoint) {
+      return insertionPoint;
+    }
+
+    const currentEditingBlockId = editingBlockIdRef.current;
+    const currentEditingBlock = currentEditingBlockId
+      ? dataRef.current.blocks.find((block) => block.id === currentEditingBlockId)
+      : null;
+
+    if (currentEditingBlock) {
+      return snapPoint({
+        x: currentEditingBlock.x,
+        y: currentEditingBlock.y + currentEditingBlock.height + PASTED_BLOCK_OFFSET,
+      });
+    }
+
+    return getPasteOrigin();
+  }
+
+  function getClipboardImage(clipboardData: DataTransfer | null): ClipboardImage | null {
+    const clipboardItems = Array.from(clipboardData?.items ?? []);
+    const imageItem = clipboardItems.find((item) =>
+      item.type.startsWith("image/"),
+    );
+    const imageItemFile = imageItem?.getAsFile();
+
+    if (imageItemFile) {
+      return {
+        file: imageItemFile,
+        kind: "file",
+        name: imageItemFile.name || "Pasted image",
+      };
+    }
+
+    const imageFile = Array.from(clipboardData?.files ?? []).find((file) =>
+      file.type.startsWith("image/"),
+    );
+
+    if (imageFile) {
+      return {
+        file: imageFile,
+        kind: "file",
+        name: imageFile.name || "Pasted image",
+      };
+    }
+
+    const html = clipboardData?.getData("text/html") ?? "";
+    const htmlImageSource = getClipboardHtmlImageSource(html);
+
+    if (htmlImageSource) {
+      return {
+        kind: "source",
+        name: getImageNameFromSource(htmlImageSource),
+        source: htmlImageSource,
+      };
+    }
+
+    return null;
+  }
+
+  function getClipboardHtmlImageSource(html: string) {
+    if (!html.trim()) {
+      return null;
+    }
+
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    const imageElement = template.content.querySelector("img");
+    const imageSource = imageElement?.getAttribute("src")?.trim();
+
+    if (!imageSource || !isPasteableImageSource(imageSource)) {
+      return null;
+    }
+
+    return imageSource;
+  }
+
+  function isPasteableImageSource(source: string) {
+    return source.startsWith("data:image/") || /^https?:\/\//i.test(source);
+  }
+
+  function getImageNameFromSource(source: string) {
+    if (source.startsWith("data:image/")) {
+      return "Pasted image";
+    }
+
+    try {
+      const pathName = new URL(source).pathname;
+      const pathParts = pathName.split("/").filter(Boolean);
+      const name = decodeURIComponent(pathParts[pathParts.length - 1] ?? "");
+
+      return name || "Pasted image";
+    } catch {
+      return "Pasted image";
+    }
+  }
+
+  function shouldReadNavigatorClipboardImage(clipboardData: DataTransfer | null) {
+    const clipboard = navigator.clipboard as
+      | (Clipboard & { read?: () => Promise<ClipboardReadItem[]> })
+      | undefined;
+
+    return (
+      typeof clipboard?.read === "function" &&
+      (clipboardData?.items.length ?? 0) === 0 &&
+      (clipboardData?.files.length ?? 0) === 0 &&
+      (clipboardData?.types.length ?? 0) === 0
+    );
+  }
+
+  function createImageBlockFromBlob(
+    pasteOrigin: CanvasPoint,
+    imageBlob: Blob,
+    imageName: string,
+  ) {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      if (typeof reader.result !== "string") {
+        return;
+      }
+
+      createImageBlock(
+        pasteOrigin.x,
+        pasteOrigin.y,
+        reader.result,
+        imageName,
+      );
+    };
+    reader.readAsDataURL(imageBlob);
+  }
+
+  async function pasteNavigatorClipboardImage(pasteOrigin: CanvasPoint) {
+    const clipboard = navigator.clipboard as
+      | (Clipboard & { read?: () => Promise<ClipboardReadItem[]> })
+      | undefined;
+
+    if (typeof clipboard?.read !== "function") {
+      return;
+    }
+
+    try {
+      const clipboardItems = await clipboard.read();
+
+      for (const clipboardItem of clipboardItems) {
+        const imageType = clipboardItem.types.find((type) =>
+          type.startsWith("image/"),
+        );
+
+        if (!imageType) {
+          continue;
+        }
+
+        const imageBlob = await clipboardItem.getType(imageType);
+        createImageBlockFromBlob(pasteOrigin, imageBlob, "Pasted image");
+        return;
+      }
+    } catch {
+      return;
+    }
+  }
+
+  function pasteClipboardImage(event: ClipboardEvent) {
+    if (!selectedPageIdRef.current) {
+      return false;
+    }
+
+    const clipboardImage = getClipboardImage(event.clipboardData);
+
+    if (!clipboardImage) {
+      if (!shouldReadNavigatorClipboardImage(event.clipboardData)) {
+        return false;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      void pasteNavigatorClipboardImage(getImagePasteOrigin());
+      return true;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    const pasteOrigin = getImagePasteOrigin();
+
+    if (clipboardImage.kind === "source") {
+      createImageBlock(
+        pasteOrigin.x,
+        pasteOrigin.y,
+        clipboardImage.source,
+        clipboardImage.name,
+      );
+      return true;
+    }
+
+    createImageBlockFromBlob(pasteOrigin, clipboardImage.file, clipboardImage.name);
+    return true;
+  }
+
   function pasteCopiedBlocks() {
     if (
       copiedContentKindRef.current !== "blocks" ||
@@ -2412,7 +2599,9 @@ function App() {
 
   useEffect(() => {
     function handlePaste(event: ClipboardEvent) {
-      if (isTextEntryTarget(event.target)) {
+      const isTextEntryPaste = isTextEntryTarget(event.target);
+
+      if (isTextEntryPaste) {
         return;
       }
 
@@ -2430,44 +2619,13 @@ function App() {
         return;
       }
 
-      if (!insertionPoint) {
-        return;
-      }
-
-      const clipboardItems = Array.from(event.clipboardData?.items ?? []);
-      const imageItem = clipboardItems.find((item) =>
-        item.type.startsWith("image/"),
-      );
-
-      if (imageItem) {
-        const imageFile = imageItem.getAsFile();
-
-        if (!imageFile) {
-          return;
-        }
-
-        event.preventDefault();
-        const reader = new FileReader();
-
-        reader.onload = () => {
-          if (typeof reader.result !== "string") {
-            return;
-          }
-
-          createImageBlock(
-            insertionPoint.x,
-            insertionPoint.y,
-            reader.result,
-            imageFile.name || "Pasted image",
-          );
-        };
-        reader.readAsDataURL(imageFile);
+      if (pasteClipboardImage(event)) {
         return;
       }
 
       const pastedText = event.clipboardData?.getData("text/plain");
 
-      if (pastedText) {
+      if (pastedText && insertionPoint) {
         event.preventDefault();
         createTextBlock(insertionPoint.x, insertionPoint.y, pastedText, {
           placement: "text-caret",
@@ -2475,9 +2633,9 @@ function App() {
       }
     }
 
-    document.addEventListener("paste", handlePaste);
+    document.addEventListener("paste", handlePaste, true);
 
-    return () => document.removeEventListener("paste", handlePaste);
+    return () => document.removeEventListener("paste", handlePaste, true);
   }, [insertionPoint, selectedPageId]);
 
   function setCanvasContentTransform(nextPanOffset: PanOffset) {
@@ -2762,48 +2920,32 @@ function App() {
       setLlamaHarnessSetupStatus(setupStatus);
 
       if (!setupStatus.ready) {
+        setLlamaHarnessCapabilities(null);
         setLlamaHarnessAgents([]);
         setAssistantStatus(llamaHarnessSetupMessage(setupStatus));
         return;
       }
 
-      const agents = await listLlamaHarnessAgents();
-      const activeAgents = agents.filter((agent) => agent.status === "active");
-      setLlamaHarnessAgents(agents);
+      const capabilities = await getLlamaHarnessNoteCapabilities();
+      const activeAgents = capabilities.allowedAgents;
+      setLlamaHarnessCapabilities(capabilities);
+      setLlamaHarnessAgents(activeAgents);
       setSelectedLlamaHarnessAgentId((currentAgentId) => {
         if (activeAgents.some((agent) => agent.id === currentAgentId)) {
           return currentAgentId;
         }
 
-        return activeAgents[0]?.id ?? "";
+        return capabilities.defaultAgent.id || activeAgents[0]?.id || "";
       });
-      setAssistantStatus(activeAgents.length ? null : "Create or activate an agent in llama-harness.");
+      setAssistantStatus(activeAgents.length ? null : "Allow an active Note agent in llama-harness.");
     } catch (error) {
       setLlamaHarnessSetupStatus(null);
+      setLlamaHarnessCapabilities(null);
       setLlamaHarnessAgents([]);
       setAssistantError(`llama-harness is not reachable at http://127.0.0.1:8787. ${getAssistantErrorMessage(error)}`);
       setAssistantStatus(null);
     } finally {
       setIsLlamaHarnessLoading(false);
-    }
-  }
-
-  async function updateSelectedLlamaHarnessAgent(patch: LlamaHarnessAgentPatch) {
-    if (!selectedLlamaHarnessAgent || Object.keys(patch).length === 0) {
-      return;
-    }
-
-    try {
-      const updated = await patchLlamaHarnessAgent(selectedLlamaHarnessAgent.id, patch);
-      setLlamaHarnessAgents((agents) =>
-        agents.map((agent) => (agent.id === updated.id ? updated : agent)),
-      );
-      setAssistantStatus("Agent saved in llama-harness");
-      setAssistantError(null);
-    } catch (error) {
-      setAssistantError(getAssistantErrorMessage(error));
-      setAssistantStatus(null);
-      await refreshLlamaHarnessAssistant().catch(() => undefined);
     }
   }
 
@@ -2817,6 +2959,417 @@ function App() {
     }
 
     return "";
+  }
+
+  function executeLlamaHarnessToolRequests(
+    toolRequests: LlamaHarnessRunToolRequest[],
+  ): LlamaHarnessRunToolResult[] {
+    return toolRequests.map((toolRequest) => {
+      try {
+        return {
+          toolCallId: toolRequest.id,
+          toolId: toolRequest.toolId,
+          result: executeLlamaHarnessToolRequest(toolRequest),
+        };
+      } catch (error) {
+        return {
+          toolCallId: toolRequest.id,
+          toolId: toolRequest.toolId,
+          error: getAssistantErrorMessage(error),
+        };
+      }
+    });
+  }
+
+  function executeLlamaHarnessToolRequest(toolRequest: LlamaHarnessRunToolRequest) {
+    const args = getToolArguments(toolRequest.arguments);
+
+    switch (toolRequest.toolId) {
+      case "note.getCurrentPage":
+        return getCurrentPageToolResult(Boolean(args.includeBlocks));
+      case "note.getSelectedBlocks":
+        return {
+          blocks: getSelectedTextBlocks().map(toToolBlock),
+        };
+      case "note.searchPages":
+        return searchPagesForTool(requireStringArg(args, "query"));
+      case "note.createBlock":
+        return createBlockFromTool(args);
+      case "note.updateBlock":
+        return updateBlockFromTool(args);
+      case "note.deleteBlock":
+        return deleteBlockFromTool(toolRequest, args);
+      case "note.moveBlock":
+        return moveBlockFromTool(args);
+      case "note.createPage":
+        return createPageFromTool(args);
+      case "note.renamePage":
+        return renamePageFromTool(args);
+      case "note.openPage":
+        return openPageFromTool(args);
+      default:
+        throw new Error(`Unsupported Note tool: ${toolRequest.toolId}`);
+    }
+  }
+
+  function getCurrentPageToolResult(includeBlocks: boolean) {
+    const page = getActivePageForTool();
+
+    return {
+      page,
+      ...(includeBlocks
+        ? {
+            blocks: dataRef.current.blocks
+              .filter((block) => block.pageId === page.id)
+              .sort(compareToolBlocksByPosition)
+              .map(toToolBlock),
+          }
+        : {}),
+    };
+  }
+
+  function getSelectedTextBlocks() {
+    const selectedIds = new Set(selectedBlockIdsRef.current);
+
+    return dataRef.current.blocks
+      .filter((block) => selectedIds.has(block.id))
+      .sort(compareToolBlocksByPosition);
+  }
+
+  function searchPagesForTool(query: string) {
+    const normalizedQuery = query.trim().toLocaleLowerCase();
+    if (!normalizedQuery) {
+      throw new Error("query is required.");
+    }
+
+    const pages = dataRef.current.pages
+      .map((page) => {
+        const matchedBlocks = dataRef.current.blocks.filter(
+          (block) =>
+            block.pageId === page.id &&
+            block.content.toLocaleLowerCase().includes(normalizedQuery),
+        );
+        const titleMatches = page.title.toLocaleLowerCase().includes(normalizedQuery);
+
+        return titleMatches || matchedBlocks.length > 0
+          ? {
+              folderId: page.folderId,
+              id: page.id,
+              matchedBlockIds: matchedBlocks.map((block) => block.id),
+              title: page.title,
+            }
+          : null;
+      })
+      .filter((page): page is NonNullable<typeof page> => Boolean(page))
+      .slice(0, 20);
+
+    return { pages };
+  }
+
+  function createBlockFromTool(args: Record<string, unknown>) {
+    const page = getActivePageForTool();
+    const content = requireStringArg(args, "content");
+    const blockId = createId("block");
+    const xArg = optionalNumberArg(args, "x");
+    const yArg = optionalNumberArg(args, "y");
+    const currentCanvasViewport = canvasViewportRef.current;
+    const origin =
+      xArg !== undefined && yArg !== undefined
+        ? { x: xArg, y: yArg }
+        : insertionPoint ??
+          (currentCanvasViewport
+            ? {
+                x: currentCanvasViewport.x + currentCanvasViewport.width / 2,
+                y: currentCanvasViewport.y + currentCanvasViewport.height / 2,
+              }
+            : { x: PASTED_BLOCK_OFFSET, y: PASTED_BLOCK_OFFSET });
+    const blockPosition = snapPoint(origin);
+    const formattedRichContent = createFormattedRichContent(
+      content,
+      textFormatStateRef.current,
+    );
+    const block: TextBlock = {
+      id: blockId,
+      pageId: page.id,
+      x: blockPosition.x,
+      y: blockPosition.y,
+      width: DEFAULT_BLOCK_WIDTH,
+      height: DEFAULT_BLOCK_HEIGHT,
+      content,
+      ...(formattedRichContent ? { richContent: formattedRichContent } : {}),
+      isWidthManuallyResized: false,
+    };
+
+    setBlocksWithHistory((currentBlocks) => [...currentBlocks, block]);
+    setSelectedBlockIds([blockId]);
+    setEditingBlockId(blockId);
+    setFocusEndBlockId(blockId);
+    setIsCanvasKeyboardActive(true);
+    setActiveMode("editing");
+    setInsertionPoint(null);
+
+    return { block: toToolBlock(block) };
+  }
+
+  function updateBlockFromTool(args: Record<string, unknown>) {
+    const blockId = requireStringArg(args, "blockId");
+    const block = getActivePageBlockForTool(blockId);
+    const content = optionalStringArg(args, "content");
+    const x = optionalNumberArg(args, "x");
+    const y = optionalNumberArg(args, "y");
+    const width = optionalNumberArg(args, "width");
+    const height = optionalNumberArg(args, "height");
+
+    if (
+      content === undefined &&
+      x === undefined &&
+      y === undefined &&
+      width === undefined &&
+      height === undefined
+    ) {
+      throw new Error("At least one block field is required.");
+    }
+
+    const nextBlock: TextBlock = {
+      ...block,
+      ...(content !== undefined ? { content, richContent: undefined } : {}),
+      ...(x !== undefined ? { x } : {}),
+      ...(y !== undefined ? { y } : {}),
+      ...(width !== undefined ? { width } : {}),
+      ...(height !== undefined ? { height } : {}),
+    };
+
+    setBlocksWithHistory((currentBlocks) =>
+      currentBlocks.map((currentBlock) =>
+        currentBlock.id === blockId ? nextBlock : currentBlock,
+      ),
+    );
+    setSelectedBlockIds([blockId]);
+    setEditingBlockId(null);
+    setInsertionPoint(null);
+    setIsCanvasKeyboardActive(true);
+    setActiveMode("selected");
+
+    return { block: toToolBlock(nextBlock) };
+  }
+
+  function deleteBlockFromTool(
+    toolRequest: LlamaHarnessRunToolRequest,
+    args: Record<string, unknown>,
+  ) {
+    const blockId = requireStringArg(args, "blockId");
+    const block = getActivePageBlockForTool(blockId);
+
+    if (
+      toolRequest.riskLevel === "high" &&
+      !window.confirm(`Allow assistant to delete this Note block?\n\n${truncateForTool(block.content, 160)}`)
+    ) {
+      throw new Error("User denied approval for note.deleteBlock.");
+    }
+
+    deleteBlocks([blockId]);
+
+    return { deletedBlockId: blockId };
+  }
+
+  function moveBlockFromTool(args: Record<string, unknown>) {
+    const blockId = requireStringArg(args, "blockId");
+    const block = getActivePageBlockForTool(blockId);
+    const point = snapPoint({
+      x: requireNumberArg(args, "x"),
+      y: requireNumberArg(args, "y"),
+    });
+    const nextBlock = { ...block, x: point.x, y: point.y };
+
+    setBlocksWithHistory((currentBlocks) =>
+      currentBlocks.map((currentBlock) =>
+        currentBlock.id === blockId ? nextBlock : currentBlock,
+      ),
+    );
+    setSelectedBlockIds([blockId]);
+    setEditingBlockId(null);
+    setInsertionPoint(null);
+    setIsCanvasKeyboardActive(true);
+    setActiveMode("selected");
+
+    return { block: toToolBlock(nextBlock) };
+  }
+
+  function createPageFromTool(args: Record<string, unknown>) {
+    const title = requireStringArg(args, "title").trim();
+    if (!title) {
+      throw new Error("title is required.");
+    }
+    const folderId = optionalStringArg(args, "folderId") ?? selectedFolderIdRef.current ?? ROOT_FOLDER_ID;
+    if (folderId && !dataRef.current.folders.some((folder) => folder.id === folderId)) {
+      throw new Error("folderId does not exist.");
+    }
+    const pageId = createId("page");
+    const page = { id: pageId, folderId, title };
+    const nextData = {
+      ...dataRef.current,
+      pages: [...dataRef.current.pages, page],
+    };
+
+    dataRef.current = nextData;
+    setData(nextData);
+    rememberPageViewport(selectedPageIdRef.current);
+    selectedFolderIdRef.current = folderId;
+    selectedPageIdRef.current = pageId;
+    setSelectedFolderId(folderId);
+    setSelectedPageId(pageId);
+    setSidebarPageSelection([pageId]);
+    restorePageViewport(pageId);
+    setEditingFolderId(null);
+    setEditingPageId(null);
+    setIsEditingHeaderTitle(false);
+    setSelectedBlockIds([]);
+    setEditingBlockId(null);
+    setInsertionPoint(null);
+    setActiveMode("canvas");
+
+    return { page };
+  }
+
+  function renamePageFromTool(args: Record<string, unknown>) {
+    const pageId = requireStringArg(args, "pageId");
+    const title = requireStringArg(args, "title").trim();
+    const page = dataRef.current.pages.find((currentPage) => currentPage.id === pageId);
+
+    if (!page) {
+      throw new Error("pageId does not exist.");
+    }
+    if (!title) {
+      throw new Error("title is required.");
+    }
+
+    const nextPage = { ...page, title };
+    const nextData = {
+      ...dataRef.current,
+      pages: dataRef.current.pages.map((currentPage) =>
+        currentPage.id === pageId ? nextPage : currentPage,
+      ),
+    };
+
+    dataRef.current = nextData;
+    setData(nextData);
+
+    return { page: nextPage };
+  }
+
+  function openPageFromTool(args: Record<string, unknown>) {
+    const pageId = requireStringArg(args, "pageId");
+    const page = dataRef.current.pages.find((currentPage) => currentPage.id === pageId);
+
+    if (!page) {
+      throw new Error("pageId does not exist.");
+    }
+
+    rememberPageViewport(selectedPageIdRef.current);
+    selectedFolderIdRef.current = page.folderId;
+    selectedPageIdRef.current = pageId;
+    setSelectedFolderId(page.folderId);
+    setSelectedPageId(pageId);
+    setSidebarPageSelection([pageId]);
+    restorePageViewport(pageId);
+    setEditingFolderId(null);
+    setEditingPageId(null);
+    setIsEditingHeaderTitle(false);
+    setSelectedBlockIds([]);
+    setEditingBlockId(null);
+    setInsertionPoint(null);
+    setIsCanvasKeyboardActive(false);
+    setActiveMode("canvas");
+
+    return { page };
+  }
+
+  function getActivePageForTool() {
+    const pageId = selectedPageIdRef.current;
+    const page = dataRef.current.pages.find((currentPage) => currentPage.id === pageId);
+
+    if (!page) {
+      throw new Error("Select a page before using Note tools.");
+    }
+
+    return page;
+  }
+
+  function getActivePageBlockForTool(blockId: string) {
+    const page = getActivePageForTool();
+    const block = dataRef.current.blocks.find((currentBlock) => currentBlock.id === blockId);
+
+    if (!block) {
+      throw new Error("blockId does not exist.");
+    }
+    if (block.pageId !== page.id) {
+      throw new Error("Mutating Note tools are scoped to the active page.");
+    }
+    if (block.imageData) {
+      throw new Error("Only text blocks are supported by Note tools.");
+    }
+
+    return block;
+  }
+
+  function toToolBlock(block: TextBlock) {
+    return {
+      content: block.content,
+      height: block.height,
+      id: block.id,
+      pageId: block.pageId,
+      width: block.width,
+      x: block.x,
+      y: block.y,
+    };
+  }
+
+  function compareToolBlocksByPosition(firstBlock: TextBlock, secondBlock: TextBlock) {
+    return (
+      firstBlock.y - secondBlock.y ||
+      firstBlock.x - secondBlock.x ||
+      firstBlock.id.localeCompare(secondBlock.id)
+    );
+  }
+
+  function getToolArguments(value: unknown): Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+  }
+
+  function requireStringArg(args: Record<string, unknown>, name: string) {
+    const value = optionalStringArg(args, name);
+    if (value === undefined) {
+      throw new Error(`${name} is required.`);
+    }
+
+    return value;
+  }
+
+  function optionalStringArg(args: Record<string, unknown>, name: string) {
+    const value = args[name];
+
+    return typeof value === "string" ? value : undefined;
+  }
+
+  function requireNumberArg(args: Record<string, unknown>, name: string) {
+    const value = optionalNumberArg(args, name);
+    if (value === undefined) {
+      throw new Error(`${name} is required.`);
+    }
+
+    return value;
+  }
+
+  function optionalNumberArg(args: Record<string, unknown>, name: string) {
+    const value = args[name];
+
+    return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  }
+
+  function truncateForTool(value: string, maxLength: number) {
+    return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
   }
 
   function stopAssistantRecordingStream() {
@@ -2994,12 +3547,29 @@ function App() {
       selectedBlockIds: selectedBlockIdsRef.current,
       selectedPageId: selectedPageIdRef.current,
     });
-
-    return sendLlamaHarnessAgentChat({
+    let response: LlamaHarnessRunResponse = await createLlamaHarnessNoteRun({
       agentId: selectedLlamaHarnessAgent.id,
       messages,
       notesContext,
     });
+
+    for (let iteration = 0; response.status === "requires_action"; iteration += 1) {
+      if (iteration >= 5) {
+        throw new Error("llama-harness requested too many tool result rounds.");
+      }
+      if (response.toolRequests.length === 0) {
+        throw new Error("llama-harness requested action without tool requests.");
+      }
+
+      setAssistantStatus(`Executing ${response.toolRequests.length} Note tool request${response.toolRequests.length === 1 ? "" : "s"}`);
+      const toolResults = executeLlamaHarnessToolRequests(response.toolRequests);
+      response = await submitLlamaHarnessNoteToolResults({
+        runId: response.runId,
+        toolResults,
+      });
+    }
+
+    return response;
   }
 
   async function sendAssistantMessage() {
@@ -3025,18 +3595,16 @@ function App() {
 
     try {
       const response = await requestAssistantChat(nextMessages);
+      const content = response.output?.trim() || "Done.";
       const assistantMessage: AssistantMessage = {
         id: createId("assistant-message"),
         role: "assistant",
-        content: response.content,
+        content,
         createdAt: new Date().toISOString(),
       };
 
       setAssistantMessages([...nextMessages, assistantMessage]);
-      const executedToolCallCount = executeAssistantToolCalls(response.toolCalls);
-      if (executedToolCallCount === 0) {
-        setAssistantStatus(`Received response from ${assistantAgentLabel}`);
-      }
+      setAssistantStatus(`Received response from ${assistantAgentLabel}`);
     } catch (error) {
       setAssistantError(getAssistantErrorMessage(error));
       setAssistantStatus(null);
@@ -3209,35 +3777,6 @@ function App() {
         : "Replaced selected text block",
     );
     return true;
-  }
-
-  function executeAssistantToolCalls(toolCalls: LlamaHarnessToolCall[]) {
-    let executedCount = 0;
-
-    for (const toolCall of toolCalls) {
-      const actionKind = assistantActionKindFromToolName(toolCall.function?.name);
-      if (!actionKind) {
-        continue;
-      }
-
-      const args = parseToolCallArguments(toolCall.function?.arguments);
-      const action = validateAssistantActionRequest({
-        ...args,
-        kind: actionKind,
-      });
-
-      if (!action.ok) {
-        setAssistantError(action.message);
-        setAssistantStatus(null);
-        continue;
-      }
-
-      if (executeAssistantActionRequest(action.request)) {
-        executedCount += 1;
-      }
-    }
-
-    return executedCount;
   }
 
   function runAssistantAction(kind: AssistantActionKind) {
@@ -4873,9 +5412,6 @@ function App() {
           assistantStatus={assistantStatus}
           defaultChatModelLabel={assistantAgentLabel}
           harnessAgents={activeLlamaHarnessAgents}
-          harnessAgentModel={selectedLlamaHarnessAgent?.default_model ?? ""}
-          harnessAgentName={selectedLlamaHarnessAgent?.name ?? ""}
-          harnessAgentSystemPrompt={selectedLlamaHarnessAgent?.system_prompt ?? ""}
           isHarnessLoading={isLlamaHarnessLoading}
           isHarnessReady={Boolean(llamaHarnessSetupStatus?.ready)}
           inputValue={assistantInput}
@@ -4886,7 +5422,6 @@ function App() {
           onInputChange={setAssistantInput}
           onRefreshHarness={refreshLlamaHarnessAssistant}
           onRunAction={runAssistantAction}
-          onSaveHarnessAgent={updateSelectedLlamaHarnessAgent}
           onSend={sendAssistantMessage}
           onSelectHarnessAgent={setSelectedLlamaHarnessAgentId}
           onToggleRecording={toggleAssistantRecording}

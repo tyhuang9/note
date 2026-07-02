@@ -2634,6 +2634,20 @@ h2 {
   background: #cbd3dc;
 }
 
+.text-block-editor .ProseMirror img,
+.text-block-display .text-block-rich-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 2px 0;
+  user-select: auto;
+}
+
+.text-block-editor .ProseMirror img.ProseMirror-selectednode {
+  outline: 2px solid var(--accent-purple);
+  outline-offset: 2px;
+}
+
 .text-block-display {
   position: relative;
   z-index: 1;

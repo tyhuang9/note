@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from "react";
+import { memo } from "react";
 import type {
   AssistantActionKind,
   AssistantMessage,
@@ -9,13 +9,9 @@ type AssistantPanelProps = {
   assistantStatus: string | null;
   defaultChatModelLabel: string;
   harnessAgents: Array<{
-    default_model: string;
     id: string;
     name: string;
   }>;
-  harnessAgentModel: string;
-  harnessAgentName: string;
-  harnessAgentSystemPrompt: string;
   inputValue: string;
   isHarnessLoading: boolean;
   isHarnessReady: boolean;
@@ -26,11 +22,6 @@ type AssistantPanelProps = {
   onInputChange: (value: string) => void;
   onRefreshHarness: () => void;
   onRunAction: (kind: AssistantActionKind) => void;
-  onSaveHarnessAgent: (patch: {
-    default_model?: string;
-    name?: string;
-    system_prompt?: string;
-  }) => void;
   onSend: () => void;
   onSelectHarnessAgent: (agentId: string) => void;
   onToggleRecording: () => void;
@@ -103,9 +94,6 @@ export const AssistantPanel = memo(function AssistantPanel({
   assistantStatus,
   defaultChatModelLabel,
   harnessAgents,
-  harnessAgentModel,
-  harnessAgentName,
-  harnessAgentSystemPrompt,
   inputValue,
   isHarnessLoading,
   isHarnessReady,
@@ -116,37 +104,14 @@ export const AssistantPanel = memo(function AssistantPanel({
   onInputChange,
   onRefreshHarness,
   onRunAction,
-  onSaveHarnessAgent,
   onSend,
   onSelectHarnessAgent,
   onToggleRecording,
   selectedHarnessAgentId,
 }: AssistantPanelProps) {
-  const [draftAgentModel, setDraftAgentModel] = useState(harnessAgentModel);
-  const [draftAgentName, setDraftAgentName] = useState(harnessAgentName);
-  const [draftSystemPrompt, setDraftSystemPrompt] = useState(harnessAgentSystemPrompt);
   const canSend = inputValue.trim().length > 0 && !isSending && isHarnessReady && Boolean(selectedHarnessAgentId);
   const latestAssistantOutput = getLatestAssistantOutput(messages);
   const canRunOutputAction = Boolean(latestAssistantOutput);
-
-  useEffect(() => {
-    setDraftAgentModel(harnessAgentModel);
-    setDraftAgentName(harnessAgentName);
-    setDraftSystemPrompt(harnessAgentSystemPrompt);
-  }, [harnessAgentModel, harnessAgentName, harnessAgentSystemPrompt]);
-
-  function saveAgentField(field: "default_model" | "name" | "system_prompt", value: string) {
-    const trimmedValue = value.trim();
-    if (field === "default_model" && trimmedValue !== harnessAgentModel) {
-      onSaveHarnessAgent({ default_model: trimmedValue });
-    }
-    if (field === "name" && trimmedValue !== harnessAgentName) {
-      onSaveHarnessAgent({ name: trimmedValue });
-    }
-    if (field === "system_prompt" && trimmedValue !== harnessAgentSystemPrompt) {
-      onSaveHarnessAgent({ system_prompt: trimmedValue });
-    }
-  }
 
   return (
     <aside className="assistant-panel" aria-label="AI assistant">
@@ -188,33 +153,6 @@ export const AssistantPanel = memo(function AssistantPanel({
           {isHarnessLoading ? "Checking..." : "Refresh"}
         </button>
       </section>
-
-      {isHarnessReady && selectedHarnessAgentId ? (
-        <section className="assistant-agent-editor" aria-label="Selected agent details">
-          <input
-            aria-label="Agent name"
-            onBlur={() => saveAgentField("name", draftAgentName)}
-            onChange={(event) => setDraftAgentName(event.currentTarget.value)}
-            placeholder="Agent name"
-            value={draftAgentName}
-          />
-          <input
-            aria-label="Agent default model"
-            onBlur={() => saveAgentField("default_model", draftAgentModel)}
-            onChange={(event) => setDraftAgentModel(event.currentTarget.value)}
-            placeholder="Default model"
-            value={draftAgentModel}
-          />
-          <textarea
-            aria-label="Agent system prompt"
-            onBlur={() => saveAgentField("system_prompt", draftSystemPrompt)}
-            onChange={(event) => setDraftSystemPrompt(event.currentTarget.value)}
-            placeholder="System prompt"
-            rows={3}
-            value={draftSystemPrompt}
-          />
-        </section>
-      ) : null}
 
       <section className="assistant-messages" aria-label="Assistant messages">
         {messages.length === 0 ? (

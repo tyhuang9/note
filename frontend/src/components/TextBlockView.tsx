@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
-import { Mark, mergeAttributes, type Editor, type JSONContent } from "@tiptap/core";
+import { Mark, Node as TiptapNode, mergeAttributes, type Editor, type JSONContent } from "@tiptap/core";
 import { AllSelection, TextSelection, type EditorState } from "@tiptap/pm/state";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -100,7 +100,59 @@ const TextStyle = Mark.create({
   },
 });
 
-const tiptapExtensions = [StarterKit, TextStyle];
+const RichImage = TiptapNode.create({
+  name: "image",
+
+  group: "block",
+
+  atom: true,
+
+  draggable: false,
+
+  selectable: true,
+
+  addAttributes() {
+    return {
+      alt: {
+        default: null,
+      },
+      height: {
+        default: null,
+        parseHTML: (element: HTMLElement) => {
+          const height = Number(element.getAttribute("height"));
+
+          return Number.isFinite(height) && height > 0 ? height : null;
+        },
+      },
+      src: {
+        default: null,
+      },
+      title: {
+        default: null,
+      },
+      width: {
+        default: null,
+        parseHTML: (element: HTMLElement) => {
+          const width = Number(element.getAttribute("width"));
+
+          return Number.isFinite(width) && width > 0 ? width : null;
+        },
+      },
+    };
+  },
+
+  parseHTML() {
+    return [{ tag: "img[src]" }];
+  },
+
+  renderHTML({ HTMLAttributes }) {
+    return ["img", mergeAttributes(HTMLAttributes)];
+  },
+});
+
+const tiptapExtensions = [StarterKit, TextStyle, RichImage];
+const TEXT_BLOCK_HORIZONTAL_PADDING = 18;
+const INLINE_IMAGE_VERTICAL_GAP = 4;
 
 type TextBlockViewProps = {
   block: TextBlock;
@@ -259,7 +311,7 @@ export const TextBlockView = memo(function TextBlockView({
   ]);
 
   function getSizeUpdates() {
-    const size = getAutoSize(undefined, false, draftMeasureTextRef.current);
+    const size = getAutoSize(undefined, false, draftRichContentRef.current);
     const updates: BlockUpdates = {};
 
     if (size.width !== block.width) {
@@ -294,7 +346,7 @@ export const TextBlockView = memo(function TextBlockView({
   function getAutoSize(
     widthOverride?: number,
     forceFixedWidth = false,
-    measureText = draftMeasureTextRef.current,
+    measureContent = draftRichContentRef.current,
   ) {
     if (block.imageData) {
       return {
@@ -306,6 +358,8 @@ export const TextBlockView = memo(function TextBlockView({
     const widthMeasureElement = widthMeasureRef.current;
     const heightMeasureElement = heightMeasureRef.current;
     const nextWidth = widthOverride ?? block.width;
+    const measureText = getTipTapMeasureText(measureContent);
+    const imageMetrics = getTipTapImageMetrics(measureContent);
 
     setMeasureText(measureText);
 
@@ -322,12 +376,18 @@ export const TextBlockView = memo(function TextBlockView({
           DEFAULT_BLOCK_WIDTH,
           MIN_BLOCK_WIDTH,
           Math.ceil(widthMeasureElement.scrollWidth) + AUTO_WIDTH_RIGHT_PADDING,
+          imageMetrics.maxWidth + TEXT_BLOCK_HORIZONTAL_PADDING,
           nextWidth,
         );
 
     heightMeasureElement.style.width = `${measuredWidth}px`;
 
-    const measuredHeight = heightMeasureElement.scrollHeight;
+    const measuredImageHeight = getScaledImageHeight(
+      imageMetrics,
+      Math.max(MIN_BLOCK_WIDTH, measuredWidth - TEXT_BLOCK_HORIZONTAL_PADDING),
+    );
+    const measuredHeight =
+      heightMeasureElement.scrollHeight + measuredImageHeight;
 
     return {
       width: measuredWidth,
@@ -342,7 +402,7 @@ export const TextBlockView = memo(function TextBlockView({
     return getAutoSize(
       widthOverride,
       forceFixedWidth,
-      draftMeasureTextRef.current,
+      draftRichContentRef.current,
     ).height;
   }
 
@@ -359,7 +419,7 @@ export const TextBlockView = memo(function TextBlockView({
       return;
     }
 
-    const size = getAutoSize(undefined, false, draftMeasureTextRef.current);
+    const size = getAutoSize(undefined, false, draftRichContentRef.current);
 
     if (
       lastAppliedSizeRef.current?.width === size.width &&
@@ -410,7 +470,7 @@ export const TextBlockView = memo(function TextBlockView({
         return;
       }
 
-      const size = getAutoSize(undefined, false, draftMeasureTextRef.current);
+      const size = getAutoSize(undefined, false, draftRichContentRef.current);
 
       committedContentRef.current = nextContent;
       committedRichContentRef.current = nextRichContent;
@@ -579,7 +639,7 @@ export const TextBlockView = memo(function TextBlockView({
       : {};
     const nextContent = nextDraftContent.trim();
 
-    if (!nextContent) {
+    if (!nextContent && !hasTipTapRenderableContent(nextRichContent)) {
       if (options.deleteEmpty) {
         onDelete(block.id);
         onEditEnd(block.id);
@@ -1147,6 +1207,18 @@ type TiptapBlockEditorProps = {
 
 type CtrlASelectionStage = "none" | "line" | "manual-line-confirmed" | "all";
 
+type ClipboardEditorImage =
+  | {
+      file: File;
+      kind: "file";
+      name: string;
+    }
+  | {
+      kind: "source";
+      name: string;
+      source: string;
+    };
+
 function TiptapBlockEditor({
   block,
   initialCaretOffset,
@@ -1246,6 +1318,18 @@ function TiptapBlockEditor({
           ctrlAStageRef.current =
             selectionScope === "single-line" ? "manual-line-confirmed" : "line";
           onSelectionResetRef.current();
+          return true;
+        },
+        handlePaste: (_view, event) => {
+          const clipboardImage = getClipboardEditorImage(event.clipboardData);
+
+          if (!clipboardImage) {
+            return false;
+          }
+
+          event.preventDefault();
+          event.stopPropagation();
+          void insertClipboardImage(editor, clipboardImage);
           return true;
         },
       },
@@ -1359,6 +1443,155 @@ function TiptapBlockEditor({
   );
 }
 
+function getClipboardEditorImage(
+  clipboardData: DataTransfer | null,
+): ClipboardEditorImage | null {
+  const clipboardItems = Array.from(clipboardData?.items ?? []);
+  const imageItem = clipboardItems.find((item) =>
+    item.type.startsWith("image/"),
+  );
+  const imageItemFile = imageItem?.getAsFile();
+
+  if (imageItemFile) {
+    return {
+      file: imageItemFile,
+      kind: "file",
+      name: imageItemFile.name || "Pasted image",
+    };
+  }
+
+  const imageFile = Array.from(clipboardData?.files ?? []).find((file) =>
+    file.type.startsWith("image/"),
+  );
+
+  if (imageFile) {
+    return {
+      file: imageFile,
+      kind: "file",
+      name: imageFile.name || "Pasted image",
+    };
+  }
+
+  const html = clipboardData?.getData("text/html") ?? "";
+  const htmlImageSource = getClipboardHtmlImageSource(html);
+
+  if (htmlImageSource) {
+    return {
+      kind: "source",
+      name: getImageNameFromSource(htmlImageSource),
+      source: htmlImageSource,
+    };
+  }
+
+  return null;
+}
+
+function getClipboardHtmlImageSource(html: string) {
+  if (!html.trim()) {
+    return null;
+  }
+
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  const imageElement = template.content.querySelector("img");
+  const imageSource = imageElement?.getAttribute("src")?.trim();
+
+  if (!imageSource || !isPasteableImageSource(imageSource)) {
+    return null;
+  }
+
+  return imageSource;
+}
+
+function isPasteableImageSource(source: string) {
+  return source.startsWith("data:image/") || /^https?:\/\//i.test(source);
+}
+
+function getImageNameFromSource(source: string) {
+  if (source.startsWith("data:image/")) {
+    return "Pasted image";
+  }
+
+  try {
+    const pathName = new URL(source).pathname;
+    const pathParts = pathName.split("/").filter(Boolean);
+    const name = decodeURIComponent(pathParts[pathParts.length - 1] ?? "");
+
+    return name || "Pasted image";
+  } catch {
+    return "Pasted image";
+  }
+}
+
+async function insertClipboardImage(
+  editor: Editor | null,
+  clipboardImage: ClipboardEditorImage,
+) {
+  if (!editor || editor.isDestroyed) {
+    return;
+  }
+
+  const source =
+    clipboardImage.kind === "file"
+      ? await readFileAsDataUrl(clipboardImage.file)
+      : clipboardImage.source;
+  const dimensions = await getImageDimensions(source);
+
+  if (editor.isDestroyed) {
+    return;
+  }
+
+  editor
+    .chain()
+    .focus()
+    .insertContent({
+      type: "image",
+      attrs: {
+        alt: clipboardImage.name,
+        src: source,
+        ...(dimensions ? dimensions : {}),
+      },
+    })
+    .run();
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read image."));
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+        return;
+      }
+
+      reject(new Error("Image reader returned an unsupported result."));
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function getImageDimensions(source: string) {
+  return new Promise<{ width: number; height: number } | null>((resolve) => {
+    const image = new Image();
+
+    image.onload = () => {
+      if (image.naturalWidth > 0 && image.naturalHeight > 0) {
+        resolve({
+          height: image.naturalHeight,
+          width: image.naturalWidth,
+        });
+        return;
+      }
+
+      resolve(null);
+    };
+    image.onerror = () => resolve(null);
+    image.src = source;
+  });
+}
+
 type SelectionLineScope = "caret" | "single-line" | "multi-line" | "all";
 
 function getCurrentLineSelectionRange(state: EditorState) {
@@ -1430,7 +1663,7 @@ function areRichContentsEqual(
 function getTipTapContent(block: TextBlock): JSONContent {
   if (
     block.richContent &&
-    (!block.content.trim() || hasTipTapText(block.richContent))
+    (!block.content.trim() || hasTipTapRenderableContent(block.richContent))
   ) {
     return block.richContent;
   }
@@ -1530,12 +1763,67 @@ function collectInlineMeasureText(content: JSONContent, parts: string[]) {
   content.content?.forEach((child) => collectInlineMeasureText(child, parts));
 }
 
-function hasTipTapText(content: JSONContent): boolean {
-  if (content.type === "text" && content.text) {
+type TipTapImageMetrics = {
+  images: Array<{
+    height: number;
+    width: number;
+  }>;
+  maxWidth: number;
+};
+
+function getTipTapImageMetrics(content: JSONContent): TipTapImageMetrics {
+  const images: TipTapImageMetrics["images"] = [];
+
+  collectTipTapImageMetrics(content, images);
+
+  return {
+    images,
+    maxWidth: images.reduce(
+      (currentMaxWidth, image) => Math.max(currentMaxWidth, image.width),
+      0,
+    ),
+  };
+}
+
+function collectTipTapImageMetrics(
+  content: JSONContent,
+  images: TipTapImageMetrics["images"],
+) {
+  if (content.type === "image") {
+    const width = Number(content.attrs?.width);
+    const height = Number(content.attrs?.height);
+
+    images.push({
+      height: Number.isFinite(height) && height > 0 ? height : 160,
+      width: Number.isFinite(width) && width > 0 ? width : DEFAULT_BLOCK_WIDTH,
+    });
+    return;
+  }
+
+  content.content?.forEach((child) => collectTipTapImageMetrics(child, images));
+}
+
+function getScaledImageHeight(
+  metrics: TipTapImageMetrics,
+  availableContentWidth: number,
+) {
+  return metrics.images.reduce((height, image) => {
+    const scale = Math.min(1, availableContentWidth / image.width);
+
+    return height + image.height * scale + INLINE_IMAGE_VERTICAL_GAP;
+  }, 0);
+}
+
+function hasTipTapRenderableContent(content: JSONContent): boolean {
+  if (content.type === "text") {
+    return Boolean(content.text?.trim());
+  }
+
+  if (content.type === "image" && typeof content.attrs?.src === "string") {
     return true;
   }
 
-  return content.content?.some(hasTipTapText) ?? false;
+  return content.content?.some(hasTipTapRenderableContent) ?? false;
 }
 
 function renderRichBlockContent(block: TextBlock) {
@@ -1588,6 +1876,20 @@ function renderTipTapContent(content: JSONContent, key = "root"): ReactNode {
         | "h6";
 
       return <HeadingTag key={key}>{children}</HeadingTag>;
+    }
+    case "image": {
+      const src = typeof content.attrs?.src === "string" ? content.attrs.src : "";
+      const alt =
+        typeof content.attrs?.alt === "string" ? content.attrs.alt : "Pasted image";
+
+      return src ? (
+        <img
+          alt={alt}
+          className="text-block-rich-image"
+          key={key}
+          src={src}
+        />
+      ) : null;
     }
     case "hardBreak":
       return <br key={key} />;

@@ -6,7 +6,7 @@ const PNG_DATA_URL =
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: /create new note/i }).click();
-  await expect(page.getByRole("region", { name: /freeform note canvas/i })).toBeVisible();
+  await expect(page.getByRole("tabpanel")).toBeVisible();
 });
 
 test("pasting a clipboard image on the canvas creates an image block", async ({ page }) => {
@@ -58,7 +58,7 @@ test("pressing Ctrl+V with a clipboard image while editing a textbox inserts a r
 });
 
 async function clickCanvas(page: Page, x: number, y: number) {
-  const canvas = page.getByRole("region", { name: /freeform note canvas/i });
+  const canvas = page.getByRole("tabpanel");
   const bounds = await canvas.boundingBox();
 
   if (!bounds) {

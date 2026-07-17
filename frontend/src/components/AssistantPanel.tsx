@@ -1,32 +1,38 @@
 import { memo } from "react";
+import type { Ref } from "react";
 import type {
   AssistantActionKind,
   AssistantMessage,
 } from "../aiTypes";
+import { buildAssistantActionRequest } from "../services/assistantActions";
 
-type AssistantPanelProps = {
-  assistantError: string | null;
-  assistantStatus: string | null;
-  defaultChatModelLabel: string;
-  harnessAgents: Array<{
-    id: string;
-    name: string;
+interface AssistantPanelProps {
+  readonly assistantError: string | null;
+  readonly assistantStatus: string | null;
+  readonly defaultChatModelLabel: string;
+  readonly harnessAgents: ReadonlyArray<{
+    readonly id: string;
+    readonly name: string;
   }>;
-  inputValue: string;
-  isHarnessLoading: boolean;
-  isHarnessReady: boolean;
-  isRecording: boolean;
-  isSending: boolean;
-  messages: AssistantMessage[];
-  onClose: () => void;
-  onInputChange: (value: string) => void;
-  onRefreshHarness: () => void;
-  onRunAction: (kind: AssistantActionKind) => void;
-  onSend: () => void;
-  onSelectHarnessAgent: (agentId: string) => void;
-  onToggleRecording: () => void;
-  selectedHarnessAgentId: string;
-};
+  readonly inputValue: string;
+  readonly isHarnessLoading: boolean;
+  readonly isHarnessReady: boolean;
+  readonly isRecording: boolean;
+  readonly isSending: boolean;
+  readonly messages: readonly AssistantMessage[];
+  readonly onClose: () => void;
+  readonly onInputChange: (value: string) => void;
+  readonly onRefreshHarness: () => void;
+  readonly onRunAction: (kind: AssistantActionKind) => void;
+  readonly onSend: () => void;
+  readonly onSelectHarnessAgent: (agentId: string) => void;
+  readonly onToggleRecording: () => void;
+  readonly panelRef: Ref<HTMLElement>;
+  readonly selectedBlockCount: number;
+  readonly selectedBlockPreview: string | null;
+  readonly selectedHarnessAgentId: string;
+  readonly selectedPageTitle: string | null;
+}
 
 type AssistantIconName =
   | "chevron-right"
@@ -77,16 +83,16 @@ function AssistantIcon({ name }: { name: AssistantIconName }) {
   );
 }
 
-function getLatestAssistantOutput(messages: AssistantMessage[]) {
+function getLatestAssistantMessage(messages: readonly AssistantMessage[]) {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
 
     if (message.role === "assistant" && message.content.trim()) {
-      return message.content;
+      return message;
     }
   }
 
-  return "";
+  return null;
 }
 
 export const AssistantPanel = memo(function AssistantPanel({
@@ -107,14 +113,61 @@ export const AssistantPanel = memo(function AssistantPanel({
   onSend,
   onSelectHarnessAgent,
   onToggleRecording,
+  panelRef,
+  selectedBlockCount,
+  selectedBlockPreview,
   selectedHarnessAgentId,
-}: AssistantPanelProps) {
+  selectedPageTitle,
+}: Readonly<AssistantPanelProps>) {
   const canSend = inputValue.trim().length > 0 && !isSending && isHarnessReady && Boolean(selectedHarnessAgentId);
-  const latestAssistantOutput = getLatestAssistantOutput(messages);
-  const canRunOutputAction = Boolean(latestAssistantOutput);
+  const latestAssistantMessage = getLatestAssistantMessage(messages);
+  const assistantOutputEligibility = buildAssistantActionRequest(
+    "insert-text-block",
+    latestAssistantMessage?.content ?? "",
+  );
+  const hasSingleSelectedBlock =
+    selectedBlockCount === 1 && selectedBlockPreview !== null;
+  const actionEligibilityReasonId = "assistant-action-eligibility-reason";
+  const selectedBlockLabel = selectedBlockPreview
+    ? `Selected block: ${selectedBlockPreview}`
+    : selectedBlockCount === 1
+      ? "Selected block: Image block (text actions unavailable)"
+    : selectedBlockCount > 1
+      ? `${selectedBlockCount} blocks selected`
+      : "Selected block: None";
+
+  function getActionDisabledReason(kind: AssistantActionKind) {
+    if (!assistantOutputEligibility.ok) {
+      return assistantOutputEligibility.message;
+    }
+
+    if (kind === "insert-text-block") {
+      return selectedPageTitle ? null : "Select a page before inserting output.";
+    }
+
+    return hasSingleSelectedBlock
+      ? null
+      : "Select exactly one text block to append or replace output.";
+  }
+
+  const visibleEligibilityReason = !assistantOutputEligibility.ok
+    ? assistantOutputEligibility.message
+    : !selectedPageTitle && !hasSingleSelectedBlock
+      ? "Select a page to enable Insert, and select exactly one text block to enable Append and Replace."
+      : !selectedPageTitle
+        ? "Select a page to enable Insert."
+        : !hasSingleSelectedBlock
+          ? "Select exactly one text block to enable Append and Replace."
+          : null;
 
   return (
-    <aside className="assistant-panel" aria-label="AI assistant">
+    <aside
+      className="assistant-panel"
+      aria-label="AI assistant"
+      id="workspace-assistant-panel"
+      ref={panelRef}
+      tabIndex={-1}
+    >
       <header className="assistant-panel-header">
         <div className="assistant-panel-title">
           <AssistantIcon name="sparkles" />
@@ -158,29 +211,64 @@ export const AssistantPanel = memo(function AssistantPanel({
         {messages.length === 0 ? (
           <div className="assistant-empty-state">No messages</div>
         ) : (
-          messages.map((message) => (
-            <article
-              className={`assistant-message assistant-message-${message.role}`}
-              key={message.id}
-            >
-              <div className="assistant-message-role">{message.role}</div>
-              <p>{message.content}</p>
-            </article>
-          ))
-        )}
-      </section>
+          messages.map((message) => {
+            const isLatestAssistantMessage =
+              message.id === latestAssistantMessage?.id;
 
-      <section className="assistant-output-actions" aria-label="Assistant output actions">
-        {assistantActions.map((action) => (
-          <button
-            disabled={!canRunOutputAction}
-            key={action.kind}
-            onClick={() => onRunAction(action.kind)}
-            type="button"
-          >
-            {action.label}
-          </button>
-        ))}
+            return (
+              <article
+                className={`assistant-message assistant-message-${message.role}`}
+                key={message.id}
+              >
+                <div className="assistant-message-role">{message.role}</div>
+                <p>{message.content}</p>
+                {isLatestAssistantMessage ? (
+                  <>
+                    <div className="assistant-target-context">
+                      <strong>
+                        Current page: {selectedPageTitle ?? "None selected"}
+                      </strong>
+                      <span>{selectedBlockLabel}</span>
+                    </div>
+                    <section
+                      className="assistant-output-actions"
+                      aria-label="Assistant output actions"
+                    >
+                      {assistantActions.map((action) => {
+                        const disabledReason = getActionDisabledReason(action.kind);
+
+                        return (
+                          <button
+                            aria-describedby={
+                              disabledReason
+                                ? actionEligibilityReasonId
+                                : undefined
+                            }
+                            disabled={Boolean(disabledReason)}
+                            key={action.kind}
+                            onClick={() => onRunAction(action.kind)}
+                            title={disabledReason ?? action.label}
+                            type="button"
+                          >
+                            {action.label}
+                          </button>
+                        );
+                      })}
+                      {visibleEligibilityReason ? (
+                        <p
+                          className="assistant-action-reason"
+                          id={actionEligibilityReasonId}
+                        >
+                          {visibleEligibilityReason}
+                        </p>
+                      ) : null}
+                    </section>
+                  </>
+                ) : null}
+              </article>
+            );
+          })
+        )}
       </section>
 
       {assistantStatus ? (

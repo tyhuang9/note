@@ -152,7 +152,6 @@ const RichImage = TiptapNode.create({
 
 const tiptapExtensions = [StarterKit, TextStyle, RichImage];
 const TEXT_BLOCK_HORIZONTAL_PADDING = 18;
-const INLINE_IMAGE_VERTICAL_GAP = 4;
 
 type TextBlockViewProps = {
   block: TextBlock;
@@ -239,9 +238,6 @@ export const TextBlockView = memo(function TextBlockView({
   const draftRichContentRef = useRef<JSONContent>(
     getTipTapContent(block),
   );
-  const draftMeasureTextRef = useRef(
-    getTipTapMeasureText(getTipTapContent(block)),
-  );
   const committedContentRef = useRef(block.content);
   const committedRichContentRef = useRef<JSONContent>(
     getTipTapContent(block),
@@ -252,7 +248,10 @@ export const TextBlockView = memo(function TextBlockView({
     width: number;
     height: number;
   } | null>(null);
-  const latestAutosizeText = useRef(block.content);
+  const latestAutosizeContent = useRef<{
+    key: string;
+    source: HTMLElement | null;
+  } | null>(null);
   const [isContentSelected, setIsContentSelected] = useState(false);
 
   const setBlockElement = useCallback(
@@ -277,10 +276,7 @@ export const TextBlockView = memo(function TextBlockView({
     if (!isEditing) {
       draftContentRef.current = block.content;
       draftRichContentRef.current = getTipTapContent(block);
-      draftMeasureTextRef.current = getTipTapMeasureText(
-        draftRichContentRef.current,
-      );
-      latestAutosizeText.current = "";
+      latestAutosizeContent.current = null;
     }
   }, [block.content, block.id, block.richContent, isEditing]);
 
@@ -325,22 +321,41 @@ export const TextBlockView = memo(function TextBlockView({
     return updates;
   }
 
-  function setMeasureText(text: string) {
-    const measureText = text.length > 0 ? text : " ";
+  function setMeasureContent(content: JSONContent) {
+    const widthMeasureElement = widthMeasureRef.current;
+    const heightMeasureElement = heightMeasureRef.current;
 
-    if (latestAutosizeText.current === text) {
+    if (!widthMeasureElement || !heightMeasureElement) {
       return;
     }
 
-    latestAutosizeText.current = text;
+    const sourceElement = editorRef.current?.view.dom ?? displayRef.current;
+    const contentKey = JSON.stringify(content);
 
-    if (widthMeasureRef.current) {
-      widthMeasureRef.current.textContent = measureText;
+    if (
+      latestAutosizeContent.current?.key === contentKey &&
+      latestAutosizeContent.current.source === sourceElement
+    ) {
+      return;
     }
 
-    if (heightMeasureRef.current) {
-      heightMeasureRef.current.textContent = measureText;
+    if (sourceElement) {
+      const cloneContent = () =>
+        Array.from(sourceElement.childNodes, (node) => node.cloneNode(true));
+
+      widthMeasureElement.replaceChildren(...cloneContent());
+      heightMeasureElement.replaceChildren(...cloneContent());
+    } else {
+      const measureText = getTipTapMeasureText(content) || " ";
+
+      widthMeasureElement.textContent = measureText;
+      heightMeasureElement.textContent = measureText;
     }
+
+    latestAutosizeContent.current = {
+      key: contentKey,
+      source: sourceElement,
+    };
   }
 
   function getAutoSize(
@@ -358,10 +373,9 @@ export const TextBlockView = memo(function TextBlockView({
     const widthMeasureElement = widthMeasureRef.current;
     const heightMeasureElement = heightMeasureRef.current;
     const nextWidth = widthOverride ?? block.width;
-    const measureText = getTipTapMeasureText(measureContent);
     const imageMetrics = getTipTapImageMetrics(measureContent);
 
-    setMeasureText(measureText);
+    setMeasureContent(measureContent);
 
     if (!widthMeasureElement || !heightMeasureElement) {
       return {
@@ -382,12 +396,7 @@ export const TextBlockView = memo(function TextBlockView({
 
     heightMeasureElement.style.width = `${measuredWidth}px`;
 
-    const measuredImageHeight = getScaledImageHeight(
-      imageMetrics,
-      Math.max(MIN_BLOCK_WIDTH, measuredWidth - TEXT_BLOCK_HORIZONTAL_PADDING),
-    );
-    const measuredHeight =
-      heightMeasureElement.scrollHeight + measuredImageHeight;
+    const measuredHeight = heightMeasureElement.scrollHeight;
 
     return {
       width: measuredWidth,
@@ -404,12 +413,6 @@ export const TextBlockView = memo(function TextBlockView({
       forceFixedWidth,
       draftRichContentRef.current,
     ).height;
-  }
-
-  function getMeasureText() {
-    return draftMeasureTextRef.current.length > 0
-      ? draftMeasureTextRef.current
-      : " ";
   }
 
   function updateBlockElementSize() {
@@ -606,9 +609,6 @@ export const TextBlockView = memo(function TextBlockView({
 
     draftContentRef.current = editor.getText({ blockSeparator: "\n" });
     draftRichContentRef.current = editor.getJSON();
-    draftMeasureTextRef.current = getTipTapMeasureText(
-      draftRichContentRef.current,
-    );
     applyAutosize();
     scheduleContentCommit();
   }
@@ -628,9 +628,6 @@ export const TextBlockView = memo(function TextBlockView({
 
     draftContentRef.current = editor.getText({ blockSeparator: "\n" });
     draftRichContentRef.current = editor.getJSON();
-    draftMeasureTextRef.current = getTipTapMeasureText(
-      draftRichContentRef.current,
-    );
 
     const nextDraftContent = draftContentRef.current;
     const nextRichContent = draftRichContentRef.current;
@@ -1069,7 +1066,7 @@ export const TextBlockView = memo(function TextBlockView({
       ) : null}
       {!isEditing && !block.imageData ? (
         <div
-          className="text-block-display"
+          className="text-block-display text-block-rich-content"
           onClick={(event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -1151,18 +1148,14 @@ export const TextBlockView = memo(function TextBlockView({
         <>
           <div
             aria-hidden="true"
-            className="text-block-measurer text-block-width-measurer"
+            className="text-block-measurer text-block-rich-content text-block-width-measurer"
             ref={widthMeasureRef}
-          >
-            {getMeasureText()}
-          </div>
+          />
           <div
             aria-hidden="true"
-            className="text-block-measurer text-block-height-measurer"
+            className="text-block-measurer text-block-rich-content text-block-height-measurer"
             ref={heightMeasureRef}
-          >
-            {getMeasureText()}
-          </div>
+          />
         </>
       ) : null}
     </div>
@@ -1252,7 +1245,7 @@ function TiptapBlockEditor({
       editorProps: {
         attributes: {
           "aria-label": "Text block",
-          class: "text-block-editor-content",
+          class: "text-block-editor-content text-block-rich-content",
         },
         handleKeyDown: (view, event) => {
           const isCtrlA =
@@ -1803,17 +1796,6 @@ function collectTipTapImageMetrics(
   content.content?.forEach((child) => collectTipTapImageMetrics(child, images));
 }
 
-function getScaledImageHeight(
-  metrics: TipTapImageMetrics,
-  availableContentWidth: number,
-) {
-  return metrics.images.reduce((height, image) => {
-    const scale = Math.min(1, availableContentWidth / image.width);
-
-    return height + image.height * scale + INLINE_IMAGE_VERTICAL_GAP;
-  }, 0);
-}
-
 function hasTipTapRenderableContent(content: JSONContent): boolean {
   if (content.type === "text") {
     return Boolean(content.text?.trim());
@@ -1881,13 +1863,20 @@ function renderTipTapContent(content: JSONContent, key = "root"): ReactNode {
       const src = typeof content.attrs?.src === "string" ? content.attrs.src : "";
       const alt =
         typeof content.attrs?.alt === "string" ? content.attrs.alt : "Pasted image";
+      const title =
+        typeof content.attrs?.title === "string" ? content.attrs.title : undefined;
+      const width = Number(content.attrs?.width);
+      const height = Number(content.attrs?.height);
 
       return src ? (
         <img
           alt={alt}
           className="text-block-rich-image"
+          height={Number.isFinite(height) && height > 0 ? height : undefined}
           key={key}
           src={src}
+          title={title}
+          width={Number.isFinite(width) && width > 0 ? width : undefined}
         />
       ) : null;
     }

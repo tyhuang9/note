@@ -8,7 +8,11 @@ import {
   useState,
 } from "react";
 import type { Editor, JSONContent } from "@tiptap/core";
-import type { DragEvent, PointerEvent as ReactPointerEvent } from "react";
+import type {
+  DragEvent,
+  PointerEvent as ReactPointerEvent,
+  Ref,
+} from "react";
 import { useEditorState } from "@tiptap/react";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
@@ -19,6 +23,18 @@ import {
 import { AssistantPanel } from "./components/AssistantPanel";
 import { InlineRename } from "./components/InlineRename";
 import { TextBlockView } from "./components/TextBlockView";
+import { ActivityRail } from "./components/workbench/ActivityRail";
+import { WorkbenchShell } from "./components/workbench/WorkbenchShell";
+import {
+  getWorkspaceTabId,
+  WORKSPACE_PAGE_PANEL_ID,
+  WorkspaceTabs,
+} from "./components/workbench/WorkspaceTabs";
+import type {
+  WorkbenchIconName,
+  WorkbenchIconProps,
+} from "./components/workbench/icons";
+import { useWorkbenchViewport } from "./components/workbench/useWorkbenchViewport";
 import {
   DEFAULT_BLOCK_HEIGHT,
   DEFAULT_BLOCK_WIDTH,
@@ -68,7 +84,7 @@ import {
   DEFAULT_LOCAL_STT_CONFIG,
 } from "./services/localModelProviders";
 import { listAIProviderModels, testAIProvider } from "./services/aiProviderAdapters";
-import { buildAssistantActionRequest, validateAssistantActionRequest } from "./services/assistantActions";
+import { buildAssistantActionRequest } from "./services/assistantActions";
 import {
   createAIProvider,
   deleteProviderCredential,
@@ -77,14 +93,16 @@ import {
 } from "./services/aiProviderStorage";
 import { buildNotesContext } from "./services/notesContext";
 import {
+  createLlamaHarnessNoteRun,
+  getLlamaHarnessNoteCapabilities,
   getLlamaHarnessSetupStatus,
-  listLlamaHarnessAgents,
-  patchLlamaHarnessAgent,
-  sendLlamaHarnessAgentChat,
   type LlamaHarnessAgent,
-  type LlamaHarnessAgentPatch,
+  type LlamaHarnessAppCapabilities,
+  type LlamaHarnessRunResponse,
+  type LlamaHarnessRunToolRequest,
+  type LlamaHarnessRunToolResult,
   type LlamaHarnessSetupStatus,
-  type LlamaHarnessToolCall,
+  submitLlamaHarnessNoteToolResults,
 } from "./services/llamaHarnessAssistant";
 import type { AppData, AppSessionState, TextBlock } from "./types";
 
@@ -92,8 +110,12 @@ type SidebarProps = {
   bookmarkedPages: AppData["pages"];
   editingFolderId: string | null;
   editingPageId: string | null;
+  explorerPanelRef: Ref<HTMLDivElement>;
+  explorerToggleButtonRef: Ref<HTMLButtonElement>;
   folders: AppData["folders"];
   isCollapsed: boolean;
+  isInert: boolean;
+  isNarrowWorkbench: boolean;
   pageSearchFocusRequest: number;
   pageTemplates: AppData["pages"];
   pages: AppData["pages"];
@@ -104,11 +126,13 @@ type SidebarProps = {
   onCreateFolder: () => void;
   onCreatePage: () => void;
   onCreatePageFromTemplate: (templatePageId: string) => void;
+  onCreateTemplateFromPage: () => void;
   onDeleteFolder: (folderId: string) => void;
   onDeletePage: (pageId: string) => void;
+  onDeletePageTemplate: (templatePageId: string) => void;
   onFolderDragLeave: (folderId: string) => void;
   onFolderDragOver: (folderId: string) => void;
-  onFocusPageSearch: () => void;
+  onFocusPageSearch: (trigger?: HTMLElement) => void;
   onPageDragEnd: () => void;
   onPageDragStart: (pageId: string) => boolean;
   onPageDropOnFolder: (folderId: string) => boolean;
@@ -120,7 +144,7 @@ type SidebarProps = {
   onSelectPage: (pageId: string, isMultiSelect?: boolean) => void;
   onSetEditingFolderId: (folderId: string | null) => void;
   onSetEditingPageId: (pageId: string | null) => void;
-  onToggleCollapse: () => void;
+  onToggleCollapse: (trigger?: HTMLElement) => void;
   onTogglePageBookmark: (pageId: string) => void;
   pageDropTargetFolderId: string | null;
   draggedPageIds: string[];
@@ -129,22 +153,18 @@ type SidebarProps = {
 
 type PageHeaderProps = {
   activeTextEditor: Editor | null;
-  canCreatePageFromTemplate: boolean;
+  assistantToggleButtonRef: Ref<HTMLButtonElement>;
   isAssistantOpen: boolean;
   isGridVisible: boolean;
   isDarkMode: boolean;
   isEditingHeaderTitle: boolean;
   isSnapToGridEnabled: boolean;
   openPages: OpenPageTab[];
-  pageTemplates: AppData["pages"];
-  selectedPage: AppData["pages"][number] | undefined;
   selectedPageId: string;
   textFormatState: TextFormatState;
   zoomLevel: number;
   onClosePageTab: (pageId: string) => void;
   onCreatePage: () => void;
-  onCreatePageFromTemplate: (templatePageId: string) => void;
-  onCreateTemplateFromPage: () => void;
   onFocusCanvasSearch: () => void;
   onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
   onRenamePage: (pageId: string, title: string) => void;
@@ -155,9 +175,8 @@ type PageHeaderProps = {
   ) => void;
   onSelectPageTab: (pageId: string) => void;
   onSetEditingHeaderTitle: (isEditing: boolean) => void;
-  onToggleAssistant: () => void;
+  onToggleAssistant: (trigger?: HTMLElement) => void;
   onToggleGrid: () => void;
-  onTogglePageBookmark: (pageId: string) => void;
   onToggleDarkMode: () => void;
   onToggleSnapToGrid: () => void;
   onSetTextFontFamily: (fontFamily: TextFontFamily) => void;
@@ -170,6 +189,7 @@ type OpenPageTab = AppData["pages"][number] & {
 };
 
 type PageTabDropPlacement = "before" | "after";
+type WorkbenchOverlay = "assistant" | "explorer";
 
 type ToolbarActionId =
   | "bold"
@@ -197,6 +217,23 @@ type TextFormatState = Record<ToolbarActionId, boolean> & {
 
 type CreateTextBlockOptions = {
   placement?: "block-origin" | "text-caret";
+};
+
+type ClipboardImage =
+  | {
+      file: File;
+      kind: "file";
+      name: string;
+    }
+  | {
+      kind: "source";
+      name: string;
+      source: string;
+    };
+
+type ClipboardReadItem = {
+  getType: (type: string) => Promise<Blob>;
+  types: string[];
 };
 
 type DragLayerSession = {
@@ -246,7 +283,6 @@ const MAX_BLOCK_HISTORY_ENTRIES = 100;
 const PAGE_SEARCH_PREVIEW_CONTEXT = 44;
 const PAGE_TEMPLATE_FOLDER_ID = "__note_page_templates__";
 const PAGE_DRAG_MIME_TYPE = "application/x-note-page";
-const PAGE_TAB_DRAG_MIME_TYPE = "application/x-note-page-tab";
 const ROOT_FOLDER_ID = "";
 const PASTED_BLOCK_OFFSET = 24;
 const TEXT_BLOCK_BORDER_WIDTH = 1;
@@ -263,41 +299,7 @@ type SidebarSortOrder =
   | "created-asc";
 type SidebarTabId = "files" | "search" | "bookmarks" | "templates";
 
-type HeroIconName =
-  | "adjustments-horizontal"
-  | "archive-box"
-  | "arrows-up-down"
-  | "bookmark"
-  | "bold"
-  | "check"
-  | "chevron-down"
-  | "chevron-right"
-  | "chevron-up"
-  | "code-bracket"
-  | "document-plus"
-  | "document-text"
-  | "eye"
-  | "eye-slash"
-  | "folder"
-  | "folder-plus"
-  | "italic"
-  | "list-bullet"
-  | "magnifying-glass"
-  | "moon"
-  | "numbered-list"
-  | "panel"
-  | "pencil-square"
-  | "plus"
-  | "quote"
-  | "rectangle-stack"
-  | "sparkles"
-  | "squares-2x2"
-  | "star"
-  | "strikethrough"
-  | "sun"
-  | "trash"
-  | "underline"
-  | "x-mark";
+type HeroIconName = WorkbenchIconName;
 
 function readSelectedLlamaHarnessAgentId() {
   if (typeof window === "undefined") {
@@ -331,39 +333,6 @@ function llamaHarnessSetupMessage(status: LlamaHarnessSetupStatus) {
       return "Finish setup in llama-harness: create or activate an agent.";
     case "ready":
       return "llama-harness is ready.";
-  }
-}
-
-function assistantActionKindFromToolName(name: string | undefined): AssistantActionKind | null {
-  switch (name) {
-    case "insert_text_block":
-      return "insert-text-block";
-    case "append_to_selected_block":
-      return "append-to-selected-block";
-    case "replace_selected_block":
-      return "replace-selected-block";
-    default:
-      return null;
-  }
-}
-
-function parseToolCallArguments(args: string | Record<string, unknown> | undefined): Record<string, unknown> {
-  if (!args) {
-    return {};
-  }
-
-  if (typeof args !== "string") {
-    return args;
-  }
-
-  try {
-    const parsed = JSON.parse(args) as unknown;
-
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
   }
 }
 
@@ -422,7 +391,24 @@ function areStringSetsEqual(firstSet: Set<string>, secondSet: Set<string>) {
   return true;
 }
 
-function HeroIcon({ name }: { name: HeroIconName }) {
+function getOffscreenDirectionLabel(
+  direction: OffscreenGroup["direction"],
+): string {
+  const labels: Record<OffscreenGroup["direction"], string> = {
+    n: "north",
+    ne: "northeast",
+    e: "east",
+    se: "southeast",
+    s: "south",
+    sw: "southwest",
+    w: "west",
+    nw: "northwest",
+  };
+
+  return labels[direction];
+}
+
+function HeroIcon({ name }: Readonly<WorkbenchIconProps>) {
   return (
     <svg
       aria-hidden="true"
@@ -1016,6 +1002,9 @@ function App() {
   const [isCanvasKeyboardActive, setIsCanvasKeyboardActive] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [isAssistantOpen, setIsAssistantOpen] = useState(false);
+  const { isCompactWorkbench, isNarrowWorkbench } = useWorkbenchViewport();
+  const [activeNarrowOverlay, setActiveNarrowOverlay] =
+    useState<WorkbenchOverlay | null>(null);
   const [isGridVisible, setIsGridVisible] = useState(false);
   const [isSnapToGridEnabled, setIsSnapToGridEnabled] = useState(false);
   const [dragSourceBlockIds, setDragSourceBlockIds] = useState<string[]>([]);
@@ -1034,6 +1023,8 @@ function App() {
   const [isAssistantRecording, setIsAssistantRecording] = useState(false);
   const [llamaHarnessSetupStatus, setLlamaHarnessSetupStatus] =
     useState<LlamaHarnessSetupStatus | null>(null);
+  const [llamaHarnessCapabilities, setLlamaHarnessCapabilities] =
+    useState<LlamaHarnessAppCapabilities | null>(null);
   const [llamaHarnessAgents, setLlamaHarnessAgents] = useState<LlamaHarnessAgent[]>([]);
   const [selectedLlamaHarnessAgentId, setSelectedLlamaHarnessAgentId] = useState(
     readSelectedLlamaHarnessAgentId,
@@ -1058,6 +1049,14 @@ function App() {
   const canvasContentRef = useRef<HTMLDivElement | null>(null);
   const selectionRectRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const explorerPanelRef = useRef<HTMLDivElement | null>(null);
+  const explorerToggleButtonRef = useRef<HTMLButtonElement | null>(null);
+  const assistantPanelRef = useRef<HTMLElement | null>(null);
+  const assistantToggleButtonRef = useRef<HTMLButtonElement | null>(null);
+  const overlayReturnFocusRef = useRef<HTMLElement | null>(null);
+  const overlayEntryFocusRequestRef = useRef<WorkbenchOverlay | null>(null);
+  const overlayReturnFocusRequestRef = useRef(false);
+  const wasNarrowWorkbenchRef = useRef(false);
   const canvasViewportRef = useRef<ViewportRect | null>(null);
   const panState = useRef<PanState | null>(null);
   const panOffsetRef = useRef<PanOffset>(panOffset);
@@ -1100,10 +1099,48 @@ function App() {
   textFormatStateRef.current = textFormatState;
   zoomLevelRef.current = zoomLevel;
 
+  const isExplorerOverlayOpen =
+    isNarrowWorkbench && activeNarrowOverlay === "explorer";
+  const isAssistantOverlayOpen = isNarrowWorkbench
+    ? activeNarrowOverlay === "assistant" ||
+      (activeNarrowOverlay === null && isAssistantOpen)
+    : isCompactWorkbench && isAssistantOpen;
+  const activeWorkbenchOverlay: WorkbenchOverlay | null =
+    isExplorerOverlayOpen
+      ? "explorer"
+      : isAssistantOverlayOpen
+        ? "assistant"
+        : null;
+  const isExplorerPresentationCollapsed = isNarrowWorkbench
+    ? !isExplorerOverlayOpen
+    : isSidebarCollapsed;
+  const shouldRenderAssistantPanel = isNarrowWorkbench
+    ? isAssistantOverlayOpen
+    : isAssistantOpen;
+
   const selectedPage = useMemo(
     () => data.pages.find((page) => page.id === selectedPageId),
     [data.pages, selectedPageId],
   );
+  const selectedAssistantBlockPreview = useMemo(() => {
+    if (selectedBlockIds.length !== 1) {
+      return null;
+    }
+
+    const selectedBlock = data.blocks.find(
+      (block) => block.id === selectedBlockIds[0],
+    );
+
+    if (!selectedBlock || selectedBlock.imageData) {
+      return null;
+    }
+
+    const normalizedContent = selectedBlock.content.replace(/\s+/g, " ").trim();
+
+    return normalizedContent
+      ? `${normalizedContent.slice(0, 88)}${normalizedContent.length > 88 ? "…" : ""}`
+      : "Empty text block";
+  }, [data.blocks, selectedBlockIds]);
   const isWorkspaceEmpty =
     isLoaded && data.folders.length === 0 && data.pages.length === 0;
   const pageTemplates = useMemo(
@@ -1360,8 +1397,8 @@ function App() {
     }));
   }, [canvasViewport, visibleBlocks]);
   const activeLlamaHarnessAgents = useMemo(
-    () => llamaHarnessAgents.filter((agent) => agent.status === "active"),
-    [llamaHarnessAgents],
+    () => llamaHarnessCapabilities?.allowedAgents ?? llamaHarnessAgents,
+    [llamaHarnessAgents, llamaHarnessCapabilities],
   );
   const selectedLlamaHarnessAgent = useMemo(
     () =>
@@ -1371,10 +1408,133 @@ function App() {
     [activeLlamaHarnessAgents, selectedLlamaHarnessAgentId],
   );
   const assistantAgentLabel = selectedLlamaHarnessAgent
-    ? `${selectedLlamaHarnessAgent.name} / ${selectedLlamaHarnessAgent.default_model || "model not set"}`
+    ? `${selectedLlamaHarnessAgent.name} / ${llamaHarnessCapabilities?.model.modelName || "model not set"}`
     : llamaHarnessSetupStatus?.ready
       ? "No active agent selected"
       : "llama-harness setup incomplete";
+
+  useEffect(() => {
+    const wasNarrowWorkbench = wasNarrowWorkbenchRef.current;
+
+    if (isNarrowWorkbench && !wasNarrowWorkbench) {
+      setActiveNarrowOverlay(isAssistantOpen ? "assistant" : null);
+    } else if (isNarrowWorkbench && isAssistantOpen) {
+      setActiveNarrowOverlay((currentOverlay) => currentOverlay ?? "assistant");
+    } else if (!isNarrowWorkbench && wasNarrowWorkbench) {
+      setActiveNarrowOverlay(null);
+    }
+
+    wasNarrowWorkbenchRef.current = isNarrowWorkbench;
+  }, [isAssistantOpen, isNarrowWorkbench]);
+
+  useEffect(() => {
+    const requestedEntryOverlay = overlayEntryFocusRequestRef.current;
+    const shouldFocusEntry = Boolean(
+      requestedEntryOverlay && requestedEntryOverlay === activeWorkbenchOverlay,
+    );
+    const shouldRestoreFocus =
+      overlayReturnFocusRequestRef.current && !activeWorkbenchOverlay;
+
+    if (!shouldFocusEntry && !shouldRestoreFocus) {
+      if (requestedEntryOverlay && requestedEntryOverlay !== activeWorkbenchOverlay) {
+        overlayEntryFocusRequestRef.current = null;
+      }
+      if (overlayReturnFocusRequestRef.current && activeWorkbenchOverlay) {
+        overlayReturnFocusRequestRef.current = false;
+      }
+      if (!activeWorkbenchOverlay) {
+        overlayReturnFocusRef.current = null;
+      }
+      return;
+    }
+
+    overlayEntryFocusRequestRef.current = null;
+    overlayReturnFocusRequestRef.current = false;
+    const frameId = window.requestAnimationFrame(() => {
+      if (shouldFocusEntry && activeWorkbenchOverlay === "explorer") {
+        explorerPanelRef.current?.focus();
+      } else if (shouldFocusEntry && activeWorkbenchOverlay === "assistant") {
+        assistantPanelRef.current?.focus();
+      } else if (shouldRestoreFocus) {
+        overlayReturnFocusRef.current?.focus();
+        overlayReturnFocusRef.current = null;
+      }
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [activeWorkbenchOverlay]);
+
+  useEffect(() => {
+    if (!activeWorkbenchOverlay) {
+      return;
+    }
+
+    const overlay: WorkbenchOverlay = activeWorkbenchOverlay;
+
+    function handleOverlayKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeWorkbenchOverlay(overlay);
+        return;
+      }
+      if (event.key !== "Tab") {
+        return;
+      }
+
+      const overlayPanel =
+        overlay === "explorer"
+          ? explorerPanelRef.current
+          : assistantPanelRef.current;
+      if (!overlayPanel) {
+        return;
+      }
+
+      const focusBoundary =
+        overlay === "explorer"
+          ? (overlayPanel.closest<HTMLElement>(".sidebar") ?? overlayPanel)
+          : overlayPanel;
+
+      const focusableElements = Array.from(
+        focusBoundary.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter(
+        (element) =>
+          element.getAttribute("aria-hidden") !== "true" &&
+          element.getClientRects().length > 0,
+      );
+      const firstFocusableElement = focusableElements[0];
+      const lastFocusableElement = focusableElements[focusableElements.length - 1];
+      const activeElement = document.activeElement;
+
+      if (!firstFocusableElement || !lastFocusableElement) {
+        event.preventDefault();
+        overlayPanel.focus();
+        return;
+      }
+
+      if (!focusBoundary.contains(activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? lastFocusableElement : firstFocusableElement).focus();
+        return;
+      }
+
+      if (
+        event.shiftKey &&
+        (activeElement === firstFocusableElement || activeElement === overlayPanel)
+      ) {
+        event.preventDefault();
+        lastFocusableElement.focus();
+      } else if (!event.shiftKey && activeElement === lastFocusableElement) {
+        event.preventDefault();
+        firstFocusableElement.focus();
+      }
+    }
+
+    window.addEventListener("keydown", handleOverlayKeyDown, true);
+    return () => window.removeEventListener("keydown", handleOverlayKeyDown, true);
+  }, [activeWorkbenchOverlay, isNarrowWorkbench]);
 
   useEffect(() => {
     panOffsetRef.current = panOffset;
@@ -1479,6 +1639,8 @@ function App() {
 
         setData(savedData);
         setIsDarkMode(savedData.isDarkMode ?? true);
+        setIsSidebarCollapsed(savedSessionState?.isExplorerCollapsed ?? false);
+        setIsAssistantOpen(savedSessionState?.isAssistantOpen ?? false);
         pageViewportsRef.current = normalizePageViewports(
           savedSessionState?.pageViewports,
           validPageIds,
@@ -1688,8 +1850,10 @@ function App() {
     return () => window.clearTimeout(saveTimer);
   }, [
     data,
+    isAssistantOpen,
     isDarkMode,
     isLoaded,
+    isSidebarCollapsed,
     openPageTabIds,
     panOffset.x,
     panOffset.y,
@@ -1783,6 +1947,8 @@ function App() {
     }
 
     return {
+      isAssistantOpen,
+      isExplorerCollapsed: isSidebarCollapsed,
       selectedFolderId: selectedFolderIdRef.current || undefined,
       selectedPageId: selectedPageIdRef.current || undefined,
       openPageTabIds: getValidUniquePageIds(
@@ -2081,6 +2247,205 @@ function App() {
     return { x: PASTED_BLOCK_OFFSET, y: PASTED_BLOCK_OFFSET };
   }
 
+  function getImagePasteOrigin() {
+    if (insertionPoint) {
+      return insertionPoint;
+    }
+
+    const currentEditingBlockId = editingBlockIdRef.current;
+    const currentEditingBlock = currentEditingBlockId
+      ? dataRef.current.blocks.find((block) => block.id === currentEditingBlockId)
+      : null;
+
+    if (currentEditingBlock) {
+      return snapPoint({
+        x: currentEditingBlock.x,
+        y: currentEditingBlock.y + currentEditingBlock.height + PASTED_BLOCK_OFFSET,
+      });
+    }
+
+    return getPasteOrigin();
+  }
+
+  function getClipboardImage(clipboardData: DataTransfer | null): ClipboardImage | null {
+    const clipboardItems = Array.from(clipboardData?.items ?? []);
+    const imageItem = clipboardItems.find((item) =>
+      item.type.startsWith("image/"),
+    );
+    const imageItemFile = imageItem?.getAsFile();
+
+    if (imageItemFile) {
+      return {
+        file: imageItemFile,
+        kind: "file",
+        name: imageItemFile.name || "Pasted image",
+      };
+    }
+
+    const imageFile = Array.from(clipboardData?.files ?? []).find((file) =>
+      file.type.startsWith("image/"),
+    );
+
+    if (imageFile) {
+      return {
+        file: imageFile,
+        kind: "file",
+        name: imageFile.name || "Pasted image",
+      };
+    }
+
+    const html = clipboardData?.getData("text/html") ?? "";
+    const htmlImageSource = getClipboardHtmlImageSource(html);
+
+    if (htmlImageSource) {
+      return {
+        kind: "source",
+        name: getImageNameFromSource(htmlImageSource),
+        source: htmlImageSource,
+      };
+    }
+
+    return null;
+  }
+
+  function getClipboardHtmlImageSource(html: string) {
+    if (!html.trim()) {
+      return null;
+    }
+
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    const imageElement = template.content.querySelector("img");
+    const imageSource = imageElement?.getAttribute("src")?.trim();
+
+    if (!imageSource || !isPasteableImageSource(imageSource)) {
+      return null;
+    }
+
+    return imageSource;
+  }
+
+  function isPasteableImageSource(source: string) {
+    return source.startsWith("data:image/") || /^https?:\/\//i.test(source);
+  }
+
+  function getImageNameFromSource(source: string) {
+    if (source.startsWith("data:image/")) {
+      return "Pasted image";
+    }
+
+    try {
+      const pathName = new URL(source).pathname;
+      const pathParts = pathName.split("/").filter(Boolean);
+      const name = decodeURIComponent(pathParts[pathParts.length - 1] ?? "");
+
+      return name || "Pasted image";
+    } catch {
+      return "Pasted image";
+    }
+  }
+
+  function shouldReadNavigatorClipboardImage(clipboardData: DataTransfer | null) {
+    const clipboard = navigator.clipboard as
+      | (Clipboard & { read?: () => Promise<ClipboardReadItem[]> })
+      | undefined;
+
+    return (
+      typeof clipboard?.read === "function" &&
+      (clipboardData?.items.length ?? 0) === 0 &&
+      (clipboardData?.files.length ?? 0) === 0 &&
+      (clipboardData?.types.length ?? 0) === 0
+    );
+  }
+
+  function createImageBlockFromBlob(
+    pasteOrigin: CanvasPoint,
+    imageBlob: Blob,
+    imageName: string,
+  ) {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      if (typeof reader.result !== "string") {
+        return;
+      }
+
+      createImageBlock(
+        pasteOrigin.x,
+        pasteOrigin.y,
+        reader.result,
+        imageName,
+      );
+    };
+    reader.readAsDataURL(imageBlob);
+  }
+
+  async function pasteNavigatorClipboardImage(pasteOrigin: CanvasPoint) {
+    const clipboard = navigator.clipboard as
+      | (Clipboard & { read?: () => Promise<ClipboardReadItem[]> })
+      | undefined;
+
+    if (typeof clipboard?.read !== "function") {
+      return;
+    }
+
+    try {
+      const clipboardItems = await clipboard.read();
+
+      for (const clipboardItem of clipboardItems) {
+        const imageType = clipboardItem.types.find((type) =>
+          type.startsWith("image/"),
+        );
+
+        if (!imageType) {
+          continue;
+        }
+
+        const imageBlob = await clipboardItem.getType(imageType);
+        createImageBlockFromBlob(pasteOrigin, imageBlob, "Pasted image");
+        return;
+      }
+    } catch {
+      return;
+    }
+  }
+
+  function pasteClipboardImage(event: ClipboardEvent) {
+    if (!selectedPageIdRef.current) {
+      return false;
+    }
+
+    const clipboardImage = getClipboardImage(event.clipboardData);
+
+    if (!clipboardImage) {
+      if (!shouldReadNavigatorClipboardImage(event.clipboardData)) {
+        return false;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      void pasteNavigatorClipboardImage(getImagePasteOrigin());
+      return true;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    const pasteOrigin = getImagePasteOrigin();
+
+    if (clipboardImage.kind === "source") {
+      createImageBlock(
+        pasteOrigin.x,
+        pasteOrigin.y,
+        clipboardImage.source,
+        clipboardImage.name,
+      );
+      return true;
+    }
+
+    createImageBlockFromBlob(pasteOrigin, clipboardImage.file, clipboardImage.name);
+    return true;
+  }
+
   function pasteCopiedBlocks() {
     if (
       copiedContentKindRef.current !== "blocks" ||
@@ -2253,6 +2618,10 @@ function App() {
 
   useEffect(() => {
     function handleKeyboard(event: KeyboardEvent) {
+      if (activeWorkbenchOverlay) {
+        return;
+      }
+
       const currentEditingBlockId = editingBlockIdRef.current;
 
       if (
@@ -2399,6 +2768,7 @@ function App() {
 
     return () => document.removeEventListener("keydown", handleKeyboard);
   }, [
+    activeWorkbenchOverlay,
     deleteBlocks,
     insertionPoint,
     isCanvasKeyboardActive,
@@ -2412,7 +2782,13 @@ function App() {
 
   useEffect(() => {
     function handlePaste(event: ClipboardEvent) {
-      if (isTextEntryTarget(event.target)) {
+      if (activeWorkbenchOverlay) {
+        return;
+      }
+
+      const isTextEntryPaste = isTextEntryTarget(event.target);
+
+      if (isTextEntryPaste) {
         return;
       }
 
@@ -2430,44 +2806,13 @@ function App() {
         return;
       }
 
-      if (!insertionPoint) {
-        return;
-      }
-
-      const clipboardItems = Array.from(event.clipboardData?.items ?? []);
-      const imageItem = clipboardItems.find((item) =>
-        item.type.startsWith("image/"),
-      );
-
-      if (imageItem) {
-        const imageFile = imageItem.getAsFile();
-
-        if (!imageFile) {
-          return;
-        }
-
-        event.preventDefault();
-        const reader = new FileReader();
-
-        reader.onload = () => {
-          if (typeof reader.result !== "string") {
-            return;
-          }
-
-          createImageBlock(
-            insertionPoint.x,
-            insertionPoint.y,
-            reader.result,
-            imageFile.name || "Pasted image",
-          );
-        };
-        reader.readAsDataURL(imageFile);
+      if (pasteClipboardImage(event)) {
         return;
       }
 
       const pastedText = event.clipboardData?.getData("text/plain");
 
-      if (pastedText) {
+      if (pastedText && insertionPoint) {
         event.preventDefault();
         createTextBlock(insertionPoint.x, insertionPoint.y, pastedText, {
           placement: "text-caret",
@@ -2475,10 +2820,10 @@ function App() {
       }
     }
 
-    document.addEventListener("paste", handlePaste);
+    document.addEventListener("paste", handlePaste, true);
 
-    return () => document.removeEventListener("paste", handlePaste);
-  }, [insertionPoint, selectedPageId]);
+    return () => document.removeEventListener("paste", handlePaste, true);
+  }, [activeWorkbenchOverlay, insertionPoint, selectedPageId]);
 
   function setCanvasContentTransform(nextPanOffset: PanOffset) {
     const canvasContentElement = canvasContentRef.current;
@@ -2538,17 +2883,34 @@ function App() {
   }
 
   function getCanvasPoint(clientX: number, clientY: number): CanvasPoint | null {
-    const canvasElement = canvasRef.current;
+    const canvasContentElement = canvasContentRef.current;
 
-    if (!canvasElement) {
+    if (!canvasContentElement) {
       return null;
     }
 
-    const canvasRect = canvasElement.getBoundingClientRect();
+    const canvasContentRect = canvasContentElement.getBoundingClientRect();
+    const scaleX =
+      canvasContentElement.offsetWidth > 0
+        ? canvasContentRect.width / canvasContentElement.offsetWidth
+        : 0;
+    const scaleY =
+      canvasContentElement.offsetHeight > 0
+        ? canvasContentRect.height / canvasContentElement.offsetHeight
+        : 0;
+
+    if (
+      !Number.isFinite(scaleX) ||
+      !Number.isFinite(scaleY) ||
+      scaleX <= 0 ||
+      scaleY <= 0
+    ) {
+      return null;
+    }
 
     return {
-      x: (clientX - canvasRect.left - panOffsetRef.current.x) / zoomLevel,
-      y: (clientY - canvasRect.top - panOffsetRef.current.y) / zoomLevel,
+      x: (clientX - canvasContentRect.left) / scaleX,
+      y: (clientY - canvasContentRect.top) / scaleY,
     };
   }
 
@@ -2736,8 +3098,120 @@ function App() {
     setActiveMode("canvas");
   }
 
-  function focusPageSearch() {
-    setIsSidebarCollapsed(false);
+  function rememberOverlayTrigger(
+    trigger: HTMLElement | undefined,
+    fallback: HTMLElement | null,
+  ) {
+    overlayReturnFocusRef.current = trigger ?? fallback;
+  }
+
+  function requestOverlayEntryFocus(
+    overlay: WorkbenchOverlay,
+    trigger: HTMLElement | undefined,
+    fallback: HTMLElement | null,
+  ) {
+    rememberOverlayTrigger(trigger, fallback);
+    overlayEntryFocusRequestRef.current = overlay;
+    overlayReturnFocusRequestRef.current = false;
+  }
+
+  function closeWorkbenchOverlay(overlay: WorkbenchOverlay) {
+    if (activeWorkbenchOverlay === overlay) {
+      if (!overlayReturnFocusRef.current) {
+        overlayReturnFocusRef.current =
+          overlay === "explorer"
+            ? explorerToggleButtonRef.current
+            : assistantToggleButtonRef.current;
+      }
+      overlayEntryFocusRequestRef.current = null;
+      overlayReturnFocusRequestRef.current = true;
+    }
+
+    if (overlay === "explorer") {
+      setActiveNarrowOverlay((currentOverlay) =>
+        currentOverlay === "explorer" ? null : currentOverlay,
+      );
+      return;
+    }
+
+    setActiveNarrowOverlay((currentOverlay) =>
+      currentOverlay === "assistant" ? null : currentOverlay,
+    );
+    setIsAssistantOpen(false);
+  }
+
+  function toggleExplorerPresentation(trigger?: HTMLElement) {
+    if (isNarrowWorkbench) {
+      const shouldOpenExplorer = activeNarrowOverlay !== "explorer";
+      if (shouldOpenExplorer) {
+        requestOverlayEntryFocus(
+          "explorer",
+          trigger,
+          explorerToggleButtonRef.current,
+        );
+        setActiveNarrowOverlay("explorer");
+        setIsAssistantOpen(false);
+      } else {
+        rememberOverlayTrigger(trigger, explorerToggleButtonRef.current);
+        closeWorkbenchOverlay("explorer");
+      }
+      return;
+    }
+
+    setIsSidebarCollapsed((currentValue) => !currentValue);
+  }
+
+  function toggleAssistantPanel(trigger?: HTMLElement) {
+    if (isNarrowWorkbench) {
+      const shouldOpenAssistant = activeNarrowOverlay !== "assistant";
+      if (shouldOpenAssistant) {
+        requestOverlayEntryFocus(
+          "assistant",
+          trigger,
+          assistantToggleButtonRef.current,
+        );
+        setActiveNarrowOverlay("assistant");
+        setIsAssistantOpen(true);
+      } else {
+        rememberOverlayTrigger(trigger, assistantToggleButtonRef.current);
+        closeWorkbenchOverlay("assistant");
+      }
+      return;
+    }
+
+    if (isCompactWorkbench) {
+      if (isAssistantOpen) {
+        rememberOverlayTrigger(trigger, assistantToggleButtonRef.current);
+        closeWorkbenchOverlay("assistant");
+      } else {
+        requestOverlayEntryFocus(
+          "assistant",
+          trigger,
+          assistantToggleButtonRef.current,
+        );
+        setIsAssistantOpen(true);
+      }
+      return;
+    }
+
+    setIsAssistantOpen((currentValue) => !currentValue);
+  }
+
+  function closeAssistantPanel() {
+    closeWorkbenchOverlay("assistant");
+  }
+
+  function focusPageSearch(trigger?: HTMLElement) {
+    if (isNarrowWorkbench) {
+      rememberOverlayTrigger(trigger, explorerToggleButtonRef.current);
+      overlayEntryFocusRequestRef.current = null;
+      overlayReturnFocusRequestRef.current = false;
+      setActiveNarrowOverlay("explorer");
+      setIsAssistantOpen(false);
+    } else {
+      setIsSidebarCollapsed(false);
+    }
+
     setPageSearchFocusRequest((currentRequest) => currentRequest + 1);
   }
 
@@ -2762,48 +3236,32 @@ function App() {
       setLlamaHarnessSetupStatus(setupStatus);
 
       if (!setupStatus.ready) {
+        setLlamaHarnessCapabilities(null);
         setLlamaHarnessAgents([]);
         setAssistantStatus(llamaHarnessSetupMessage(setupStatus));
         return;
       }
 
-      const agents = await listLlamaHarnessAgents();
-      const activeAgents = agents.filter((agent) => agent.status === "active");
-      setLlamaHarnessAgents(agents);
+      const capabilities = await getLlamaHarnessNoteCapabilities();
+      const activeAgents = capabilities.allowedAgents;
+      setLlamaHarnessCapabilities(capabilities);
+      setLlamaHarnessAgents(activeAgents);
       setSelectedLlamaHarnessAgentId((currentAgentId) => {
         if (activeAgents.some((agent) => agent.id === currentAgentId)) {
           return currentAgentId;
         }
 
-        return activeAgents[0]?.id ?? "";
+        return capabilities.defaultAgent.id || activeAgents[0]?.id || "";
       });
-      setAssistantStatus(activeAgents.length ? null : "Create or activate an agent in llama-harness.");
+      setAssistantStatus(activeAgents.length ? null : "Allow an active Note agent in llama-harness.");
     } catch (error) {
       setLlamaHarnessSetupStatus(null);
+      setLlamaHarnessCapabilities(null);
       setLlamaHarnessAgents([]);
       setAssistantError(`llama-harness is not reachable at http://127.0.0.1:8787. ${getAssistantErrorMessage(error)}`);
       setAssistantStatus(null);
     } finally {
       setIsLlamaHarnessLoading(false);
-    }
-  }
-
-  async function updateSelectedLlamaHarnessAgent(patch: LlamaHarnessAgentPatch) {
-    if (!selectedLlamaHarnessAgent || Object.keys(patch).length === 0) {
-      return;
-    }
-
-    try {
-      const updated = await patchLlamaHarnessAgent(selectedLlamaHarnessAgent.id, patch);
-      setLlamaHarnessAgents((agents) =>
-        agents.map((agent) => (agent.id === updated.id ? updated : agent)),
-      );
-      setAssistantStatus("Agent saved in llama-harness");
-      setAssistantError(null);
-    } catch (error) {
-      setAssistantError(getAssistantErrorMessage(error));
-      setAssistantStatus(null);
-      await refreshLlamaHarnessAssistant().catch(() => undefined);
     }
   }
 
@@ -2817,6 +3275,417 @@ function App() {
     }
 
     return "";
+  }
+
+  function executeLlamaHarnessToolRequests(
+    toolRequests: LlamaHarnessRunToolRequest[],
+  ): LlamaHarnessRunToolResult[] {
+    return toolRequests.map((toolRequest) => {
+      try {
+        return {
+          toolCallId: toolRequest.id,
+          toolId: toolRequest.toolId,
+          result: executeLlamaHarnessToolRequest(toolRequest),
+        };
+      } catch (error) {
+        return {
+          toolCallId: toolRequest.id,
+          toolId: toolRequest.toolId,
+          error: getAssistantErrorMessage(error),
+        };
+      }
+    });
+  }
+
+  function executeLlamaHarnessToolRequest(toolRequest: LlamaHarnessRunToolRequest) {
+    const args = getToolArguments(toolRequest.arguments);
+
+    switch (toolRequest.toolId) {
+      case "note.getCurrentPage":
+        return getCurrentPageToolResult(Boolean(args.includeBlocks));
+      case "note.getSelectedBlocks":
+        return {
+          blocks: getSelectedTextBlocks().map(toToolBlock),
+        };
+      case "note.searchPages":
+        return searchPagesForTool(requireStringArg(args, "query"));
+      case "note.createBlock":
+        return createBlockFromTool(args);
+      case "note.updateBlock":
+        return updateBlockFromTool(args);
+      case "note.deleteBlock":
+        return deleteBlockFromTool(toolRequest, args);
+      case "note.moveBlock":
+        return moveBlockFromTool(args);
+      case "note.createPage":
+        return createPageFromTool(args);
+      case "note.renamePage":
+        return renamePageFromTool(args);
+      case "note.openPage":
+        return openPageFromTool(args);
+      default:
+        throw new Error(`Unsupported Note tool: ${toolRequest.toolId}`);
+    }
+  }
+
+  function getCurrentPageToolResult(includeBlocks: boolean) {
+    const page = getActivePageForTool();
+
+    return {
+      page,
+      ...(includeBlocks
+        ? {
+            blocks: dataRef.current.blocks
+              .filter((block) => block.pageId === page.id)
+              .sort(compareToolBlocksByPosition)
+              .map(toToolBlock),
+          }
+        : {}),
+    };
+  }
+
+  function getSelectedTextBlocks() {
+    const selectedIds = new Set(selectedBlockIdsRef.current);
+
+    return dataRef.current.blocks
+      .filter((block) => selectedIds.has(block.id))
+      .sort(compareToolBlocksByPosition);
+  }
+
+  function searchPagesForTool(query: string) {
+    const normalizedQuery = query.trim().toLocaleLowerCase();
+    if (!normalizedQuery) {
+      throw new Error("query is required.");
+    }
+
+    const pages = dataRef.current.pages
+      .map((page) => {
+        const matchedBlocks = dataRef.current.blocks.filter(
+          (block) =>
+            block.pageId === page.id &&
+            block.content.toLocaleLowerCase().includes(normalizedQuery),
+        );
+        const titleMatches = page.title.toLocaleLowerCase().includes(normalizedQuery);
+
+        return titleMatches || matchedBlocks.length > 0
+          ? {
+              folderId: page.folderId,
+              id: page.id,
+              matchedBlockIds: matchedBlocks.map((block) => block.id),
+              title: page.title,
+            }
+          : null;
+      })
+      .filter((page): page is NonNullable<typeof page> => Boolean(page))
+      .slice(0, 20);
+
+    return { pages };
+  }
+
+  function createBlockFromTool(args: Record<string, unknown>) {
+    const page = getActivePageForTool();
+    const content = requireStringArg(args, "content");
+    const blockId = createId("block");
+    const xArg = optionalNumberArg(args, "x");
+    const yArg = optionalNumberArg(args, "y");
+    const currentCanvasViewport = canvasViewportRef.current;
+    const origin =
+      xArg !== undefined && yArg !== undefined
+        ? { x: xArg, y: yArg }
+        : insertionPoint ??
+          (currentCanvasViewport
+            ? {
+                x: currentCanvasViewport.x + currentCanvasViewport.width / 2,
+                y: currentCanvasViewport.y + currentCanvasViewport.height / 2,
+              }
+            : { x: PASTED_BLOCK_OFFSET, y: PASTED_BLOCK_OFFSET });
+    const blockPosition = snapPoint(origin);
+    const formattedRichContent = createFormattedRichContent(
+      content,
+      textFormatStateRef.current,
+    );
+    const block: TextBlock = {
+      id: blockId,
+      pageId: page.id,
+      x: blockPosition.x,
+      y: blockPosition.y,
+      width: DEFAULT_BLOCK_WIDTH,
+      height: DEFAULT_BLOCK_HEIGHT,
+      content,
+      ...(formattedRichContent ? { richContent: formattedRichContent } : {}),
+      isWidthManuallyResized: false,
+    };
+
+    setBlocksWithHistory((currentBlocks) => [...currentBlocks, block]);
+    setSelectedBlockIds([blockId]);
+    setEditingBlockId(blockId);
+    setFocusEndBlockId(blockId);
+    setIsCanvasKeyboardActive(true);
+    setActiveMode("editing");
+    setInsertionPoint(null);
+
+    return { block: toToolBlock(block) };
+  }
+
+  function updateBlockFromTool(args: Record<string, unknown>) {
+    const blockId = requireStringArg(args, "blockId");
+    const block = getActivePageBlockForTool(blockId);
+    const content = optionalStringArg(args, "content");
+    const x = optionalNumberArg(args, "x");
+    const y = optionalNumberArg(args, "y");
+    const width = optionalNumberArg(args, "width");
+    const height = optionalNumberArg(args, "height");
+
+    if (
+      content === undefined &&
+      x === undefined &&
+      y === undefined &&
+      width === undefined &&
+      height === undefined
+    ) {
+      throw new Error("At least one block field is required.");
+    }
+
+    const nextBlock: TextBlock = {
+      ...block,
+      ...(content !== undefined ? { content, richContent: undefined } : {}),
+      ...(x !== undefined ? { x } : {}),
+      ...(y !== undefined ? { y } : {}),
+      ...(width !== undefined ? { width } : {}),
+      ...(height !== undefined ? { height } : {}),
+    };
+
+    setBlocksWithHistory((currentBlocks) =>
+      currentBlocks.map((currentBlock) =>
+        currentBlock.id === blockId ? nextBlock : currentBlock,
+      ),
+    );
+    setSelectedBlockIds([blockId]);
+    setEditingBlockId(null);
+    setInsertionPoint(null);
+    setIsCanvasKeyboardActive(true);
+    setActiveMode("selected");
+
+    return { block: toToolBlock(nextBlock) };
+  }
+
+  function deleteBlockFromTool(
+    toolRequest: LlamaHarnessRunToolRequest,
+    args: Record<string, unknown>,
+  ) {
+    const blockId = requireStringArg(args, "blockId");
+    const block = getActivePageBlockForTool(blockId);
+
+    if (
+      toolRequest.riskLevel === "high" &&
+      !window.confirm(`Allow assistant to delete this Note block?\n\n${truncateForTool(block.content, 160)}`)
+    ) {
+      throw new Error("User denied approval for note.deleteBlock.");
+    }
+
+    deleteBlocks([blockId]);
+
+    return { deletedBlockId: blockId };
+  }
+
+  function moveBlockFromTool(args: Record<string, unknown>) {
+    const blockId = requireStringArg(args, "blockId");
+    const block = getActivePageBlockForTool(blockId);
+    const point = snapPoint({
+      x: requireNumberArg(args, "x"),
+      y: requireNumberArg(args, "y"),
+    });
+    const nextBlock = { ...block, x: point.x, y: point.y };
+
+    setBlocksWithHistory((currentBlocks) =>
+      currentBlocks.map((currentBlock) =>
+        currentBlock.id === blockId ? nextBlock : currentBlock,
+      ),
+    );
+    setSelectedBlockIds([blockId]);
+    setEditingBlockId(null);
+    setInsertionPoint(null);
+    setIsCanvasKeyboardActive(true);
+    setActiveMode("selected");
+
+    return { block: toToolBlock(nextBlock) };
+  }
+
+  function createPageFromTool(args: Record<string, unknown>) {
+    const title = requireStringArg(args, "title").trim();
+    if (!title) {
+      throw new Error("title is required.");
+    }
+    const folderId = optionalStringArg(args, "folderId") ?? selectedFolderIdRef.current ?? ROOT_FOLDER_ID;
+    if (folderId && !dataRef.current.folders.some((folder) => folder.id === folderId)) {
+      throw new Error("folderId does not exist.");
+    }
+    const pageId = createId("page");
+    const page = { id: pageId, folderId, title };
+    const nextData = {
+      ...dataRef.current,
+      pages: [...dataRef.current.pages, page],
+    };
+
+    dataRef.current = nextData;
+    setData(nextData);
+    rememberPageViewport(selectedPageIdRef.current);
+    selectedFolderIdRef.current = folderId;
+    selectedPageIdRef.current = pageId;
+    setSelectedFolderId(folderId);
+    setSelectedPageId(pageId);
+    setSidebarPageSelection([pageId]);
+    restorePageViewport(pageId);
+    setEditingFolderId(null);
+    setEditingPageId(null);
+    setIsEditingHeaderTitle(false);
+    setSelectedBlockIds([]);
+    setEditingBlockId(null);
+    setInsertionPoint(null);
+    setActiveMode("canvas");
+
+    return { page };
+  }
+
+  function renamePageFromTool(args: Record<string, unknown>) {
+    const pageId = requireStringArg(args, "pageId");
+    const title = requireStringArg(args, "title").trim();
+    const page = dataRef.current.pages.find((currentPage) => currentPage.id === pageId);
+
+    if (!page) {
+      throw new Error("pageId does not exist.");
+    }
+    if (!title) {
+      throw new Error("title is required.");
+    }
+
+    const nextPage = { ...page, title };
+    const nextData = {
+      ...dataRef.current,
+      pages: dataRef.current.pages.map((currentPage) =>
+        currentPage.id === pageId ? nextPage : currentPage,
+      ),
+    };
+
+    dataRef.current = nextData;
+    setData(nextData);
+
+    return { page: nextPage };
+  }
+
+  function openPageFromTool(args: Record<string, unknown>) {
+    const pageId = requireStringArg(args, "pageId");
+    const page = dataRef.current.pages.find((currentPage) => currentPage.id === pageId);
+
+    if (!page) {
+      throw new Error("pageId does not exist.");
+    }
+
+    rememberPageViewport(selectedPageIdRef.current);
+    selectedFolderIdRef.current = page.folderId;
+    selectedPageIdRef.current = pageId;
+    setSelectedFolderId(page.folderId);
+    setSelectedPageId(pageId);
+    setSidebarPageSelection([pageId]);
+    restorePageViewport(pageId);
+    setEditingFolderId(null);
+    setEditingPageId(null);
+    setIsEditingHeaderTitle(false);
+    setSelectedBlockIds([]);
+    setEditingBlockId(null);
+    setInsertionPoint(null);
+    setIsCanvasKeyboardActive(false);
+    setActiveMode("canvas");
+
+    return { page };
+  }
+
+  function getActivePageForTool() {
+    const pageId = selectedPageIdRef.current;
+    const page = dataRef.current.pages.find((currentPage) => currentPage.id === pageId);
+
+    if (!page) {
+      throw new Error("Select a page before using Note tools.");
+    }
+
+    return page;
+  }
+
+  function getActivePageBlockForTool(blockId: string) {
+    const page = getActivePageForTool();
+    const block = dataRef.current.blocks.find((currentBlock) => currentBlock.id === blockId);
+
+    if (!block) {
+      throw new Error("blockId does not exist.");
+    }
+    if (block.pageId !== page.id) {
+      throw new Error("Mutating Note tools are scoped to the active page.");
+    }
+    if (block.imageData) {
+      throw new Error("Only text blocks are supported by Note tools.");
+    }
+
+    return block;
+  }
+
+  function toToolBlock(block: TextBlock) {
+    return {
+      content: block.content,
+      height: block.height,
+      id: block.id,
+      pageId: block.pageId,
+      width: block.width,
+      x: block.x,
+      y: block.y,
+    };
+  }
+
+  function compareToolBlocksByPosition(firstBlock: TextBlock, secondBlock: TextBlock) {
+    return (
+      firstBlock.y - secondBlock.y ||
+      firstBlock.x - secondBlock.x ||
+      firstBlock.id.localeCompare(secondBlock.id)
+    );
+  }
+
+  function getToolArguments(value: unknown): Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+  }
+
+  function requireStringArg(args: Record<string, unknown>, name: string) {
+    const value = optionalStringArg(args, name);
+    if (value === undefined) {
+      throw new Error(`${name} is required.`);
+    }
+
+    return value;
+  }
+
+  function optionalStringArg(args: Record<string, unknown>, name: string) {
+    const value = args[name];
+
+    return typeof value === "string" ? value : undefined;
+  }
+
+  function requireNumberArg(args: Record<string, unknown>, name: string) {
+    const value = optionalNumberArg(args, name);
+    if (value === undefined) {
+      throw new Error(`${name} is required.`);
+    }
+
+    return value;
+  }
+
+  function optionalNumberArg(args: Record<string, unknown>, name: string) {
+    const value = args[name];
+
+    return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  }
+
+  function truncateForTool(value: string, maxLength: number) {
+    return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
   }
 
   function stopAssistantRecordingStream() {
@@ -2994,12 +3863,29 @@ function App() {
       selectedBlockIds: selectedBlockIdsRef.current,
       selectedPageId: selectedPageIdRef.current,
     });
-
-    return sendLlamaHarnessAgentChat({
+    let response: LlamaHarnessRunResponse = await createLlamaHarnessNoteRun({
       agentId: selectedLlamaHarnessAgent.id,
       messages,
       notesContext,
     });
+
+    for (let iteration = 0; response.status === "requires_action"; iteration += 1) {
+      if (iteration >= 5) {
+        throw new Error("llama-harness requested too many tool result rounds.");
+      }
+      if (response.toolRequests.length === 0) {
+        throw new Error("llama-harness requested action without tool requests.");
+      }
+
+      setAssistantStatus(`Executing ${response.toolRequests.length} Note tool request${response.toolRequests.length === 1 ? "" : "s"}`);
+      const toolResults = executeLlamaHarnessToolRequests(response.toolRequests);
+      response = await submitLlamaHarnessNoteToolResults({
+        runId: response.runId,
+        toolResults,
+      });
+    }
+
+    return response;
   }
 
   async function sendAssistantMessage() {
@@ -3025,18 +3911,16 @@ function App() {
 
     try {
       const response = await requestAssistantChat(nextMessages);
+      const content = response.output?.trim() || "Done.";
       const assistantMessage: AssistantMessage = {
         id: createId("assistant-message"),
         role: "assistant",
-        content: response.content,
+        content,
         createdAt: new Date().toISOString(),
       };
 
       setAssistantMessages([...nextMessages, assistantMessage]);
-      const executedToolCallCount = executeAssistantToolCalls(response.toolCalls);
-      if (executedToolCallCount === 0) {
-        setAssistantStatus(`Received response from ${assistantAgentLabel}`);
-      }
+      setAssistantStatus(`Received response from ${assistantAgentLabel}`);
     } catch (error) {
       setAssistantError(getAssistantErrorMessage(error));
       setAssistantStatus(null);
@@ -3183,6 +4067,12 @@ function App() {
       return false;
     }
 
+    if (selectedBlock.imageData) {
+      setAssistantError("Select one text block before using this assistant action.");
+      setAssistantStatus(null);
+      return false;
+    }
+
     const nextContent =
       action.kind === "append-to-selected-block"
         ? [selectedBlock.content.trimEnd(), action.content]
@@ -3209,35 +4099,6 @@ function App() {
         : "Replaced selected text block",
     );
     return true;
-  }
-
-  function executeAssistantToolCalls(toolCalls: LlamaHarnessToolCall[]) {
-    let executedCount = 0;
-
-    for (const toolCall of toolCalls) {
-      const actionKind = assistantActionKindFromToolName(toolCall.function?.name);
-      if (!actionKind) {
-        continue;
-      }
-
-      const args = parseToolCallArguments(toolCall.function?.arguments);
-      const action = validateAssistantActionRequest({
-        ...args,
-        kind: actionKind,
-      });
-
-      if (!action.ok) {
-        setAssistantError(action.message);
-        setAssistantStatus(null);
-        continue;
-      }
-
-      if (executeAssistantActionRequest(action.request)) {
-        executedCount += 1;
-      }
-    }
-
-    return executedCount;
   }
 
   function runAssistantAction(kind: AssistantActionKind) {
@@ -3438,6 +4299,28 @@ function App() {
     setEditingBlockId(null);
     setInsertionPoint(null);
     setActiveMode("canvas");
+  }
+
+  function deletePageTemplate(templatePageId: string) {
+    const currentData = dataRef.current;
+    const templatePage = currentData.pages.find(
+      (page) => page.id === templatePageId && isTemplatePage(page),
+    );
+
+    if (!templatePage) {
+      return;
+    }
+
+    const nextData = {
+      ...currentData,
+      pages: currentData.pages.filter((page) => page.id !== templatePageId),
+      blocks: currentData.blocks.filter(
+        (block) => block.pageId !== templatePageId,
+      ),
+    };
+
+    dataRef.current = nextData;
+    setData(nextData);
   }
 
   function beginPageDrag(pageId: string) {
@@ -4454,7 +5337,36 @@ function App() {
     event.preventDefault();
 
     if (event.metaKey || event.ctrlKey) {
-      updateZoom(event.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP);
+      const currentZoom = zoomLevelRef.current;
+      const nextZoom = Math.min(
+        MAX_ZOOM,
+        Math.max(
+          MIN_ZOOM,
+          currentZoom + (event.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP),
+        ),
+      );
+
+      if (nextZoom === currentZoom) {
+        return;
+      }
+
+      const canvasRect = event.currentTarget.getBoundingClientRect();
+      const pointerX = event.clientX - canvasRect.left;
+      const pointerY = event.clientY - canvasRect.top;
+      const canvasPointX =
+        (pointerX - panOffsetRef.current.x) / currentZoom;
+      const canvasPointY =
+        (pointerY - panOffsetRef.current.y) / currentZoom;
+      const nextPanOffset = {
+        x: pointerX - canvasPointX * nextZoom,
+        y: pointerY - canvasPointY * nextZoom,
+      };
+
+      zoomLevelRef.current = nextZoom;
+      panOffsetRef.current = nextPanOffset;
+      setZoomLevel(nextZoom);
+      setPanOffset(nextPanOffset);
+      setLivePanOffset(nextPanOffset);
       return;
     }
 
@@ -4566,17 +5478,27 @@ function App() {
     activeCanvasSearchMatch?.kind === "title" ? "Title" : "Text";
 
   return (
-    <main
-      className={`app-shell ${isDarkMode ? "is-dark" : ""} ${
-        isSidebarCollapsed ? "is-sidebar-collapsed" : ""
-      } ${isAssistantOpen ? "has-assistant-panel" : ""}`}
+    <WorkbenchShell
+      isAssistantOpen={shouldRenderAssistantPanel}
+      isAssistantOverlayOpen={isAssistantOverlayOpen}
+      isCompactWorkbench={isCompactWorkbench}
+      isDarkMode={isDarkMode}
+      isExplorerCollapsed={isExplorerPresentationCollapsed}
+      isExplorerOverlayOpen={isExplorerOverlayOpen}
+      isNarrowWorkbench={isNarrowWorkbench}
+      onCloseAssistantOverlay={() => closeWorkbenchOverlay("assistant")}
+      onCloseExplorerOverlay={() => closeWorkbenchOverlay("explorer")}
     >
       <Sidebar
         bookmarkedPages={bookmarkedPages}
         editingFolderId={editingFolderId}
         editingPageId={editingPageId}
+        explorerPanelRef={explorerPanelRef}
+        explorerToggleButtonRef={explorerToggleButtonRef}
         folders={data.folders}
-        isCollapsed={isSidebarCollapsed}
+        isCollapsed={isExplorerPresentationCollapsed}
+        isInert={isAssistantOverlayOpen}
+        isNarrowWorkbench={isNarrowWorkbench}
         pageSearchFocusRequest={pageSearchFocusRequest}
         pageTemplates={pageTemplates}
         pages={explorerPages}
@@ -4587,8 +5509,10 @@ function App() {
         onCreateFolder={createFolder}
         onCreatePage={createPage}
         onCreatePageFromTemplate={createPageFromTemplate}
+        onCreateTemplateFromPage={createTemplateFromSelectedPage}
         onDeleteFolder={deleteFolder}
         onDeletePage={deletePage}
+        onDeletePageTemplate={deletePageTemplate}
         onFolderDragLeave={(folderId) => {
           if (pageDropTargetFolderId === folderId) {
             setPageDropTargetFolderId(null);
@@ -4612,43 +5536,40 @@ function App() {
         onSelectPage={selectPage}
         onSetEditingFolderId={setEditingFolderId}
         onSetEditingPageId={setEditingPageId}
-        onToggleCollapse={() =>
-          setIsSidebarCollapsed((currentValue) => !currentValue)
-        }
+        onToggleCollapse={toggleExplorerPresentation}
         onTogglePageBookmark={togglePageBookmark}
         pageDropTargetFolderId={pageDropTargetFolderId}
         draggedPageIds={draggedPageIds}
         selectedPageIds={selectedSidebarPageIds}
       />
 
-      <section className="workspace">
+      <section
+        className="workspace"
+        inert={
+          isAssistantOverlayOpen || isExplorerOverlayOpen ? true : undefined
+        }
+      >
         <PageHeader
           activeTextEditor={activeTextEditor}
-          canCreatePageFromTemplate={true}
-          isAssistantOpen={isAssistantOpen}
+          assistantToggleButtonRef={assistantToggleButtonRef}
+          isAssistantOpen={shouldRenderAssistantPanel}
           isGridVisible={isGridVisible}
           isDarkMode={isDarkMode}
           isEditingHeaderTitle={isEditingHeaderTitle}
           isSnapToGridEnabled={isSnapToGridEnabled}
           openPages={openPages}
-          pageTemplates={pageTemplates}
-          selectedPage={selectedPage}
           selectedPageId={selectedPageId}
           textFormatState={textFormatState}
           zoomLevel={zoomLevel}
           onClosePageTab={closePageTab}
           onCreatePage={createPage}
-          onCreatePageFromTemplate={createPageFromTemplate}
-          onCreateTemplateFromPage={createTemplateFromSelectedPage}
           onFocusCanvasSearch={focusCanvasSearch}
           onPointerDown={handleChromePointerDown}
           onRenamePage={renamePage}
           onReorderPageTab={reorderPageTab}
           onSelectPageTab={selectPage}
           onSetEditingHeaderTitle={setIsEditingHeaderTitle}
-          onToggleAssistant={() =>
-            setIsAssistantOpen((currentValue) => !currentValue)
-          }
+          onToggleAssistant={toggleAssistantPanel}
           onToggleGrid={() =>
             setIsGridVisible((currentValue) => {
               const nextValue = !currentValue;
@@ -4661,7 +5582,6 @@ function App() {
             })
           }
           onToggleDarkMode={() => setIsDarkMode((currentMode) => !currentMode)}
-          onTogglePageBookmark={togglePageBookmark}
           onToggleSnapToGrid={() =>
             setIsSnapToGridEnabled((currentValue) =>
               isGridVisible ? !currentValue : false,
@@ -4673,11 +5593,15 @@ function App() {
         />
 
         <section
+          aria-labelledby={
+            selectedPageId ? getWorkspaceTabId(selectedPageId) : undefined
+          }
           className={`canvas ${activeMode === "canvas" ? "is-canvas-selected" : ""} ${
             activeMode === "panning" ? "is-panning" : ""
           } ${activeMode === "selecting" ? "is-selecting" : ""
           }`}
           aria-label="Freeform note canvas"
+          id={WORKSPACE_PAGE_PANEL_ID}
           onPointerCancel={endCanvasInteraction}
           onContextMenu={(event) => event.preventDefault()}
           onPointerDown={startCanvasInteraction}
@@ -4685,12 +5609,20 @@ function App() {
           onPointerUp={endCanvasInteraction}
           onWheel={handleCanvasWheel}
           ref={canvasRef}
+          role="tabpanel"
         >
           {offscreenGroups.length > 0 ? (
-            <div className="offscreen-indicators" aria-label="Offscreen textboxes">
+            <div
+              className={`offscreen-indicators ${
+                isSearchOpen ? "has-search-panel" : ""
+              }`}
+              aria-label="Offscreen textboxes"
+            >
               {offscreenGroups.map((group) => (
                 <button
-                  aria-label={`${group.count} textboxes offscreen ${group.direction}`}
+                  aria-label={`${group.count} ${
+                    group.count === 1 ? "textbox" : "textboxes"
+                  } offscreen ${getOffscreenDirectionLabel(group.direction)}`}
                   className={`offscreen-arrow offscreen-${group.direction}`}
                   key={group.direction}
                   onClick={(event) => {
@@ -4700,7 +5632,8 @@ function App() {
                   onPointerDown={(event) => event.stopPropagation()}
                   type="button"
                 >
-                  <span>{group.count}</span>
+                  <HeroIcon name="chevron-right" />
+                  <span className="offscreen-count">{group.count}</span>
                 </button>
               ))}
             </div>
@@ -4835,7 +5768,7 @@ function App() {
               </button>
               <button
                 className="canvas-starter-action"
-                onClick={focusPageSearch}
+                onClick={() => focusPageSearch()}
                 type="button"
               >
                 Go to file <span>Ctrl + O</span>
@@ -4867,33 +5800,33 @@ function App() {
           onUpdateProvider={updateAIProvider}
         />
       ) : null}
-      {isAssistantOpen ? (
+      {shouldRenderAssistantPanel ? (
         <AssistantPanel
           assistantError={assistantError}
           assistantStatus={assistantStatus}
           defaultChatModelLabel={assistantAgentLabel}
           harnessAgents={activeLlamaHarnessAgents}
-          harnessAgentModel={selectedLlamaHarnessAgent?.default_model ?? ""}
-          harnessAgentName={selectedLlamaHarnessAgent?.name ?? ""}
-          harnessAgentSystemPrompt={selectedLlamaHarnessAgent?.system_prompt ?? ""}
           isHarnessLoading={isLlamaHarnessLoading}
           isHarnessReady={Boolean(llamaHarnessSetupStatus?.ready)}
           inputValue={assistantInput}
           isRecording={isAssistantRecording}
           isSending={isAssistantSending}
           messages={assistantMessages}
-          onClose={() => setIsAssistantOpen(false)}
+          onClose={closeAssistantPanel}
           onInputChange={setAssistantInput}
           onRefreshHarness={refreshLlamaHarnessAssistant}
           onRunAction={runAssistantAction}
-          onSaveHarnessAgent={updateSelectedLlamaHarnessAgent}
           onSend={sendAssistantMessage}
           onSelectHarnessAgent={setSelectedLlamaHarnessAgentId}
           onToggleRecording={toggleAssistantRecording}
+          panelRef={assistantPanelRef}
+          selectedBlockCount={selectedBlockIds.length}
+          selectedBlockPreview={selectedAssistantBlockPreview}
           selectedHarnessAgentId={selectedLlamaHarnessAgent?.id ?? ""}
+          selectedPageTitle={selectedPage?.title ?? null}
         />
       ) : null}
-    </main>
+    </WorkbenchShell>
   );
 }
 
@@ -4901,8 +5834,11 @@ const Sidebar = memo(function Sidebar({
   bookmarkedPages,
   editingFolderId,
   editingPageId,
+  explorerPanelRef,
+  explorerToggleButtonRef,
   folders,
   isCollapsed,
+  isInert,
   pageSearchFocusRequest,
   pageTemplates,
   pages,
@@ -4913,8 +5849,10 @@ const Sidebar = memo(function Sidebar({
   onCreateFolder,
   onCreatePage,
   onCreatePageFromTemplate,
+  onCreateTemplateFromPage,
   onDeleteFolder,
   onDeletePage,
+  onDeletePageTemplate,
   onFolderDragLeave,
   onFolderDragOver,
   onFocusPageSearch,
@@ -4940,6 +5878,9 @@ const Sidebar = memo(function Sidebar({
   const [activeSidebarTab, setActiveSidebarTab] = useState<SidebarTabId>("files");
   const [isPageSearchFocused, setIsPageSearchFocused] = useState(false);
   const [isSearchOptionsOpen, setIsSearchOptionsOpen] = useState(false);
+  const canCreateTemplateFromPage = pages.some(
+    (page) => page.id === selectedPageId,
+  );
   const [sortMenuPosition, setSortMenuPosition] = useState<{
     left: number;
     top: number;
@@ -5054,15 +5995,15 @@ const Sidebar = memo(function Sidebar({
     });
   }
 
-  function openSidebarTab(tabId: SidebarTabId) {
+  function openSidebarTab(tabId: SidebarTabId, trigger: HTMLButtonElement) {
     setActiveSidebarTab(tabId);
 
     if (isCollapsed && tabId !== "search") {
-      onToggleCollapse();
+      onToggleCollapse(trigger);
     }
 
     if (tabId === "search") {
-      onFocusPageSearch();
+      onFocusPageSearch(trigger);
     }
   }
 
@@ -5172,79 +6113,32 @@ const Sidebar = memo(function Sidebar({
     <aside
       className={`sidebar ${isCollapsed ? "is-collapsed" : ""}`}
       aria-label="Workspace navigation"
+      inert={isInert ? true : undefined}
       onPointerDown={onPointerDown}
     >
-      <nav className="activity-rail" aria-label="Primary workspace tools">
-        <button
-          type="button"
-          className="rail-button"
-          aria-expanded={!isCollapsed}
-          aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-          onClick={onToggleCollapse}
-          title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-        >
-          <HeroIcon name="panel" />
-        </button>
-        <div className="rail-tabs" role="tablist" aria-label="Sidebar tabs">
-          <button
-            type="button"
-            className={`rail-button ${activeSidebarTab === "files" ? "is-active" : ""}`}
-            aria-label="File explorer"
-            aria-selected={activeSidebarTab === "files"}
-            onClick={() => openSidebarTab("files")}
-            role="tab"
-            title="File explorer"
-          >
-            <HeroIcon name="folder" />
-          </button>
-          <button
-            type="button"
-            className={`rail-button ${activeSidebarTab === "search" ? "is-active" : ""}`}
-            aria-label="Search files"
-            aria-selected={activeSidebarTab === "search"}
-            onClick={() => openSidebarTab("search")}
-            role="tab"
-            title="Search files"
-          >
-            <HeroIcon name="magnifying-glass" />
-          </button>
-          <button
-            type="button"
-            className={`rail-button ${
-              activeSidebarTab === "bookmarks" ? "is-active" : ""
-            } ${bookmarkedPages.length > 0 ? "has-count" : ""}`}
-            aria-label={`${bookmarkedPages.length} favorites`}
-            aria-selected={activeSidebarTab === "bookmarks"}
-            onClick={() => openSidebarTab("bookmarks")}
-            role="tab"
-            title="Favorites"
-          >
-            <HeroIcon name="bookmark" />
-          </button>
-          <button
-            type="button"
-            className={`rail-button ${
-              activeSidebarTab === "templates" ? "is-active" : ""
-            } ${pageTemplates.length > 0 ? "has-count" : ""}`}
-            aria-label={`${pageTemplates.length} templates`}
-            aria-selected={activeSidebarTab === "templates"}
-            onClick={() => openSidebarTab("templates")}
-            role="tab"
-            title="Templates"
-          >
-            <HeroIcon name="rectangle-stack" />
-          </button>
-        </div>
-      </nav>
+      <ActivityRail
+        activeTab={activeSidebarTab}
+        bookmarkedPageCount={bookmarkedPages.length}
+        Icon={HeroIcon}
+        isExplorerCollapsed={isCollapsed}
+        onSelectTab={openSidebarTab}
+        onToggleExplorer={onToggleCollapse}
+        templatePageCount={pageTemplates.length}
+        toggleButtonRef={explorerToggleButtonRef}
+      />
 
-      <div className="sidebar-main">
+      <div
+        className="sidebar-main"
+        id="workspace-explorer-panel"
+        ref={explorerPanelRef}
+        tabIndex={-1}
+      >
         {!isCollapsed ? (
           <div className="sidebar-content">
           {activeSidebarTab === "search" ? (
           <section
             className="sidebar-section sidebar-tab-panel sidebar-search"
             aria-labelledby="sidebar-search-title"
-            role="tabpanel"
           >
             <div className="sidebar-tab-header">
               <h2 id="sidebar-search-title">Search</h2>
@@ -5336,7 +6230,6 @@ const Sidebar = memo(function Sidebar({
           <section
             className="sidebar-section sidebar-tab-panel file-explorer"
             aria-labelledby="explorer-title"
-            role="tabpanel"
           >
             <div className="file-explorer-header">
               <h2 id="explorer-title">Files</h2>
@@ -5712,7 +6605,6 @@ const Sidebar = memo(function Sidebar({
             <section
               className="sidebar-section sidebar-tab-panel compact-section"
               aria-labelledby="favorites-title"
-              role="tabpanel"
             >
               <div className="section-header">
                 <h2 id="favorites-title">Favorites</h2>
@@ -5765,27 +6657,59 @@ const Sidebar = memo(function Sidebar({
             <section
               className="sidebar-section sidebar-tab-panel compact-section"
               aria-labelledby="templates-title"
-              role="tabpanel"
             >
               <div className="section-header">
                 <h2 id="templates-title">Templates</h2>
+                <button
+                  aria-label="Save current page as template"
+                  className="section-action"
+                  disabled={!canCreateTemplateFromPage}
+                  onClick={onCreateTemplateFromPage}
+                  title="Save current page as template"
+                  type="button"
+                >
+                  <HeroIcon name="rectangle-stack" />
+                </button>
               </div>
               {pageTemplates.length > 0 ? (
                 <div className="nav-list">
                   {pageTemplates.map((templatePage) => (
-                    <button
+                    <div
                       className="nav-item nav-item-template"
                       key={templatePage.id}
-                      onClick={() => onCreatePageFromTemplate(templatePage.id)}
-                      title={`Create page from ${templatePage.title}`}
-                      type="button"
                     >
-                      <span className="file-row-icon">
-                        <HeroIcon name="rectangle-stack" />
+                      <button
+                        aria-label={`Create page from ${templatePage.title}`}
+                        className="template-create-button"
+                        onClick={() => onCreatePageFromTemplate(templatePage.id)}
+                        title={`Create page from ${templatePage.title}`}
+                        type="button"
+                      >
+                        <span className="file-row-icon">
+                          <HeroIcon name="rectangle-stack" />
+                        </span>
+                        <span className="nav-label">{templatePage.title}</span>
+                        <span className="file-kind">TEMPLATE</span>
+                      </button>
+                      <span className="nav-actions">
+                        <button
+                          aria-label={`Delete template ${templatePage.title}`}
+                          onClick={() => {
+                            const didConfirm = window.confirm(
+                              `Delete template "${templatePage.title}"?\n\nPages already created from this template will not be affected.`,
+                            );
+
+                            if (didConfirm) {
+                              onDeletePageTemplate(templatePage.id);
+                            }
+                          }}
+                          title={`Delete template ${templatePage.title}`}
+                          type="button"
+                        >
+                          <HeroIcon name="trash" />
+                        </button>
                       </span>
-                      <span className="nav-label">{templatePage.title}</span>
-                      <span className="file-kind">TEMPLATE</span>
-                    </button>
+                    </div>
                   ))}
                 </div>
               ) : (
@@ -5811,6 +6735,8 @@ function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps) {
     previous.editingPageId === next.editingPageId &&
     previous.folders === next.folders &&
     previous.isCollapsed === next.isCollapsed &&
+    previous.isInert === next.isInert &&
+    previous.isNarrowWorkbench === next.isNarrowWorkbench &&
     previous.pageSearchFocusRequest === next.pageSearchFocusRequest &&
     previous.pageTemplates === next.pageTemplates &&
     previous.pages === next.pages &&
@@ -5825,22 +6751,18 @@ function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps) {
 
 const PageHeader = memo(function PageHeader({
   activeTextEditor,
-  canCreatePageFromTemplate,
+  assistantToggleButtonRef,
   isAssistantOpen,
   isGridVisible,
   isDarkMode,
   isEditingHeaderTitle,
   isSnapToGridEnabled,
   openPages,
-  pageTemplates,
-  selectedPage,
   selectedPageId,
   textFormatState,
   zoomLevel,
   onClosePageTab,
   onCreatePage,
-  onCreatePageFromTemplate,
-  onCreateTemplateFromPage,
   onFocusCanvasSearch,
   onPointerDown,
   onRenamePage,
@@ -5849,7 +6771,6 @@ const PageHeader = memo(function PageHeader({
   onSetEditingHeaderTitle,
   onToggleAssistant,
   onToggleGrid,
-  onTogglePageBookmark,
   onToggleDarkMode,
   onToggleSnapToGrid,
   onSetTextFontFamily,
@@ -5865,185 +6786,24 @@ const PageHeader = memo(function PageHeader({
   const themeToggleTitle = isDarkMode
     ? "Switch to light mode"
     : "Switch to dark mode";
-  const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
-  const [tabDropTarget, setTabDropTarget] = useState<{
-    pageId: string;
-    placement: PageTabDropPlacement;
-  } | null>(null);
-
-  function getTabDropPlacement(event: DragEvent<HTMLElement>) {
-    const tabBounds = event.currentTarget.getBoundingClientRect();
-
-    return event.clientX > tabBounds.left + tabBounds.width / 2
-      ? "after"
-      : "before";
-  }
-
-  function hasPageTabDragData(event: DragEvent<HTMLElement>) {
-    return Array.from(event.dataTransfer.types).includes(PAGE_TAB_DRAG_MIME_TYPE);
-  }
 
   return (
     <header
       className="page-header"
       onPointerDown={onPointerDown}
     >
-      <div className="page-tabs" role="tablist" aria-label="Open pages">
-        {openPages.map((page) => {
-          const isActive = page.id === selectedPageId;
-          const isEditingThisTab = isActive && isEditingHeaderTitle;
-          const isDraggedTab = draggedTabId === page.id;
-          const tabDropPlacement =
-            tabDropTarget?.pageId === page.id ? tabDropTarget.placement : null;
-
-          return (
-            <div
-              aria-selected={isActive}
-              className={`page-tab ${isActive ? "is-active" : ""} ${
-                isEditingThisTab ? "is-editing" : ""
-              } ${isDraggedTab ? "is-tab-dragging" : ""} ${
-                tabDropPlacement === "before" ? "is-tab-drop-before" : ""
-              } ${
-                tabDropPlacement === "after" ? "is-tab-drop-after" : ""
-              } has-close`}
-              draggable={!isEditingThisTab}
-              key={page.id}
-              onAuxClick={(event) => {
-                if (event.button !== 1) {
-                  return;
-                }
-
-                event.preventDefault();
-                event.stopPropagation();
-                onClosePageTab(page.id);
-              }}
-              onDragEnd={() => {
-                setDraggedTabId(null);
-                setTabDropTarget(null);
-              }}
-              onDragLeave={(event) => {
-                if (
-                  event.currentTarget.contains(event.relatedTarget as Node | null)
-                ) {
-                  return;
-                }
-
-                setTabDropTarget((currentTarget) =>
-                  currentTarget?.pageId === page.id ? null : currentTarget,
-                );
-              }}
-              onDragOver={(event) => {
-                if (!hasPageTabDragData(event)) {
-                  return;
-                }
-
-                event.preventDefault();
-                event.stopPropagation();
-                event.dataTransfer.dropEffect = "move";
-
-                const placement = getTabDropPlacement(event);
-
-                setTabDropTarget({
-                  pageId: page.id,
-                  placement,
-                });
-              }}
-              onDragStart={(event) => {
-                if (isEditingThisTab) {
-                  event.preventDefault();
-                  return;
-                }
-
-                event.stopPropagation();
-                setDraggedTabId(page.id);
-                event.dataTransfer.effectAllowed = "move";
-                event.dataTransfer.setData(PAGE_TAB_DRAG_MIME_TYPE, page.id);
-                event.dataTransfer.setData("text/plain", page.title);
-              }}
-              onDrop={(event) => {
-                if (!hasPageTabDragData(event)) {
-                  return;
-                }
-
-                event.preventDefault();
-                event.stopPropagation();
-
-                const sourcePageId =
-                  event.dataTransfer.getData(PAGE_TAB_DRAG_MIME_TYPE) ||
-                  draggedTabId;
-
-                if (sourcePageId && sourcePageId !== page.id) {
-                  onReorderPageTab(
-                    sourcePageId,
-                    page.id,
-                    getTabDropPlacement(event),
-                  );
-                }
-
-                setDraggedTabId(null);
-                setTabDropTarget(null);
-              }}
-              onMouseDown={(event) => {
-                if (event.button === 1) {
-                  event.preventDefault();
-                }
-              }}
-              role="tab"
-            >
-              {isEditingThisTab ? (
-                <>
-                  <HeroIcon name="document-text" />
-                  <InlineRename
-                    ariaLabel="Page title"
-                    initialValue={page.title}
-                    onCancel={() => onSetEditingHeaderTitle(false)}
-                    onCommit={(value) => {
-                      onRenamePage(page.id, value);
-                      onSetEditingHeaderTitle(false);
-                    }}
-                  />
-                </>
-              ) : (
-                <button
-                  className="page-tab-main"
-                  onClick={() => onSelectPageTab(page.id)}
-                  onDoubleClick={() => {
-                    if (isActive) {
-                      onSetEditingHeaderTitle(true);
-                    }
-                  }}
-                  title={isActive ? "Double-click to rename page" : page.title}
-                  type="button"
-                >
-                  <HeroIcon name="document-text" />
-                  <span className="page-title">{page.title}</span>
-                </button>
-              )}
-              <button
-                aria-label={`Close ${page.title}`}
-                className="page-tab-close"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onClosePageTab(page.id);
-                }}
-                title="Close tab"
-                type="button"
-              >
-                <HeroIcon name="x-mark" />
-              </button>
-            </div>
-          );
-        })}
-        <button
-          className="page-tab-add"
-          aria-label="Create root page"
-          onClick={onCreatePage}
-          title="Create root page"
-          type="button"
-        >
-          <HeroIcon name="plus" />
-        </button>
-      </div>
+      <WorkspaceTabs
+        Icon={HeroIcon}
+        isEditingActiveTab={isEditingHeaderTitle}
+        onCloseTab={onClosePageTab}
+        onCreatePage={onCreatePage}
+        onRenamePage={onRenamePage}
+        onReorderTab={onReorderPageTab}
+        onSelectTab={onSelectPageTab}
+        onSetEditingActiveTab={onSetEditingHeaderTitle}
+        selectedPageId={selectedPageId}
+        tabs={openPages}
+      />
       <div className="page-header-actions">
         <GlobalTextToolbar
           editor={activeTextEditor && !activeTextEditor.isDestroyed ? activeTextEditor : null}
@@ -6052,115 +6812,72 @@ const PageHeader = memo(function PageHeader({
           onSetFontSize={onSetTextFontSize}
           onToggleFormat={onToggleTextFormat}
         />
-        <button
-          aria-label="AI assistant"
-          aria-pressed={isAssistantOpen}
-          className="header-toggle icon-button"
-          onClick={onToggleAssistant}
-          title="AI assistant"
-          type="button"
+        <div
+          aria-label="Canvas controls"
+          className="canvas-controls"
+          role="toolbar"
         >
-          <HeroIcon name="sparkles" />
-        </button>
-        <button
-          aria-label="Find in canvas"
-          className="header-toggle icon-button"
-          onClick={onFocusCanvasSearch}
-          title="Find in canvas (Ctrl+F)"
-          type="button"
-        >
-          <HeroIcon name="magnifying-glass" />
-        </button>
-        {selectedPage ? (
           <button
-            type="button"
-            className={`bookmark-toggle header-bookmark-toggle ${
-              selectedPage.isBookmarked ? "is-bookmarked" : ""
-            }`}
-            aria-label={`${
-              selectedPage.isBookmarked ? "Remove bookmark from" : "Bookmark"
-            } ${selectedPage.title}`}
-            aria-pressed={Boolean(selectedPage.isBookmarked)}
-            title={selectedPage.isBookmarked ? "Remove bookmark" : "Bookmark"}
-            onClick={() => onTogglePageBookmark(selectedPage.id)}
-          >
-            <HeroIcon name="bookmark" />
-          </button>
-        ) : null}
-        <div className="template-actions">
-          <button
-            aria-label="Save current page as template"
-            className="template-button icon-button"
-            disabled={!selectedPage}
-            onClick={onCreateTemplateFromPage}
-            title="Save current page as template"
+            aria-label="Find in canvas"
+            className="header-toggle icon-button"
+            data-tooltip="Find in canvas (Ctrl+F)"
+            onClick={onFocusCanvasSearch}
             type="button"
           >
-            <HeroIcon name="rectangle-stack" />
+            <HeroIcon name="magnifying-glass" />
           </button>
-          <span className="template-select-wrapper">
-            <select
-              aria-label="Create page from template"
-              className="template-select"
-              disabled={!canCreatePageFromTemplate || pageTemplates.length === 0}
-              onChange={(event) => {
-                const templatePageId = event.currentTarget.value;
-
-                if (templatePageId) {
-                  onCreatePageFromTemplate(templatePageId);
-                }
-
-                event.currentTarget.value = "";
-              }}
-              title="Create page from template"
-              value=""
-            >
-              <option value="">Use template</option>
-              {pageTemplates.map((templatePage) => (
-                <option key={templatePage.id} value={templatePage.id}>
-                  {templatePage.title}
-                </option>
-              ))}
-            </select>
-            <span className="template-select-icon" aria-hidden="true">
-              <HeroIcon name="document-plus" />
-            </span>
+          <button
+            aria-controls="workspace-assistant-panel"
+            aria-expanded={isAssistantOpen}
+            aria-label="AI assistant"
+            aria-pressed={isAssistantOpen}
+            className="header-toggle icon-button"
+            data-tooltip="AI assistant"
+            onClick={(event) => onToggleAssistant(event.currentTarget)}
+            ref={assistantToggleButtonRef}
+            type="button"
+          >
+            <HeroIcon name="sparkles" />
+          </button>
+          <span
+            aria-label={`Zoom ${Math.round(zoomLevel * 100)}%`}
+            className="zoom-indicator"
+            data-tooltip="Zoom level"
+          >
+            {Math.round(zoomLevel * 100)}%
           </span>
+          <button
+            aria-label="Grid"
+            aria-pressed={isGridVisible}
+            className="header-toggle icon-button"
+            data-tooltip={gridToggleTitle}
+            onClick={onToggleGrid}
+            type="button"
+          >
+            <HeroIcon name="squares-2x2" />
+          </button>
+          <button
+            aria-label="Snap to grid"
+            aria-pressed={isGridVisible && isSnapToGridEnabled}
+            className="header-toggle icon-button"
+            data-tooltip={snapToggleTitle}
+            disabled={!isGridVisible}
+            onClick={onToggleSnapToGrid}
+            type="button"
+          >
+            <HeroIcon name="adjustments-horizontal" />
+          </button>
+          <button
+            aria-label="Dark mode"
+            aria-pressed={isDarkMode}
+            className="theme-toggle icon-button"
+            data-tooltip={themeToggleTitle}
+            onClick={onToggleDarkMode}
+            type="button"
+          >
+            <HeroIcon name={isDarkMode ? "sun" : "moon"} />
+          </button>
         </div>
-        <span className="zoom-indicator" title="Zoom">
-          {Math.round(zoomLevel * 100)}%
-        </span>
-        <button
-          aria-label="Grid"
-          aria-pressed={isGridVisible}
-          className="header-toggle icon-button"
-          onClick={onToggleGrid}
-          title={gridToggleTitle}
-          type="button"
-        >
-          <HeroIcon name="squares-2x2" />
-        </button>
-        <button
-          aria-label="Snap to grid"
-          aria-pressed={isGridVisible && isSnapToGridEnabled}
-          className="header-toggle icon-button"
-          disabled={!isGridVisible}
-          onClick={onToggleSnapToGrid}
-          title={snapToggleTitle}
-          type="button"
-        >
-          <HeroIcon name="adjustments-horizontal" />
-        </button>
-        <button
-          aria-label="Dark mode"
-          aria-pressed={isDarkMode}
-          className="theme-toggle icon-button"
-          onClick={onToggleDarkMode}
-          title={themeToggleTitle}
-          type="button"
-        >
-          <HeroIcon name={isDarkMode ? "sun" : "moon"} />
-        </button>
       </div>
     </header>
   );
@@ -6364,15 +7081,12 @@ function GlobalTextToolbar({
 function arePageHeaderPropsEqual(previous: PageHeaderProps, next: PageHeaderProps) {
   return (
     previous.activeTextEditor === next.activeTextEditor &&
-    previous.canCreatePageFromTemplate === next.canCreatePageFromTemplate &&
     previous.isAssistantOpen === next.isAssistantOpen &&
     previous.isGridVisible === next.isGridVisible &&
     previous.isDarkMode === next.isDarkMode &&
     previous.isEditingHeaderTitle === next.isEditingHeaderTitle &&
     previous.isSnapToGridEnabled === next.isSnapToGridEnabled &&
     previous.openPages === next.openPages &&
-    previous.pageTemplates === next.pageTemplates &&
-    previous.selectedPage === next.selectedPage &&
     previous.selectedPageId === next.selectedPageId &&
     previous.textFormatState === next.textFormatState &&
     previous.zoomLevel === next.zoomLevel

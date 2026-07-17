@@ -35,6 +35,8 @@ export type PersistedPageViewport = {
 };
 
 export type AppSessionState = {
+  isAssistantOpen?: boolean;
+  isExplorerCollapsed?: boolean;
   selectedFolderId?: string;
   selectedPageId?: string;
   openPageTabIds?: string[];

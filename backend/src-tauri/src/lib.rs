@@ -49,6 +49,8 @@ struct TextBlock {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AppSessionState {
+    is_assistant_open: Option<bool>,
+    is_explorer_collapsed: Option<bool>,
     selected_folder_id: Option<String>,
     selected_page_id: Option<String>,
     open_page_tab_ids: Option<Vec<String>>,

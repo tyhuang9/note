@@ -5,6 +5,7 @@ import type {
 } from "../aiTypes";
 
 const LLAMA_HARNESS_BASE_URL = "http://127.0.0.1:8787";
+const NOTE_APP_ID = "note";
 
 type TokenUsage = {
   input_tokens?: number;
@@ -33,75 +34,76 @@ export type LlamaHarnessSetupStatus = {
 export type LlamaHarnessAgent = {
   id: string;
   name: string;
-  role: string;
   description: string;
-  system_prompt: string;
-  default_provider_id: string;
-  default_model: string;
-  default_environment: string;
-  autonomy: string;
-  permissions: {
-    browser: boolean;
-    file_read: boolean;
-    file_write: boolean;
-    terminal: boolean;
-  };
-  status: "active" | "paused" | "draft";
-  tasks_run: number;
-  updated_at: string;
 };
 
-export type LlamaHarnessAgentPatch = Partial<
-  Pick<
-    LlamaHarnessAgent,
-    "name" | "description" | "system_prompt" | "default_provider_id" | "default_model" | "status"
-  >
->;
-
-export type LlamaHarnessToolCall = {
-  id?: string;
-  type?: string;
-  function?: {
-    name?: string;
-    arguments?: string | Record<string, unknown>;
-  };
+export type LlamaHarnessToolSummary = {
+  id: string;
+  name: string;
+  description: string;
+  riskLevel: "low" | "medium" | "high" | string;
+  enabled: boolean;
 };
 
-export type LlamaHarnessAgentChatResponse = {
-  content: string;
+export type LlamaHarnessAppCapabilities = {
+  appId: string;
+  appName: string;
+  defaultAgent: LlamaHarnessAgent;
+  allowedAgents: LlamaHarnessAgent[];
+  tools: LlamaHarnessToolSummary[];
+  model: {
+    id: string;
+    name: string;
+    provider: string;
+    modelName: string;
+    status: string;
+  };
+  warnings?: string[];
+};
+
+export type LlamaHarnessRunToolRequest = {
+  id: string;
+  toolId: string;
+  name: string;
+  arguments: unknown;
+  riskLevel: "low" | "medium" | "high" | string;
+  displayName: string;
+};
+
+export type LlamaHarnessRunToolResult = {
+  toolCallId: string;
+  toolId?: string;
+  result?: unknown;
+  error?: string;
+};
+
+export type LlamaHarnessRunResponse = {
+  runId: string;
+  status: "completed" | "requires_action" | "failed";
+  appId: string;
+  agentId: string;
   modelId: string;
-  providerId: string;
-  toolCalls: LlamaHarnessToolCall[];
+  output?: string;
+  toolRequests: LlamaHarnessRunToolRequest[];
+  durationMs: number;
   usage?: TokenUsage | null;
 };
 
-type AgentChatWireResponse = {
-  provider: string;
-  model: string;
-  message: ChatMessage;
-  tool_calls?: LlamaHarnessToolCall[] | null;
-  usage?: TokenUsage | null;
+type RunWireResponse = Omit<LlamaHarnessRunResponse, "toolRequests"> & {
+  toolRequests?: LlamaHarnessRunToolRequest[];
 };
 
 export async function getLlamaHarnessSetupStatus() {
   return request<LlamaHarnessSetupStatus>("/api/setup/status");
 }
 
-export async function listLlamaHarnessAgents() {
-  return request<LlamaHarnessAgent[]>("/api/agents");
+export async function getLlamaHarnessNoteCapabilities() {
+  return request<LlamaHarnessAppCapabilities>(
+    `/api/apps/${encodeURIComponent(NOTE_APP_ID)}/capabilities`,
+  );
 }
 
-export async function patchLlamaHarnessAgent(
-  agentId: string,
-  patch: LlamaHarnessAgentPatch,
-) {
-  return request<LlamaHarnessAgent>(`/api/agents/${encodeURIComponent(agentId)}`, {
-    method: "PATCH",
-    body: JSON.stringify(patch),
-  });
-}
-
-export async function sendLlamaHarnessAgentChat({
+export async function createLlamaHarnessNoteRun({
   agentId,
   messages,
   notesContext,
@@ -109,25 +111,49 @@ export async function sendLlamaHarnessAgentChat({
   agentId: string;
   messages: AssistantMessage[];
   notesContext: NotesContextSnapshot;
-}): Promise<LlamaHarnessAgentChatResponse> {
-  const response = await request<AgentChatWireResponse>(
-    `/api/agents/${encodeURIComponent(agentId)}/chat`,
+}): Promise<LlamaHarnessRunResponse> {
+  const response = await request<RunWireResponse>("/api/runs", {
+    method: "POST",
+    body: JSON.stringify({
+      agentId,
+      appId: NOTE_APP_ID,
+      context: notesContext,
+      messages: messages.map(toChatMessage),
+    }),
+  });
+
+  return normalizeRunResponse(response);
+}
+
+export async function submitLlamaHarnessNoteToolResults({
+  runId,
+  toolResults,
+}: {
+  runId: string;
+  toolResults: LlamaHarnessRunToolResult[];
+}): Promise<LlamaHarnessRunResponse> {
+  const response = await request<RunWireResponse>(
+    `/api/runs/${encodeURIComponent(runId)}/tool-results`,
     {
       method: "POST",
       body: JSON.stringify({
-        app_context: notesContext,
-        messages: messages.map(({ content, role }) => ({ content, role })),
-        source_app: "note",
+        appId: NOTE_APP_ID,
+        toolResults,
       }),
     },
   );
 
+  return normalizeRunResponse(response);
+}
+
+function toChatMessage({ content, role }: AssistantMessage): ChatMessage {
+  return { content, role };
+}
+
+function normalizeRunResponse(response: RunWireResponse): LlamaHarnessRunResponse {
   return {
-    content: response.message.content.toString(),
-    modelId: response.model,
-    providerId: response.provider,
-    toolCalls: response.tool_calls ?? [],
-    usage: response.usage,
+    ...response,
+    toolRequests: response.toolRequests ?? [],
   };
 }
 

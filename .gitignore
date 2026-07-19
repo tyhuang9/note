@@ -7,6 +7,15 @@ graphify-out/
 PROJECT.md
 RESPONSIVENESS_REFACTOR_PLAN.md
 OBSIDIAN_FEATURE_PLAN.md
+
+# Local Stitch/design-review artifacts
+/.stitch/
+/frontend/.stitch/
+/resources/style-guide.json
+
+# The root package only coordinates scripts; its empty npm lockfile is local noise.
+/package-lock.json
+
 logs
 *.log
 npm-debug.log*

@@ -5,6 +5,7 @@ export type WorkbenchIconName =
   | "archive-box"
   | "arrows-up-down"
   | "bookmark"
+  | "calendar"
   | "bold"
   | "check"
   | "chevron-down"

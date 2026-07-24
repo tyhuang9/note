@@ -12,7 +12,9 @@ export interface ActivityRailProps {
   readonly activeTab: ActivityRailTabId;
   readonly bookmarkedPageCount: number;
   readonly Icon: WorkbenchIconComponent;
+  readonly isAgendaSelected: boolean;
   readonly isExplorerCollapsed: boolean;
+  readonly onOpenAgenda: () => void;
   readonly onSelectTab: (
     tabId: ActivityRailTabId,
     trigger: HTMLButtonElement,
@@ -26,7 +28,9 @@ export const ActivityRail = memo(function ActivityRail({
   activeTab,
   bookmarkedPageCount,
   Icon,
+  isAgendaSelected,
   isExplorerCollapsed,
+  onOpenAgenda,
   onSelectTab,
   onToggleExplorer,
   templatePageCount,
@@ -94,6 +98,18 @@ export const ActivityRail = memo(function ActivityRail({
           title="Templates"
         >
           <Icon name="rectangle-stack" />
+        </button>
+      </div>
+      <div className="rail-tabs" aria-label="System views" role="group">
+        <button
+          type="button"
+          className={`rail-button ${isAgendaSelected ? "is-active" : ""}`}
+          aria-label="Open Agenda"
+          aria-pressed={isAgendaSelected}
+          onClick={onOpenAgenda}
+          title="Open Agenda"
+        >
+          <Icon name="calendar" />
         </button>
       </div>
     </nav>

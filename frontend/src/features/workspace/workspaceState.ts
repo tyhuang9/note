@@ -10,6 +10,9 @@ export type WorkspaceState = {
   readonly tabs: WorkspaceTab[];
 };
 
+export const AGENDA_WORKSPACE_TAB_ID = "agenda";
+export const AGENDA_WORKSPACE_TAB_TITLE = "Agenda";
+
 export function getNoteWorkspaceTabId(pageId: string) {
   return `note:${pageId}`;
 }
@@ -20,6 +23,46 @@ export function createNoteWorkspaceTab(page: Pick<Page, "id" | "title">) {
     title: page.title,
     view: { kind: "note", pageId: page.id },
   } satisfies WorkspaceTab;
+}
+
+export function createAgendaWorkspaceTab(view: "agenda" | "month" = "agenda") {
+  return {
+    id: AGENDA_WORKSPACE_TAB_ID,
+    title: AGENDA_WORKSPACE_TAB_TITLE,
+    view: { kind: "agenda", view },
+  } satisfies WorkspaceTab;
+}
+
+export function openAgendaWorkspaceTab(state: WorkspaceState): WorkspaceState {
+  const tabs = state.tabs.some((tab) => tab.id === AGENDA_WORKSPACE_TAB_ID)
+    ? state.tabs
+    : [...state.tabs, createAgendaWorkspaceTab()];
+
+  return state.selectedTabId === AGENDA_WORKSPACE_TAB_ID && tabs === state.tabs
+    ? state
+    : { selectedTabId: AGENDA_WORKSPACE_TAB_ID, tabs };
+}
+
+export function setAgendaWorkspaceView(
+  tabs: WorkspaceTab[],
+  view: "agenda" | "month",
+) {
+  const agendaTab = tabs.find((tab) => tab.id === AGENDA_WORKSPACE_TAB_ID);
+
+  if (!agendaTab || agendaTab.view.kind !== "agenda" || agendaTab.view.view === view) {
+    return tabs;
+  }
+
+  const nextAgendaTab: WorkspaceTab = {
+    ...agendaTab,
+    view: { kind: "agenda", view },
+  };
+
+  return tabs.map((tab) =>
+    tab.id === AGENDA_WORKSPACE_TAB_ID
+      ? nextAgendaTab
+      : tab,
+  );
 }
 
 export function restoreWorkspaceState(
@@ -208,7 +251,17 @@ function readWorkspaceTab(
 
   const view = readWorkspaceView(value.view, pagesById);
 
-  return view ? { id: value.id, title: value.title, view } : null;
+  if (!view) {
+    return null;
+  }
+
+  if (view.kind === "agenda") {
+    return value.id === AGENDA_WORKSPACE_TAB_ID
+      ? createAgendaWorkspaceTab(view.view)
+      : null;
+  }
+
+  return { id: value.id, title: value.title, view };
 }
 
 function readWorkspaceView(

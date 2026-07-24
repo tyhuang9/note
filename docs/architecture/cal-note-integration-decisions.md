@@ -177,3 +177,15 @@ Applies to: Note integration worktree at base SHA `d7fd7b13d0964ed631e846fe6a6cc
 **Rationale:** The pre-policy failures moved between unrelated tests and disappeared under the shared-resource-safe worker policy, supporting runner/resource isolation flakiness rather than a Phase 2 product regression. This is a deliberate supported default, not a claim that multi-worker parallel mode is fixed.
 
 **Consequences:** The acceptance lane is repeatable but slower (approximately 27–28 s) and provides less concurrency diagnostics. An optional multi-worker stress/debug lane remains future, non-blocking work; it must not block Phase 2 acceptance or be represented as passing evidence.
+
+## ADR-018 — Calendar views own bounded asynchronous query and render state
+
+**Status:** Accepted in Phase 3
+
+**Decision:** Keep Agenda and Month query, loading/error, settings-snapshot, request-generation, retention, and measured-render-window state in the Calendar workspace. Use fixed 32-day Agenda pages with a 64-day retained maximum, a fixed 42-day Month range, and explicit search limits. Coalesce refreshes from `note://calendar-changed`; retain native expected revisions and native validation as the authority for mutations.
+
+**Rationale:** Calendar views need independent stale-response handling and bounded render cost without moving durable state, validation, authorization, recurrence, or conflict resolution into `App.tsx` or the renderer. Fixed ranges and limits make responsiveness and failure behavior reviewable.
+
+**Tradeoffs:** The UI intentionally does not provide unbounded scrolling, whole-calendar client caching, or speculative optimistic mutation. It performs additional bounded native reads after refreshes and lets native revision conflicts drive explicit draft-preserving resolution.
+
+**Consequences:** Each view owns independent request generations and errors; stale completions cannot overwrite newer state. Measured virtualization activates for large Agenda result sets. New calendar UI must preserve the fixed limits, coalesced refresh contract, and native-authoritative revisions rather than adding a second client-side calendar store.

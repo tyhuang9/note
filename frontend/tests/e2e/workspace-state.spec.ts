@@ -1,7 +1,9 @@
 import { expect, test } from "@playwright/test";
 import {
   closeWorkspaceTab,
+  openAgendaWorkspaceTab,
   restoreWorkspaceState,
+  setAgendaWorkspaceView,
 } from "../../src/features/workspace/workspaceState";
 import type { AppSessionState, Page, WorkspaceTab } from "../../src/types";
 
@@ -28,7 +30,7 @@ test("legacy tabs restore valid pages, order, and selection", () => {
 
 test("forward state preserves mixed order, view details, and selection", () => {
   const workspaceTabs: WorkspaceTab[] = [
-    { id: "agenda", title: "Month", view: { kind: "agenda", view: "month" } },
+    { id: "agenda", title: "Agenda", view: { kind: "agenda", view: "month" } },
     noteTab("page-2", "Two"),
     {
       id: "settings",
@@ -44,6 +46,63 @@ test("forward state preserves mixed order, view details, and selection", () => {
       pages,
     ),
   ).toEqual({ selectedTabId: "settings", tabs: workspaceTabs });
+});
+
+test("opening Agenda creates one stable system tab and focuses it", () => {
+  const initial = { selectedTabId: "note:page-1", tabs: [noteTab("page-1", "One")] };
+  const opened = openAgendaWorkspaceTab(initial);
+
+  expect(opened).toEqual({
+    selectedTabId: "agenda",
+    tabs: [
+      noteTab("page-1", "One"),
+      { id: "agenda", title: "Agenda", view: { kind: "agenda", view: "agenda" } },
+    ],
+  });
+  expect(openAgendaWorkspaceTab(opened)).toBe(opened);
+  expect(initial.tabs).toEqual([noteTab("page-1", "One")]);
+});
+
+test("Agenda mode updates immutably and restores under its fixed title", () => {
+  const tabs: WorkspaceTab[] = [
+    { id: "agenda", title: "Agenda", view: { kind: "agenda", view: "agenda" } },
+    noteTab("page-1", "One"),
+  ];
+  const updatedTabs = setAgendaWorkspaceView(tabs, "month");
+
+  expect(updatedTabs).not.toBe(tabs);
+  expect(updatedTabs[0]).not.toBe(tabs[0]);
+  expect(updatedTabs[1]).toBe(tabs[1]);
+  expect(tabs[0]).toEqual({
+    id: "agenda",
+    title: "Agenda",
+    view: { kind: "agenda", view: "agenda" },
+  });
+  expect(
+    restoreWorkspaceState(
+      { selectedWorkspaceTabId: "agenda", workspaceTabs: updatedTabs },
+      pages,
+    ),
+  ).toEqual({ selectedTabId: "agenda", tabs: updatedTabs });
+});
+
+test("restoring Agenda canonicalizes its fixed title", () => {
+  expect(
+    restoreWorkspaceState(
+      {
+        selectedWorkspaceTabId: "agenda",
+        workspaceTabs: [
+          { id: "agenda", title: "Month", view: { kind: "agenda", view: "month" } },
+        ],
+      },
+      pages,
+    ),
+  ).toEqual({
+    selectedTabId: "agenda",
+    tabs: [
+      { id: "agenda", title: "Agenda", view: { kind: "agenda", view: "month" } },
+    ],
+  });
 });
 
 test("tolerant restore treats a null settings section as absent", () => {

@@ -1,6 +1,8 @@
 import {
   Fragment,
+  lazy,
   memo,
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -27,8 +29,10 @@ import {
   getNoteWorkspaceTabId,
   getOpenNotePageIds,
   getSelectedNotePageId,
+  openAgendaWorkspaceTab,
   reconcileWorkspaceNoteTabs,
   restoreWorkspaceState,
+  setAgendaWorkspaceView,
   syncWorkspaceTabsWithPages,
 } from "./features/workspace/workspaceState";
 import { InlineRename } from "./components/InlineRename";
@@ -112,6 +116,10 @@ import type {
   WorkspaceTab,
 } from "./types";
 
+const CalendarWorkspace = lazy(
+  () => import("./features/calendar/CalendarWorkspace"),
+);
+
 type SidebarProps = {
   bookmarkedPages: AppData["pages"];
   editingFolderId: string | null;
@@ -119,6 +127,7 @@ type SidebarProps = {
   explorerPanelRef: Ref<HTMLDivElement>;
   explorerToggleButtonRef: Ref<HTMLButtonElement>;
   folders: AppData["folders"];
+  isAgendaSelected: boolean;
   isCollapsed: boolean;
   isInert: boolean;
   isNarrowWorkbench: boolean;
@@ -139,6 +148,7 @@ type SidebarProps = {
   onFolderDragLeave: (folderId: string) => void;
   onFolderDragOver: (folderId: string) => void;
   onFocusPageSearch: (trigger?: HTMLElement) => void;
+  onOpenAgenda: () => void;
   onPageDragEnd: () => void;
   onPageDragStart: (pageId: string) => boolean;
   onPageDropOnFolder: (folderId: string) => boolean;
@@ -466,6 +476,12 @@ function HeroIcon({ name }: Readonly<WorkbenchIconProps>) {
       ) : null}
       {name === "bookmark" ? (
         <path d="M17.25 21 12 17.25 6.75 21V5.25A2.25 2.25 0 0 1 9 3h6a2.25 2.25 0 0 1 2.25 2.25V21Z" />
+      ) : null}
+      {name === "calendar" ? (
+        <>
+          <path d="M6.75 3v3M17.25 3v3M4.5 9.75h15" />
+          <path d="M5.25 5.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25A2.25 2.25 0 0 1 18.75 21H5.25A2.25 2.25 0 0 1 3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25Z" />
+        </>
       ) : null}
       {name === "bold" ? (
         <>
@@ -3974,6 +3990,32 @@ function App() {
     }
   }
 
+  function openAgendaWorkspace() {
+    const currentState = {
+      selectedTabId: selectedWorkspaceTabIdRef.current,
+      tabs: workspaceTabsRef.current,
+    };
+    const nextState = openAgendaWorkspaceTab(currentState);
+
+    workspaceTabsRef.current = nextState.tabs;
+    if (nextState.tabs !== currentState.tabs) {
+      setWorkspaceTabs(nextState.tabs);
+    }
+    activateWorkspaceTab(nextState.selectedTabId, nextState.tabs);
+    window.requestAnimationFrame(() => {
+      document.getElementById(getWorkspaceTabId(nextState.selectedTabId))?.focus();
+    });
+  }
+
+  function updateAgendaView(view: "agenda" | "month") {
+    setWorkspaceTabs((currentTabs) => {
+      const nextTabs = setAgendaWorkspaceView(currentTabs, view);
+
+      workspaceTabsRef.current = nextTabs;
+      return nextTabs;
+    });
+  }
+
   function reorderPageTab(
     sourcePageId: string,
     targetPageId: string,
@@ -5430,6 +5472,7 @@ function App() {
         explorerPanelRef={explorerPanelRef}
         explorerToggleButtonRef={explorerToggleButtonRef}
         folders={data.folders}
+        isAgendaSelected={selectedWorkspaceTab?.view.kind === "agenda"}
         isCollapsed={isExplorerPresentationCollapsed}
         isInert={isAssistantOverlayOpen}
         isNarrowWorkbench={isNarrowWorkbench}
@@ -5454,6 +5497,7 @@ function App() {
         }}
         onFolderDragOver={setPageDropTargetFolderId}
         onFocusPageSearch={focusPageSearch}
+        onOpenAgenda={openAgendaWorkspace}
         onPageDragEnd={endPageDrag}
         onPageDragStart={beginPageDrag}
         onPageDropOnFolder={(folderId) => {
@@ -5726,7 +5770,32 @@ function App() {
             </div>
           ) : null}
         </section>
-        {selectedWorkspaceTab && selectedWorkspaceTab.view.kind !== "note" ? (
+        {selectedWorkspaceTab?.view.kind === "agenda" ? (
+          <section
+            aria-labelledby={getWorkspaceTabId(selectedWorkspaceTab.id)}
+            className="workspace-calendar-panel"
+            id={WORKSPACE_PAGE_PANEL_ID}
+            role="tabpanel"
+          >
+            <Suspense
+              fallback={
+                <div
+                  aria-live="polite"
+                  className="workspace-calendar-loading"
+                  role="status"
+                >
+                  <span className="workspace-calendar-loading-spinner" aria-hidden="true" />
+                  <span>Loading Agenda</span>
+                </div>
+              }
+            >
+              <CalendarWorkspace
+                activeView={selectedWorkspaceTab.view.view}
+                onViewChange={updateAgendaView}
+              />
+            </Suspense>
+          </section>
+        ) : selectedWorkspaceTab?.view.kind === "settings" ? (
           <section
             aria-labelledby={getWorkspaceTabId(selectedWorkspaceTab.id)}
             className="workspace-system-placeholder"
@@ -5736,11 +5805,7 @@ function App() {
             <p className="workspace-system-eyebrow">Workspace view</p>
             <h1>{selectedWorkspaceTab.title}</h1>
             <p>
-              {selectedWorkspaceTab.view.kind === "agenda"
-                ? selectedWorkspaceTab.view.view === "month"
-                  ? "Month view is preserved and ready for the calendar integration."
-                  : "Agenda view is preserved and ready for the calendar integration."
-                : selectedWorkspaceTab.view.section
+              {selectedWorkspaceTab.view.section
                   ? `Settings section: ${selectedWorkspaceTab.view.section}`
                   : "Settings are preserved for the upcoming native workspace."}
             </p>
@@ -5801,6 +5866,7 @@ const Sidebar = memo(function Sidebar({
   explorerPanelRef,
   explorerToggleButtonRef,
   folders,
+  isAgendaSelected,
   isCollapsed,
   isInert,
   pageSearchFocusRequest,
@@ -5820,6 +5886,7 @@ const Sidebar = memo(function Sidebar({
   onFolderDragLeave,
   onFolderDragOver,
   onFocusPageSearch,
+  onOpenAgenda,
   onPageDragEnd,
   onPageDragStart,
   onPageDropOnFolder,
@@ -6084,7 +6151,9 @@ const Sidebar = memo(function Sidebar({
         activeTab={activeSidebarTab}
         bookmarkedPageCount={bookmarkedPages.length}
         Icon={HeroIcon}
+        isAgendaSelected={isAgendaSelected}
         isExplorerCollapsed={isCollapsed}
+        onOpenAgenda={onOpenAgenda}
         onSelectTab={openSidebarTab}
         onToggleExplorer={onToggleCollapse}
         templatePageCount={pageTemplates.length}
@@ -6698,6 +6767,7 @@ function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps) {
     previous.editingFolderId === next.editingFolderId &&
     previous.editingPageId === next.editingPageId &&
     previous.folders === next.folders &&
+    previous.isAgendaSelected === next.isAgendaSelected &&
     previous.isCollapsed === next.isCollapsed &&
     previous.isInert === next.isInert &&
     previous.isNarrowWorkbench === next.isNarrowWorkbench &&

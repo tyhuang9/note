@@ -1114,6 +1114,56 @@ h2 {
   text-align: center;
 }
 
+.workspace-calendar-panel {
+  --workbench-canvas: #f5f7fa;
+  --workbench-panel: #ffffff;
+  --workbench-surface: #ffffff;
+  --workbench-border: #cbd3dc;
+  --workbench-border-strong: #7d8b9b;
+  --workbench-text: #263241;
+  --workbench-text-secondary: #5d6b7b;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--workbench-text, #263241);
+  background: var(--workbench-canvas, #f5f5f5);
+}
+
+.workspace-calendar-panel > .calendar-workspace {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.workspace-calendar-loading {
+  display: grid;
+  flex: 1 1 auto;
+  place-content: center;
+  justify-items: center;
+  gap: 12px;
+  min-width: 0;
+  min-height: 240px;
+  color: var(--workbench-text-secondary, #5d6b7b);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.workspace-calendar-loading-spinner {
+  width: 24px;
+  height: 24px;
+  border: 3px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: workspace-calendar-loading-spin 0.8s linear infinite;
+}
+
+@keyframes workspace-calendar-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .workspace-system-placeholder h1 {
   margin: 6px 0 12px;
   font-size: clamp(28px, 4vw, 44px);
@@ -1140,6 +1190,20 @@ h2 {
 .app-shell.is-dark .workspace-system-placeholder {
   color: var(--workbench-text);
   background: var(--workbench-canvas);
+}
+
+.app-shell.is-dark .workspace-calendar-panel {
+  --workbench-canvas: #161616;
+  --workbench-panel: #1e1e1e;
+  --workbench-surface: #2c2c2c;
+  --workbench-border: #3e3e3e;
+  --workbench-border-strong: #555555;
+  --workbench-text: #f5f5f5;
+  --workbench-text-secondary: #9b9b9b;
+}
+
+.app-shell.is-dark .workspace-calendar-loading {
+  color: var(--workbench-text-secondary);
 }
 
 .app-shell.is-dark .workspace-system-placeholder > p:last-child {
@@ -4506,6 +4570,10 @@ h2 {
   }
 
   .persistence-retry-spinner {
+    animation: none;
+  }
+
+  .workspace-calendar-loading-spinner {
     animation: none;
   }
 }

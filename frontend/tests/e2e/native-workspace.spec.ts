@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import type { AppData, WorkspaceTab } from "../../src/types";
 
 const workspaceTabs: WorkspaceTab[] = [
-  { id: "agenda", title: "Month", view: { kind: "agenda", view: "month" } },
+  { id: "agenda", title: "Agenda", view: { kind: "agenda", view: "month" } },
   {
     id: "note:page-1",
     title: "One",
@@ -41,15 +41,17 @@ test("mixed workspace tabs support keyboard selection and generic close", async 
   const tablist = page.getByRole("tablist", {
     name: "Open workspace views",
   });
-  const monthTab = tablist.getByRole("tab", { name: "Month" });
+  const agendaTab = tablist.getByRole("tab", { name: "Agenda" });
   const noteTab = tablist.getByRole("tab", { name: "One" });
   const settingsTab = tablist.getByRole("tab", { name: "Accounts" });
 
-  await expect(monthTab).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByRole("heading", { name: "Month" })).toBeVisible();
-  await expect(page.getByText(/Month view is preserved/i)).toBeVisible();
+  await expect(agendaTab).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator("#workspace-page-panel")).toBeVisible();
+  await expect(agendaTab.locator("xpath=..")).toHaveAttribute("draggable", "false");
+  await agendaTab.dblclick();
+  await expect(page.getByRole("textbox", { name: "Page title" })).toHaveCount(0);
 
-  await monthTab.focus();
+  await agendaTab.focus();
   await page.keyboard.press("ArrowRight");
   await expect(noteTab).toBeFocused();
   await expect(noteTab).toHaveAttribute("aria-selected", "true");
@@ -77,6 +79,46 @@ test("mixed workspace tabs support keyboard selection and generic close", async 
   await expect(twoTab).toBeFocused();
 });
 
+test("Agenda rail opens and focuses one system tab without adding notes", async ({
+  page,
+}) => {
+  const noteOnlyData: AppData = {
+    ...savedData,
+    sessionState: {
+      selectedWorkspaceTabId: "note:page-1",
+      workspaceTabs: [workspaceTabs[1]],
+    },
+  };
+
+  await installNativeMock(page, { loadData: noteOnlyData });
+  await page.goto("/");
+  await expect(page.getByRole("tab", { name: "One" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  const agendaRailButton = page.getByRole("button", { name: "Open Agenda" });
+  await expect(agendaRailButton).toHaveAttribute("aria-pressed", "false");
+  await expect(agendaRailButton).not.toHaveClass(/is-active/);
+
+  await page.evaluate(() => {
+    window.__savedAppData = undefined;
+  });
+  await page.getByRole("button", { name: "Open Agenda" }).click();
+
+  const agendaTab = page.getByRole("tab", { name: "Agenda" });
+  await expect(agendaTab).toHaveCount(1);
+  await expect(agendaTab).toHaveAttribute("aria-selected", "true");
+  await expect(agendaTab).toBeFocused();
+  await expect(agendaRailButton).toHaveAttribute("aria-pressed", "true");
+  await expect(agendaRailButton).toHaveClass(/is-active/);
+  await expect(page.locator("#workspace-page-panel")).toHaveClass(
+    /workspace-calendar-panel/,
+  );
+  await expect.poll(() => page.evaluate(() => window.__savedAppData?.pages)).toEqual(
+    savedData.pages,
+  );
+});
+
 test("workspace tabs expose one Tab stop and Delete restores adjacent focus", async ({
   page,
 }) => {
@@ -89,18 +131,18 @@ test("workspace tabs expose one Tab stop and Delete restores adjacent focus", as
   const createPageButton = tablist.getByRole("button", {
     name: "Create root page",
   });
-  const monthTab = tablist.getByRole("tab", { name: "Month" });
+  const agendaTab = tablist.getByRole("tab", { name: "Agenda" });
 
   await expect(tablist.locator('[role="tab"][tabindex="0"]')).toHaveCount(1);
   await expect(tablist.locator('[role="tab"][tabindex="-1"]')).toHaveCount(3);
   await createPageButton.focus();
   await page.keyboard.press("Shift+Tab");
-  await expect(monthTab).toBeFocused();
-  await expect(monthTab).toHaveAttribute("aria-keyshortcuts", "Delete");
+  await expect(agendaTab).toBeFocused();
+  await expect(agendaTab).toHaveAttribute("aria-keyshortcuts", "Delete");
 
   await page.keyboard.press("Delete");
   const oneTab = tablist.getByRole("tab", { name: "One" });
-  await expect(monthTab).toHaveCount(0);
+  await expect(agendaTab).toHaveCount(0);
   await expect(oneTab).toBeFocused();
   await expect(oneTab).toHaveAttribute("aria-selected", "true");
 
@@ -249,7 +291,7 @@ test("successful save retry announces progress and returns focus", async ({
   await expect(alert).toHaveCount(0);
   await expect(status).toHaveText("Changes saved");
   await expect(
-    page.getByRole("tab", { name: "Month" }),
+    page.getByRole("tab", { name: "Agenda" }),
   ).toBeFocused();
 });
 

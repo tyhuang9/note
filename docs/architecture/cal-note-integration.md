@@ -297,7 +297,7 @@ Each step has a rollback boundary: the previous commit remains buildable, note J
 | 0 — Baseline, documentation, measurements | **Complete** | Source/state inventory, architecture records, toolchain, builds, tests, bundle sizes, and the startup-probe limitation are recorded. Aggregate documentation and security review passed after the complete initial Cal porcelain output was embedded and the unbounded note-persistence risk was made explicit. Final Cal `HEAD` and raw porcelain bytes match the recorded baseline exactly. |
 | 1 — Modular shell and native surface routing | **Complete** | Surface resolver and main/browser fallback, five HTML entries, typed notes client, workspace union and legacy restoration, extracted provider/assistant/settings boundaries, modular Rust state/error/event/mutation/notes/private-file/security modules, restrictive CSP, four exact-label capabilities, caller-label and bounded persistence tests; no calendar behavior. See the Phase 1 record below. |
 | 2 — Calendar kernel | **Accepted** | SQLite/migrations, bounded domain/repository APIs, recurrence/occurrences, revisions, reminders, search/paging, ICS, verified backup/restore, authorization, typed client, 160 passing Rust tests, and the supported default Playwright run are complete. Commit `b3ad26584731e49bf5b564fe265338a789182752` deliberately configures one worker for the suite's shared Vite server and host/browser resources; the unchanged default command passed 39/39 three consecutive times (117/117 aggregate). See the Phase 2 record below. |
-| 3 — React Agenda and Month | Not started | First-class system tabs, real service queries, bounded rendering, accessible editor, CRUD/recurrence/reminders, existing canvas/tabs intact. |
+| 3 — React Agenda and Month | **Accepted** | Stable Agenda system tab with Agenda/Month, bounded native queries and rendering, accessible controlled editor, recurrence/reminder CRUD, responsive themed UI, and preserved Note workspace behavior. Final frontend E2E passed 65/65; see the Phase 3 record below. |
 | 4 — Unified assistant and calendar tools | Not started | Provider-neutral runtime, one registry, bounded grounding, expiring reviewed create-event actions, authorized windows, retained Note actions. |
 | 5 — App-managed models and credentials | Not started | Native Ollama management, unified model/provider state, progress/cancel/remove, native credential abstraction/migration, nonblocking startup. |
 | 6 — Native voice and quick command | Not started | Native device/capture/transcription, private files, cancellation/session race handling, global shortcuts, lightweight overlay, typed input fallback. |
@@ -590,3 +590,78 @@ Phase 2 is **accepted complete**. The calendar kernel and every Phase 2 native a
 - `backend/src-tauri/src/lib.rs`
 - `frontend/src/native/calendarClient.ts`
 - Codex Security scan `6200646_20260724T191413Z`
+
+## Phase 3 implementation record
+
+Phase 3 is **accepted complete**. It adds Note-native Calendar workspace UI while retaining the Phase 2 Rust calendar service as the authoritative data, validation, revision, recurrence, and reminder boundary. The implementation does not modify the native calendar backend, `note-data.json`, Cal, auxiliary surfaces, import/migration, unified backup, assistant, model, voice, or widget scope.
+
+### Implementation completed
+
+- Added one stable Agenda system tab with internal `Agenda` and `Month` modes. `App.tsx` composes and lazy-loads the calendar workspace rather than owning calendar query/render logic; existing note tabs, canvas behavior, and persistence remain intact.
+- Added bounded Agenda pages of exactly 32 days with earlier/later navigation, at most 64 retained days, occurrence de-duplication, stale request-generation discard, explicit source-owned loading/errors/settings snapshots, and `ResizeObserver`-measured windowed rendering when more than 100 occurrences are present.
+- Added a 42-day Month grid with correct grid semantics, no more than two visible items per day, a bounded `+N` affordance, and a detail panel. Date controls retain 44 px targets; visible events and `+N` span the available cell content.
+- Added bounded calendar search: 250 ms debounce, at most 200 input characters, 50 results, and a maximum 366-day range.
+- Added a typed client-owned, coalesced refresh listener for `note://calendar-changed`; the UI does not create a second mutable calendar source. Projection preserves half-open intervals, display-zone conversion, all-day ranges, and overnight/timed continuation behavior.
+- Added an accessible controlled event editor with source-owned errors, settings snapshot serialization, revision-conflict handling that preserves the appropriate draft, occurrence/series scope, native-valid recurrence and reminder controls, explicit delete confirmation, and modal isolation.
+- Added responsive light/dark/forced-colors/reduced-motion styling, including touch-sized calendar controls and repaired inherited global 30 px button sizing. Month-specific width rules preserve date targets and cell-spanning event/`+N` controls.
+
+### Verification evidence
+
+| Evidence | Result |
+|---|---|
+| TypeScript | Final `npx tsc --noEmit` passed. |
+| Frontend production build | `npm.cmd run build` passed: 129 modules and auxiliary CSP/chunk checks passed. The known `MainSurface` chunk remains over 500 kB. |
+| Focused calendar UI | `npx.cmd playwright test tests/e2e/calendar-workspace.spec.ts` passed **22/22**. |
+| Focused workspace aggregate | Final focused workspace aggregate passed **40/40**. |
+| Full supported frontend E2E | Final `npm.cmd run test:e2e` passed **65/65** in **52.5 s**. |
+| Native regression evidence | Final rerun passed `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features --locked --offline -- -D warnings`, and `cargo test --all-targets --locked --offline` (**160/160**). Backend source was unchanged. |
+| Aggregate diff | `git diff --check` passed. |
+| Cal integrity | Read-only Cal stayed at `032c4703bdb04d470b1aee5e23fb8c1c57b249c4`; default porcelain remained 22 lines/820 bytes with SHA-256 `bfa387d2e6c85f3ae8ccf728ad44e1cdc49adbedb5ae91701f4c752a09ebae34`. |
+
+Two intermediate full-suite runs passed 64/65 but failed differently at the existing `tests/e2e/image-paste.spec.ts:32`; the focused image-paste suite passed 4/4. The final post-repair full run passed 65/65, supporting nondeterministic shared-runner isolation flakiness rather than a Phase 3 product failure. This history is retained as evidence, not hidden as a clean first-run claim.
+
+### Independent review outcomes
+
+- Code review: GO, 0 findings.
+- Security review: GO, 0 findings.
+- Accessibility review: initial 1 Must Fix and 2 Should Fix findings were repaired; re-review GO, 0 Must Fix and 0 Should Fix.
+- UX review: GO, 0 findings.
+- Performance review: GO, 0 blockers; one low/nit future optimization to profile scroll work through `requestAnimationFrame` before adding further work.
+- QA and visual review: GO after the inherited global 30 px button sizing and Month selector specificity were repaired. Six ephemeral QA PNG scenarios were directly inspected; screenshots are evidence only and are not committed artifacts.
+
+### Explicitly unverified
+
+- Live Tauri UI authorization and persistence against the real database; frontend checks use mocked native calls and Rust remains authoritative.
+- Real screen-reader use and automated contrast measurement.
+- Production performance, scroll-stress behavior, telemetry, and first-paint measurement.
+- Cross-platform runtime behavior and native notification/dialog flows.
+- Pixel-by-pixel visual-regression automation.
+
+### Phase 3 acceptance checklist
+
+- [x] Agenda is one stable system tab with internal Agenda/Month modes; it is not a generated Note page.
+- [x] Bounded Agenda/Month/search query and rendering limits, generation handling, refresh coalescing, and projection semantics are covered by focused tests.
+- [x] The editor preserves drafts across revision conflicts, supports occurrence/series native-valid edits and reminders, confirms deletion, and isolates its modal interaction.
+- [x] Responsive, dark, forced-colors, reduced-motion, keyboard/grid, and 44 px control behavior are covered by automated and direct visual QA.
+- [x] Final frontend E2E is 65/65; production build, TypeScript, diff check, reviews, and Cal integrity evidence are green.
+
+### Phase 3 risk disposition
+
+| Severity | Phase 3 disposition | Residual mitigation / next gate |
+|---|---|---|
+| High | Calendar mutation correctness, authorization, recurrence, reminders, and durable persistence remain native Rust authority; UI uses bounded typed calls and expected revisions. | Exercise real native UI/database and caller-authorization flows before release. |
+| Medium | Query/render work is explicitly bounded and windowed, but production scroll/load telemetry and first-paint evidence are absent. | Profile realistic large calendars and add performance marks in Phase 9. |
+| Medium | One-worker E2E is the supported shared-resource lane; intermediate image-paste failures were isolated and final full evidence is green. | Keep serial acceptance; use a separate multi-worker stress lane when diagnosing runner isolation. |
+| Low | Ephemeral visual inspection caught inherited button sizing; no committed pixel-baseline automation exists. | Add visual-regression coverage if UI churn justifies its maintenance cost. |
+
+### Phase 3 evidence references
+
+- `frontend/src/features/calendar/CalendarWorkspace.tsx`
+- `frontend/src/features/calendar/EventEditor.tsx`
+- `frontend/src/features/calendar/calendar.css`
+- `frontend/src/features/calendar/calendarUtils.ts`
+- `frontend/src/native/calendarClient.ts`
+- `frontend/tests/e2e/calendar-workspace.spec.ts`
+- `frontend/tests/e2e/native-workspace.spec.ts`
+- `frontend/tests/e2e/workspace-state.spec.ts`
+- Ephemeral direct-inspection evidence: `C:\tmp\phase3-calendar-qa\` (not committed)

@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export type TimedEventInput = {
   temporalKind: "timed";
@@ -441,3 +442,29 @@ export const calendarWidgetClient = {
     return invokeCalendar("calendar_widget_agenda", { displayTimeZone });
   },
 };
+
+export type CalendarChangedListener = () => void;
+
+/** Main-window calendar changes only; callers own the returned unlisten handle. */
+export async function listenForCalendarChanges(
+  listener: CalendarChangedListener,
+  signal?: AbortSignal,
+): Promise<UnlistenFn> {
+  if (!isTauri() || signal?.aborted) {
+    return () => undefined;
+  }
+
+  const unlisten = await listen("note://calendar-changed", () => listener());
+  let stopped = false;
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    unlisten();
+  };
+  if (signal?.aborted) {
+    stop();
+    return () => undefined;
+  }
+  signal?.addEventListener("abort", stop, { once: true });
+  return stop;
+}

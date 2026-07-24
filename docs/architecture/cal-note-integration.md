@@ -296,7 +296,7 @@ Each step has a rollback boundary: the previous commit remains buildable, note J
 |---|---|---|
 | 0 — Baseline, documentation, measurements | **Complete** | Source/state inventory, architecture records, toolchain, builds, tests, bundle sizes, and the startup-probe limitation are recorded. Aggregate documentation and security review passed after the complete initial Cal porcelain output was embedded and the unbounded note-persistence risk was made explicit. Final Cal `HEAD` and raw porcelain bytes match the recorded baseline exactly. |
 | 1 — Modular shell and native surface routing | **Complete** | Surface resolver and main/browser fallback, five HTML entries, typed notes client, workspace union and legacy restoration, extracted provider/assistant/settings boundaries, modular Rust state/error/event/mutation/notes/private-file/security modules, restrictive CSP, four exact-label capabilities, caller-label and bounded persistence tests; no calendar behavior. See the Phase 1 record below. |
-| 2 — Calendar kernel | Not started | SQLite/migrations, bounded domain/repository APIs, recurrence/occurrences, revisions, reminders, search/paging, ICS, verified backup/restore, authorization, and adapted Rust tests. |
+| 2 — Calendar kernel | **Accepted** | SQLite/migrations, bounded domain/repository APIs, recurrence/occurrences, revisions, reminders, search/paging, ICS, verified backup/restore, authorization, typed client, 160 passing Rust tests, and the supported default Playwright run are complete. Commit `b3ad26584731e49bf5b564fe265338a789182752` deliberately configures one worker for the suite's shared Vite server and host/browser resources; the unchanged default command passed 39/39 three consecutive times (117/117 aggregate). See the Phase 2 record below. |
 | 3 — React Agenda and Month | Not started | First-class system tabs, real service queries, bounded rendering, accessible editor, CRUD/recurrence/reminders, existing canvas/tabs intact. |
 | 4 — Unified assistant and calendar tools | Not started | Provider-neutral runtime, one registry, bounded grounding, expiring reviewed create-event actions, authorized windows, retained Note actions. |
 | 5 — App-managed models and credentials | Not started | Native Ollama management, unified model/provider state, progress/cancel/remove, native credential abstraction/migration, nonblocking startup. |
@@ -474,3 +474,119 @@ Phase 1 is **accepted complete for the modular-shell scope**. The implementation
 - `frontend/tests/build/verify-auxiliary-output.mjs`
 - `docs/ai-assistant-architecture.md`
 - Master implementation brief attached to the Phase 0 task
+
+## Phase 2 implementation record
+
+Phase 2's calendar-kernel implementation is complete. It adapts Cal's framework-neutral Rust domain and persistence behavior to Note's application state, authorization, events, capabilities, typed frontend boundary, and startup model. It does not port Cal's Svelte shell, activate Agenda/Month UI, modify `note-data.json`, import existing Cal application data, or create a unified Note backup format.
+
+### Implementation completed
+
+- Added `<Note app data>/calendar.sqlite3` with six embedded SQLx migrations for calendars, timed/all-day events, recurrence, settings, reminders/delivery state, occurrence overrides, and import-source identities. A long-lived SQLite pool runs migrations once during asynchronous readiness initialization; notes remain in their existing JSON store and no cross-store transaction is implied.
+- Added validated domain types and repositories for timed and all-day events, IANA time zones, half-open date/instant ranges, revisions, recurrence rules, occurrence projection, occurrence replacement/cancellation, settings, bounded search, and bidirectional opaque agenda cursors. Capacity ceilings fail explicitly rather than returning a silently incomplete result.
+- Added main-window-only typed commands for list/page/search/get/create/update/delete, occurrence update/delete, settings, readiness/retry, notification permission/status, ICS import/export, and calendar backup/restore. Sensitive requests reject unknown fields and renderer responses do not expose SQL, database handles, or private paths.
+- Added `frontend/src/native/calendarClient.ts` as the typed React boundary. Its command union is cross-checked against the build manifest, Rust invoke handler, and per-window capabilities.
+- Added a dedicated widget-only `calendar_widget_agenda` command. Rust computes the current seven-civil-day range, caps output at 50 items, and returns only event ID, occurrence key, title, and time. The widget cannot call the general calendar read APIs or any mutation.
+- Added asynchronous calendar readiness with `loading`, `ready`, and path-free `unavailable` states plus retry. `AppState` construction performs no database work, setup spawns initialization, calendar commands wait through a bounded readiness path, reminders start only after readiness, and note persistence never waits for calendar startup.
+- Split note and calendar mutation admission. Each domain rejects conflicting same-domain work without queuing, while an unavailable/loading calendar cannot block an independent note save. Calendar commands await readiness before taking the calendar gate.
+- Added the desktop reminder scheduler and notification permission boundary. Scheduling, horizon, candidate, delivery, catch-up, and polling work are bounded. Event/occurrence mutations and restore synchronize through a dispatch barrier and data generation; a claimed reminder is revalidated under the barrier immediately before OS enqueue. Sensitive status and catch-up payloads target only `main`.
+- Added bounded ICS import preview/commit with native file selection, UTF-8 and byte/line/property/component/depth/item limits, strict temporal/domain parsing, source identity classification, explicit `skipExisting`/`createCopies` duplicate policy, private in-memory staging, opaque UUID session IDs, 15-minute expiry, transactional commit, and replay/mismatch rejection.
+- Added bounded ICS export with validated inclusive date selection, recurrence/override materialization, stable UIDs, UTC timestamps, RFC text escaping and UTF-8 line folding, bounded complete output, private temporary files, synchronization, and no-clobber atomic publication.
+- Added calendar-only backup and two-step restore. Backups use SQLite `VACUUM INTO`, private no-clobber staging, `quick_check`, `integrity_check`, foreign-key verification, and sync-before-publication. Restore stages a bounded immutable snapshot, rejects the live database, validates physical/logical size, exact migration lineage/checksums, schema definitions/columns, integrity and foreign keys, reinspects at commit, creates a verified recovery backup, replaces a fixed table set transactionally, and rolls back on injected failure.
+- Added the Windows Common Controls v6 manifest through the Rust build script so notification-plugin-linked all-target tests and the application binary load consistently. Tauri's generated application manifest is disabled only for the Windows resource that would otherwise conflict; command metadata remains generated normally.
+
+### Phase 2 verification evidence
+
+| Evidence | Result |
+|---|---|
+| Rust formatting | Final `cargo fmt --all -- --check` passed in 0.524 s. |
+| Rust lint | Final strict `cargo clippy --all-targets --all-features --locked --offline -- -D warnings` passed in 3.958 s. |
+| Rust tests | Final `cargo test --all-targets --locked --offline` passed **160/160** in 1.662 s. The total includes the added persistent cross-midnight event test. |
+| Release build | `cargo build --release --locked --offline` passed in 36.464 s after the final production-code repair; the later test-only overnight addition does not affect release code. |
+| Frontend production build | Passed in 3.960 s; TypeScript and Vite completed and the auxiliary CSP/chunk verifier passed. The known `MainSurface` warning remains at 545.05 kB. |
+| Existing Playwright suite | Separate commit `b3ad26584731e49bf5b564fe265338a789182752` deliberately sets the supported default to one worker because the suite shares one Vite server and host/browser resources such as clipboard. The unchanged `npm.cmd run test:e2e` passed 39/39 three consecutive times in 27.0 s, 28.0 s, and 27.0 s (117/117 aggregate); both formerly intermittent titles passed on every run. One initial post-commit sandboxed invocation failed before tests because Vite could not read the workspace/config under sandbox access; three approved local-server runs passed, so that invocation is environment-only. |
+| Aggregate diff | `git diff --check` passed. Source/security reviews are GO after repairs. The sealed Codex Security diff scan covered the 32/32-file production implementation snapshot and reported Critical 0, High 0, Medium 0, Low 0. The post-seal delta is limited to one `#[cfg(test)]` overnight test, the separate Playwright config-only commit `b3ad26584731e49bf5b564fe265338a789182752`, and these architecture/ADR edits; the final aggregate review inspected those non-production changes separately, and production implementation remained unchanged, so a second security scan was not required. CodeRabbit CLI was unavailable. |
+
+Before the worker policy, historical default 8-worker runs failed 38/39 twice, on unrelated existing tests:
+
+1. Run one passed 38/39 in 8.438 s. `[chromium] › tests/e2e/image-paste.spec.ts:32:1 › pasting a clipboard image while editing a textbox inserts a rich image` failed at line 39 because `.text-block-image` was expected to have count `0` but had count `1` after 5 seconds.
+2. Run two passed 38/39 in 9.030 s. The first failure passed, while `[chromium] › tests/e2e/surface-routing.spec.ts:17:3 › Widget renders an isolated accessible placeholder` failed at line 24 because `getByRole("main")` was not found/visible after 5 seconds.
+
+`npm.cmd run test:e2e -- tests/e2e/image-paste.spec.ts` passed all four image-paste cases in 3.413 s, and the explicit `npm.cmd run test:e2e -- --workers=1` passed all 39 tests in 28.657 s, including both previously failing titles. The failures moved between unrelated cases on identical source and each passed unchanged in a later run, supporting runner/shared-resource isolation timing flakiness rather than a Phase 2 product regression. Commit `b3ad26584731e49bf5b564fe265338a789182752` therefore makes one worker the deliberate supported default for the shared Vite server and host/browser resources. This policy is not a claim that parallel mode is fixed: it trades approximately 27–28 s runtime and less concurrency diagnostics for repeatable default evidence. An optional multi-worker stress/debug lane is future, non-blocking work.
+
+### Test coverage disposition
+
+The 160-test native suite covers timed and all-day persistence; non-hour-offset and DST time-zone projection; ambiguous/nonexistent local times; overnight events crossing civil midnight; half-open intersections; recurrence grammar/count/until/monthly/yearly/leap-day/DST behavior; bounded expansion; occurrence replacement and cancellation; optimistic revision conflicts; search escaping/candidate/result limits; agenda cursor and exhaustion behavior; settings; reminders, catch-up, idempotence and stale-claim edit/delete/move/cancel/restore races; ICS parser/import/export limits and rollback; backup/WAL/integrity/schema/migration/recovery/rollback behavior; readiness/retry; independent mutation admission; widget DTO/range limits; individual capability-list and forbidden-window contracts; and existing bounded atomic note persistence. Exact cross-file parity among the build command manifest, Rust invoke handler, TypeScript command union, and capability grants was established by the final manual aggregate audit, not by one native parity test.
+
+### Startup evidence
+
+Calendar initialization is structurally off the startup critical section: native setup manages `AppState` immediately and spawns SQLite open/migration, readiness is observable and retryable, commands await it, reminder construction begins only after success, and tests hold an injected initializer blocked while note admission and note persistence continue.
+
+Five warm launches of the final local Windows release reached a responding native `Note` window in 179.7–254.7 ms, with a 207.3 ms median. This is a time-to-responsive-window sample, not first-paint or first-interaction latency. A WebView2 diagnostics attempt did not expose a target/window within 30 seconds and was cleaned up; because Phase 0 also lacked a reliable first-frame signal, no percentage first-frame regression is claimed. Frontend/native performance marks and a supported first-frame harness remain Phase 9 work.
+
+### Cal integrity proof
+
+- Final Cal `HEAD` is exactly `032c4703bdb04d470b1aee5e23fb8c1c57b249c4`.
+- The Phase 0 comparison command, `git status --porcelain=v1`, still produces exactly 22 lines and 820 UTF-8 bytes, byte-for-byte identical to the embedded baseline. Both streams have SHA-256 `bfa387d2e6c85f3ae8ccf728ad44e1cdc49adbedb5ae91701f4c752a09ebae34`.
+- `git status --porcelain=v1 --untracked-files=all` necessarily expands the baseline `?? evals/` directory into its two existing files, producing 23 lines/872 bytes and SHA-256 `4d2c1a4f73d49afcdca90c5b1edd02898033c08e2318d6eb096a13885a0f97f1`. That flag cannot produce the recorded directory-collapsed 820-byte baseline; the difference is command semantics, not a Cal mutation.
+- Cal was used read-only and no Cal process, build, formatter, test, staging, commit, or file write was performed.
+
+### Independent review outcomes
+
+The initial core scaffold was rejected because recurrence semantics were incomplete and was replaced with a faithful bounded adaptation. Aggregate review then found and repaired synchronous startup I/O, a stale reminder dispatch race, globally broadcast reminder details, overbroad widget reads, and cross-domain mutation admission. Two post-repair Sol source rechecks returned GO. The formal CodeRabbit path was unavailable because the CLI was not installed; manual Sol review provided the code-review fallback. The sealed Codex Security workflow completed with no reportable findings and complete 32-file coverage for the production implementation snapshot. After sealing, the only changes were the required `#[cfg(test)]` overnight case, the Playwright worker-policy commit, and this Phase 2 evidence/ADR documentation; the final integrator separately reviewed the non-production delta and found no security-relevant production change, so a second scan was not required. Final QA is green for native, build, the supported default Playwright command (39/39 three consecutive runs), Cal integrity, and diff checks. The historical 8-worker failures remain diagnosed as runner/shared-resource flakiness; parallel mode is not claimed fixed.
+
+### Explicitly unverified
+
+- A reliable first-painted or first-interactive frame measurement and a percentage comparison with Phase 0.
+- Live native notification permission prompts and OS notification delivery on supported platforms.
+- Live native dialogs and user-selected import/export/backup/restore flows outside the Rust service tests.
+- Windows DACL/no-follow and symlink edge behavior; Unix private-file mode tests are compile-time platform-gated.
+- macOS, Linux X11, and Linux Wayland builds and runtime behavior.
+- Multi-worker Playwright stress/debug behavior beyond the supported one-worker default; this optional lane is future non-blocking work, and parallel mode is not claimed fixed.
+- Agenda/Month/editor UI, actual widget activation, assistant/model/voice integration, existing Cal-data migration, and unified Note backup; these remain later phases.
+
+## Phase 2 acceptance gate
+
+Phase 2 is **accepted complete**. The calendar kernel and every Phase 2 native acceptance item are green. The supported default Playwright policy is one worker, deliberately recorded in commit `b3ad26584731e49bf5b564fe265338a789182752` for the suite's shared Vite server and host/browser resources; the unchanged default command passed 39/39 three consecutive times (27.0 s, 28.0 s, 27.0 s; 117/117 aggregate). This accepts the supported serial lane without claiming that multi-worker parallel mode is fixed.
+
+- [x] SQLite initialization/migrations and separate `<Note app data>/calendar.sqlite3` are implemented without altering `note-data.json`.
+- [x] Typed bounded commands create, query, page, search, update, and delete events/occurrences without exposing raw storage to React.
+- [x] Recurrence, time zones, overnight/all-day/timed events, revisions, settings, reminders, notification state, ICS, backup/restore, and change events are implemented and tested.
+- [x] Calendar startup is asynchronous, readiness is explicit, reminders start after readiness, and independent note persistence is not blocked.
+- [x] Main/widget authorization, strict DTOs, bounds, private staging, atomic/no-clobber publication, verified restore, and fail-closed capacity behavior are covered.
+- [x] Rust format, strict lint, 160/160 tests, release build, frontend production build, serial Playwright 39/39, aggregate diff check, source reviews, and the sealed production-snapshot security scan plus post-seal test/docs aggregate review pass.
+- [x] The unchanged default `npm.cmd run test:e2e` passes 39/39 three consecutive times after the deliberate one-worker policy in `b3ad26584731e49bf5b564fe265338a789182752` (27.0 s, 28.0 s, 27.0 s; 117/117 aggregate), including both formerly intermittent titles on every run.
+- [x] Cal `HEAD` and the exact Phase 0 820-byte/default-porcelain stream are unchanged.
+
+## Phase 2 risk disposition
+
+| Severity | Phase 2 disposition | Residual mitigation / next gate |
+|---|---|---|
+| High | Calendar data validation, revisions, recurrence limits, transactional persistence, import staging, and verified restore are implemented and tested. | Retain exact schema/migration verification and failure-injection coverage; exercise native dialogs and filesystem controls on every supported platform. |
+| High | General calendar commands are main-only; widget access is a dedicated minimal bounded read and sensitive reminder events target `main`. | Keep capability/build/invoke/client parity tests and Rust caller checks authoritative when Phase 3 and Phase 7 activate UI. |
+| High | Reminder stale-claim races across edit/delete/move/cancel/restore are protected by the dispatch barrier, generation, and final revalidation. | Add real OS notification lifecycle tests and suspend/resume soak coverage before release. |
+| Medium | Initialization is asynchronous and cannot block note persistence; warm responsive-window median is 207.3 ms. | Add first-paint/first-interaction and calendar-readiness performance marks in Phase 9; do not interpret window readiness as painted UI. |
+| Medium | The supported Playwright default uses one worker because the suite shares one Vite server and host/browser resources such as clipboard. It is repeatably green, but slower (~27–28 s) and provides less concurrency diagnostics; multi-worker parallel mode is not claimed fixed. | Keep the one-worker policy as the acceptance lane. Optionally add a separate multi-worker stress/debug lane later; it is non-blocking for Phase 2. |
+| Medium | Calendar-only backup is verified; note/calendar unified backup and existing Cal-data migration are intentionally deferred. | Implement the explicit recovery-backed Cal migration and versioned unified backup in Phase 8 without weakening the calendar snapshot checks. |
+| Low | `MainSurface` remains 545.05 kB and triggers the existing Vite warning. | Keep Phase 3 calendar UI lazy and preserve auxiliary chunk isolation; measure parse/render costs before release. |
+
+## Phase 2 evidence references
+
+- `backend/src-tauri/migrations/0001_local_calendar.sql` through `0006_event_import_sources.sql`
+- `backend/src-tauri/src/app_state.rs`
+- `backend/src-tauri/src/calendar/api.rs`
+- `backend/src-tauri/src/calendar/domain.rs`
+- `backend/src-tauri/src/calendar/recurrence.rs`
+- `backend/src-tauri/src/calendar/reminders.rs`
+- `backend/src-tauri/src/calendar/import.rs`
+- `backend/src-tauri/src/calendar/export.rs`
+- `backend/src-tauri/src/calendar/backup.rs`
+- `backend/src-tauri/src/calendar/service.rs`
+- `backend/src-tauri/src/calendar/settings.rs`
+- `backend/src-tauri/src/calendar_store/sqlite.rs`
+- `backend/src-tauri/src/calendar_store/backup.rs`
+- `backend/src-tauri/src/calendar_store/private_file.rs`
+- `backend/src-tauri/capabilities/main.json`
+- `backend/src-tauri/capabilities/widget.json`
+- `backend/src-tauri/src/lib.rs`
+- `frontend/src/native/calendarClient.ts`
+- Codex Security scan `6200646_20260724T191413Z`

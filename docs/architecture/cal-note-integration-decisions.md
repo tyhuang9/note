@@ -125,3 +125,55 @@ Applies to: Note integration worktree at base SHA `d7fd7b13d0964ed631e846fe6a6cc
 **Rationale:** HTML entry isolation prevents auxiliary surfaces from loading the full canvas bundle and gives each document an independent egress and media policy. Capabilities and Rust caller-label checks are defense in depth, not interchangeable authorities.
 
 **Consequences:** The auxiliary build verifier can prove CSP and chunk isolation for each generated document. Auxiliary windows remain inert until native creation, cannot persist notes, and cannot emit renderer events. Live native creation/denial and cross-platform WebView behavior still require release validation.
+
+## ADR-013 — Calendar startup uses explicit asynchronous readiness
+
+**Status:** Accepted in Phase 2
+
+**Decision:** Construct and manage Note's native `AppState` without opening the calendar database, then spawn calendar initialization. Model readiness as `loading`, `ready`, or path-free `unavailable`; let calendar commands await a bounded readiness path and expose main-only status/retry commands. Start reminders only after the long-lived SQLite-backed runtime is ready.
+
+**Rationale:** SQLite open, migration, integrity recovery, and reminder initialization are independent native work and must not delay the first usable note frame or make note persistence depend on calendar health.
+
+**Consequences:** Calendar features can show or recover from unavailable storage without taking Note down. Tests can inject blocked and failed initializers deterministically. A reliable first-paint harness is still required before a percentage startup regression can be claimed.
+
+## ADR-014 — Note and calendar mutations use independent admission domains
+
+**Status:** Accepted in Phase 2
+
+**Decision:** Keep separate nonqueueing mutation gates for `note-data.json` and `calendar.sqlite3`. A calendar mutation awaits readiness before taking the calendar gate. Reminder dispatch uses a separate store-level read/write barrier and data generation so final notification revalidation and calendar mutations cannot cross in the last pre-enqueue gap.
+
+**Rationale:** The stores cannot share a transaction and should not deny one another's independent work. At the same time, same-domain writes and reminder delivery need deterministic conflict behavior rather than silent queuing, lost updates, or stale notifications.
+
+**Consequences:** Concurrent note and calendar writes may proceed, while conflicting calendar operations fail with a structured busy error and updates still require an expected revision. Lock order is readiness, calendar admission, then repository/dispatch synchronization; new mutation paths must preserve it.
+
+## ADR-015 — Auxiliary calendar reads use purpose-built minimal DTOs
+
+**Status:** Accepted in Phase 2
+
+**Decision:** Do not grant the widget any general calendar list, search, get, settings, notification, import/export, backup, or mutation command. Give it only `calendar_widget_agenda`, which derives the current seven-day range in Rust, caps results at 50, and serializes only event ID, occurrence key, title, and time. Send sensitive reminder status/catch-up events only to `main`.
+
+**Rationale:** Capability files alone do not prevent accidental over-disclosure when a broadly shaped command is reusable. A purpose-built command makes the lower-trust window's data and resource budget explicit at the authoritative boundary.
+
+**Consequences:** Phase 7 widget UI must work within this contract or justify a separately reviewed minimal extension. General calendar DTOs and settings remain unavailable to auxiliary surfaces, and native event routing must remain target-specific.
+
+## ADR-016 — Calendar file I/O is native, staged, bounded, and verified
+
+**Status:** Accepted in Phase 2
+
+**Decision:** Keep ICS import/export and calendar-only backup/restore behind main-window native dialogs and Rust services. Imports and restores use opaque expiring preview sessions. Exports and backups use private temporary files and no-clobber publication. Restore accepts only bounded snapshots that pass same-live-file rejection, SQLite integrity/foreign-key checks, exact migration checksums, exact schema/column comparison, commit-time reinspection, and recovery-backed transactional replacement.
+
+**Rationale:** Renderer-supplied paths, one-step destructive restores, partial recurrence exports, or merely openable SQLite files are insufficient safety boundaries for private durable data.
+
+**Consequences:** React receives display file names, counts, statuses, and opaque session IDs, never raw database paths or SQL. Calendar-only backup is available in Phase 2; existing Cal-data migration and versioned unified Note+calendar backup remain Phase 8 work and must preserve or strengthen these verification controls.
+
+## ADR-017 — Playwright acceptance uses one worker for shared host resources
+
+**Status:** Accepted in Phase 2
+
+**Decision:** Keep Playwright's supported default at one worker, as deliberately configured in separate commit b3ad26584731e49bf5b564fe265338a789182752. The suite shares one Vite server and host/browser resources such as clipboard, so the default acceptance lane is the unchanged npm.cmd run test:e2e command under that one-worker policy.
+
+**Evidence:** Before the policy, default 8-worker runs failed 38/39 twice on different unrelated existing tests (clipboard rich-image at 8.438 s and Widget placeholder at 9.030 s); focused image-paste passed 4/4 and explicit --workers=1 passed 39/39. After the commit, unchanged default runs passed 39/39 three consecutive times in 27.0 s, 28.0 s, and 27.0 s (117/117 aggregate), with both formerly intermittent titles passing on every run. One initial post-commit sandboxed invocation failed before tests because Vite could not read the workspace/config under sandbox access; three approved local-server runs passed, making that an environment-only failure.
+
+**Rationale:** The pre-policy failures moved between unrelated tests and disappeared under the shared-resource-safe worker policy, supporting runner/resource isolation flakiness rather than a Phase 2 product regression. This is a deliberate supported default, not a claim that multi-worker parallel mode is fixed.
+
+**Consequences:** The acceptance lane is repeatable but slower (approximately 27–28 s) and provides less concurrency diagnostics. An optional multi-worker stress/debug lane remains future, non-blocking work; it must not block Phase 2 acceptance or be represented as passing evidence.

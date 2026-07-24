@@ -1,12 +1,33 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "Full Note workbench capability. Note persistence remains main-window only.",
+  "description": "Full Note workbench capability. Note and calendar mutations remain main-window only.",
   "windows": ["main"],
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "allow-load-app-data",
-    "allow-save-app-data"
+    "allow-save-app-data",
+    "allow-calendar-list-events",
+    "allow-calendar-agenda-page",
+    "allow-calendar-search",
+    "allow-calendar-get-event",
+    "allow-calendar-create-event",
+    "allow-calendar-update-event",
+    "allow-calendar-delete-event",
+    "allow-calendar-update-occurrence",
+    "allow-calendar-delete-occurrence",
+    "allow-calendar-get-settings",
+    "allow-calendar-update-settings",
+    "allow-calendar-readiness-get",
+    "allow-calendar-retry-initialization",
+    "allow-notification-status-get",
+    "allow-notification-permission-request",
+    "allow-import-ics-preview",
+    "allow-import-ics-commit",
+    "allow-export-ics",
+    "allow-backup-create",
+    "allow-backup-restore-preview",
+    "allow-backup-restore-commit"
   ]
 }

@@ -1,4 +1,4 @@
-use std::sync::{Mutex, MutexGuard, TryLockError};
+use tokio::sync::{Mutex, MutexGuard};
 
 use crate::error::NativeError;
 
@@ -9,12 +9,9 @@ pub(crate) struct MutationGate {
 
 impl MutationGate {
     pub(crate) fn begin(&self) -> Result<MutexGuard<'_, ()>, NativeError> {
-        // ponytail: one process-wide gate is sufficient until independent domains need concurrency.
-        self.operation.try_lock().map_err(|error| match error {
-            TryLockError::Poisoned(_) | TryLockError::WouldBlock => {
-                NativeError::mutation_unavailable()
-            }
-        })
+        self.operation
+            .try_lock()
+            .map_err(|_| NativeError::mutation_unavailable())
     }
 }
 
@@ -23,7 +20,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn concurrent_mutations_fail_without_queueing() {
+    fn same_domain_concurrent_mutations_fail_without_queueing() {
         let gate = MutationGate::default();
         let first = gate.begin().unwrap();
         assert_eq!(
@@ -32,5 +29,13 @@ mod tests {
         );
         drop(first);
         assert!(gate.begin().is_ok());
+    }
+
+    #[test]
+    fn separate_domains_admit_concurrent_mutations() {
+        let notes = MutationGate::default();
+        let calendar = MutationGate::default();
+        let _note = notes.begin().unwrap();
+        assert!(calendar.begin().is_ok());
     }
 }

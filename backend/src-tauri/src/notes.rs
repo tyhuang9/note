@@ -452,7 +452,7 @@ fn save_app_data_body(
         return Err(NativeError::data_too_large("noteData"));
     }
 
-    let _admission = state.mutations.begin()?;
+    let _admission = state.note_mutations.begin()?;
     state.notes.save_raw(raw)
 }
 
@@ -1219,7 +1219,7 @@ mod tests {
         let state = AppState::new(directory.path().to_path_buf());
         let data_path = directory.path().join(APP_DATA_FILE_NAME);
         fs::write(&data_path, b"existing").unwrap();
-        let admission = state.mutations.begin().unwrap();
+        let admission = state.note_mutations.begin().unwrap();
 
         let oversized = InvokeBody::Raw(vec![b'x'; 33]);
         let error = save_app_data_body("main", &state, &oversized, 32).unwrap_err();
@@ -1238,7 +1238,7 @@ mod tests {
         let state = Arc::new(AppState::new(directory.path().to_path_buf()));
         let data_path = directory.path().join(APP_DATA_FILE_NAME);
         fs::write(&data_path, b"existing").unwrap();
-        let admission = state.mutations.begin().unwrap();
+        let admission = state.note_mutations.begin().unwrap();
         let contender = Arc::clone(&state);
 
         let thread = std::thread::spawn(move || {
@@ -1250,6 +1250,16 @@ mod tests {
         assert_eq!(error.code, NativeErrorCode::MutationUnavailable);
         assert_eq!(fs::read(&data_path).unwrap(), b"existing");
         drop(admission);
+    }
+
+    #[test]
+    fn calendar_admission_does_not_reject_note_save() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::new(directory.path().to_path_buf());
+        let _calendar_admission = state.calendar_mutations.begin().unwrap();
+        let body = InvokeBody::Raw(serde_json::to_vec(&valid_save_json()).unwrap());
+
+        save_app_data_body("main", &state, &body, MAX_APP_DATA_BYTES).unwrap();
     }
 
     #[test]

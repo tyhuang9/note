@@ -34,12 +34,25 @@ export type PersistedPageViewport = {
   zoomLevel: number;
 };
 
+export type WorkspaceView =
+  | { kind: "note"; pageId: string }
+  | { kind: "agenda"; view: "agenda" | "month" }
+  | { kind: "settings"; section?: string };
+
+export type WorkspaceTab = {
+  id: string;
+  title: string;
+  view: WorkspaceView;
+};
+
 export type AppSessionState = {
   isAssistantOpen?: boolean;
   isExplorerCollapsed?: boolean;
   selectedFolderId?: string;
   selectedPageId?: string;
   openPageTabIds?: string[];
+  selectedWorkspaceTabId?: string;
+  workspaceTabs?: WorkspaceTab[];
   pageViewports?: Record<string, PersistedPageViewport>;
 };
 

@@ -3,8 +3,8 @@ import type { Ref } from "react";
 import type {
   AssistantActionKind,
   AssistantMessage,
-} from "../aiTypes";
-import { buildAssistantActionRequest } from "../services/assistantActions";
+} from "../../aiTypes";
+import { buildAssistantActionRequest } from "../../services/assistantActions";
 
 interface AssistantPanelProps {
   readonly assistantError: string | null;
@@ -17,7 +17,6 @@ interface AssistantPanelProps {
   readonly inputValue: string;
   readonly isHarnessLoading: boolean;
   readonly isHarnessReady: boolean;
-  readonly isRecording: boolean;
   readonly isSending: boolean;
   readonly messages: readonly AssistantMessage[];
   readonly onClose: () => void;
@@ -26,7 +25,6 @@ interface AssistantPanelProps {
   readonly onRunAction: (kind: AssistantActionKind) => void;
   readonly onSend: () => void;
   readonly onSelectHarnessAgent: (agentId: string) => void;
-  readonly onToggleRecording: () => void;
   readonly panelRef: Ref<HTMLElement>;
   readonly selectedBlockCount: number;
   readonly selectedBlockPreview: string | null;
@@ -103,7 +101,6 @@ export const AssistantPanel = memo(function AssistantPanel({
   inputValue,
   isHarnessLoading,
   isHarnessReady,
-  isRecording,
   isSending,
   messages,
   onClose,
@@ -112,7 +109,6 @@ export const AssistantPanel = memo(function AssistantPanel({
   onRunAction,
   onSend,
   onSelectHarnessAgent,
-  onToggleRecording,
   panelRef,
   selectedBlockCount,
   selectedBlockPreview,
@@ -309,12 +305,15 @@ export const AssistantPanel = memo(function AssistantPanel({
           value={inputValue}
         />
         <div className="assistant-composer-actions">
+          <span className="assistant-voice-unavailable" id="native-voice-status">
+            Native voice input is not yet available.
+          </span>
           <button
-            aria-label={isRecording ? "Stop dictation" : "Start dictation"}
-            aria-pressed={isRecording}
+            aria-describedby="native-voice-status"
+            aria-label="Native voice input unavailable"
             className="assistant-dictation-button"
-            onClick={onToggleRecording}
-            title={isRecording ? "Stop dictation" : "Start dictation"}
+            disabled
+            title="Native voice input is not yet available"
             type="button"
           >
             <AssistantIcon name="microphone" />

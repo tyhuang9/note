@@ -12,6 +12,8 @@
   "app": {
     "windows": [
       {
+        "label": "main",
+        "url": "index.html",
         "title": "Note",
         "width": 800,
         "height": 600,
@@ -19,10 +21,53 @@
         "minHeight": 240,
         "decorations": true,
         "resizable": true
+      },
+      {
+        "label": "widget",
+        "url": "widget.html",
+        "title": "Note Widget",
+        "create": false,
+        "visible": false,
+        "width": 360,
+        "height": 520,
+        "decorations": false,
+        "resizable": false
+      },
+      {
+        "label": "quick-command",
+        "url": "quick-command.html",
+        "title": "Note Quick Command",
+        "create": false,
+        "visible": false,
+        "width": 520,
+        "height": 180,
+        "decorations": false,
+        "resizable": false,
+        "alwaysOnTop": true
+      },
+      {
+        "label": "event-editor",
+        "url": "event-editor.html",
+        "title": "Note Event Editor",
+        "create": false,
+        "visible": false,
+        "width": 560,
+        "height": 720,
+        "minWidth": 360,
+        "minHeight": 480,
+        "decorations": true,
+        "resizable": true
       }
     ],
     "security": {
-      "csp": null
+      "capabilities": [
+        "main",
+        "widget",
+        "quick-command",
+        "event-editor"
+      ],
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https: http://127.0.0.1:* http://localhost:*; img-src 'self' data: blob: https: http://127.0.0.1:* http://localhost:*; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; frame-ancestors 'none'; media-src 'none'; worker-src 'self' blob:",
+      "devCsp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https: http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; img-src 'self' data: blob: https: http://127.0.0.1:* http://localhost:*; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; frame-ancestors 'none'; media-src 'none'; worker-src 'self' blob:"
     }
   },
   "bundle": {

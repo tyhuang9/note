@@ -1,7 +1,8 @@
-import { useState } from "react";
-import type { DragEvent, KeyboardEvent } from "react";
+import { useRef, useState } from "react";
+import type { DragEvent, KeyboardEvent, RefObject } from "react";
+import type { WorkspaceTab } from "../../types";
 import { InlineRename } from "../InlineRename";
-import type { WorkbenchIconComponent } from "./icons";
+import type { WorkbenchIconComponent, WorkbenchIconName } from "./icons";
 
 const PAGE_TAB_DRAG_MIME_TYPE = "application/x-note-page-tab";
 export const WORKSPACE_PAGE_PANEL_ID = "workspace-page-panel";
@@ -12,15 +13,11 @@ export function getWorkspaceTabId(pageId: string) {
 
 export type WorkspaceTabDropPlacement = "before" | "after";
 
-export interface WorkspaceTab {
-  readonly id: string;
-  readonly title: string;
-}
-
 export interface WorkspaceTabsProps {
+  readonly createPageButtonRef: RefObject<HTMLButtonElement | null>;
   readonly Icon: WorkbenchIconComponent;
   readonly isEditingActiveTab: boolean;
-  readonly onCloseTab: (pageId: string) => void;
+  readonly onCloseTab: (tabId: string) => void;
   readonly onCreatePage: () => void;
   readonly onRenamePage: (pageId: string, title: string) => void;
   readonly onReorderTab: (
@@ -28,13 +25,14 @@ export interface WorkspaceTabsProps {
     targetPageId: string,
     placement: WorkspaceTabDropPlacement,
   ) => void;
-  readonly onSelectTab: (pageId: string) => void;
+  readonly onSelectTab: (tabId: string) => void;
   readonly onSetEditingActiveTab: (isEditing: boolean) => void;
-  readonly selectedPageId: string;
+  readonly selectedTabId: string;
   readonly tabs: readonly WorkspaceTab[];
 }
 
 export function WorkspaceTabs({
+  createPageButtonRef,
   Icon,
   isEditingActiveTab,
   onCloseTab,
@@ -43,7 +41,7 @@ export function WorkspaceTabs({
   onReorderTab,
   onSelectTab,
   onSetEditingActiveTab,
-  selectedPageId,
+  selectedTabId,
   tabs,
 }: Readonly<WorkspaceTabsProps>) {
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
@@ -51,6 +49,32 @@ export function WorkspaceTabs({
     pageId: string;
     placement: WorkspaceTabDropPlacement;
   } | null>(null);
+  const tabButtonRefs = useRef(new Map<string, HTMLElement>());
+
+  function setTabButtonRef(tabId: string, element: HTMLElement | null) {
+    if (element) {
+      tabButtonRefs.current.set(tabId, element);
+    } else {
+      tabButtonRefs.current.delete(tabId);
+    }
+  }
+
+  function closeTabAndRestoreFocus(tabId: string) {
+    const closedIndex = tabs.findIndex((tab) => tab.id === tabId);
+    const nextFocusTabId =
+      selectedTabId !== tabId && tabs.some((tab) => tab.id === selectedTabId)
+        ? selectedTabId
+        : tabs[closedIndex + 1]?.id ?? tabs[closedIndex - 1]?.id ?? "";
+
+    onCloseTab(tabId);
+    window.requestAnimationFrame(() => {
+      if (nextFocusTabId) {
+        tabButtonRefs.current.get(nextFocusTabId)?.focus();
+      } else {
+        createPageButtonRef.current?.focus();
+      }
+    });
+  }
 
   function getTabDropPlacement(event: DragEvent<HTMLElement>) {
     const tabBounds = event.currentTarget.getBoundingClientRect();
@@ -65,9 +89,16 @@ export function WorkspaceTabs({
   }
 
   function handleTabKeyDown(
-    event: KeyboardEvent<HTMLButtonElement>,
+    event: KeyboardEvent<HTMLElement>,
     tabIndex: number,
   ) {
+    if (event.key === "Delete") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeTabAndRestoreFocus(tabs[tabIndex]?.id ?? "");
+      return;
+    }
+
     let nextTabIndex: number;
 
     switch (event.key) {
@@ -101,10 +132,17 @@ export function WorkspaceTabs({
   }
 
   return (
-    <div className="page-tabs" role="tablist" aria-label="Open pages">
+    <div
+      className="page-tabs"
+      role="tablist"
+      aria-label="Open workspace views"
+    >
       {tabs.map((page, tabIndex) => {
-        const isActive = page.id === selectedPageId;
-        const isEditingThisTab = isActive && isEditingActiveTab;
+        const notePageId =
+          page.view.kind === "note" ? page.view.pageId : null;
+        const isNoteTab = notePageId !== null;
+        const isActive = page.id === selectedTabId;
+        const isEditingThisTab = isNoteTab && isActive && isEditingActiveTab;
         const isDraggedTab = draggedTabId === page.id;
         const tabDropPlacement =
           tabDropTarget?.pageId === page.id ? tabDropTarget.placement : null;
@@ -118,7 +156,7 @@ export function WorkspaceTabs({
             } ${
               tabDropPlacement === "after" ? "is-tab-drop-after" : ""
             } has-close`}
-            draggable={!isEditingThisTab}
+            draggable={isNoteTab && !isEditingThisTab}
             key={page.id}
             onAuxClick={(event) => {
               if (event.button !== 1) {
@@ -127,7 +165,7 @@ export function WorkspaceTabs({
 
               event.preventDefault();
               event.stopPropagation();
-              onCloseTab(page.id);
+              closeTabAndRestoreFocus(page.id);
             }}
             onDragEnd={() => {
               setDraggedTabId(null);
@@ -145,7 +183,7 @@ export function WorkspaceTabs({
               );
             }}
             onDragOver={(event) => {
-              if (!hasPageTabDragData(event)) {
+              if (!isNoteTab || !hasPageTabDragData(event)) {
                 return;
               }
 
@@ -158,7 +196,7 @@ export function WorkspaceTabs({
               });
             }}
             onDragStart={(event) => {
-              if (isEditingThisTab) {
+              if (!isNoteTab || isEditingThisTab) {
                 event.preventDefault();
                 return;
               }
@@ -166,11 +204,14 @@ export function WorkspaceTabs({
               event.stopPropagation();
               setDraggedTabId(page.id);
               event.dataTransfer.effectAllowed = "move";
-              event.dataTransfer.setData(PAGE_TAB_DRAG_MIME_TYPE, page.id);
+              event.dataTransfer.setData(
+                PAGE_TAB_DRAG_MIME_TYPE,
+                notePageId,
+              );
               event.dataTransfer.setData("text/plain", page.title);
             }}
             onDrop={(event) => {
-              if (!hasPageTabDragData(event)) {
+              if (!isNoteTab || !hasPageTabDragData(event)) {
                 return;
               }
 
@@ -181,10 +222,10 @@ export function WorkspaceTabs({
                 event.dataTransfer.getData(PAGE_TAB_DRAG_MIME_TYPE) ||
                 draggedTabId;
 
-              if (sourcePageId && sourcePageId !== page.id) {
+              if (sourcePageId && sourcePageId !== notePageId) {
                 onReorderTab(
                   sourcePageId,
-                  page.id,
+                  notePageId,
                   getTabDropPlacement(event),
                 );
               }
@@ -203,11 +244,15 @@ export function WorkspaceTabs({
               <>
                 <span
                   aria-controls={WORKSPACE_PAGE_PANEL_ID}
+                  aria-keyshortcuts="Delete"
                   aria-label={page.title}
                   aria-selected="true"
                   className="page-tab-rename-anchor"
                   id={getWorkspaceTabId(page.id)}
+                  onKeyDown={(event) => handleTabKeyDown(event, tabIndex)}
+                  ref={(element) => setTabButtonRef(page.id, element)}
                   role="tab"
+                  tabIndex={0}
                 />
                 <Icon name="document-text" />
                 <InlineRename
@@ -215,7 +260,7 @@ export function WorkspaceTabs({
                   initialValue={page.title}
                   onCancel={() => onSetEditingActiveTab(false)}
                   onCommit={(value) => {
-                    onRenamePage(page.id, value);
+                    onRenamePage(notePageId, value);
                     onSetEditingActiveTab(false);
                   }}
                 />
@@ -223,22 +268,28 @@ export function WorkspaceTabs({
             ) : (
               <button
                 aria-controls={WORKSPACE_PAGE_PANEL_ID}
+                aria-keyshortcuts="Delete"
                 aria-selected={isActive}
                 className="page-tab-main"
                 id={getWorkspaceTabId(page.id)}
                 onClick={() => onSelectTab(page.id)}
                 onDoubleClick={() => {
-                  if (isActive) {
+                  if (isNoteTab && isActive) {
                     onSetEditingActiveTab(true);
                   }
                 }}
                 onKeyDown={(event) => handleTabKeyDown(event, tabIndex)}
-                title={isActive ? "Double-click to rename page" : page.title}
+                ref={(element) => setTabButtonRef(page.id, element)}
+                title={
+                  isNoteTab && isActive
+                    ? "Double-click to rename page"
+                    : page.title
+                }
                 role="tab"
                 tabIndex={isActive ? 0 : -1}
                 type="button"
               >
-                <Icon name="document-text" />
+                <Icon name={getWorkspaceTabIcon(page)} />
                 <span className="page-title">{page.title}</span>
               </button>
             )}
@@ -247,8 +298,9 @@ export function WorkspaceTabs({
               className="page-tab-close"
               onClick={(event) => {
                 event.stopPropagation();
-                onCloseTab(page.id);
+                closeTabAndRestoreFocus(page.id);
               }}
+              tabIndex={-1}
               title="Close tab"
               type="button"
             >
@@ -261,6 +313,7 @@ export function WorkspaceTabs({
         className="page-tab-add"
         aria-label="Create root page"
         onClick={onCreatePage}
+        ref={createPageButtonRef}
         title="Create root page"
         type="button"
       >
@@ -268,4 +321,15 @@ export function WorkspaceTabs({
       </button>
     </div>
   );
+}
+
+function getWorkspaceTabIcon(tab: WorkspaceTab): WorkbenchIconName {
+  switch (tab.view.kind) {
+    case "note":
+      return "document-text";
+    case "agenda":
+      return "rectangle-stack";
+    case "settings":
+      return "adjustments-horizontal";
+  }
 }

@@ -1,13 +1,7 @@
 import { memo, useMemo, useState } from "react";
-import type { AIModel, AIProvider, ProviderType } from "../aiTypes";
-import { getProviderTypeLabel } from "../services/aiProviderStorage";
-
-export type ProviderConnectionState = {
-  isRefreshing?: boolean;
-  isTesting?: boolean;
-  message?: string;
-  status: "idle" | "ok" | "error";
-};
+import type { AIModel, AIProvider, ProviderType } from "../../aiTypes";
+import { getProviderTypeLabel } from "../../services/aiProviderStorage";
+import type { ProviderConnectionState } from "./useAIProviderSettings";
 
 type AIProvidersSettingsProps = {
   connectionStates: Record<string, ProviderConnectionState>;

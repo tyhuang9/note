@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "quick-command",
+  "description": "Restricted quick-command overlay capability. It may only receive sanitized native events.",
+  "windows": ["quick-command"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}

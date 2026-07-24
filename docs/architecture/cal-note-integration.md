@@ -1,6 +1,6 @@
 # Cal-to-Note Integration Architecture
 
-Status: Phase 0 complete (acceptance gate passed)
+Status: Phase 1 complete (acceptance gate passed)
 
 Last updated: 2026-07-24
 
@@ -295,7 +295,7 @@ Each step has a rollback boundary: the previous commit remains buildable, note J
 | Phase | Status | Scope and acceptance evidence |
 |---|---|---|
 | 0 — Baseline, documentation, measurements | **Complete** | Source/state inventory, architecture records, toolchain, builds, tests, bundle sizes, and the startup-probe limitation are recorded. Aggregate documentation and security review passed after the complete initial Cal porcelain output was embedded and the unbounded note-persistence risk was made explicit. Final Cal `HEAD` and raw porcelain bytes match the recorded baseline exactly. |
-| 1 — Modular shell and native surface routing | Not started | Surface resolver, main/browser fallback, typed clients, workspace union, backend modules, restrictive CSP, per-window capabilities, caller-label tests; no calendar behavior. |
+| 1 — Modular shell and native surface routing | **Complete** | Surface resolver and main/browser fallback, five HTML entries, typed notes client, workspace union and legacy restoration, extracted provider/assistant/settings boundaries, modular Rust state/error/event/mutation/notes/private-file/security modules, restrictive CSP, four exact-label capabilities, caller-label and bounded persistence tests; no calendar behavior. See the Phase 1 record below. |
 | 2 — Calendar kernel | Not started | SQLite/migrations, bounded domain/repository APIs, recurrence/occurrences, revisions, reminders, search/paging, ICS, verified backup/restore, authorization, and adapted Rust tests. |
 | 3 — React Agenda and Month | Not started | First-class system tabs, real service queries, bounded rendering, accessible editor, CRUD/recurrence/reminders, existing canvas/tabs intact. |
 | 4 — Unified assistant and calendar tools | Not started | Provider-neutral runtime, one registry, bounded grounding, expiring reviewed create-event actions, authorized windows, retained Note actions. |
@@ -383,6 +383,67 @@ Phase 0 is **complete**. Every item below has recorded evidence:
 
 No Phase 1 implementation begins before this gate passes. No Phase 0 activity authorizes any Cal mutation.
 
+## Phase 1 implementation record
+
+Phase 1 is **complete**. It prepares Note for multiple native domains and surfaces without adding calendar behavior or changing the Cal reference repository. The historical Phase 0 baseline above remains the comparison point; the current Phase 1 implementation reduces `frontend/src/App.tsx` to 7,074 physical lines.
+
+### Implementation completed
+
+- Added a modular surface resolver that reads the Tauri window label and falls back to `main` for browser-only development. Main, widget, quick-command, event-editor, and unsupported routing are code-split through dedicated surface entries.
+- Added five production HTML entries (`index.html`, `widget.html`, `quick-command.html`, `event-editor.html`, and `unsupported.html`). The three configured auxiliary Tauri windows are `create: false` and hidden until native code explicitly creates them; an auxiliary build verifier confirms they do not reach the main canvas bundle.
+- Added the typed `frontend/src/native/notesClient.ts` boundary. It is the sole direct-invoke module: load uses the existing typed command, save sends bounded raw JSON bytes, and feature components do not scatter raw `invoke` calls.
+- Added the canonical discriminated workspace model: `WorkspaceView` is `{ kind: "note", pageId }`, `{ kind: "agenda", view: "agenda" | "month" }`, or `{ kind: "settings", section? }`. Existing page-tab/session fields restore compatibly through the legacy representation.
+- Extracted the provider controller and moved assistant and settings views into feature modules while preserving the existing canvas/workbench behavior. Browser STT and microphone capture were removed from application behavior.
+- Split the minimal Rust backend into `error`, `app_state`, `events`, `mutation`, `notes`, `private_file`, and `security` modules. Native failures now cross the boundary as structured errors, and `note://...` event names are centralized as constants.
+- Restricted note persistence to the exact `main` window label. The native boundary caps raw bytes before deserialization, uses strict save DTOs with unknown-field rejection, keeps persisted loads tolerant for forward-compatible legacy data, applies cumulative record/string/rich-content/decoded-image/output bounds, and publishes validated writes through private atomic staging.
+- Replaced the disabled CSP with a restrictive Tauri CSP and added a separate restrictive meta CSP to every auxiliary HTML entry. Four capabilities use the exact labels `main`, `widget`, `quick-command`, and `event-editor`; they contain no globs, `core:default`, `core:event:allow-emit`, or `core:event:allow-emit-to` permissions. The browser-media initialization shim remains defense in depth only; native voice is not implemented in Phase 1.
+
+### Phase 1 verification evidence
+
+| Evidence | Result |
+|---|---|
+| Production frontend build | Passed: 124 modules and all five HTML entries emitted; the auxiliary CSP/chunk verifier passed. Vite reported the expected `MainSurface` warning of 545.05 kB (170.96 kB gzip). |
+| Playwright | `39/39` tests passed. |
+| Rust formatting | `cargo fmt --all -- --check` passed. |
+| Rust lint | Strict locked clippy passed with `-D warnings`. |
+| Rust tests | `24/24` tests passed. |
+| Tauri release | No-bundle Tauri release build passed. |
+| Direct invoke audit | Exactly one direct-invoke boundary module remains: `frontend/src/native/notesClient.ts`. |
+| Static security invariants | No application browser media APIs, no `csp: null`, no capability globs, and no default/event emit capability were found. The media shim is documented only as defense in depth. |
+
+### Independent review outcomes
+
+Code, security, accessibility, UI/UX, and QA reviews were all **GO after fixes**. The canonical Codex Security diff scan was unavailable because Python was not installed; the manual security fallback was **GO**.
+
+### Explicitly unverified
+
+The following are not claimed by the Phase 1 evidence and remain focused release/manual validation work: live native auxiliary-window creation, live capability-denial behavior, live media-permission behavior, behavior with representative installed user data, Windows DACL/no-follow behavior, macOS and Linux builds/runs, and focused manual provider/settings flows. The automated checks and static audits above do not substitute for those environment-specific checks.
+
+## Phase 1 acceptance gate
+
+Phase 1 is **accepted complete for the modular-shell scope**. The implementation, static boundaries, build outputs, tests, and reviews above satisfy the branch gate; no calendar behavior was introduced. The explicit unverified items remain release-validation work and are not represented as passing evidence.
+
+- [x] Surface resolver, browser `main` fallback, five HTML entries, and non-created auxiliary Tauri windows are implemented.
+- [x] Typed notes client is the only direct renderer invoke boundary; raw IPC and structured native errors are bounded.
+- [x] Canonical workspace union and legacy note-tab/session restoration are implemented.
+- [x] Assistant/settings/provider extraction and modular Rust boundaries are implemented without a canvas rewrite.
+- [x] Restrictive CSP, auxiliary meta CSP, exact-label capabilities, caller-label authorization, and browser-media defense-in-depth checks are implemented.
+- [x] Production build, auxiliary verifier, Playwright `39/39`, Rust format, strict locked clippy, Rust `24/24`, and no-bundle Tauri release checks pass.
+- [x] Code, security, accessibility, UI/UX, and QA reviews are GO after fixes; manual security fallback is GO with the canonical Codex Security scan unavailable.
+- [ ] Live native auxiliary creation/denial/media, representative installed data, Windows DACL/no-follow, macOS/Linux, and focused provider/settings manual checks remain unverified.
+
+## Phase 1 risk disposition
+
+| Severity | Phase 1 disposition | Residual mitigation / next gate |
+|---|---|---|
+| High | `App.tsx` remains large at 7,074 physical lines, although provider control and assistant/settings views are extracted. | Continue behavior-preserving extraction before calendar UI; do not add calendar logic to the canvas component. |
+| High | Note load/save now has pre-deserialization, strict-save, tolerant-load, cumulative, and atomic-write controls. | Exercise representative installed data and hostile files on each supported platform; retain the bounded contract as the native foundation. |
+| High | Restrictive CSP, four exact-label capabilities, main-only note authorization, and no renderer event emission are implemented. | Verify live auxiliary creation and denial behavior in native packaging; keep Rust caller checks authoritative. |
+| High | Existing provider credentials remain a Phase 5 migration concern; Phase 1 does not claim native secret storage. | Migrate legacy webview credentials through a verified native abstraction before provider/model release work. |
+| Medium | The browser media shim can deny renderer capture but is explicitly not an OS permission boundary. | Replace renderer voice paths with native capture in Phase 6 and test device/platform races. |
+| Medium | Rust coverage is now 24/24 for Phase 1 boundaries, but platform-specific DACL/no-follow and macOS/Linux behavior are unverified. | Add supported-platform release validation and filesystem security checks before Phase 9 acceptance. |
+| Low | The production build warns that `MainSurface` is 545.05 kB (170.96 kB gzip). | Keep auxiliary chunks isolated and measure release performance when calendar surfaces are added. |
+
 ## Evidence references
 
 - `frontend/src/App.tsx`
@@ -396,6 +457,20 @@ No Phase 1 implementation begins before this gate passes. No Phase 0 activity au
 - `frontend/src/services/llamaHarnessAssistant.ts`
 - `backend/src-tauri/src/lib.rs`
 - `backend/src-tauri/tauri.conf.json`
-- `backend/src-tauri/capabilities/default.json`
+- `backend/src-tauri/capabilities/main.json`
+- `backend/src-tauri/capabilities/widget.json`
+- `backend/src-tauri/capabilities/quick-command.json`
+- `backend/src-tauri/capabilities/event-editor.json`
+- `backend/src-tauri/src/app_state.rs`
+- `backend/src-tauri/src/error.rs`
+- `backend/src-tauri/src/events.rs`
+- `backend/src-tauri/src/mutation.rs`
+- `backend/src-tauri/src/notes.rs`
+- `backend/src-tauri/src/private_file.rs`
+- `backend/src-tauri/src/security.rs`
+- `frontend/src/surfaces/resolveSurface.ts`
+- `frontend/src/native/notesClient.ts`
+- `frontend/src/features/workspace/workspaceState.ts`
+- `frontend/tests/build/verify-auxiliary-output.mjs`
 - `docs/ai-assistant-architecture.md`
 - Master implementation brief attached to the Phase 0 task

@@ -12,15 +12,25 @@ import type {
   DragEvent,
   PointerEvent as ReactPointerEvent,
   Ref,
+  RefObject,
 } from "react";
 import { useEditorState } from "@tiptap/react";
-import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 import {
   AIProvidersSettings,
-  type ProviderConnectionState,
-} from "./components/AIProvidersSettings";
-import { AssistantPanel } from "./components/AssistantPanel";
+} from "./features/settings/AIProvidersSettings";
+import { useAIProviderSettings } from "./features/settings/useAIProviderSettings";
+import { AssistantPanel } from "./features/assistant/AssistantPanel";
+import {
+  closeWorkspaceTab as closeWorkspaceTabState,
+  createNoteWorkspaceTab,
+  getNoteWorkspaceTabId,
+  getOpenNotePageIds,
+  getSelectedNotePageId,
+  reconcileWorkspaceNoteTabs,
+  restoreWorkspaceState,
+  syncWorkspaceTabsWithPages,
+} from "./features/workspace/workspaceState";
 import { InlineRename } from "./components/InlineRename";
 import { TextBlockView } from "./components/TextBlockView";
 import { ActivityRail } from "./components/workbench/ActivityRail";
@@ -62,13 +72,9 @@ import type {
   ViewportRect,
 } from "./appTypes";
 import type {
-  AIModel,
-  AIProvider,
   AssistantActionKind,
   AssistantActionRequest,
   AssistantMessage,
-  ProviderType,
-  SttProviderConfig,
 } from "./aiTypes";
 import {
   blurActiveTextEntry,
@@ -80,17 +86,12 @@ import {
   rectsIntersect,
 } from "./editorUtils";
 import {
-  callOpenAICompatibleWhisperTranscription,
-  DEFAULT_LOCAL_STT_CONFIG,
-} from "./services/localModelProviders";
-import { listAIProviderModels, testAIProvider } from "./services/aiProviderAdapters";
+  isNativeNotesError,
+  loadAppData,
+  saveAppData,
+  type NativeNotesError,
+} from "./native/notesClient";
 import { buildAssistantActionRequest } from "./services/assistantActions";
-import {
-  createAIProvider,
-  deleteProviderCredential,
-  loadAIProviderSettings,
-  saveAIProviderSettings,
-} from "./services/aiProviderStorage";
 import { buildNotesContext } from "./services/notesContext";
 import {
   createLlamaHarnessNoteRun,
@@ -104,7 +105,12 @@ import {
   type LlamaHarnessSetupStatus,
   submitLlamaHarnessNoteToolResults,
 } from "./services/llamaHarnessAssistant";
-import type { AppData, AppSessionState, TextBlock } from "./types";
+import type {
+  AppData,
+  AppSessionState,
+  TextBlock,
+  WorkspaceTab,
+} from "./types";
 
 type SidebarProps = {
   bookmarkedPages: AppData["pages"];
@@ -154,16 +160,17 @@ type SidebarProps = {
 type PageHeaderProps = {
   activeTextEditor: Editor | null;
   assistantToggleButtonRef: Ref<HTMLButtonElement>;
+  createPageButtonRef: RefObject<HTMLButtonElement | null>;
   isAssistantOpen: boolean;
   isGridVisible: boolean;
   isDarkMode: boolean;
   isEditingHeaderTitle: boolean;
   isSnapToGridEnabled: boolean;
-  openPages: OpenPageTab[];
-  selectedPageId: string;
+  selectedWorkspaceTabId: string;
+  workspaceTabs: WorkspaceTab[];
   textFormatState: TextFormatState;
   zoomLevel: number;
-  onClosePageTab: (pageId: string) => void;
+  onCloseWorkspaceTab: (tabId: string) => void;
   onCreatePage: () => void;
   onFocusCanvasSearch: () => void;
   onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
@@ -173,7 +180,7 @@ type PageHeaderProps = {
     targetPageId: string,
     placement: PageTabDropPlacement,
   ) => void;
-  onSelectPageTab: (pageId: string) => void;
+  onSelectWorkspaceTab: (tabId: string) => void;
   onSetEditingHeaderTitle: (isEditing: boolean) => void;
   onToggleAssistant: (trigger?: HTMLElement) => void;
   onToggleGrid: () => void;
@@ -186,10 +193,28 @@ type PageHeaderProps = {
 
 type OpenPageTab = AppData["pages"][number] & {
   isBlankPlaceholder: boolean;
+  kind: "note";
+  pageId: string;
 };
 
 type PageTabDropPlacement = "before" | "after";
 type WorkbenchOverlay = "assistant" | "explorer";
+type NotesPersistenceIssue = {
+  error: NativeNotesError;
+  operation: "load" | "save";
+};
+
+function logNotesPersistenceError(summary: string, error: unknown) {
+  if (isNativeNotesError(error)) {
+    console.warn(summary, {
+      code: error.details.code,
+      ...(error.details.field ? { field: error.details.field } : {}),
+    });
+    return;
+  }
+
+  console.warn(summary);
+}
 
 type ToolbarActionId =
   | "bold"
@@ -723,20 +748,6 @@ function normalizePageViewports(
   return normalizedViewports;
 }
 
-function getValidUniquePageIds(
-  pageIds: string[] | undefined,
-  validPageIds: Set<string>,
-) {
-  if (!pageIds) {
-    return [];
-  }
-
-  return pageIds.filter(
-    (pageId, index) =>
-      validPageIds.has(pageId) && pageIds.indexOf(pageId) === index,
-  );
-}
-
 function getNextTextFormatState(
   currentState: TextFormatState,
   formatId: ToolbarActionId,
@@ -979,7 +990,16 @@ function applyFormatStateToBlock(
 function App() {
   const [data, setData] = useState<AppData>(emptyData);
   const [selectedFolderId, setSelectedFolderId] = useState("");
-  const [selectedPageId, setSelectedPageId] = useState("");
+  const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTab[]>([]);
+  const [selectedWorkspaceTabId, setSelectedWorkspaceTabId] = useState("");
+  const selectedWorkspaceTab = workspaceTabs.find(
+    (tab) => tab.id === selectedWorkspaceTabId,
+  );
+  const selectedPageId = getSelectedNotePageId(
+    workspaceTabs,
+    selectedWorkspaceTabId,
+  );
+  const openPageTabIds = getOpenNotePageIds(workspaceTabs);
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
   const [editingPageId, setEditingPageId] = useState<string | null>(null);
   const [isEditingHeaderTitle, setIsEditingHeaderTitle] = useState(false);
@@ -997,7 +1017,6 @@ function App() {
   const [pageSearchFocusRequest, setPageSearchFocusRequest] = useState(0);
   const [pageSearchQuery, setPageSearchQuery] = useState("");
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
-  const [openPageTabIds, setOpenPageTabIds] = useState<string[]>([]);
   const [focusEndBlockId, setFocusEndBlockId] = useState<string | null>(null);
   const [isCanvasKeyboardActive, setIsCanvasKeyboardActive] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
@@ -1020,7 +1039,6 @@ function App() {
   const [assistantStatus, setAssistantStatus] = useState<string | null>(null);
   const [assistantError, setAssistantError] = useState<string | null>(null);
   const [isAssistantSending, setIsAssistantSending] = useState(false);
-  const [isAssistantRecording, setIsAssistantRecording] = useState(false);
   const [llamaHarnessSetupStatus, setLlamaHarnessSetupStatus] =
     useState<LlamaHarnessSetupStatus | null>(null);
   const [llamaHarnessCapabilities, setLlamaHarnessCapabilities] =
@@ -1030,20 +1048,30 @@ function App() {
     readSelectedLlamaHarnessAgentId,
   );
   const [isLlamaHarnessLoading, setIsLlamaHarnessLoading] = useState(false);
-  const [sttProviderConfig] = useState<SttProviderConfig>(DEFAULT_LOCAL_STT_CONFIG);
-  const [isAIProvidersOpen, setIsAIProvidersOpen] = useState(false);
-  const [isAIProviderSettingsLoaded, setIsAIProviderSettingsLoaded] =
-    useState(false);
-  const [aiProviders, setAIProviders] = useState<AIProvider[]>([]);
-  const [aiModels, setAIModels] = useState<AIModel[]>([]);
-  const [selectedAIProviderId, setSelectedAIProviderId] = useState("");
-  const [defaultChatModelId, setDefaultChatModelId] = useState("");
-  const [defaultEmbeddingModelId, setDefaultEmbeddingModelId] = useState("");
-  const [providerConnectionStates, setProviderConnectionStates] = useState<
-    Record<string, ProviderConnectionState>
-  >({});
+  const {
+    addProvider: addAIProvider,
+    close: closeAIProviderSettings,
+    connectionStates: providerConnectionStates,
+    defaultChatModelId,
+    defaultEmbeddingModelId,
+    deleteProvider: deleteAIProvider,
+    isOpen: isAIProvidersOpen,
+    models: aiModels,
+    providers: aiProviders,
+    refreshModels: refreshProviderModels,
+    selectedProviderId: selectedAIProviderId,
+    setDefaultChatModelId,
+    setDefaultEmbeddingModelId,
+    setSelectedProviderId: setSelectedAIProviderId,
+    testConnection: testProviderConnection,
+    updateProvider: updateAIProvider,
+  } = useAIProviderSettings();
   const [isLoaded, setIsLoaded] = useState(false);
   const [persistenceAvailable, setPersistenceAvailable] = useState(false);
+  const [persistenceIssue, setPersistenceIssue] =
+    useState<NotesPersistenceIssue | null>(null);
+  const [isPersistenceRetrying, setIsPersistenceRetrying] = useState(false);
+  const [persistenceAnnouncement, setPersistenceAnnouncement] = useState("");
   const dataRef = useRef<AppData>(data);
   const canvasRef = useRef<HTMLElement | null>(null);
   const canvasContentRef = useRef<HTMLDivElement | null>(null);
@@ -1053,6 +1081,8 @@ function App() {
   const explorerToggleButtonRef = useRef<HTMLButtonElement | null>(null);
   const assistantPanelRef = useRef<HTMLElement | null>(null);
   const assistantToggleButtonRef = useRef<HTMLButtonElement | null>(null);
+  const createPageButtonRef = useRef<HTMLButtonElement | null>(null);
+  const persistenceRetryButtonRef = useRef<HTMLButtonElement | null>(null);
   const overlayReturnFocusRef = useRef<HTMLElement | null>(null);
   const overlayEntryFocusRequestRef = useRef<WorkbenchOverlay | null>(null);
   const overlayReturnFocusRequestRef = useRef(false);
@@ -1072,10 +1102,8 @@ function App() {
   const redoBlockHistoryRef = useRef<TextBlock[][]>([]);
   const blockElementsRef = useRef<Map<string, HTMLElement>>(new Map());
   const dragLayerSessionRef = useRef<DragLayerSession | null>(null);
-  const assistantMediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const assistantRecordingChunksRef = useRef<Blob[]>([]);
-  const assistantRecordingStreamRef = useRef<MediaStream | null>(null);
-  const openPageTabIdsRef = useRef<string[]>(openPageTabIds);
+  const workspaceTabsRef = useRef<WorkspaceTab[]>(workspaceTabs);
+  const selectedWorkspaceTabIdRef = useRef(selectedWorkspaceTabId);
   const pageViewportsRef = useRef<Map<string, PageViewport>>(new Map());
   const isSnapToGridEnabledRef = useRef(isSnapToGridEnabled);
   const editingBlockIdRef = useRef<string | null>(editingBlockId);
@@ -1091,13 +1119,69 @@ function App() {
   dataRef.current = data;
   isSnapToGridEnabledRef.current = isGridVisible && isSnapToGridEnabled;
   editingBlockIdRef.current = editingBlockId;
-  openPageTabIdsRef.current = openPageTabIds;
+  workspaceTabsRef.current = workspaceTabs;
+  selectedWorkspaceTabIdRef.current = selectedWorkspaceTabId;
   selectedBlockIdsRef.current = selectedBlockIds;
   selectedFolderIdRef.current = selectedFolderId;
   selectedPageIdRef.current = selectedPageId;
   selectedSidebarPageIdsRef.current = selectedSidebarPageIds;
   textFormatStateRef.current = textFormatState;
   zoomLevelRef.current = zoomLevel;
+
+  function setSelectedPageId(pageId: string) {
+    if (!pageId) {
+      selectedWorkspaceTabIdRef.current = "";
+      setSelectedWorkspaceTabId("");
+      return;
+    }
+
+    const tabId = getNoteWorkspaceTabId(pageId);
+    const page = dataRef.current.pages.find(
+      (currentPage) =>
+        currentPage.id === pageId && currentPage.folderId !== PAGE_TEMPLATE_FOLDER_ID,
+    );
+
+    setWorkspaceTabs((currentTabs) => {
+      const nextTabs = currentTabs.some(
+        (tab) => tab.view.kind === "note" && tab.view.pageId === pageId,
+      )
+        ? currentTabs
+        : [
+            ...currentTabs,
+            createNoteWorkspaceTab({
+              id: pageId,
+              title: page?.title ?? "New page",
+            }),
+          ];
+
+      workspaceTabsRef.current = nextTabs;
+      return nextTabs;
+    });
+    selectedWorkspaceTabIdRef.current = tabId;
+    setSelectedWorkspaceTabId(tabId);
+  }
+
+  function setOpenPageTabIds(
+    update: string[] | ((currentPageIds: string[]) => string[]),
+  ) {
+    setWorkspaceTabs((currentTabs) => {
+      const currentPageIds = getOpenNotePageIds(currentTabs);
+      const nextPageIds =
+        typeof update === "function" ? update(currentPageIds) : update;
+      const notePages = dataRef.current.pages.filter(
+        (page) => page.folderId !== PAGE_TEMPLATE_FOLDER_ID,
+      );
+
+      const nextTabs = reconcileWorkspaceNoteTabs(
+        currentTabs,
+        nextPageIds,
+        notePages,
+      );
+
+      workspaceTabsRef.current = nextTabs;
+      return nextTabs;
+    });
+  }
 
   const isExplorerOverlayOpen =
     isNarrowWorkbench && activeNarrowOverlay === "explorer";
@@ -1174,6 +1258,8 @@ function App() {
         ? [
             {
               ...page,
+              kind: "note" as const,
+              pageId: page.id,
               isBlankPlaceholder:
                 page.title.trim() === "New page" && !pageIdsWithBlocks.has(page.id),
             },
@@ -1556,8 +1642,6 @@ function App() {
         cleanupDragLayerSession(dragLayerSessionRef.current);
         dragLayerSessionRef.current = null;
       }
-
-      stopAssistantRecordingStream();
     };
   }, []);
 
@@ -1582,7 +1666,7 @@ function App() {
 
     async function loadData() {
       try {
-        const savedData = await invoke<AppData>("load_app_data");
+        const savedData = await loadAppData();
 
         if (!isMounted) {
           return;
@@ -1595,37 +1679,14 @@ function App() {
           ...savedData.folders.map((folder) => folder.id),
         ]);
         const savedSessionState = savedData.sessionState;
-        const hasSavedSessionState = Boolean(savedSessionState);
-        const savedOpenPageIds = getValidUniquePageIds(
-          savedSessionState?.openPageTabIds,
-          validPageIds,
+        const restoredWorkspace = restoreWorkspaceState(
+          savedSessionState,
+          validPages,
         );
-        let nextSelectedPageId =
-          savedSessionState?.selectedPageId &&
-          validPageIds.has(savedSessionState.selectedPageId)
-            ? savedSessionState.selectedPageId
-            : "";
-
-        if (!nextSelectedPageId && savedOpenPageIds.length > 0) {
-          nextSelectedPageId = savedOpenPageIds[0];
-        }
-
-        if (!hasSavedSessionState && !nextSelectedPageId) {
-          nextSelectedPageId = validPages[0]?.id ?? "";
-        }
-
-        const nextOpenPageIds = hasSavedSessionState
-          ? [...savedOpenPageIds]
-          : nextSelectedPageId
-            ? [nextSelectedPageId]
-            : [];
-
-        if (
-          nextSelectedPageId &&
-          !nextOpenPageIds.includes(nextSelectedPageId)
-        ) {
-          nextOpenPageIds.push(nextSelectedPageId);
-        }
+        const nextSelectedPageId = getSelectedNotePageId(
+          restoredWorkspace.tabs,
+          restoredWorkspace.selectedTabId,
+        );
 
         const nextSelectedPage = validPages.find(
           (page) => page.id === nextSelectedPageId,
@@ -1646,8 +1707,8 @@ function App() {
           validPageIds,
         );
         setSelectedFolderId(nextFolderId);
-        setSelectedPageId(nextSelectedPageId);
-        setOpenPageTabIds(nextOpenPageIds);
+        setWorkspaceTabs(restoredWorkspace.tabs);
+        setSelectedWorkspaceTabId(restoredWorkspace.selectedTabId);
         setSidebarPageSelection(nextSelectedPageId ? [nextSelectedPageId] : []);
         restorePageViewport(nextSelectedPageId);
         setSelectedBlockIds([]);
@@ -1656,8 +1717,15 @@ function App() {
         setInsertionPoint(null);
         setIsEditingHeaderTitle(false);
         setPersistenceAvailable(true);
+        setPersistenceIssue(null);
       } catch (error) {
-        console.warn("Could not load local note data.", error);
+        logNotesPersistenceError("Could not load local note data.", error);
+        if (
+          isNativeNotesError(error) &&
+          error.details.code !== "native_notes_unavailable"
+        ) {
+          setPersistenceIssue({ error, operation: "load" });
+        }
       } finally {
         if (isMounted) {
           setIsLoaded(true);
@@ -1671,57 +1739,6 @@ function App() {
       isMounted = false;
     };
   }, []);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    async function loadProviderSettings() {
-      try {
-        const settings = await loadAIProviderSettings();
-
-        if (!isMounted) {
-          return;
-        }
-
-        setAIProviders(settings.providers);
-        setAIModels(settings.models);
-        setDefaultChatModelId(settings.defaultChatModelId ?? "");
-        setDefaultEmbeddingModelId(settings.defaultEmbeddingModelId ?? "");
-        setSelectedAIProviderId(settings.providers[0]?.id ?? "");
-      } finally {
-        if (isMounted) {
-          setIsAIProviderSettingsLoaded(true);
-        }
-      }
-    }
-
-    loadProviderSettings();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!isAIProviderSettingsLoaded) {
-      return;
-    }
-
-    saveAIProviderSettings({
-      defaultChatModelId: defaultChatModelId || undefined,
-      defaultEmbeddingModelId: defaultEmbeddingModelId || undefined,
-      models: aiModels,
-      providers: aiProviders,
-    }).catch((error) => {
-      console.warn("Could not save AI provider settings.", error);
-    });
-  }, [
-    aiModels,
-    aiProviders,
-    defaultChatModelId,
-    defaultEmbeddingModelId,
-    isAIProviderSettingsLoaded,
-  ]);
 
   useEffect(() => {
     const validPageIds = new Set(
@@ -1752,40 +1769,29 @@ function App() {
   }, [isSearchOpen]);
 
   useEffect(() => {
-    const validPageIds = new Set(
-      data.pages
-        .filter((page) => !isTemplatePage(page))
-        .map((page) => page.id),
-    );
+    const notePages = data.pages.filter((page) => !isTemplatePage(page));
 
-    setOpenPageTabIds((currentPageIds) => {
-      const nextPageIds = currentPageIds.filter((pageId) => validPageIds.has(pageId));
+    setWorkspaceTabs((currentTabs) => {
+      const nextTabs = syncWorkspaceTabsWithPages(currentTabs, notePages);
 
-      return areIdSelectionsEqual(currentPageIds, nextPageIds)
-        ? currentPageIds
-        : nextPageIds;
+      workspaceTabsRef.current = nextTabs;
+      return nextTabs;
     });
   }, [data.pages]);
 
   useEffect(() => {
-    if (!selectedPageId) {
+    if (
+      !selectedWorkspaceTabId ||
+      workspaceTabs.some((tab) => tab.id === selectedWorkspaceTabId)
+    ) {
       return;
     }
 
-    const selectedPageExists = data.pages.some(
-      (page) => page.id === selectedPageId && !isTemplatePage(page),
-    );
+    const nextSelectedTabId = workspaceTabs[0]?.id ?? "";
 
-    if (!selectedPageExists) {
-      return;
-    }
-
-    setOpenPageTabIds((currentPageIds) =>
-      currentPageIds.includes(selectedPageId)
-        ? currentPageIds
-        : [...currentPageIds, selectedPageId],
-    );
-  }, [data.pages, selectedPageId]);
+    selectedWorkspaceTabIdRef.current = nextSelectedTabId;
+    setSelectedWorkspaceTabId(nextSelectedTabId);
+  }, [selectedWorkspaceTabId, workspaceTabs]);
 
   useEffect(() => {
     if (!isWorkspaceEmpty) {
@@ -1836,15 +1842,22 @@ function App() {
     }
 
     const saveTimer = window.setTimeout(() => {
-      invoke("save_app_data", {
-        data: {
-          ...data,
-          isDarkMode,
-          sessionState: getSessionState(),
-        },
-      }).catch((error) => {
-        console.warn("Could not save local note data.", error);
-      });
+      saveAppData({
+        ...data,
+        isDarkMode,
+        sessionState: getSessionState(),
+      })
+        .then(() => {
+          setPersistenceIssue((currentIssue) =>
+            currentIssue?.operation === "save" ? null : currentIssue,
+          );
+        })
+        .catch((error) => {
+          logNotesPersistenceError("Could not save local note data.", error);
+          if (isNativeNotesError(error)) {
+            setPersistenceIssue({ error, operation: "save" });
+          }
+        });
     }, SAVE_DELAY_MS);
 
     return () => window.clearTimeout(saveTimer);
@@ -1854,12 +1867,12 @@ function App() {
     isDarkMode,
     isLoaded,
     isSidebarCollapsed,
-    openPageTabIds,
     panOffset.x,
     panOffset.y,
     persistenceAvailable,
     selectedFolderId,
-    selectedPageId,
+    selectedWorkspaceTabId,
+    workspaceTabs,
     zoomLevel,
   ]);
 
@@ -1946,15 +1959,32 @@ function App() {
       };
     }
 
+    const validNotePages = dataRef.current.pages.filter(
+      (page) => !isTemplatePage(page),
+    );
+    const validWorkspaceTabs = syncWorkspaceTabsWithPages(
+      workspaceTabsRef.current,
+      validNotePages,
+    );
+    const selectedWorkspaceTabId = validWorkspaceTabs.some(
+      (tab) => tab.id === selectedWorkspaceTabIdRef.current,
+    )
+      ? selectedWorkspaceTabIdRef.current
+      : "";
+    const openNotePageIds = getOpenNotePageIds(validWorkspaceTabs);
+    const selectedNotePageId = getSelectedNotePageId(
+      validWorkspaceTabs,
+      selectedWorkspaceTabId,
+    );
+
     return {
       isAssistantOpen,
       isExplorerCollapsed: isSidebarCollapsed,
       selectedFolderId: selectedFolderIdRef.current || undefined,
-      selectedPageId: selectedPageIdRef.current || undefined,
-      openPageTabIds: getValidUniquePageIds(
-        openPageTabIdsRef.current,
-        validPageIds,
-      ),
+      selectedPageId: selectedNotePageId || undefined,
+      openPageTabIds: openNotePageIds,
+      selectedWorkspaceTabId: selectedWorkspaceTabId || undefined,
+      workspaceTabs: validWorkspaceTabs,
       pageViewports,
     };
   }
@@ -2652,6 +2682,10 @@ function App() {
         return;
       }
 
+      if (!selectedPageIdRef.current) {
+        return;
+      }
+
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
         event.preventDefault();
         focusCanvasSearch();
@@ -3216,6 +3250,10 @@ function App() {
   }
 
   function focusCanvasSearch() {
+    if (!selectedPageIdRef.current) {
+      return;
+    }
+
     setIsSearchOpen(true);
     window.requestAnimationFrame(() => {
       searchInputRef.current?.focus();
@@ -3688,163 +3726,6 @@ function App() {
     return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
   }
 
-  function stopAssistantRecordingStream() {
-    assistantRecordingStreamRef.current
-      ?.getTracks()
-      .forEach((track) => track.stop());
-    assistantRecordingStreamRef.current = null;
-  }
-
-  function setProviderConnectionState(
-    providerId: string,
-    updates: ProviderConnectionState,
-  ) {
-    setProviderConnectionStates((currentStates) => ({
-      ...currentStates,
-      [providerId]: updates,
-    }));
-  }
-
-  function addAIProvider(type: ProviderType) {
-    const provider = createAIProvider(type);
-
-    setAIProviders((currentProviders) => [...currentProviders, provider]);
-    setSelectedAIProviderId(provider.id);
-    setProviderConnectionState(provider.id, { status: "idle" });
-    setIsAIProvidersOpen(true);
-  }
-
-  function updateAIProvider(
-    providerId: string,
-    updates: Partial<AIProvider>,
-  ) {
-    setAIProviders((currentProviders) =>
-      currentProviders.map((provider) =>
-        provider.id === providerId ? { ...provider, ...updates } : provider,
-      ),
-    );
-    setProviderConnectionState(providerId, { status: "idle" });
-  }
-
-  function deleteAIProvider(providerId: string) {
-    setAIProviders((currentProviders) =>
-      currentProviders.filter((provider) => provider.id !== providerId),
-    );
-    setAIModels((currentModels) =>
-      currentModels.filter((model) => model.providerId !== providerId),
-    );
-    setProviderConnectionStates((currentStates) => {
-      const nextStates = { ...currentStates };
-
-      delete nextStates[providerId];
-      return nextStates;
-    });
-    setDefaultChatModelId((currentModelId) => {
-      const currentModel = aiModels.find((model) => model.id === currentModelId);
-
-      return currentModel?.providerId === providerId ? "" : currentModelId;
-    });
-    setDefaultEmbeddingModelId((currentModelId) => {
-      const currentModel = aiModels.find((model) => model.id === currentModelId);
-
-      return currentModel?.providerId === providerId ? "" : currentModelId;
-    });
-    setSelectedAIProviderId((currentProviderId) => {
-      if (currentProviderId !== providerId) {
-        return currentProviderId;
-      }
-
-      return aiProviders.find((provider) => provider.id !== providerId)?.id ?? "";
-    });
-    deleteProviderCredential(providerId).catch((error) => {
-      console.warn("Could not delete AI provider credential.", error);
-    });
-  }
-
-  async function testProviderConnection(providerId: string) {
-    const provider = aiProviders.find(
-      (currentProvider) => currentProvider.id === providerId,
-    );
-
-    if (!provider) {
-      return;
-    }
-
-    setProviderConnectionState(providerId, {
-      isTesting: true,
-      message: "Testing connection...",
-      status: "idle",
-    });
-
-    try {
-      const result = await testAIProvider(provider);
-      const latencyMessage = result.latencyMs ? ` (${result.latencyMs} ms)` : "";
-
-      setProviderConnectionState(providerId, {
-        message: `${result.message}${latencyMessage}`,
-        status: result.ok ? "ok" : "error",
-      });
-    } catch (error) {
-      setProviderConnectionState(providerId, {
-        message: getAssistantErrorMessage(error),
-        status: "error",
-      });
-    }
-  }
-
-  async function refreshProviderModels(providerId: string) {
-    const provider = aiProviders.find(
-      (currentProvider) => currentProvider.id === providerId,
-    );
-
-    if (!provider) {
-      return;
-    }
-
-    setProviderConnectionState(providerId, {
-      isRefreshing: true,
-      message: "Refreshing models...",
-      status: "idle",
-    });
-
-    try {
-      const providerModels = await listAIProviderModels(provider);
-
-      setAIModels((currentModels) => {
-        const retainedModels = currentModels.filter(
-          (model) => model.providerId !== providerId,
-        );
-
-        return [...retainedModels, ...providerModels];
-      });
-      setDefaultChatModelId((currentModelId) => {
-        if (currentModelId) {
-          return currentModelId;
-        }
-
-        return providerModels.find((model) => model.capabilities.chat)?.id ?? "";
-      });
-      setDefaultEmbeddingModelId((currentModelId) => {
-        if (currentModelId) {
-          return currentModelId;
-        }
-
-        return (
-          providerModels.find((model) => model.capabilities.embeddings)?.id ?? ""
-        );
-      });
-      setProviderConnectionState(providerId, {
-        message: `Found ${providerModels.length} models.`,
-        status: "ok",
-      });
-    } catch (error) {
-      setProviderConnectionState(providerId, {
-        message: getAssistantErrorMessage(error),
-        status: "error",
-      });
-    }
-  }
-
   async function requestAssistantChat(messages: AssistantMessage[]) {
     if (!llamaHarnessSetupStatus?.ready) {
       throw new Error(
@@ -3926,99 +3807,6 @@ function App() {
       setAssistantStatus(null);
     } finally {
       setIsAssistantSending(false);
-    }
-  }
-
-  async function transcribeAssistantRecording(audio: Blob, fileName: string) {
-    if (audio.size === 0) {
-      setAssistantError("No audio was captured.");
-      setAssistantStatus(null);
-      return;
-    }
-
-    setAssistantError(null);
-    setAssistantStatus("Transcribing local audio");
-
-    try {
-      const transcription = await callOpenAICompatibleWhisperTranscription({
-        audio,
-        config: sttProviderConfig,
-        fileName,
-      });
-      const nextText = transcription.text.trim();
-
-      if (!nextText) {
-        setAssistantError("The STT provider returned an empty transcription.");
-        setAssistantStatus(null);
-        return;
-      }
-
-      setAssistantInput((currentInput) => {
-        const trimmedInput = currentInput.trimEnd();
-
-        return trimmedInput ? `${trimmedInput} ${nextText}` : nextText;
-      });
-      setAssistantStatus("Transcription added to prompt");
-    } catch (error) {
-      setAssistantError(getAssistantErrorMessage(error));
-      setAssistantStatus(null);
-    }
-  }
-
-  async function toggleAssistantRecording() {
-    if (isAssistantRecording) {
-      assistantMediaRecorderRef.current?.stop();
-      return;
-    }
-
-    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-      setAssistantError("Audio recording is not available in this environment.");
-      setAssistantStatus(null);
-      return;
-    }
-
-    setAssistantError(null);
-    setAssistantStatus("Requesting microphone access");
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
-
-      assistantRecordingStreamRef.current = stream;
-      assistantRecordingChunksRef.current = [];
-      assistantMediaRecorderRef.current = recorder;
-
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          assistantRecordingChunksRef.current.push(event.data);
-        }
-      };
-      recorder.onerror = () => {
-        setAssistantError("Audio recording failed.");
-        setAssistantStatus(null);
-        setIsAssistantRecording(false);
-        stopAssistantRecordingStream();
-      };
-      recorder.onstop = () => {
-        const chunks = assistantRecordingChunksRef.current;
-        const mimeType = recorder.mimeType || "audio/webm";
-        const audio = new Blob(chunks, { type: mimeType });
-
-        assistantMediaRecorderRef.current = null;
-        assistantRecordingChunksRef.current = [];
-        setIsAssistantRecording(false);
-        stopAssistantRecordingStream();
-        void transcribeAssistantRecording(audio, "note-dictation.webm");
-      };
-
-      recorder.start();
-      setIsAssistantRecording(true);
-      setAssistantStatus("Recording audio");
-    } catch (error) {
-      stopAssistantRecordingStream();
-      setIsAssistantRecording(false);
-      setAssistantError(getAssistantErrorMessage(error));
-      setAssistantStatus(null);
     }
   }
 
@@ -4113,36 +3901,37 @@ function App() {
     executeAssistantActionRequest(action.request);
   }
 
-  function closePageTab(pageId: string) {
-    const currentTabIds = openPageTabIds;
+  function activateWorkspaceTab(tabId: string, tabs = workspaceTabsRef.current) {
+    const tab = tabs.find((currentTab) => currentTab.id === tabId);
 
-    if (!currentTabIds.includes(pageId)) {
+    if (!tab) {
       return;
     }
 
-    const closedTabIndex = currentTabIds.indexOf(pageId);
-    const nextTabIds = currentTabIds.filter((currentPageId) => currentPageId !== pageId);
+    rememberPageViewport(selectedPageIdRef.current);
+    selectedWorkspaceTabIdRef.current = tab.id;
+    setSelectedWorkspaceTabId(tab.id);
 
-    setOpenPageTabIds(nextTabIds);
+    if (tab.view.kind === "note") {
+      const pageId = tab.view.pageId;
+      const page = dataRef.current.pages.find(
+        (currentPage) => currentPage.id === pageId,
+      );
 
-    if (selectedPageIdRef.current !== pageId) {
-      return;
+      selectedPageIdRef.current = pageId;
+      selectedFolderIdRef.current = page?.folderId ?? ROOT_FOLDER_ID;
+      setSelectedFolderId(selectedFolderIdRef.current);
+      setSidebarPageSelection([pageId]);
+      restorePageViewport(pageId);
+    } else {
+      selectedPageIdRef.current = "";
+      setActiveTextEditor(null);
+      setIsSearchOpen(false);
+      setSearchQuery("");
+      setSidebarPageSelection([]);
+      restorePageViewport("");
     }
 
-    const nextSelectedPageId =
-      nextTabIds[closedTabIndex] ?? nextTabIds[closedTabIndex - 1] ?? "";
-    const nextPage = nextSelectedPageId
-      ? dataRef.current.pages.find((page) => page.id === nextSelectedPageId)
-      : undefined;
-    const nextFolderId = nextPage?.folderId ?? ROOT_FOLDER_ID;
-
-    rememberPageViewport(pageId);
-    selectedFolderIdRef.current = nextFolderId;
-    selectedPageIdRef.current = nextSelectedPageId;
-    setSelectedFolderId(nextFolderId);
-    setSelectedPageId(nextSelectedPageId);
-    setSidebarPageSelection(nextSelectedPageId ? [nextSelectedPageId] : []);
-    restorePageViewport(nextSelectedPageId);
     setEditingFolderId(null);
     setEditingPageId(null);
     setIsEditingHeaderTitle(false);
@@ -4151,6 +3940,38 @@ function App() {
     setInsertionPoint(null);
     setIsCanvasKeyboardActive(false);
     setActiveMode("canvas");
+  }
+
+  function selectWorkspaceTab(tabId: string) {
+    activateWorkspaceTab(tabId);
+  }
+
+  function closeWorkspaceTab(tabId: string) {
+    const currentState = {
+      selectedTabId: selectedWorkspaceTabIdRef.current,
+      tabs: workspaceTabsRef.current,
+    };
+    const nextState = closeWorkspaceTabState(currentState, tabId);
+
+    if (nextState === currentState) {
+      return;
+    }
+
+    workspaceTabsRef.current = nextState.tabs;
+    setWorkspaceTabs(nextState.tabs);
+
+    if (nextState.selectedTabId !== currentState.selectedTabId) {
+      if (nextState.selectedTabId) {
+        activateWorkspaceTab(nextState.selectedTabId, nextState.tabs);
+      } else {
+        rememberPageViewport(selectedPageIdRef.current);
+        selectedWorkspaceTabIdRef.current = "";
+        selectedPageIdRef.current = "";
+        setSelectedWorkspaceTabId("");
+        setSidebarPageSelection([]);
+        restorePageViewport("");
+      }
+    }
   }
 
   function reorderPageTab(
@@ -5477,6 +5298,63 @@ function App() {
   const canvasSearchSourceLabel =
     activeCanvasSearchMatch?.kind === "title" ? "Title" : "Text";
 
+  function focusSelectedWorkspaceTarget() {
+    window.requestAnimationFrame(() => {
+      const selectedTabId = selectedWorkspaceTabIdRef.current;
+      const selectedTab = selectedTabId
+        ? document.getElementById(getWorkspaceTabId(selectedTabId))
+        : null;
+
+      if (selectedTab) {
+        selectedTab.focus();
+      } else {
+        createPageButtonRef.current?.focus();
+      }
+    });
+  }
+
+  async function retryNotesPersistence() {
+    if (!persistenceIssue || isPersistenceRetrying) {
+      return;
+    }
+
+    setIsPersistenceRetrying(true);
+
+    if (persistenceIssue.operation === "load") {
+      setPersistenceAnnouncement("Retrying load");
+      window.location.reload();
+      return;
+    }
+
+    setPersistenceAnnouncement("Retrying save");
+
+    try {
+      await saveAppData({
+        ...dataRef.current,
+        isDarkMode,
+        sessionState: getSessionState(),
+      });
+
+      setPersistenceIssue(null);
+      setPersistenceAnnouncement("Changes saved");
+      focusSelectedWorkspaceTarget();
+    } catch (error) {
+      logNotesPersistenceError("Could not retry saving local note data.", error);
+
+      if (isNativeNotesError(error)) {
+        setPersistenceIssue({ error, operation: "save" });
+      }
+      setPersistenceAnnouncement(
+        "Changes are still not saved. Retry saving when ready.",
+      );
+      window.requestAnimationFrame(() => {
+        persistenceRetryButtonRef.current?.focus();
+      });
+    } finally {
+      setIsPersistenceRetrying(false);
+    }
+  }
+
   return (
     <WorkbenchShell
       isAssistantOpen={shouldRenderAssistantPanel}
@@ -5489,6 +5367,62 @@ function App() {
       onCloseAssistantOverlay={() => closeWorkbenchOverlay("assistant")}
       onCloseExplorerOverlay={() => closeWorkbenchOverlay("explorer")}
     >
+      <div
+        aria-atomic="true"
+        aria-label="Notes persistence updates"
+        aria-live="polite"
+        className="visually-hidden"
+        role="status"
+      >
+        {persistenceAnnouncement}
+      </div>
+      {persistenceIssue ? (
+        <aside
+          aria-busy={isPersistenceRetrying}
+          aria-label="Notes persistence status"
+          className="persistence-issue"
+          data-unsaved={persistenceIssue.operation === "save" || undefined}
+          role="alert"
+        >
+          <div>
+            <strong>
+              {persistenceIssue.operation === "save"
+                ? "Changes aren’t being saved"
+                : "Saved notes couldn’t be loaded"}
+            </strong>
+            {persistenceIssue.operation === "save" ? (
+              <p>
+                Your stored notes are unchanged. The workspace remains usable,
+                but current edits are only in memory until saving succeeds. Keep
+                this window open and retry saving.
+              </p>
+            ) : (
+              <p>
+                Your stored notes are unchanged. You can still view and copy the
+                current workspace. New edits stay only in memory and are not
+                saved. Copy any new content somewhere safe before retrying.
+              </p>
+            )}
+          </div>
+          <button
+            disabled={isPersistenceRetrying}
+            onClick={retryNotesPersistence}
+            ref={persistenceRetryButtonRef}
+            type="button"
+          >
+            {isPersistenceRetrying ? (
+              <>
+                <span className="persistence-retry-spinner" aria-hidden="true" />
+                Retrying…
+              </>
+            ) : persistenceIssue.operation === "save" ? (
+              "Retry saving"
+            ) : (
+              "Retry loading"
+            )}
+          </button>
+        </aside>
+      ) : null}
       <Sidebar
         bookmarkedPages={bookmarkedPages}
         editingFolderId={editingFolderId}
@@ -5552,22 +5486,23 @@ function App() {
         <PageHeader
           activeTextEditor={activeTextEditor}
           assistantToggleButtonRef={assistantToggleButtonRef}
+          createPageButtonRef={createPageButtonRef}
           isAssistantOpen={shouldRenderAssistantPanel}
           isGridVisible={isGridVisible}
           isDarkMode={isDarkMode}
           isEditingHeaderTitle={isEditingHeaderTitle}
           isSnapToGridEnabled={isSnapToGridEnabled}
-          openPages={openPages}
-          selectedPageId={selectedPageId}
+          selectedWorkspaceTabId={selectedWorkspaceTabId}
+          workspaceTabs={workspaceTabs}
           textFormatState={textFormatState}
           zoomLevel={zoomLevel}
-          onClosePageTab={closePageTab}
+          onCloseWorkspaceTab={closeWorkspaceTab}
           onCreatePage={createPage}
           onFocusCanvasSearch={focusCanvasSearch}
           onPointerDown={handleChromePointerDown}
           onRenamePage={renamePage}
           onReorderPageTab={reorderPageTab}
-          onSelectPageTab={selectPage}
+          onSelectWorkspaceTab={selectWorkspaceTab}
           onSetEditingHeaderTitle={setIsEditingHeaderTitle}
           onToggleAssistant={toggleAssistantPanel}
           onToggleGrid={() =>
@@ -5594,14 +5529,25 @@ function App() {
 
         <section
           aria-labelledby={
-            selectedPageId ? getWorkspaceTabId(selectedPageId) : undefined
+            selectedWorkspaceTab
+              ? getWorkspaceTabId(selectedWorkspaceTab.id)
+              : undefined
           }
           className={`canvas ${activeMode === "canvas" ? "is-canvas-selected" : ""} ${
             activeMode === "panning" ? "is-panning" : ""
           } ${activeMode === "selecting" ? "is-selecting" : ""
           }`}
           aria-label="Freeform note canvas"
-          id={WORKSPACE_PAGE_PANEL_ID}
+          hidden={
+            selectedWorkspaceTab !== undefined &&
+            selectedWorkspaceTab.view.kind !== "note"
+          }
+          id={
+            selectedWorkspaceTab?.view.kind === "note" ||
+            !selectedWorkspaceTab
+              ? WORKSPACE_PAGE_PANEL_ID
+              : undefined
+          }
           onPointerCancel={endCanvasInteraction}
           onContextMenu={(event) => event.preventDefault()}
           onPointerDown={startCanvasInteraction}
@@ -5780,6 +5726,26 @@ function App() {
             </div>
           ) : null}
         </section>
+        {selectedWorkspaceTab && selectedWorkspaceTab.view.kind !== "note" ? (
+          <section
+            aria-labelledby={getWorkspaceTabId(selectedWorkspaceTab.id)}
+            className="workspace-system-placeholder"
+            id={WORKSPACE_PAGE_PANEL_ID}
+            role="tabpanel"
+          >
+            <p className="workspace-system-eyebrow">Workspace view</p>
+            <h1>{selectedWorkspaceTab.title}</h1>
+            <p>
+              {selectedWorkspaceTab.view.kind === "agenda"
+                ? selectedWorkspaceTab.view.view === "month"
+                  ? "Month view is preserved and ready for the calendar integration."
+                  : "Agenda view is preserved and ready for the calendar integration."
+                : selectedWorkspaceTab.view.section
+                  ? `Settings section: ${selectedWorkspaceTab.view.section}`
+                  : "Settings are preserved for the upcoming native workspace."}
+            </p>
+          </section>
+        ) : null}
       </section>
       {isAIProvidersOpen ? (
         <AIProvidersSettings
@@ -5790,7 +5756,7 @@ function App() {
           providers={aiProviders}
           selectedProviderId={selectedAIProviderId}
           onAddProvider={addAIProvider}
-          onClose={() => setIsAIProvidersOpen(false)}
+          onClose={closeAIProviderSettings}
           onDeleteProvider={deleteAIProvider}
           onRefreshModels={refreshProviderModels}
           onSelectProvider={setSelectedAIProviderId}
@@ -5809,7 +5775,6 @@ function App() {
           isHarnessLoading={isLlamaHarnessLoading}
           isHarnessReady={Boolean(llamaHarnessSetupStatus?.ready)}
           inputValue={assistantInput}
-          isRecording={isAssistantRecording}
           isSending={isAssistantSending}
           messages={assistantMessages}
           onClose={closeAssistantPanel}
@@ -5818,7 +5783,6 @@ function App() {
           onRunAction={runAssistantAction}
           onSend={sendAssistantMessage}
           onSelectHarnessAgent={setSelectedLlamaHarnessAgentId}
-          onToggleRecording={toggleAssistantRecording}
           panelRef={assistantPanelRef}
           selectedBlockCount={selectedBlockIds.length}
           selectedBlockPreview={selectedAssistantBlockPreview}
@@ -6752,22 +6716,23 @@ function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps) {
 const PageHeader = memo(function PageHeader({
   activeTextEditor,
   assistantToggleButtonRef,
+  createPageButtonRef,
   isAssistantOpen,
   isGridVisible,
   isDarkMode,
   isEditingHeaderTitle,
   isSnapToGridEnabled,
-  openPages,
-  selectedPageId,
+  selectedWorkspaceTabId,
+  workspaceTabs,
   textFormatState,
   zoomLevel,
-  onClosePageTab,
+  onCloseWorkspaceTab,
   onCreatePage,
   onFocusCanvasSearch,
   onPointerDown,
   onRenamePage,
   onReorderPageTab,
-  onSelectPageTab,
+  onSelectWorkspaceTab,
   onSetEditingHeaderTitle,
   onToggleAssistant,
   onToggleGrid,
@@ -6777,6 +6742,10 @@ const PageHeader = memo(function PageHeader({
   onSetTextFontSize,
   onToggleTextFormat,
 }: PageHeaderProps) {
+  const selectedWorkspaceTab = workspaceTabs.find(
+    (tab) => tab.id === selectedWorkspaceTabId,
+  );
+  const isNoteView = selectedWorkspaceTab?.view.kind === "note";
   const gridToggleTitle = isGridVisible ? "Hide grid" : "Show grid";
   const snapToggleTitle = !isGridVisible
     ? "Show grid to enable snap to grid"
@@ -6793,39 +6762,44 @@ const PageHeader = memo(function PageHeader({
       onPointerDown={onPointerDown}
     >
       <WorkspaceTabs
+        createPageButtonRef={createPageButtonRef}
         Icon={HeroIcon}
         isEditingActiveTab={isEditingHeaderTitle}
-        onCloseTab={onClosePageTab}
+        onCloseTab={onCloseWorkspaceTab}
         onCreatePage={onCreatePage}
         onRenamePage={onRenamePage}
         onReorderTab={onReorderPageTab}
-        onSelectTab={onSelectPageTab}
+        onSelectTab={onSelectWorkspaceTab}
         onSetEditingActiveTab={onSetEditingHeaderTitle}
-        selectedPageId={selectedPageId}
-        tabs={openPages}
+        selectedTabId={selectedWorkspaceTabId}
+        tabs={workspaceTabs}
       />
       <div className="page-header-actions">
-        <GlobalTextToolbar
-          editor={activeTextEditor && !activeTextEditor.isDestroyed ? activeTextEditor : null}
-          formatState={textFormatState}
-          onSetFontFamily={onSetTextFontFamily}
-          onSetFontSize={onSetTextFontSize}
-          onToggleFormat={onToggleTextFormat}
-        />
+        {isNoteView ? (
+          <GlobalTextToolbar
+            editor={activeTextEditor && !activeTextEditor.isDestroyed ? activeTextEditor : null}
+            formatState={textFormatState}
+            onSetFontFamily={onSetTextFontFamily}
+            onSetFontSize={onSetTextFontSize}
+            onToggleFormat={onToggleTextFormat}
+          />
+        ) : null}
         <div
-          aria-label="Canvas controls"
+          aria-label={isNoteView ? "Canvas controls" : "Workspace controls"}
           className="canvas-controls"
           role="toolbar"
         >
-          <button
-            aria-label="Find in canvas"
-            className="header-toggle icon-button"
-            data-tooltip="Find in canvas (Ctrl+F)"
-            onClick={onFocusCanvasSearch}
-            type="button"
-          >
-            <HeroIcon name="magnifying-glass" />
-          </button>
+          {isNoteView ? (
+            <button
+              aria-label="Find in canvas"
+              className="header-toggle icon-button"
+              data-tooltip="Find in canvas (Ctrl+F)"
+              onClick={onFocusCanvasSearch}
+              type="button"
+            >
+              <HeroIcon name="magnifying-glass" />
+            </button>
+          ) : null}
           <button
             aria-controls="workspace-assistant-panel"
             aria-expanded={isAssistantOpen}
@@ -6839,34 +6813,38 @@ const PageHeader = memo(function PageHeader({
           >
             <HeroIcon name="sparkles" />
           </button>
-          <span
-            aria-label={`Zoom ${Math.round(zoomLevel * 100)}%`}
-            className="zoom-indicator"
-            data-tooltip="Zoom level"
-          >
-            {Math.round(zoomLevel * 100)}%
-          </span>
-          <button
-            aria-label="Grid"
-            aria-pressed={isGridVisible}
-            className="header-toggle icon-button"
-            data-tooltip={gridToggleTitle}
-            onClick={onToggleGrid}
-            type="button"
-          >
-            <HeroIcon name="squares-2x2" />
-          </button>
-          <button
-            aria-label="Snap to grid"
-            aria-pressed={isGridVisible && isSnapToGridEnabled}
-            className="header-toggle icon-button"
-            data-tooltip={snapToggleTitle}
-            disabled={!isGridVisible}
-            onClick={onToggleSnapToGrid}
-            type="button"
-          >
-            <HeroIcon name="adjustments-horizontal" />
-          </button>
+          {isNoteView ? (
+            <>
+              <span
+                aria-label={`Zoom ${Math.round(zoomLevel * 100)}%`}
+                className="zoom-indicator"
+                data-tooltip="Zoom level"
+              >
+                {Math.round(zoomLevel * 100)}%
+              </span>
+              <button
+                aria-label="Grid"
+                aria-pressed={isGridVisible}
+                className="header-toggle icon-button"
+                data-tooltip={gridToggleTitle}
+                onClick={onToggleGrid}
+                type="button"
+              >
+                <HeroIcon name="squares-2x2" />
+              </button>
+              <button
+                aria-label="Snap to grid"
+                aria-pressed={isGridVisible && isSnapToGridEnabled}
+                className="header-toggle icon-button"
+                data-tooltip={snapToggleTitle}
+                disabled={!isGridVisible}
+                onClick={onToggleSnapToGrid}
+                type="button"
+              >
+                <HeroIcon name="adjustments-horizontal" />
+              </button>
+            </>
+          ) : null}
           <button
             aria-label="Dark mode"
             aria-pressed={isDarkMode}
@@ -7086,8 +7064,8 @@ function arePageHeaderPropsEqual(previous: PageHeaderProps, next: PageHeaderProp
     previous.isDarkMode === next.isDarkMode &&
     previous.isEditingHeaderTitle === next.isEditingHeaderTitle &&
     previous.isSnapToGridEnabled === next.isSnapToGridEnabled &&
-    previous.openPages === next.openPages &&
-    previous.selectedPageId === next.selectedPageId &&
+    previous.selectedWorkspaceTabId === next.selectedWorkspaceTabId &&
+    previous.workspaceTabs === next.workspaceTabs &&
     previous.textFormatState === next.textFormatState &&
     previous.zoomLevel === next.zoomLevel
   );

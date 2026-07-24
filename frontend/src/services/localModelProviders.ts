@@ -4,15 +4,10 @@ import type {
   LlmChatResponse,
   LlmProviderConfig,
   LlmProviderKind,
-  SttProviderConfig,
-  SttProviderKind,
-  SttTranscriptionRequest,
-  SttTranscriptionResponse,
 } from "../aiTypes";
 
 const OLLAMA_CHAT_ENDPOINT = "api/chat";
 const OPENAI_CHAT_COMPLETIONS_ENDPOINT = "chat/completions";
-const OPENAI_AUDIO_TRANSCRIPTIONS_ENDPOINT = "audio/transcriptions";
 const ERROR_BODY_MAX_LENGTH = 500;
 
 type ProviderChatMessage = Pick<AssistantMessage, "content" | "role">;
@@ -33,16 +28,6 @@ export const DEFAULT_OPENAI_COMPATIBLE_LLM_CONFIG: LlmProviderConfig = {
 
 export const DEFAULT_LOCAL_LLM_CONFIG: LlmProviderConfig =
   DEFAULT_OLLAMA_LLM_CONFIG;
-
-export const DEFAULT_OPENAI_COMPATIBLE_WHISPER_STT_CONFIG: SttProviderConfig = {
-  baseUrl: "http://localhost:8000/v1",
-  kind: "openai-compatible-whisper",
-  model: "whisper-1",
-  name: "OpenAI-compatible Whisper",
-};
-
-export const DEFAULT_LOCAL_STT_CONFIG: SttProviderConfig =
-  DEFAULT_OPENAI_COMPATIBLE_WHISPER_STT_CONFIG;
 
 export class LocalModelProviderError extends Error {
   constructor(message: string) {
@@ -172,43 +157,6 @@ export async function callOpenAICompatibleChat(
   };
 }
 
-export async function callOpenAICompatibleWhisperTranscription(
-  request: SttTranscriptionRequest,
-): Promise<SttTranscriptionResponse> {
-  assertSttProviderKind(request.config, "openai-compatible-whisper");
-
-  const url = getProviderEndpointUrl(
-    request.config.baseUrl,
-    OPENAI_AUDIO_TRANSCRIPTIONS_ENDPOINT,
-  );
-  const formData = new FormData();
-
-  formData.append("file", request.audio, request.fileName);
-  formData.append("model", request.config.model);
-
-  const responseJson = await postFormData(request.config, url, formData);
-  const providerError = extractProviderErrorMessage(responseJson);
-
-  if (providerError) {
-    throw new LocalModelProviderError(
-      `${getProviderDisplayName(request.config)} returned an error: ${providerError}`,
-    );
-  }
-
-  const text = readText(responseJson, "text");
-
-  if (text === undefined) {
-    throw new LocalModelProviderError(
-      `${getProviderDisplayName(request.config)} returned a transcription without text.`,
-    );
-  }
-
-  return {
-    provider: "openai-compatible-whisper",
-    text,
-  };
-}
-
 function hasUrlProtocol(value: string): boolean {
   return /^[a-z][a-z\d+\-.]*:\/\//i.test(value);
 }
@@ -257,27 +205,8 @@ async function postJson(
   return readProviderJson(config, url, response);
 }
 
-async function postFormData(
-  config: SttProviderConfig,
-  url: string,
-  formData: FormData,
-): Promise<unknown> {
-  let response: Response;
-
-  try {
-    response = await fetch(url, {
-      body: formData,
-      method: "POST",
-    });
-  } catch (error) {
-    throw buildFetchError(config, url, error);
-  }
-
-  return readProviderJson(config, url, response);
-}
-
 async function readProviderJson(
-  config: LlmProviderConfig | SttProviderConfig,
+  config: LlmProviderConfig,
   url: string,
   response: Response,
 ): Promise<unknown> {
@@ -305,7 +234,7 @@ async function readProviderJson(
 }
 
 function buildFetchError(
-  config: LlmProviderConfig | SttProviderConfig,
+  config: LlmProviderConfig,
   url: string,
   error: unknown,
 ): LocalModelProviderError {
@@ -325,20 +254,7 @@ function assertLlmProviderKind(
   }
 }
 
-function assertSttProviderKind(
-  config: SttProviderConfig,
-  expectedKind: SttProviderKind,
-): void {
-  if (config.kind !== expectedKind) {
-    throw new LocalModelProviderError(
-      `${getProviderDisplayName(config)} is configured as "${config.kind}", but this helper requires "${expectedKind}".`,
-    );
-  }
-}
-
-function getProviderDisplayName(
-  config: LlmProviderConfig | SttProviderConfig,
-): string {
+function getProviderDisplayName(config: LlmProviderConfig): string {
   return config.name.trim() || config.kind;
 }
 

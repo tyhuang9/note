@@ -8,18 +8,9 @@ export type ProviderType =
 
 export type LlmProviderKind = "ollama" | "openai-compatible";
 
-export type SttProviderKind = "openai-compatible-whisper";
-
 export type LlmProviderConfig = {
   baseUrl: string;
   kind: LlmProviderKind;
-  model: string;
-  name: string;
-};
-
-export type SttProviderConfig = {
-  baseUrl: string;
-  kind: SttProviderKind;
   model: string;
   name: string;
 };
@@ -65,17 +56,6 @@ export type LlmChatResponse = {
   content: string;
   model?: string;
   provider: LlmProviderKind;
-};
-
-export type SttTranscriptionRequest = {
-  audio: Blob;
-  config: SttProviderConfig;
-  fileName: string;
-};
-
-export type SttTranscriptionResponse = {
-  provider: SttProviderKind;
-  text: string;
 };
 
 export type NotesContextBlock = Pick<

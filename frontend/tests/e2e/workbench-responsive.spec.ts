@@ -259,7 +259,9 @@ test("page tabs support roving keyboard navigation", async ({ page }) => {
   await createPageButton.click();
   await createPageButton.click();
 
-  const tabs = page.getByRole("tablist", { name: "Open pages" }).getByRole("tab");
+  const tabs = page
+    .getByRole("tablist", { name: "Open workspace views" })
+    .getByRole("tab");
   await expect(tabs).toHaveCount(3);
   await tabs.nth(2).focus();
   await page.keyboard.press("ArrowLeft");

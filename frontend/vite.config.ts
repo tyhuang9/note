@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { fileURLToPath } from "node:url";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
@@ -7,6 +8,24 @@ const host = process.env.TAURI_DEV_HOST;
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [react()],
+  build: {
+    manifest: true,
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL("./index.html", import.meta.url)),
+        widget: fileURLToPath(new URL("./widget.html", import.meta.url)),
+        quickCommand: fileURLToPath(
+          new URL("./quick-command.html", import.meta.url),
+        ),
+        eventEditor: fileURLToPath(
+          new URL("./event-editor.html", import.meta.url),
+        ),
+        unsupported: fileURLToPath(
+          new URL("./unsupported.html", import.meta.url),
+        ),
+      },
+    },
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

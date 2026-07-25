@@ -24,6 +24,17 @@ import {
 import { useAIProviderSettings } from "./features/settings/useAIProviderSettings";
 import { AssistantPanel } from "./features/assistant/AssistantPanel";
 import {
+  AssistantRuntime,
+  isAssistantRuntimeError,
+  type AssistantProviderMetadata,
+  type AssistantReview,
+  type RuntimeTransition,
+} from "./features/assistant/AssistantRuntime";
+import {
+  getAssistantToolManifest,
+  type ToolDefinition,
+} from "./features/assistant/toolRegistry";
+import {
   closeWorkspaceTab as closeWorkspaceTabState,
   createNoteWorkspaceTab,
   getNoteWorkspaceTabId,
@@ -79,6 +90,7 @@ import type {
   AssistantActionKind,
   AssistantActionRequest,
   AssistantMessage,
+  NotesContextSnapshot,
 } from "./aiTypes";
 import {
   blurActiveTextEntry,
@@ -103,12 +115,14 @@ import {
   getLlamaHarnessSetupStatus,
   type LlamaHarnessAgent,
   type LlamaHarnessAppCapabilities,
-  type LlamaHarnessRunResponse,
-  type LlamaHarnessRunToolRequest,
-  type LlamaHarnessRunToolResult,
   type LlamaHarnessSetupStatus,
   submitLlamaHarnessNoteToolResults,
 } from "./services/llamaHarnessAssistant";
+import type { EventDraft } from "./native/calendarClient";
+import {
+  assistantCalendarClient,
+  isAssistantNativeAvailable,
+} from "./native/assistantClient";
 import type {
   AppData,
   AppSessionState,
@@ -147,6 +161,7 @@ type SidebarProps = {
   onDeletePageTemplate: (templatePageId: string) => void;
   onFolderDragLeave: (folderId: string) => void;
   onFolderDragOver: (folderId: string) => void;
+  onBeforeWorkbenchTransition: () => boolean;
   onFocusPageSearch: (trigger?: HTMLElement) => void;
   onOpenAgenda: () => void;
   onPageDragEnd: () => void;
@@ -209,6 +224,30 @@ type OpenPageTab = AppData["pages"][number] & {
 
 type PageTabDropPlacement = "before" | "after";
 type WorkbenchOverlay = "assistant" | "explorer";
+type AssistantRequestSnapshot = {
+  agentId: string;
+  agentLabel: string;
+  history: AssistantMessage[];
+  notesContext: NotesContextSnapshot;
+  prompt: string;
+  provider: AssistantProviderMetadata;
+  modelId: string;
+  modelLabel: string;
+  runFolderId: string;
+  runPageId: string;
+};
+type AssistantConsent = AssistantRequestSnapshot & {
+  categories: readonly string[];
+};
+type AssistantCalendarReconciliation =
+  | { state: "loading" }
+  | { state: "clear" }
+  | { state: "required"; agendaInspected: boolean; busy: boolean; error?: string }
+  | { state: "unknown"; agendaInspected: boolean; busy: boolean; canRetryStatus: boolean; error: string };
+type AssistantCalendarReconciliationFocus = {
+  request: number;
+  target: "acknowledge" | "openAgenda" | "retry" | null;
+};
 type NotesPersistenceIssue = {
   error: NativeNotesError;
   operation: "load" | "save";
@@ -324,6 +363,26 @@ const TEXT_BLOCK_BORDER_WIDTH = 1;
 const TEXT_BLOCK_CONTENT_PADDING_LEFT = 10;
 const TEXT_BLOCK_CONTENT_PADDING_TOP = 5;
 const LLAMA_HARNESS_SELECTED_AGENT_KEY = "note.llamaHarness.selectedAgentId.v1";
+const ASSISTANT_READ_RESULT_MAX_BYTES = 16_000;
+const ASSISTANT_READ_CONTENT_BUDGET = 15_000;
+const ASSISTANT_PAGE_BLOCK_LIMIT = 24;
+const ASSISTANT_SELECTION_BLOCK_LIMIT = 12;
+const ASSISTANT_SEARCH_PAGE_LIMIT = 20;
+const ASSISTANT_SEARCH_MATCH_LIMIT_PER_PAGE = 20;
+const ASSISTANT_SEARCH_MATCH_LIMIT_TOTAL = 100;
+const ASSISTANT_TOOL_TEXT_LIMIT = 2_000;
+const ASSISTANT_PROMPT_LIMIT = 4_000;
+const ASSISTANT_HISTORY_LIMIT = 19;
+const ASSISTANT_CONFIRM_OUTCOME_PENDING_MESSAGE = "Confirmation outcome is pending or unknown. Keep Note open and retry Confirm to reconcile this same proposal safely.";
+const ASSISTANT_CONFIRM_OUTCOME_UNRESOLVED_MESSAGE = "The event may already exist. Inspect Agenda or your calendar before attempting another create.";
+const ASSISTANT_CONSENT_CATEGORIES = [
+  "Your typed prompt (up to 4,000 characters) and up to 19 recent conversation messages (each up to 4,000 characters)",
+  "Up to 12 selected text snippets, each limited to 280 characters",
+  "Up to 24 current-page text snippets, each limited to 280 characters",
+  "Current-page title and folder name plus workspace item counts",
+  "Up to 20 folder IDs/names and 40 page IDs/titles/folder IDs/bookmark flags",
+  "Later bounded read-tool results for this whole run, sent to the provider for tool-result continuation: Note page, selection, and search text snippets and identifiers; calendar titles, times, locations, and event notes from query, search, or get_event",
+] as const;
 const DEFAULT_PAN_OFFSET: PanOffset = { x: 0, y: 0 };
 type SidebarSortOrder =
   | "name-asc"
@@ -1055,6 +1114,13 @@ function App() {
   const [assistantStatus, setAssistantStatus] = useState<string | null>(null);
   const [assistantError, setAssistantError] = useState<string | null>(null);
   const [isAssistantSending, setIsAssistantSending] = useState(false);
+  const [assistantReview, setAssistantReview] = useState<AssistantReview | null>(null);
+  const [isAssistantReviewBusy, setIsAssistantReviewBusy] = useState(false);
+  const [assistantReviewOperation, setAssistantReviewOperation] = useState<string | null>(null);
+  const [assistantConsent, setAssistantConsent] = useState<AssistantConsent | null>(null);
+  const [assistantCalendarReconciliation, setAssistantCalendarReconciliation] = useState<AssistantCalendarReconciliation>({ state: "loading" });
+  const [assistantCalendarReconciliationFocus, setAssistantCalendarReconciliationFocus] = useState<AssistantCalendarReconciliationFocus>({ request: 0, target: null });
+  const [assistantFocusRequest, setAssistantFocusRequest] = useState(0);
   const [llamaHarnessSetupStatus, setLlamaHarnessSetupStatus] =
     useState<LlamaHarnessSetupStatus | null>(null);
   const [llamaHarnessCapabilities, setLlamaHarnessCapabilities] =
@@ -1096,6 +1162,15 @@ function App() {
   const explorerPanelRef = useRef<HTMLDivElement | null>(null);
   const explorerToggleButtonRef = useRef<HTMLButtonElement | null>(null);
   const assistantPanelRef = useRef<HTMLElement | null>(null);
+  const assistantRuntimeRef = useRef<AssistantRuntime | null>(null);
+  const assistantRequestSnapshotRef = useRef<AssistantRequestSnapshot | null>(null);
+  const assistantConsentRef = useRef<AssistantConsent | null>(assistantConsent);
+  const assistantReviewRef = useRef<AssistantReview | null>(assistantReview);
+  const assistantCalendarReconciliationRef = useRef<AssistantCalendarReconciliation>(assistantCalendarReconciliation);
+  const assistantCalendarReconciliationRequestRef = useRef(0);
+  const assistantCalendarReconciliationMutationRef = useRef(0);
+  const assistantCalendarReconciliationBusyRef = useRef(false);
+  const assistantCalendarReconciliationMountedRef = useRef(false);
   const assistantToggleButtonRef = useRef<HTMLButtonElement | null>(null);
   const createPageButtonRef = useRef<HTMLButtonElement | null>(null);
   const persistenceRetryButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -1133,6 +1208,8 @@ function App() {
   const zoomLevelRef = useRef(zoomLevel);
 
   dataRef.current = data;
+  assistantConsentRef.current = assistantConsent;
+  assistantReviewRef.current = assistantReview;
   isSnapToGridEnabledRef.current = isGridVisible && isSnapToGridEnabled;
   editingBlockIdRef.current = editingBlockId;
   workspaceTabsRef.current = workspaceTabs;
@@ -1514,6 +1591,20 @@ function App() {
     : llamaHarnessSetupStatus?.ready
       ? "No active agent selected"
       : "llama-harness setup incomplete";
+  const assistantProviderMetadata = useMemo<AssistantProviderMetadata>(
+    () => ({
+      provider: llamaHarnessCapabilities?.model.provider
+        ? `local llama-harness; reported upstream ${llamaHarnessCapabilities.model.provider}`
+        : "local llama-harness; upstream provider unknown",
+      model:
+        llamaHarnessCapabilities?.model.id
+          ? `${llamaHarnessCapabilities.model.modelName || llamaHarnessCapabilities.model.name} (${llamaHarnessCapabilities.model.id})`
+          : selectedLlamaHarnessAgent?.name || "unknown model",
+      capabilities: { tools: true },
+      dataSharing: "unknown",
+    }),
+    [llamaHarnessCapabilities, selectedLlamaHarnessAgent],
+  );
 
   useEffect(() => {
     const wasNarrowWorkbench = wasNarrowWorkbenchRef.current;
@@ -1556,7 +1647,14 @@ function App() {
       if (shouldFocusEntry && activeWorkbenchOverlay === "explorer") {
         explorerPanelRef.current?.focus();
       } else if (shouldFocusEntry && activeWorkbenchOverlay === "assistant") {
-        assistantPanelRef.current?.focus();
+        const reconciliation = assistantCalendarReconciliationRef.current;
+        const assistantContentOwnsFocus = Boolean(
+          assistantConsentRef.current ||
+          assistantReviewRef.current ||
+          reconciliation.state === "required" ||
+          reconciliation.state === "unknown",
+        );
+        if (!assistantContentOwnsFocus) assistantPanelRef.current?.focus();
       } else if (shouldRestoreFocus) {
         overlayReturnFocusRef.current?.focus();
         overlayReturnFocusRef.current = null;
@@ -1577,6 +1675,24 @@ function App() {
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
+        if (blockWorkbenchTransitionForPendingConfirmation()) {
+          return;
+        }
+        if (overlay === "assistant" && assistantConsent) {
+          cancelAssistantConsent();
+          return;
+        }
+        if (overlay === "assistant" && assistantReview) {
+          if (
+            assistantReview.kind === "calendar" &&
+            assistantReview.expiresAtUtcMs <= Date.now()
+          ) {
+            dismissExpiredAssistantReview();
+          } else {
+            void cancelAssistantReview();
+          }
+          return;
+        }
         closeWorkbenchOverlay(overlay);
         return;
       }
@@ -1636,7 +1752,7 @@ function App() {
 
     window.addEventListener("keydown", handleOverlayKeyDown, true);
     return () => window.removeEventListener("keydown", handleOverlayKeyDown, true);
-  }, [activeWorkbenchOverlay, isNarrowWorkbench]);
+  }, [activeWorkbenchOverlay, assistantConsent, assistantReview, isNarrowWorkbench]);
 
   useEffect(() => {
     panOffsetRef.current = panOffset;
@@ -1901,6 +2017,16 @@ function App() {
       void refreshLlamaHarnessAssistant();
     }
   }, [isAssistantOpen]);
+
+  useEffect(() => {
+    assistantCalendarReconciliationMountedRef.current = true;
+    void refreshAssistantCalendarReconciliation();
+    return () => {
+      assistantCalendarReconciliationMountedRef.current = false;
+      assistantCalendarReconciliationRequestRef.current += 1;
+      assistantCalendarReconciliationBusyRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     const shouldDisableSelection =
@@ -3165,7 +3291,23 @@ function App() {
     overlayReturnFocusRequestRef.current = false;
   }
 
+  function blockWorkbenchTransitionForPendingConfirmation() {
+    const review = assistantReviewRef.current;
+
+    if (review?.kind !== "calendar" || !review.confirmationOutcomePending) {
+      return false;
+    }
+
+    setIsAssistantOpen(true);
+    setActiveNarrowOverlay("assistant");
+    setAssistantStatus(ASSISTANT_CONFIRM_OUTCOME_PENDING_MESSAGE);
+    return true;
+  }
+
   function closeWorkbenchOverlay(overlay: WorkbenchOverlay) {
+    if (blockWorkbenchTransitionForPendingConfirmation()) {
+      return;
+    }
     if (activeWorkbenchOverlay === overlay) {
       if (!overlayReturnFocusRef.current) {
         overlayReturnFocusRef.current =
@@ -3191,6 +3333,10 @@ function App() {
   }
 
   function toggleExplorerPresentation(trigger?: HTMLElement) {
+    if (blockWorkbenchTransitionForPendingConfirmation()) {
+      return;
+    }
+
     if (isNarrowWorkbench) {
       const shouldOpenExplorer = activeNarrowOverlay !== "explorer";
       if (shouldOpenExplorer) {
@@ -3212,6 +3358,10 @@ function App() {
   }
 
   function toggleAssistantPanel(trigger?: HTMLElement) {
+    if (blockWorkbenchTransitionForPendingConfirmation()) {
+      return;
+    }
+
     if (isNarrowWorkbench) {
       const shouldOpenAssistant = activeNarrowOverlay !== "assistant";
       if (shouldOpenAssistant) {
@@ -3244,14 +3394,40 @@ function App() {
       return;
     }
 
-    setIsAssistantOpen((currentValue) => !currentValue);
+    if (isAssistantOpen) closeAssistantPanel();
+    else setIsAssistantOpen(true);
   }
 
   function closeAssistantPanel() {
+    if (blockWorkbenchTransitionForPendingConfirmation()) {
+      return;
+    }
+
+    if (assistantConsent) {
+      cancelAssistantConsent();
+      closeWorkbenchOverlay("assistant");
+      return;
+    }
+    if (assistantReview) {
+      if (
+        assistantReview.kind === "calendar" &&
+        assistantReview.expiresAtUtcMs <= Date.now()
+      ) {
+        dismissExpiredAssistantReview();
+      } else {
+        void cancelAssistantReview();
+      }
+      return;
+    }
+    assistantRuntimeRef.current?.cancel();
     closeWorkbenchOverlay("assistant");
   }
 
   function focusPageSearch(trigger?: HTMLElement) {
+    if (blockWorkbenchTransitionForPendingConfirmation()) {
+      return;
+    }
+
     if (isNarrowWorkbench) {
       rememberOverlayTrigger(trigger, explorerToggleButtonRef.current);
       overlayEntryFocusRequestRef.current = null;
@@ -3279,6 +3455,110 @@ function App() {
 
   function getAssistantErrorMessage(error: unknown) {
     return error instanceof Error ? error.message : String(error);
+  }
+
+  function updateAssistantCalendarReconciliation(next: AssistantCalendarReconciliation) {
+    assistantCalendarReconciliationRef.current = next;
+    setAssistantCalendarReconciliation(next);
+  }
+
+  function focusAssistantCalendarReconciliation(target: Exclude<AssistantCalendarReconciliationFocus["target"], null>) {
+    setAssistantCalendarReconciliationFocus((current) => ({ request: current.request + 1, target }));
+  }
+
+  function lockAssistantCalendarReconciliation(
+    state: "required" | "unknown",
+    error?: string,
+  ) {
+    assistantCalendarReconciliationMutationRef.current += 1;
+    assistantCalendarReconciliationRequestRef.current += 1;
+    assistantCalendarReconciliationBusyRef.current = false;
+    updateAssistantCalendarReconciliation(state === "required"
+      ? { state, agendaInspected: false, busy: false, ...(error ? { error } : {}) }
+      : {
+          state,
+          agendaInspected: false,
+          busy: false,
+          canRetryStatus: isAssistantNativeAvailable(),
+          error: error ?? ASSISTANT_CONFIRM_OUTCOME_UNRESOLVED_MESSAGE,
+        });
+  }
+
+  function clearAssistantCalendarReconciliation() {
+    assistantCalendarReconciliationMutationRef.current += 1;
+    assistantCalendarReconciliationRequestRef.current += 1;
+    assistantCalendarReconciliationBusyRef.current = false;
+    updateAssistantCalendarReconciliation({ state: "clear" });
+  }
+
+  async function refreshAssistantCalendarReconciliation(announceResult = false) {
+    if (assistantCalendarReconciliationBusyRef.current) return;
+    if (!isAssistantNativeAvailable()) {
+      updateAssistantCalendarReconciliation({
+        state: "unknown",
+        agendaInspected: false,
+        busy: false,
+        canRetryStatus: false,
+        error: "Calendar creation is available only in the native Note app.",
+      });
+      return;
+    }
+
+    assistantCalendarReconciliationBusyRef.current = true;
+    const request = ++assistantCalendarReconciliationRequestRef.current;
+    const mutation = assistantCalendarReconciliationMutationRef.current;
+    const previous = assistantCalendarReconciliationRef.current;
+    updateAssistantCalendarReconciliation(
+      previous.state === "required" || previous.state === "unknown"
+        ? { ...previous, busy: true }
+        : { state: "loading" },
+    );
+    try {
+      const status = await assistantCalendarClient.reconciliationStatus();
+      if (
+        !assistantCalendarReconciliationMountedRef.current ||
+        request !== assistantCalendarReconciliationRequestRef.current ||
+        mutation !== assistantCalendarReconciliationMutationRef.current
+      ) return;
+      if (status.state === "clear") {
+        updateAssistantCalendarReconciliation({ state: "clear" });
+        if (announceResult) {
+          setAssistantError(null);
+          setAssistantStatus("Calendar status verified; creation unlocked");
+          setAssistantFocusRequest((focusRequest) => focusRequest + 1);
+        }
+      } else {
+        updateAssistantCalendarReconciliation({
+            state: "required",
+            agendaInspected: previous.state === "required" || previous.state === "unknown" ? previous.agendaInspected : false,
+            busy: false,
+        });
+      }
+    } catch (error) {
+      if (
+        !assistantCalendarReconciliationMountedRef.current ||
+        request !== assistantCalendarReconciliationRequestRef.current ||
+        mutation !== assistantCalendarReconciliationMutationRef.current
+      ) return;
+      const agendaInspected = previous.state === "required" || previous.state === "unknown" ? previous.agendaInspected : false;
+      const message = `Calendar creation status could not be verified. Creation remains locked. ${getAssistantErrorMessage(error)}`;
+      updateAssistantCalendarReconciliation({
+        state: "unknown",
+        agendaInspected,
+        busy: false,
+        canRetryStatus: true,
+        error: message,
+      });
+      if (announceResult) {
+        setAssistantError(message);
+        setAssistantStatus("Calendar status check failed; creation remains locked.");
+        focusAssistantCalendarReconciliation(agendaInspected ? "acknowledge" : "retry");
+      }
+    } finally {
+      if (request === assistantCalendarReconciliationRequestRef.current) {
+        assistantCalendarReconciliationBusyRef.current = false;
+      }
+    }
   }
 
   async function refreshLlamaHarnessAssistant() {
@@ -3331,70 +3611,32 @@ function App() {
     return "";
   }
 
-  function executeLlamaHarnessToolRequests(
-    toolRequests: LlamaHarnessRunToolRequest[],
-  ): LlamaHarnessRunToolResult[] {
-    return toolRequests.map((toolRequest) => {
-      try {
-        return {
-          toolCallId: toolRequest.id,
-          toolId: toolRequest.toolId,
-          result: executeLlamaHarnessToolRequest(toolRequest),
-        };
-      } catch (error) {
-        return {
-          toolCallId: toolRequest.id,
-          toolId: toolRequest.toolId,
-          error: getAssistantErrorMessage(error),
-        };
-      }
-    });
-  }
-
-  function executeLlamaHarnessToolRequest(toolRequest: LlamaHarnessRunToolRequest) {
-    const args = getToolArguments(toolRequest.arguments);
-
-    switch (toolRequest.toolId) {
-      case "note.getCurrentPage":
-        return getCurrentPageToolResult(Boolean(args.includeBlocks));
-      case "note.getSelectedBlocks":
-        return {
-          blocks: getSelectedTextBlocks().map(toToolBlock),
-        };
-      case "note.searchPages":
-        return searchPagesForTool(requireStringArg(args, "query"));
-      case "note.createBlock":
-        return createBlockFromTool(args);
-      case "note.updateBlock":
-        return updateBlockFromTool(args);
-      case "note.deleteBlock":
-        return deleteBlockFromTool(toolRequest, args);
-      case "note.moveBlock":
-        return moveBlockFromTool(args);
-      case "note.createPage":
-        return createPageFromTool(args);
-      case "note.renamePage":
-        return renamePageFromTool(args);
-      case "note.openPage":
-        return openPageFromTool(args);
-      default:
-        throw new Error(`Unsupported Note tool: ${toolRequest.toolId}`);
-    }
-  }
-
   function getCurrentPageToolResult(includeBlocks: boolean) {
     const page = getActivePageForTool();
+    const boundedPage = {
+      ...page,
+      id: page.id.slice(0, 200),
+      folderId: page.folderId.slice(0, 200),
+      title: page.title.slice(0, 200),
+      ...(page.title.length > 200 ? { truncatedFields: ["title"] } : {}),
+    };
 
     return {
-      page,
+      page: boundedPage,
       ...(includeBlocks
-        ? {
-            blocks: dataRef.current.blocks
+        ? boundAssistantBlocks(
+            dataRef.current.blocks
               .filter((block) => block.pageId === page.id)
-              .sort(compareToolBlocksByPosition)
-              .map(toToolBlock),
-          }
-        : {}),
+              .sort(compareToolBlocksByPosition),
+            ASSISTANT_PAGE_BLOCK_LIMIT,
+          )
+        : {
+            completeness: {
+              complete: page.title.length <= 200,
+              omittedCount: 0,
+              maximumBytes: ASSISTANT_READ_RESULT_MAX_BYTES,
+            },
+          }),
     };
   }
 
@@ -3406,13 +3648,48 @@ function App() {
       .sort(compareToolBlocksByPosition);
   }
 
+  function boundAssistantBlocks(blocks: TextBlock[], maximumCount: number) {
+    const result: ReturnType<typeof toToolBlock>[] = [];
+    let truncatedContentCount = 0;
+    for (const block of blocks.slice(0, maximumCount)) {
+      const toolBlock = {
+        ...toToolBlock(block),
+        id: block.id.slice(0, 200),
+        pageId: block.pageId.slice(0, 200),
+        content: block.content.slice(0, ASSISTANT_TOOL_TEXT_LIMIT),
+        ...(block.content.length > ASSISTANT_TOOL_TEXT_LIMIT
+          ? { truncatedFields: ["content"] }
+          : {}),
+      };
+      if (
+        new TextEncoder().encode(JSON.stringify({ blocks: [...result, toolBlock] }))
+          .byteLength > ASSISTANT_READ_CONTENT_BUDGET
+      ) {
+        break;
+      }
+      if (block.content.length > ASSISTANT_TOOL_TEXT_LIMIT) truncatedContentCount += 1;
+      result.push(toolBlock);
+    }
+    const omittedCount = blocks.length - result.length;
+    return {
+      blocks: result,
+      completeness: {
+        complete: omittedCount === 0 && truncatedContentCount === 0,
+        omittedCount,
+        truncatedContentCount,
+        maximumCount,
+        maximumBytes: ASSISTANT_READ_RESULT_MAX_BYTES,
+      },
+    };
+  }
+
   function searchPagesForTool(query: string) {
     const normalizedQuery = query.trim().toLocaleLowerCase();
     if (!normalizedQuery) {
       throw new Error("query is required.");
     }
 
-    const pages = dataRef.current.pages
+    const matches = dataRef.current.pages
       .map((page) => {
         const matchedBlocks = dataRef.current.blocks.filter(
           (block) =>
@@ -3423,17 +3700,60 @@ function App() {
 
         return titleMatches || matchedBlocks.length > 0
           ? {
-              folderId: page.folderId,
-              id: page.id,
-              matchedBlockIds: matchedBlocks.map((block) => block.id),
-              title: page.title,
+              folderId: page.folderId.slice(0, 200),
+              id: page.id.slice(0, 200),
+              matchedBlockIds: matchedBlocks.map((block) => block.id.slice(0, 200)),
+              title: page.title.slice(0, 200),
+              titleTruncated: page.title.length > 200,
             }
           : null;
       })
-      .filter((page): page is NonNullable<typeof page> => Boolean(page))
-      .slice(0, 20);
-
-    return { pages };
+      .filter((page): page is NonNullable<typeof page> => Boolean(page));
+    const pages: Array<Omit<(typeof matches)[number], "titleTruncated"> & { truncatedFields?: string[] }> = [];
+    let includedMatchCount = 0;
+    let truncatedTitleCount = 0;
+    const totalMatchCount = matches.reduce((count, page) => count + page.matchedBlockIds.length, 0);
+    for (const match of matches.slice(0, ASSISTANT_SEARCH_PAGE_LIMIT)) {
+      const remainingMatches = ASSISTANT_SEARCH_MATCH_LIMIT_TOTAL - includedMatchCount;
+      if (remainingMatches <= 0) break;
+      const matchedBlockIds = match.matchedBlockIds.slice(
+        0,
+        Math.min(ASSISTANT_SEARCH_MATCH_LIMIT_PER_PAGE, remainingMatches),
+      );
+      const { titleTruncated, ...page } = match;
+      const candidate = {
+        ...page,
+        matchedBlockIds,
+        ...(titleTruncated ? { truncatedFields: ["title"] } : {}),
+      };
+      if (
+        new TextEncoder().encode(JSON.stringify({ pages: [...pages, candidate] }))
+          .byteLength > ASSISTANT_READ_CONTENT_BUDGET
+      ) {
+        break;
+      }
+      pages.push(candidate);
+      includedMatchCount += matchedBlockIds.length;
+      if (titleTruncated) truncatedTitleCount += 1;
+    }
+    const omittedPageCount = matches.length - pages.length;
+    const omittedMatchCount = totalMatchCount - includedMatchCount;
+    return {
+      pages,
+      completeness: {
+        complete:
+          omittedPageCount === 0 &&
+          omittedMatchCount === 0 &&
+          truncatedTitleCount === 0,
+        omittedPageCount,
+        omittedMatchCount,
+        truncatedTitleCount,
+        maximumPages: ASSISTANT_SEARCH_PAGE_LIMIT,
+        maximumMatchesPerPage: ASSISTANT_SEARCH_MATCH_LIMIT_PER_PAGE,
+        maximumMatchesTotal: ASSISTANT_SEARCH_MATCH_LIMIT_TOTAL,
+        maximumBytes: ASSISTANT_READ_RESULT_MAX_BYTES,
+      },
+    };
   }
 
   function createBlockFromTool(args: Record<string, unknown>) {
@@ -3523,19 +3843,9 @@ function App() {
     return { block: toToolBlock(nextBlock) };
   }
 
-  function deleteBlockFromTool(
-    toolRequest: LlamaHarnessRunToolRequest,
-    args: Record<string, unknown>,
-  ) {
+  function deleteBlockFromTool(args: Record<string, unknown>) {
     const blockId = requireStringArg(args, "blockId");
-    const block = getActivePageBlockForTool(blockId);
-
-    if (
-      toolRequest.riskLevel === "high" &&
-      !window.confirm(`Allow assistant to delete this Note block?\n\n${truncateForTool(block.content, 160)}`)
-    ) {
-      throw new Error("User denied approval for note.deleteBlock.");
-    }
+    getActivePageBlockForTool(blockId);
 
     deleteBlocks([blockId]);
 
@@ -3702,12 +4012,6 @@ function App() {
     );
   }
 
-  function getToolArguments(value: unknown): Record<string, unknown> {
-    return typeof value === "object" && value !== null && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : {};
-  }
-
   function requireStringArg(args: Record<string, unknown>, name: string) {
     const value = optionalStringArg(args, name);
     if (value === undefined) {
@@ -3738,11 +4042,153 @@ function App() {
     return typeof value === "number" && Number.isFinite(value) ? value : undefined;
   }
 
-  function truncateForTool(value: string, maxLength: number) {
-    return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
+  function executeAssistantRuntimeTool(
+    tool: ToolDefinition,
+    input: Record<string, unknown>,
+  ) {
+    switch (tool.operation) {
+      case "notes.read_page":
+      case "legacy.note.getCurrentPage":
+        return getCurrentPageToolResult(Boolean(input.includeBlocks));
+      case "notes.read_selection":
+      case "legacy.note.getSelectedBlocks":
+        return boundAssistantBlocks(
+          getSelectedTextBlocks(),
+          ASSISTANT_SELECTION_BLOCK_LIMIT,
+        );
+      case "notes.search":
+      case "legacy.note.searchPages":
+        return searchPagesForTool(requireStringArg(input, "query"));
+      case "notes.insert_text":
+      case "legacy.note.createBlock":
+        return createBlockFromTool(input);
+      case "notes.replace_text":
+        return updateBlockFromTool(input);
+      case "notes.append_text": {
+        const block = getActivePageBlockForTool(requireStringArg(input, "blockId"));
+        return updateBlockFromTool({
+          blockId: block.id,
+          content: [block.content.trimEnd(), requireStringArg(input, "content")]
+            .filter(Boolean)
+            .join("\n\n"),
+        });
+      }
+      case "legacy.note.updateBlock":
+        return updateBlockFromTool(input);
+      case "legacy.note.deleteBlock":
+        return deleteBlockFromTool(input);
+      case "legacy.note.moveBlock":
+        return moveBlockFromTool(input);
+      case "legacy.note.createPage":
+        return createPageFromTool(input);
+      case "legacy.note.renamePage":
+        return renamePageFromTool(input);
+      case "legacy.note.openPage":
+        return openPageFromTool(input);
+      default:
+        throw new Error("This assistant tool is not available in the Note workspace.");
+    }
   }
 
-  async function requestAssistantChat(messages: AssistantMessage[]) {
+  function describeAssistantNoteWrite(
+    tool: ToolDefinition,
+    input: Record<string, unknown>,
+    provider: AssistantProviderMetadata,
+    pageId: string,
+    folderId: string,
+  ): Extract<AssistantReview, { kind: "note" }> {
+    const page = dataRef.current.pages.find((candidate) => candidate.id === pageId);
+    const blockId = typeof input.blockId === "string" ? input.blockId : null;
+    const block = blockId
+      ? dataRef.current.blocks.find((candidate) => candidate.id === blockId)
+      : null;
+    const blockPage = block
+      ? dataRef.current.pages.find((candidate) => candidate.id === block.pageId)
+      : page;
+    const targetPage = `page “${blockPage?.title || "Untitled page"}” (${blockPage?.id || pageId})`;
+    const editable = (
+      key: string,
+      label: string,
+      after: unknown,
+      before?: unknown,
+      inputType: "text" | "number" = "text",
+    ) => ({
+      key,
+      label,
+      ...(before === undefined ? {} : { before: String(before) }),
+      after: String(after ?? ""),
+      inputType,
+      editable: true,
+    });
+    const base = { kind: "note" as const, provider };
+
+    switch (tool.operation) {
+      case "notes.insert_text":
+      case "legacy.note.createBlock":
+        return {
+          ...base,
+          action: "Insert a new text block",
+          target: targetPage,
+          effect: "Creates a new text block on this page.",
+          fields: [
+            editable("content", "Proposed text", input.content),
+            ...(input.x === undefined ? [] : [editable("x", "X position", input.x, undefined, "number")]),
+            ...(input.y === undefined ? [] : [editable("y", "Y position", input.y, undefined, "number")]),
+          ],
+        };
+      case "notes.append_text":
+        return {
+          ...base,
+          action: "Append text to a block",
+          target: `block ${blockId} on ${targetPage}`,
+          effect: "Adds the proposed text after the block’s current text.",
+          fields: [editable("content", "Text to append", input.content, block?.content ?? "")],
+        };
+      case "notes.replace_text":
+        return {
+          ...base,
+          action: "Replace text in a block",
+          target: `block ${blockId} on ${targetPage}`,
+          effect: "Replaces the block’s existing text. Its prior text will no longer appear in the note.",
+          fields: [editable("content", "Replacement text", input.content, block?.content ?? "")],
+        };
+      case "legacy.note.updateBlock": {
+        const fields = [
+          ...(input.content === undefined ? [] : [editable("content", "Text", input.content, block?.content ?? "")]),
+          ...(["x", "y", "width", "height"] as const).flatMap((key) =>
+            input[key] === undefined
+              ? []
+              : [editable(key, key === "x" || key === "y" ? `${key.toUpperCase()} position` : key, input[key], block?.[key], "number")],
+          ),
+        ];
+        return { ...base, action: "Update a text block", target: `block ${blockId} on ${targetPage}`, effect: "Changes only the reviewed block fields shown below.", fields };
+      }
+      case "legacy.note.deleteBlock":
+        return { ...base, action: "Delete a text block", target: `block ${blockId} on ${targetPage}`, effect: "Deletes this block and its text from the note.", fields: [{ label: "Text being deleted", before: block?.content ?? "" }] };
+      case "legacy.note.moveBlock":
+        return { ...base, action: "Move a text block", target: `block ${blockId} on ${targetPage}`, effect: "Moves this block to the reviewed canvas position.", fields: [editable("x", "X position", input.x, block?.x, "number"), editable("y", "Y position", input.y, block?.y, "number")] };
+      case "legacy.note.createPage": {
+        const targetFolderId = typeof input.folderId === "string" ? input.folderId : folderId;
+        const folder = dataRef.current.folders.find((candidate) => candidate.id === targetFolderId);
+        return { ...base, action: "Create a note page", target: `folder “${folder?.name || "Root"}” (${targetFolderId || "root"})`, effect: "Creates and opens a new page in this folder.", fields: [editable("title", "Page title", input.title)] };
+      }
+      case "legacy.note.renamePage": {
+        const target = dataRef.current.pages.find((candidate) => candidate.id === input.pageId);
+        return { ...base, action: "Rename a note page", target: `page “${target?.title || "Untitled page"}” (${String(input.pageId)})`, effect: "Changes this page’s title.", fields: [editable("title", "New title", input.title, target?.title ?? "")] };
+      }
+      case "legacy.note.openPage": {
+        const target = dataRef.current.pages.find((candidate) => candidate.id === input.pageId);
+        return { ...base, action: "Open a note page", target: `page “${target?.title || "Untitled page"}” (${String(input.pageId)})`, effect: "Changes the active workspace page; note content is not modified.", fields: [] };
+      }
+      default:
+        throw new Error("This Note write cannot be reviewed.");
+    }
+  }
+
+  function createAssistantRuntime(
+    messages: AssistantMessage[],
+    snapshot: AssistantRequestSnapshot,
+  ) {
     if (!llamaHarnessSetupStatus?.ready) {
       throw new Error(
         llamaHarnessSetupStatus
@@ -3751,78 +4197,357 @@ function App() {
       );
     }
 
-    if (!selectedLlamaHarnessAgent) {
+    if (!snapshot.agentId) {
       throw new Error("Create or activate an agent in llama-harness.");
     }
 
-    const notesContext = buildNotesContext({
-      data: dataRef.current,
-      selectedBlockIds: selectedBlockIdsRef.current,
-      selectedPageId: selectedPageIdRef.current,
-    });
-    let response: LlamaHarnessRunResponse = await createLlamaHarnessNoteRun({
-      agentId: selectedLlamaHarnessAgent.id,
-      messages,
-      notesContext,
-    });
-
-    for (let iteration = 0; response.status === "requires_action"; iteration += 1) {
-      if (iteration >= 5) {
-        throw new Error("llama-harness requested too many tool result rounds.");
-      }
-      if (response.toolRequests.length === 0) {
-        throw new Error("llama-harness requested action without tool requests.");
-      }
-
-      setAssistantStatus(`Executing ${response.toolRequests.length} Note tool request${response.toolRequests.length === 1 ? "" : "s"}`);
-      const toolResults = executeLlamaHarnessToolRequests(response.toolRequests);
-      response = await submitLlamaHarnessNoteToolResults({
-        runId: response.runId,
-        toolResults,
-      });
-    }
-
-    return response;
+    const { agentId, modelId, notesContext, provider, runFolderId, runPageId } = snapshot;
+    return new AssistantRuntime(
+      {
+        async start(signal) {
+          return createLlamaHarnessNoteRun({
+            agentId,
+            expectedModelId: modelId,
+            messages,
+            notesContext,
+            signal,
+            toolManifest: getAssistantToolManifest(),
+          });
+        },
+        async continue(runId, toolResults, signal) {
+          return submitLlamaHarnessNoteToolResults({ agentId, expectedModelId: modelId, runId, toolResults, signal });
+        },
+      },
+      provider,
+      {
+        read: async (tool, input) => executeAssistantRuntimeTool(tool, input),
+        write: async (tool, input) => {
+          if (
+            [
+              "notes.insert_text",
+              "notes.append_text",
+              "notes.replace_text",
+              "legacy.note.createBlock",
+              "legacy.note.updateBlock",
+              "legacy.note.deleteBlock",
+              "legacy.note.moveBlock",
+            ].includes(tool.operation) && selectedPageIdRef.current !== runPageId
+          ) {
+            throw new Error("The reviewed Note page is no longer active. Cancel and ask again.");
+          }
+          if (
+            tool.operation === "legacy.note.createPage" &&
+            input.folderId === undefined &&
+            selectedFolderIdRef.current !== runFolderId
+          ) {
+            throw new Error("The reviewed destination folder changed. Cancel and ask again.");
+          }
+          return executeAssistantRuntimeTool(tool, input);
+        },
+        describeWrite: (tool, input) =>
+          describeAssistantNoteWrite(tool, input, provider, runPageId, runFolderId),
+        fingerprintWrite: (tool, input) => {
+          const blockId = typeof input.blockId === "string" ? input.blockId : null;
+          const pageId = typeof input.pageId === "string" ? input.pageId : null;
+          const destinationFolderId = tool.operation === "legacy.note.createPage"
+            ? typeof input.folderId === "string" ? input.folderId : runFolderId
+            : null;
+          return JSON.stringify({
+            operation: tool.operation,
+            selectedPageId: selectedPageIdRef.current,
+            selectedFolderId: selectedFolderIdRef.current,
+            block: blockId
+              ? dataRef.current.blocks.find((block) => block.id === blockId) ?? null
+              : null,
+            page: pageId
+              ? dataRef.current.pages.find((page) => page.id === pageId) ?? null
+              : dataRef.current.pages.find((page) => page.id === runPageId) ?? null,
+            destinationFolder: destinationFolderId === null
+              ? null
+              : destinationFolderId === ROOT_FOLDER_ID
+                ? { id: ROOT_FOLDER_ID, name: "Root" }
+                : dataRef.current.folders.find((folder) => folder.id === destinationFolderId) ?? null,
+          });
+        },
+        canProposeCalendarCreate: () => assistantCalendarReconciliationRef.current.state === "clear",
+        onCalendarReconciliationCleared: clearAssistantCalendarReconciliation,
+      },
+    );
   }
 
-  async function sendAssistantMessage() {
-    const prompt = assistantInput.trim();
+  function captureAssistantRequest(prompt: string): AssistantRequestSnapshot {
+    if (!selectedLlamaHarnessAgent) {
+      throw new Error("Create or activate an agent in llama-harness.");
+    }
+    const model = llamaHarnessCapabilities?.model;
+    if (!model?.id) {
+      throw new Error("llama-harness did not report an exact model ID for this request.");
+    }
+    return {
+      agentId: selectedLlamaHarnessAgent.id,
+      agentLabel: selectedLlamaHarnessAgent.name || selectedLlamaHarnessAgent.id,
+      history: assistantMessages.slice(-ASSISTANT_HISTORY_LIMIT).map((message) => ({
+        ...message,
+        content: message.content.slice(0, ASSISTANT_PROMPT_LIMIT),
+      })),
+      notesContext: buildNotesContext({
+        data: dataRef.current,
+        selectedBlockIds: selectedBlockIdsRef.current,
+        selectedPageId: selectedPageIdRef.current,
+      }),
+      prompt,
+      provider: { ...assistantProviderMetadata, capabilities: { ...assistantProviderMetadata.capabilities } },
+      modelId: model.id,
+      modelLabel: model.modelName || model.name || model.id,
+      runFolderId: selectedFolderIdRef.current,
+      runPageId: selectedPageIdRef.current,
+    };
+  }
 
-    if (!prompt || isAssistantSending) {
+  function applyAssistantRuntimeTransition(
+    transition: RuntimeTransition,
+    snapshot = assistantRequestSnapshotRef.current,
+  ) {
+    if (transition.kind === "review") {
+      setAssistantReview(transition.review);
+      setAssistantStatus("Assistant action requires your review.");
       return;
     }
+    const content = transition.response.output?.trim() || "Done.";
+    setAssistantMessages((currentMessages) => [
+      ...currentMessages,
+      { id: createId("assistant-message"), role: "assistant", content, createdAt: new Date().toISOString() },
+    ]);
+    setAssistantReview(null);
+    setAssistantStatus(snapshot
+      ? `Received response from ${snapshot.agentLabel} / ${snapshot.modelLabel}`
+      : "Received assistant response");
+    setAssistantFocusRequest((request) => request + 1);
+  }
 
+  async function startAssistantRequest(
+    snapshot: AssistantRequestSnapshot,
+  ) {
+    const { prompt } = snapshot;
     const userMessage: AssistantMessage = {
       id: createId("assistant-message"),
       role: "user",
       content: prompt,
       createdAt: new Date().toISOString(),
     };
-    const nextMessages = [...assistantMessages, userMessage];
+    const visibleMessages = [...assistantMessages, userMessage];
+    const nextMessages = [...snapshot.history, userMessage];
 
-    setAssistantMessages(nextMessages);
+    setAssistantMessages(visibleMessages);
     setAssistantInput("");
+    setAssistantConsent(null);
     setAssistantError(null);
-    setAssistantStatus("Sending to local LLM");
+    setAssistantStatus("Sending to the assistant adapter");
     setIsAssistantSending(true);
+    setAssistantFocusRequest((request) => request + 1);
 
     try {
-      const response = await requestAssistantChat(nextMessages);
-      const content = response.output?.trim() || "Done.";
-      const assistantMessage: AssistantMessage = {
-        id: createId("assistant-message"),
-        role: "assistant",
-        content,
-        createdAt: new Date().toISOString(),
-      };
-
-      setAssistantMessages([...nextMessages, assistantMessage]);
-      setAssistantStatus(`Received response from ${assistantAgentLabel}`);
+      const runtime = createAssistantRuntime(nextMessages, snapshot);
+      assistantRuntimeRef.current = runtime;
+      assistantRequestSnapshotRef.current = snapshot;
+      applyAssistantRuntimeTransition(await runtime.start(), snapshot);
     } catch (error) {
+      setAssistantMessages((currentMessages) => currentMessages.filter((message) => message.id !== userMessage.id));
+      setAssistantInput((currentInput) => currentInput || prompt);
+      if (error instanceof Error && error.name === "AbortError") return;
       setAssistantError(getAssistantErrorMessage(error));
       setAssistantStatus(null);
     } finally {
       setIsAssistantSending(false);
+    }
+  }
+
+  function sendAssistantMessage() {
+    const prompt = assistantInput.trim();
+    if (!prompt || isAssistantSending || assistantConsent || assistantReview) return;
+    if (prompt.length > ASSISTANT_PROMPT_LIMIT) {
+      setAssistantError(`Prompt must be ${ASSISTANT_PROMPT_LIMIT.toLocaleString()} characters or fewer.`);
+      setAssistantStatus(null);
+      return;
+    }
+    let snapshot: AssistantRequestSnapshot;
+    try {
+      snapshot = captureAssistantRequest(prompt);
+    } catch (error) {
+      setAssistantError(getAssistantErrorMessage(error));
+      setAssistantStatus(null);
+      return;
+    }
+    if (snapshot.provider.dataSharing !== "local") {
+      setAssistantConsent({ ...snapshot, categories: ASSISTANT_CONSENT_CATEGORIES });
+      setAssistantStatus("Review what will be shared before sending.");
+      setAssistantError(null);
+      return;
+    }
+    void startAssistantRequest(snapshot);
+  }
+
+  async function confirmAssistantConsent() {
+    const consent = assistantConsent;
+    if (!consent || isAssistantSending) return;
+    await startAssistantRequest(consent);
+  }
+
+  function cancelAssistantConsent() {
+    setAssistantConsent(null);
+    setAssistantStatus("Not sent. Your prompt remains in the composer.");
+    setAssistantFocusRequest((request) => request + 1);
+  }
+
+  async function confirmAssistantReview() {
+    const runtime = assistantRuntimeRef.current;
+    if (!runtime || isAssistantReviewBusy) return;
+    setIsAssistantReviewBusy(true);
+    setAssistantReviewOperation(
+      assistantReview?.kind === "calendar"
+        ? "Creating calendar event…"
+        : "Applying reviewed Note change…",
+    );
+    setAssistantError(null);
+    let preserveOperationStatus = false;
+    try {
+      applyAssistantRuntimeTransition(await runtime.confirm());
+      setAssistantFocusRequest((request) => request + 1);
+    } catch (error) {
+      const message = getAssistantErrorMessage(error);
+      if (isAssistantRuntimeError(error, "calendar_confirm_outcome_pending")) {
+        preserveOperationStatus = true;
+        setAssistantReview((currentReview) => currentReview?.kind === "calendar" ? { ...currentReview, confirmationOutcomePending: true } : currentReview);
+        setAssistantReviewOperation(message);
+        setAssistantStatus(message);
+        setAssistantError(null);
+      } else if (isAssistantRuntimeError(error, "calendar_confirm_outcome_unresolved")) {
+        lockAssistantCalendarReconciliation("required", message);
+        setAssistantReview(null);
+        setAssistantStatus(ASSISTANT_CONFIRM_OUTCOME_UNRESOLVED_MESSAGE);
+        setAssistantError(null);
+      } else if (isAssistantRuntimeError(error, "calendar_created_reconciliation_ack_failed")) {
+        lockAssistantCalendarReconciliation("unknown", message);
+        setAssistantReview(null);
+        setAssistantStatus("Calendar event created; reconciliation acknowledgement failed. Calendar creation remains locked.");
+        setAssistantError(null);
+        setAssistantFocusRequest((request) => request + 1);
+      } else if (isAssistantRuntimeError(error, "calendar_created_follow_up_failed")) {
+        setAssistantReview(null);
+        setAssistantStatus("Calendar event created; the assistant follow-up failed.");
+        setAssistantError(message);
+        setAssistantFocusRequest((request) => request + 1);
+      } else if (isAssistantRuntimeError(error, "note_changed_follow_up_failed")) {
+        setAssistantReview(null);
+        setAssistantStatus(message);
+        setAssistantError(message);
+        setAssistantFocusRequest((request) => request + 1);
+      } else if (isAssistantRuntimeError(error, "note_target_changed")) {
+        setAssistantReview(null);
+        setAssistantStatus(message);
+        setAssistantError(message);
+        setAssistantFocusRequest((request) => request + 1);
+      } else if (isAssistantRuntimeError(error, "calendar_confirm_failed")) {
+        setAssistantReview(null);
+        setAssistantStatus(message);
+        setAssistantError(message);
+        setAssistantFocusRequest((request) => request + 1);
+      } else {
+        setAssistantError(message);
+        setAssistantStatus("The assistant follow-up did not complete. Check whether the reviewed change was applied.");
+      }
+    } finally {
+      setIsAssistantReviewBusy(false);
+      if (!preserveOperationStatus) setAssistantReviewOperation(null);
+    }
+  }
+
+  function cancelAssistantRun() {
+    assistantRuntimeRef.current?.cancel();
+    setAssistantReview(null);
+    setAssistantStatus("Assistant request cancelled.");
+    setAssistantError(null);
+    setAssistantFocusRequest((request) => request + 1);
+  }
+
+  async function cancelAssistantReview() {
+    const runtime = assistantRuntimeRef.current;
+    if (!runtime || isAssistantReviewBusy) return;
+    if (blockWorkbenchTransitionForPendingConfirmation()) {
+      return;
+    }
+    setIsAssistantReviewBusy(true);
+    setAssistantReviewOperation("Cancelling reviewed action…");
+    setAssistantError(null);
+    try {
+      const result = await runtime.cancelReview();
+      setAssistantReview(null);
+      setAssistantStatus("Cancelled. No data was changed. Finishing assistant follow-up…");
+      setAssistantFocusRequest((request) => request + 1);
+      setIsAssistantReviewBusy(false);
+      setAssistantReviewOperation(null);
+      setIsAssistantSending(true);
+      const followUpAvailable = await result.followUp;
+      setAssistantStatus(
+        followUpAvailable
+          ? "Cancelled. No data was changed."
+          : "Cancelled; assistant follow-up unavailable.",
+      );
+    } catch (error) {
+      setAssistantError(getAssistantErrorMessage(error));
+      setAssistantStatus("Cancellation failed. The review is still pending.");
+    } finally {
+      setIsAssistantReviewBusy(false);
+      setAssistantReviewOperation(null);
+      setIsAssistantSending(false);
+    }
+  }
+
+  function dismissExpiredAssistantReview() {
+    assistantRuntimeRef.current?.cancel();
+    setAssistantReview(null);
+    setAssistantReviewOperation(null);
+    setAssistantError(null);
+    setAssistantStatus("Review expired. Ask the assistant to propose the action again.");
+    setAssistantFocusRequest((request) => request + 1);
+  }
+
+  async function editAssistantCalendarReview(input: { event: EventDraft; inferredFields?: string[] }) {
+    const runtime = assistantRuntimeRef.current;
+    if (!runtime || isAssistantReviewBusy) return;
+    setIsAssistantReviewBusy(true);
+    setAssistantReviewOperation("Updating calendar details…");
+    setAssistantError(null);
+    try {
+      setAssistantReview(await runtime.revise(input));
+      setAssistantStatus("Updated details require a separate confirmation.");
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") return;
+      if (isAssistantRuntimeError(error, "calendar_proposal_lost")) {
+        setAssistantReview(null);
+        setAssistantStatus("The revised proposal was discarded without creating an event.");
+      }
+      setAssistantError(getAssistantErrorMessage(error));
+    } finally {
+      setIsAssistantReviewBusy(false);
+      setAssistantReviewOperation(null);
+    }
+  }
+
+  async function editAssistantNoteReview(patch: Record<string, string | number>) {
+    const runtime = assistantRuntimeRef.current;
+    if (!runtime || isAssistantReviewBusy) return;
+    setIsAssistantReviewBusy(true);
+    setAssistantReviewOperation("Updating proposed Note change…");
+    setAssistantError(null);
+    try {
+      setAssistantReview(runtime.reviseNote(patch));
+      setAssistantStatus("Updated Note details require a separate confirmation.");
+    } catch (error) {
+      setAssistantError(getAssistantErrorMessage(error));
+    } finally {
+      setIsAssistantReviewBusy(false);
+      setAssistantReviewOperation(null);
     }
   }
 
@@ -3991,6 +4716,17 @@ function App() {
   }
 
   function openAgendaWorkspace() {
+    const reconciliation = assistantCalendarReconciliationRef.current;
+    if (
+      (reconciliation.state === "required" || reconciliation.state === "unknown") &&
+      !reconciliation.agendaInspected
+    ) {
+      assistantCalendarReconciliationMutationRef.current += 1;
+      assistantCalendarReconciliationRequestRef.current += 1;
+      assistantCalendarReconciliationBusyRef.current = false;
+      updateAssistantCalendarReconciliation({ ...reconciliation, agendaInspected: true, busy: false });
+      setAssistantStatus("Agenda opened. Check for the event, then acknowledge the unresolved confirmation in Assistant.");
+    }
     const currentState = {
       selectedTabId: selectedWorkspaceTabIdRef.current,
       tabs: workspaceTabsRef.current,
@@ -4005,6 +4741,65 @@ function App() {
     window.requestAnimationFrame(() => {
       document.getElementById(getWorkspaceTabId(nextState.selectedTabId))?.focus();
     });
+  }
+
+  async function acknowledgeAssistantCalendarUnresolved() {
+    const reconciliation = assistantCalendarReconciliationRef.current;
+    if (
+      assistantCalendarReconciliationBusyRef.current ||
+      (reconciliation.state !== "required" && reconciliation.state !== "unknown") ||
+      !reconciliation.agendaInspected ||
+      !isAssistantNativeAvailable()
+    ) return;
+    assistantCalendarReconciliationBusyRef.current = true;
+    const mutation = ++assistantCalendarReconciliationMutationRef.current;
+    const request = ++assistantCalendarReconciliationRequestRef.current;
+    updateAssistantCalendarReconciliation({ ...reconciliation, busy: true });
+    setAssistantError(null);
+    setAssistantStatus("Acknowledging the inspected calendar warning…");
+    try {
+      await assistantCalendarClient.acknowledgeReconciliation("agenda_inspected");
+      if (
+        !assistantCalendarReconciliationMountedRef.current ||
+        request !== assistantCalendarReconciliationRequestRef.current ||
+        mutation !== assistantCalendarReconciliationMutationRef.current
+      ) return;
+      updateAssistantCalendarReconciliation({ state: "clear" });
+      setAssistantStatus("Calendar warning acknowledged. New calendar proposals are available again.");
+      setAssistantFocusRequest((focusRequest) => focusRequest + 1);
+    } catch (error) {
+      if (
+        !assistantCalendarReconciliationMountedRef.current ||
+        request !== assistantCalendarReconciliationRequestRef.current ||
+        mutation !== assistantCalendarReconciliationMutationRef.current
+      ) return;
+      const message = `Could not clear the calendar creation lock. Try again or retry status. ${getAssistantErrorMessage(error)}`;
+      updateAssistantCalendarReconciliation({
+        state: "unknown",
+        agendaInspected: true,
+        busy: false,
+        canRetryStatus: true,
+        error: message,
+      });
+      setAssistantError(message);
+      setAssistantStatus("Calendar creation remains locked.");
+      focusAssistantCalendarReconciliation("acknowledge");
+    } finally {
+      if (request === assistantCalendarReconciliationRequestRef.current) {
+        assistantCalendarReconciliationBusyRef.current = false;
+      }
+    }
+  }
+
+  function inspectAssistantUnresolvedInAgenda() {
+    if (activeWorkbenchOverlay === "assistant") {
+      overlayEntryFocusRequestRef.current = null;
+      overlayReturnFocusRequestRef.current = false;
+      overlayReturnFocusRef.current = null;
+      setActiveNarrowOverlay(null);
+      setIsAssistantOpen(false);
+    }
+    openAgendaWorkspace();
   }
 
   function updateAgendaView(view: "agenda" | "month") {
@@ -5406,7 +6201,7 @@ function App() {
       isExplorerCollapsed={isExplorerPresentationCollapsed}
       isExplorerOverlayOpen={isExplorerOverlayOpen}
       isNarrowWorkbench={isNarrowWorkbench}
-      onCloseAssistantOverlay={() => closeWorkbenchOverlay("assistant")}
+      onCloseAssistantOverlay={closeAssistantPanel}
       onCloseExplorerOverlay={() => closeWorkbenchOverlay("explorer")}
     >
       <div
@@ -5496,6 +6291,7 @@ function App() {
           }
         }}
         onFolderDragOver={setPageDropTargetFolderId}
+        onBeforeWorkbenchTransition={blockWorkbenchTransitionForPendingConfirmation}
         onFocusPageSearch={focusPageSearch}
         onOpenAgenda={openAgendaWorkspace}
         onPageDragEnd={endPageDrag}
@@ -5835,7 +6631,12 @@ function App() {
         <AssistantPanel
           assistantError={assistantError}
           assistantStatus={assistantStatus}
+          calendarReconciliation={assistantCalendarReconciliation}
+          calendarReconciliationFocus={assistantCalendarReconciliationFocus}
+          consent={assistantConsent}
           defaultChatModelLabel={assistantAgentLabel}
+          providerMetadata={assistantProviderMetadata}
+          focusRequest={assistantFocusRequest}
           harnessAgents={activeLlamaHarnessAgents}
           isHarnessLoading={isLlamaHarnessLoading}
           isHarnessReady={Boolean(llamaHarnessSetupStatus?.ready)}
@@ -5843,12 +6644,26 @@ function App() {
           isSending={isAssistantSending}
           messages={assistantMessages}
           onClose={closeAssistantPanel}
+          onCancelConsent={cancelAssistantConsent}
+          onCancelReview={cancelAssistantReview}
+          onCancelRun={cancelAssistantRun}
+          onConfirmReview={confirmAssistantReview}
+          onConfirmConsent={confirmAssistantConsent}
+          onDismissExpiredReview={dismissExpiredAssistantReview}
+          onEditCalendarReview={editAssistantCalendarReview}
+          onEditNoteReview={editAssistantNoteReview}
+          onAcknowledgeCalendarUnresolved={acknowledgeAssistantCalendarUnresolved}
           onInputChange={setAssistantInput}
+          onOpenAgenda={inspectAssistantUnresolvedInAgenda}
           onRefreshHarness={refreshLlamaHarnessAssistant}
+          onRetryCalendarReconciliation={() => void refreshAssistantCalendarReconciliation(true)}
           onRunAction={runAssistantAction}
           onSend={sendAssistantMessage}
           onSelectHarnessAgent={setSelectedLlamaHarnessAgentId}
           panelRef={assistantPanelRef}
+          review={assistantReview}
+          isReviewBusy={isAssistantReviewBusy}
+          reviewOperationStatus={assistantReviewOperation}
           selectedBlockCount={selectedBlockIds.length}
           selectedBlockPreview={selectedAssistantBlockPreview}
           selectedHarnessAgentId={selectedLlamaHarnessAgent?.id ?? ""}
@@ -5885,6 +6700,7 @@ const Sidebar = memo(function Sidebar({
   onDeletePageTemplate,
   onFolderDragLeave,
   onFolderDragOver,
+  onBeforeWorkbenchTransition,
   onFocusPageSearch,
   onOpenAgenda,
   onPageDragEnd,
@@ -6027,6 +6843,10 @@ const Sidebar = memo(function Sidebar({
   }
 
   function openSidebarTab(tabId: SidebarTabId, trigger: HTMLButtonElement) {
+    if (onBeforeWorkbenchTransition()) {
+      return;
+    }
+
     setActiveSidebarTab(tabId);
 
     if (isCollapsed && tabId !== "search") {

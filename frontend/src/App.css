@@ -1728,6 +1728,39 @@ h2 {
   gap: 8px;
 }
 
+.assistant-review-card {
+  display: grid;
+  gap: 10px;
+  margin: 0 12px;
+  padding: 12px;
+  border: 1px solid #b8a6e8;
+  border-radius: 10px;
+  background: #f8f5ff;
+  color: #263241;
+}
+
+.assistant-review-card h3,
+.assistant-review-card p { margin: 0; }
+.assistant-review-warning { color: #5f3d9f; font-weight: 600; }
+.assistant-review-details { display: grid; gap: 7px; margin: 0; }
+.assistant-review-details div { display: grid; gap: 2px; }
+.assistant-review-details dt { color: #4b596a; font-size: 12px; font-weight: 700; }
+.assistant-review-details dd { margin: 0; overflow-wrap: anywhere; }
+.assistant-review-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.assistant-review-actions button,
+.assistant-review-form button { width: auto; min-width: 44px; max-width: 100%; min-height: 44px; padding: 8px 12px; overflow-wrap: anywhere; white-space: normal; cursor: pointer; }
+.assistant-review-actions button:disabled { cursor: not-allowed; }
+.assistant-cancel-run { margin-left: 8px; padding: 3px 7px; font-size: 12px; }
+.assistant-review-actions button:first-child { background: #6d4bc0; border-color: #6d4bc0; color: #fff; }
+.assistant-review-form { display: grid; gap: 8px; }
+.assistant-review-form label { display: grid; gap: 4px; font-size: 12px; font-weight: 700; }
+.assistant-review-form input,
+.assistant-review-form textarea { box-sizing: border-box; width: 100%; min-height: 44px; border: 1px solid #7b8998; border-radius: 6px; padding: 8px; color: inherit; font: inherit; }
+.assistant-review-form textarea { min-height: 72px; resize: vertical; }
+.assistant-consent-list { margin: 0; padding-left: 20px; }
+.assistant-review-operation { color: #4b596a; }
+.assistant-review-expired { color: #8a1f1f; font-weight: 700; }
+
 .assistant-voice-unavailable {
   margin-right: auto;
   color: #667385;
@@ -3334,6 +3367,47 @@ h2 {
 .app-shell.is-dark .assistant-error {
   color: #fecaca;
   background: rgba(127, 29, 29, 0.42);
+}
+
+.app-shell.is-dark .assistant-review-card { border-color: #7255b2; background: #2b243a; color: #ededed; }
+.app-shell.is-dark .assistant-review-warning,
+.app-shell.is-dark .assistant-review-details dt { color: #d5c7ff; }
+.app-shell.is-dark .assistant-review-operation { color: #c9c9c9; }
+.app-shell.is-dark .assistant-review-expired { color: #fecaca; }
+.app-shell.is-dark .assistant-review-form input,
+.app-shell.is-dark .assistant-review-form textarea { border-color: var(--workbench-border); background: var(--workbench-surface); color: var(--workbench-text); }
+
+@media (forced-colors: active) {
+  .assistant-review-card {
+    border-color: CanvasText;
+    background: Canvas;
+    color: CanvasText;
+  }
+
+  .assistant-review-warning,
+  .assistant-review-operation,
+  .assistant-review-expired,
+  .assistant-review-details dt {
+    color: CanvasText;
+  }
+
+  .assistant-review-form input,
+  .assistant-review-form textarea {
+    border-color: FieldText;
+    background: Field;
+    color: FieldText;
+  }
+
+  .assistant-review-actions button:first-child {
+    border-color: Highlight;
+    background: Highlight;
+    color: HighlightText;
+  }
+
+  .assistant-review-actions button:disabled {
+    border-color: GrayText;
+    color: GrayText;
+  }
 }
 
 .app-shell.is-dark .assistant-voice-unavailable {

@@ -21,7 +21,7 @@ use super::{
     settings::{CalendarSettings, SettingsUpdateRequest},
 };
 
-const fn mutation_busy_api_error() -> ApiError {
+pub(crate) const fn mutation_busy_api_error() -> ApiError {
     ApiError {
         code: "data_operation_in_progress",
         message: "Another local data operation is still finishing. Try again.",
@@ -191,7 +191,7 @@ pub enum EventTimeRequest {
 }
 
 impl EventDraftRequest {
-    fn into_domain(
+    pub(crate) fn into_domain(
         self,
         inherited_rule: Option<String>,
         inherited_reminders: Vec<i64>,
@@ -607,7 +607,7 @@ pub async fn calendar_search(
         .calendar
         .search_events(query, range)
         .await
-        .map(|records| records.into_iter().map(Into::into).collect())
+        .map(|result| result.occurrences.into_iter().map(Into::into).collect())
         .map_err(Into::into)
 }
 

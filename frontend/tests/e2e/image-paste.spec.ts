@@ -33,6 +33,7 @@ test("pasting a clipboard image while editing a textbox inserts a rich image", a
   await clickCanvas(page, 360, 260);
   await page.keyboard.type("hello");
   await expect(page.locator(".text-block-editor-content")).toBeVisible();
+  await expect(page.locator(".text-block-editor .ProseMirror")).toBeFocused();
 
   await pastePngFile(page, true);
 

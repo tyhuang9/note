@@ -12,6 +12,7 @@ use serde::Serialize;
 use tokio::sync::Notify;
 
 use crate::{
+    assistant::AssistantState,
     calendar::{
         backup::{BackupService, BackupState, RestoreService},
         error::{ApiError, StoreError},
@@ -259,6 +260,7 @@ pub(crate) struct AppState {
     pub(crate) note_mutations: MutationGate,
     pub(crate) calendar_mutations: MutationGate,
     pub(crate) notes: NotesService,
+    pub(crate) assistant: AssistantState,
     calendar: Arc<CalendarReadiness>,
 }
 
@@ -275,6 +277,7 @@ impl AppState {
             note_mutations: MutationGate::default(),
             calendar_mutations: MutationGate::default(),
             notes: NotesService::new(app_data_dir.clone()),
+            assistant: AssistantState::default(),
             calendar: CalendarReadiness::new(app_data_dir, initializer),
         }
     }
@@ -304,6 +307,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::calendar::domain::{parse_all_day_event, EventDraft};
 
     struct ControlledInitializer {
         calls: AtomicUsize,
@@ -446,5 +450,36 @@ mod tests {
         );
         assert!(!serialized.contains('/'));
         assert!(!serialized.contains('\\'));
+    }
+
+    #[tokio::test]
+    async fn assistant_reconciliation_marker_survives_app_state_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = AppState::new(directory.path().to_path_buf());
+        first.start_calendar_initialization(None);
+        let first_runtime = first.calendar_runtime().await.unwrap();
+        let draft = EventDraft::validated(
+            "Durable assistant create".into(),
+            None,
+            None,
+            parse_all_day_event("2026-07-25", "2026-07-26").unwrap(),
+        )
+        .unwrap();
+        first_runtime
+            .calendar
+            .create_assistant_event(draft)
+            .await
+            .unwrap();
+        drop(first_runtime);
+        drop(first);
+
+        let reopened = AppState::new(directory.path().to_path_buf());
+        reopened.start_calendar_initialization(None);
+        let reopened_runtime = reopened.calendar_runtime().await.unwrap();
+        assert!(reopened_runtime
+            .calendar
+            .assistant_create_reconciliation_required()
+            .await
+            .unwrap());
     }
 }

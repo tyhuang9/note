@@ -56,6 +56,10 @@ pub enum StoreError {
     OverrideLimitExceeded,
     #[error("calendar event candidate scan exceeded the safety limit")]
     CandidateLimitExceeded,
+    #[error("assistant calendar create requires reconciliation")]
+    AssistantCreateReconciliationRequired,
+    #[error("assistant calendar create outcome could not be determined")]
+    AssistantCreateOutcomeUnknown,
 }
 
 #[derive(Debug, Error)]
@@ -200,6 +204,17 @@ impl From<StoreError> for ApiError {
             StoreError::CandidateLimitExceeded => Self {
                 code: "event_candidate_limit_exceeded",
                 message: "The selected dates contain too many event series to load safely.",
+                field: None,
+            },
+            StoreError::AssistantCreateReconciliationRequired => Self {
+                code: "assistant_calendar_create_reconciliation_required",
+                message: "Check Agenda before creating another event with the assistant.",
+                field: None,
+            },
+            StoreError::AssistantCreateOutcomeUnknown => Self {
+                code: "assistant_calendar_create_reconciliation_unknown",
+                message:
+                    "The event result could not be verified. Check Agenda before trying again.",
                 field: None,
             },
         }

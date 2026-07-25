@@ -29,9 +29,21 @@ pub struct EventListPage {
     pub next_after: Option<EventId>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct EventSearchPage {
+    pub records: Vec<EventRecord>,
+    /// True when at least one additional matching master exists beyond
+    /// `records`. Search callers must propagate this separately from their
+    /// projected occurrence count.
+    pub has_more_candidates: bool,
+}
+
 #[async_trait]
 pub trait EventRepository: Send + Sync {
     async fn create(&self, draft: EventDraft) -> Result<EventRecord, StoreError>;
+    async fn create_assistant_event(&self, draft: EventDraft) -> Result<EventRecord, StoreError>;
+    async fn assistant_create_reconciliation_required(&self) -> Result<bool, StoreError>;
+    async fn acknowledge_assistant_create_reconciliation(&self) -> Result<bool, StoreError>;
     async fn get(&self, id: EventId) -> Result<Option<EventRecord>, StoreError>;
     #[cfg(test)]
     async fn list(&self, range: EventQueryRange) -> Result<Vec<EventRecord>, StoreError>;
@@ -51,7 +63,7 @@ pub trait EventRepository: Send + Sync {
         query: &str,
         range: EventQueryRange,
         candidate_limit: usize,
-    ) -> Result<Vec<EventRecord>, StoreError>;
+    ) -> Result<EventSearchPage, StoreError>;
     async fn update(
         &self,
         id: EventId,

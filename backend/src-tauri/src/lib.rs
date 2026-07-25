@@ -1,4 +1,5 @@
 mod app_state;
+mod assistant;
 mod calendar;
 mod calendar_store;
 mod error;
@@ -52,7 +53,14 @@ pub fn run() {
             calendar::export::export_ics,
             calendar::backup::backup_create,
             calendar::backup::backup_restore_preview,
-            calendar::backup::backup_restore_commit
+            calendar::backup::backup_restore_commit,
+            assistant::assistant_calendar_tool_execute,
+            assistant::assistant_calendar_create_propose,
+            assistant::assistant_calendar_create_revise,
+            assistant::assistant_calendar_create_confirm,
+            assistant::assistant_calendar_create_cancel,
+            assistant::assistant_calendar_create_reconciliation_status,
+            assistant::assistant_calendar_create_reconciliation_acknowledge
         ])
         .build(tauri::generate_context!())
         .expect("error while building Note")

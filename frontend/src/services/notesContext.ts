@@ -37,18 +37,20 @@ export function buildNotesContext(
   const activePageBlocks = data.blocks
     .filter((block) => block.pageId === selectedPageId)
     .sort(compareBlocksByPosition)
+    .slice(0, MAX_ACTIVE_BLOCKS_IN_PROMPT)
     .map(toContextBlock);
   const selectedBlocks = data.blocks
     .filter((block) => selectedBlockIdSet.has(block.id))
     .sort(compareBlocksByPosition)
+    .slice(0, MAX_SELECTED_BLOCKS_IN_PROMPT)
     .map(toContextBlock);
 
   return {
     activePage,
     activePageBlocks,
     appData: {
-      folders: data.folders.map((folder) => ({ ...folder })),
-      pages: data.pages.map((page) => ({ ...page })),
+      folders: data.folders.slice(0, MAX_FOLDERS_IN_PROMPT).map((folder) => ({ ...folder })),
+      pages: data.pages.slice(0, MAX_PAGES_IN_PROMPT).map((page) => ({ ...page })),
     },
     promptSummary: buildPromptSummary({
       activePage,
@@ -96,7 +98,7 @@ function toContextPage(
 
 function toContextBlock(block: TextBlock): NotesContextBlock {
   return {
-    content: block.content,
+    content: truncateText(block.content, MAX_BLOCK_SNIPPET_LENGTH),
     height: block.height,
     id: block.id,
     pageId: block.pageId,

@@ -132,6 +132,10 @@ const EXPECTED_TABLES: &[(&str, &[&str])] = &[
             "updated_at",
         ],
     ),
+    (
+        "assistant_calendar_create_reconciliation",
+        &["singleton_id", "created_at_utc_ms"],
+    ),
 ];
 
 const EXPECTED_INDEXES: &[&str] = &[
@@ -715,6 +719,7 @@ where
     let result = async {
         connection.execute("PRAGMA defer_foreign_keys = ON").await?;
         for table in [
+            "assistant_calendar_create_reconciliation",
             "reminder_deliveries",
             "reminders",
             "event_import_sources",
@@ -770,6 +775,8 @@ const RESTORE_INSERTS: &[&str] = &[
      SELECT singleton_id, checkpoint_utc, horizon_end_utc, system_time_zone, updated_at FROM restore_stage.reminder_scheduler_state",
     "INSERT INTO event_import_sources (event_id, source_uid, source_sequence, parser_version, imported_at)
      SELECT event_id, source_uid, source_sequence, parser_version, imported_at FROM restore_stage.event_import_sources",
+    "INSERT INTO assistant_calendar_create_reconciliation (singleton_id, created_at_utc_ms)
+     SELECT singleton_id, created_at_utc_ms FROM restore_stage.assistant_calendar_create_reconciliation",
 ];
 
 #[cfg(test)]
@@ -792,6 +799,15 @@ mod tests {
         let all_day_id = Uuid::new_v4().to_string();
         let override_event_id = Uuid::new_v4().to_string();
         let reminder_id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO assistant_calendar_create_reconciliation (
+                singleton_id, created_at_utc_ms
+             ) VALUES (1, ?)",
+        )
+        .bind(if prefix == "backup" { 111_i64 } else { 222_i64 })
+        .execute(store.pool())
+        .await
+        .unwrap();
         sqlx::query(
             "INSERT INTO events (
                 id, calendar_id, title, temporal_kind, start_utc, end_utc, time_zone,
@@ -1313,6 +1329,16 @@ mod tests {
             .unwrap(),
             (45, Some(30), "sunday".into(), "24h".into())
         );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT created_at_utc_ms
+                 FROM assistant_calendar_create_reconciliation WHERE singleton_id = 1"
+            )
+            .fetch_one(live.pool())
+            .await
+            .unwrap(),
+            111
+        );
 
         let recovery = SqliteConnectOptions::new()
             .filename(&recovery_path)
@@ -1325,6 +1351,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(recovered_title, "live timed");
+        let recovered_marker: i64 = sqlx::query_scalar(
+            "SELECT created_at_utc_ms
+             FROM assistant_calendar_create_reconciliation WHERE singleton_id = 1",
+        )
+        .fetch_one(&mut recovery)
+        .await
+        .unwrap();
+        assert_eq!(recovered_marker, 222);
     }
 
     #[tokio::test]

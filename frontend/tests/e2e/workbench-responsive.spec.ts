@@ -200,7 +200,9 @@ test("compact assistant behaves as a focus-managed overlay", async ({ page }) =>
 
   const assistant = page.getByRole("complementary", { name: "AI assistant" });
   await expect(assistant).toBeVisible();
-  await expect(assistant).toBeFocused();
+  const reconciliation = page.getByRole("alert", { name: "Unresolved calendar confirmation" });
+  await expect(reconciliation).toBeVisible();
+  await expect(reconciliation.getByRole("button", { name: "Open Agenda" })).toBeFocused();
   await expect(page.locator(".is-assistant-backdrop")).toBeVisible();
   await expect(page.locator(".workspace")).toHaveAttribute("inert", "");
 
@@ -365,7 +367,12 @@ test("templates can be saved, instantiated, and deleted without changing created
 });
 
 test("assistant text actions reject a selected image block", async ({ page }) => {
-  await mockLlamaHarness(page);
+  let runRequests = 0;
+  await mockLlamaHarness(page, {
+    onRunRequest: () => {
+      runRequests += 1;
+    },
+  });
   await page.setViewportSize({ width: 1440, height: 900 });
   await createInitialNote(page);
   await pasteImage(page);
@@ -377,6 +384,17 @@ test("assistant text actions reject a selected image block", async ({ page }) =>
   const sendButton = page.getByRole("button", { name: "Send prompt" });
   await expect(sendButton).toBeEnabled();
   await sendButton.click();
+
+  const consent = page.getByRole("region", {
+    name: "Assistant data sharing review",
+  });
+  await expect(consent).toBeVisible();
+  await expect(consent.getByRole("heading", { name: "Review data sharing" })).toBeVisible();
+  await expect(consent).toContainText("Nothing has been sent yet.");
+  expect(runRequests).toBe(0);
+
+  await consent.getByRole("button", { name: "Send with this context" }).click();
+  await expect.poll(() => runRequests).toBe(1);
 
   const actions = page.getByRole("region", { name: "Assistant output actions" });
   await expect(actions).toBeVisible();
@@ -419,7 +437,10 @@ async function pasteImage(page: Page) {
   }, PNG_DATA_URL);
 }
 
-async function mockLlamaHarness(page: Page) {
+async function mockLlamaHarness(
+  page: Page,
+  options: { onRunRequest?: (body: Record<string, unknown>) => void } = {},
+) {
   await page.route("http://127.0.0.1:8787/**", async (route) => {
     const request = route.request();
     const corsHeaders = {
@@ -468,6 +489,9 @@ async function mockLlamaHarness(page: Page) {
         tools: [],
       };
     } else {
+      if (path === "/api/runs") {
+        options.onRunRequest?.(request.postDataJSON() as Record<string, unknown>);
+      }
       body = {
         agentId: "test-agent",
         appId: "note",

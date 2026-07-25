@@ -38,7 +38,9 @@ use crate::calendar::{
 
 #[cfg(test)]
 use super::MAX_EVENT_MASTER_SCAN;
-use super::{EventListPage, EventRepository, SettingsRepository, EVENT_MASTER_PAGE_SIZE};
+use super::{
+    EventListPage, EventRepository, EventSearchPage, SettingsRepository, EVENT_MASTER_PAGE_SIZE,
+};
 
 const DEFAULT_CALENDAR_ID: &str = "00000000-0000-4000-8000-000000000001";
 const MAX_OVERRIDES_PER_MASTER: usize = 1_000;
@@ -328,14 +330,12 @@ impl SqliteEventStore {
             StoreError::NotFound
         })
     }
-}
 
-#[async_trait]
-impl EventRepository for SqliteEventStore {
-    async fn create(&self, draft: EventDraft) -> Result<EventRecord, StoreError> {
-        let _dispatch_barrier = self.calendar_mutation_guard().await;
-        let mut transaction = self.pool.begin().await.map_err(StoreError::Database)?;
-        let default_calendar_id = default_calendar_id(&mut transaction).await?;
+    async fn insert_event_in_transaction(
+        transaction: &mut Transaction<'_, Sqlite>,
+        draft: EventDraft,
+    ) -> Result<EventRecord, StoreError> {
+        let default_calendar_id = default_calendar_id(transaction).await?;
         let id = EventId(Uuid::new_v4());
         let now = Utc::now().timestamp_millis();
         let reminder_offsets = draft.reminder_offsets_minutes().to_vec();
@@ -362,16 +362,98 @@ impl EventRepository for SqliteEventStore {
         .bind(columns.rrule)
         .bind(now)
         .bind(now)
+        .execute(&mut **transaction)
+        .await
+        .map_err(StoreError::Database)?;
+
+        reconcile_reminders(transaction, id, &reminder_offsets, now).await?;
+        Self::event_in_transaction(transaction, id).await
+    }
+}
+
+#[async_trait]
+impl EventRepository for SqliteEventStore {
+    async fn create(&self, draft: EventDraft) -> Result<EventRecord, StoreError> {
+        let _dispatch_barrier = self.calendar_mutation_guard().await;
+        let mut transaction = self.pool.begin().await.map_err(StoreError::Database)?;
+        let created = Self::insert_event_in_transaction(&mut transaction, draft).await?;
+        transaction.commit().await.map_err(StoreError::Database)?;
+        self.advance_reminder_data_generation();
+        Ok(created)
+    }
+
+    async fn create_assistant_event(&self, draft: EventDraft) -> Result<EventRecord, StoreError> {
+        let _dispatch_barrier = self.calendar_mutation_guard().await;
+        let mut transaction = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(StoreError::Database)?;
+        let reconciliation_required: i64 = sqlx::query_scalar(
+            "SELECT EXISTS(
+                SELECT 1 FROM assistant_calendar_create_reconciliation WHERE singleton_id = 1
+             )",
+        )
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(StoreError::Database)?;
+        if reconciliation_required == 1 {
+            return Err(StoreError::AssistantCreateReconciliationRequired);
+        }
+
+        sqlx::query(
+            "INSERT INTO assistant_calendar_create_reconciliation (
+                singleton_id, created_at_utc_ms
+             ) VALUES (1, ?)",
+        )
+        .bind(Utc::now().timestamp_millis())
         .execute(&mut *transaction)
         .await
         .map_err(StoreError::Database)?;
 
-        reconcile_reminders(&mut transaction, id, &reminder_offsets, now).await?;
-
-        let created = Self::event_in_transaction(&mut transaction, id).await?;
-        transaction.commit().await.map_err(StoreError::Database)?;
+        let created = match Self::insert_event_in_transaction(&mut transaction, draft).await {
+            Ok(created) => created,
+            Err(error) => {
+                return match transaction.rollback().await {
+                    Ok(()) => Err(error),
+                    Err(_) => Err(StoreError::AssistantCreateOutcomeUnknown),
+                };
+            }
+        };
+        transaction
+            .commit()
+            .await
+            .map_err(|_| StoreError::AssistantCreateOutcomeUnknown)?;
         self.advance_reminder_data_generation();
         Ok(created)
+    }
+
+    async fn assistant_create_reconciliation_required(&self) -> Result<bool, StoreError> {
+        let required: i64 = sqlx::query_scalar(
+            "SELECT EXISTS(
+                SELECT 1 FROM assistant_calendar_create_reconciliation WHERE singleton_id = 1
+             )",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(StoreError::Database)?;
+        Ok(required == 1)
+    }
+
+    async fn acknowledge_assistant_create_reconciliation(&self) -> Result<bool, StoreError> {
+        let mut transaction = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(StoreError::Database)?;
+        let result = sqlx::query(
+            "DELETE FROM assistant_calendar_create_reconciliation WHERE singleton_id = 1",
+        )
+        .execute(&mut *transaction)
+        .await
+        .map_err(StoreError::Database)?;
+        transaction.commit().await.map_err(StoreError::Database)?;
+        Ok(result.rows_affected() == 1)
     }
 
     async fn get(&self, id: EventId) -> Result<Option<EventRecord>, StoreError> {
@@ -548,11 +630,12 @@ impl EventRepository for SqliteEventStore {
         query: &str,
         range: EventQueryRange,
         candidate_limit: usize,
-    ) -> Result<Vec<EventRecord>, StoreError> {
+    ) -> Result<EventSearchPage, StoreError> {
         let (start_utc_ms, end_utc_ms) = range.instant_bounds();
         let (start_date, end_date_exclusive) = range.date_bounds();
         let pattern = literal_like_pattern(query);
-        let rows = sqlx::query_as::<_, EventRow>(
+        let fetch_limit = candidate_limit.saturating_add(1);
+        let mut rows = sqlx::query_as::<_, EventRow>(
             "SELECT id, calendar_id, title, description, location, temporal_kind,
                     start_utc, end_utc, time_zone, start_date, end_date_exclusive,
                     rrule, revision, created_at, updated_at,
@@ -630,16 +713,22 @@ impl EventRepository for SqliteEventStore {
         .bind(start_utc_ms)
         .bind(end_date_exclusive.format("%Y-%m-%d").to_string())
         .bind(start_date.format("%Y-%m-%d").to_string())
-        .bind(i64::try_from(candidate_limit).unwrap_or(i64::MAX))
+        .bind(i64::try_from(fetch_limit).unwrap_or(i64::MAX))
         .fetch_all(&self.pool)
         .await
         .map_err(StoreError::Database)?;
+
+        let has_more_candidates = rows.len() > candidate_limit;
+        rows.truncate(candidate_limit);
 
         let events = rows
             .into_iter()
             .map(TryInto::try_into)
             .collect::<Result<Vec<_>, _>>()?;
-        self.hydrate_overrides(events).await
+        Ok(EventSearchPage {
+            records: self.hydrate_overrides(events).await?,
+            has_more_candidates,
+        })
     }
 
     async fn update(
@@ -2001,8 +2090,13 @@ mod integration_tests {
             .unwrap();
 
         let matches = store.search("pHoEnIx", july_query(), 20).await.unwrap();
-        let ids = matches.iter().map(|event| event.id).collect::<Vec<_>>();
-        assert_eq!(matches.len(), 3);
+        let ids = matches
+            .records
+            .iter()
+            .map(|event| event.id)
+            .collect::<Vec<_>>();
+        assert_eq!(matches.records.len(), 3);
+        assert!(!matches.has_more_candidates);
         assert!(ids.contains(&title.id));
         assert!(ids.contains(&location.id));
         assert!(ids.contains(&notes.id));
@@ -2033,32 +2127,61 @@ mod integration_tests {
 
         for query in ["%", "_", r"\"] {
             let matches = store.search(query, july_query(), 20).await.unwrap();
-            assert_eq!(matches.len(), 1, "query {query:?} must be literal");
-            assert_eq!(matches[0].id, literal.id);
+            assert_eq!(matches.records.len(), 1, "query {query:?} must be literal");
+            assert_eq!(matches.records[0].id, literal.id);
+            assert!(!matches.has_more_candidates);
         }
     }
 
     #[tokio::test]
-    async fn repository_search_candidate_cap_is_deterministic() {
+    async fn repository_search_reports_exact_candidate_exhaustion_boundary() {
         let directory = tempfile::tempdir().unwrap();
         let store = SqliteEventStore::open(&directory.path().join("calendar.sqlite3"))
             .await
             .unwrap();
-        for day in 10..=13 {
+        for index in 0..200 {
             store
-                .create(all_day(
-                    &format!("Capped match {day}"),
-                    &format!("2026-07-{day}"),
-                    &format!("2026-07-{}", day + 1),
+                .create(recurring_all_day(
+                    &format!("Candidate boundary ended {index:03}"),
+                    "2026-01-01",
+                    "2026-01-02",
+                    "FREQ=DAILY;COUNT=1",
                 ))
                 .await
                 .unwrap();
         }
 
-        let first = store.search("capped", july_query(), 2).await.unwrap();
-        let second = store.search("capped", july_query(), 2).await.unwrap();
-        assert_eq!(first, second);
-        assert_eq!(first.len(), 2);
+        let exact = store
+            .search("candidate boundary", july_query(), 200)
+            .await
+            .unwrap();
+        assert_eq!(exact.records.len(), 200);
+        assert!(!exact.has_more_candidates);
+
+        let live = store
+            .create(recurring_all_day(
+                "Candidate boundary live",
+                "2026-07-21",
+                "2026-07-22",
+                "FREQ=DAILY;COUNT=1",
+            ))
+            .await
+            .unwrap();
+        let capped = store
+            .search("candidate boundary", july_query(), 200)
+            .await
+            .unwrap();
+        assert_eq!(capped.records.len(), 200);
+        assert!(capped.has_more_candidates);
+        assert!(capped.records.iter().all(|event| event.id != live.id));
+
+        let all = store
+            .search("candidate boundary", july_query(), 201)
+            .await
+            .unwrap();
+        assert_eq!(all.records.len(), 201);
+        assert!(!all.has_more_candidates);
+        assert_eq!(all.records[200].id, live.id);
     }
 
     #[tokio::test]
@@ -2093,10 +2216,15 @@ mod integration_tests {
         let second = service.search_events(query, range).await.unwrap();
 
         assert_eq!(first, second);
-        assert_eq!(first.len(), 3);
-        assert!(first.iter().all(|item| item.event_id == master.id));
+        assert!(!first.has_more_candidates);
+        assert_eq!(first.occurrences.len(), 3);
+        assert!(first
+            .occurrences
+            .iter()
+            .all(|item| item.event_id == master.id));
         assert_eq!(
             first
+                .occurrences
                 .iter()
                 .map(|item| item.occurrence_key.as_str())
                 .collect::<Vec<_>>(),
@@ -2129,8 +2257,10 @@ mod integration_tests {
         let query = EventSearchQuery::validated("search series".into(), 50).unwrap();
 
         let results = service.search_events(query, range).await.unwrap();
-        assert_eq!(results.len(), 50);
+        assert!(!results.has_more_candidates);
+        assert_eq!(results.occurrences.len(), 50);
         assert!(results
+            .occurrences
             .windows(2)
             .all(|pair| pair[0].occurrence_key < pair[1].occurrence_key));
     }
@@ -2238,11 +2368,11 @@ mod override_and_settings_tests {
             )
             .await
             .unwrap();
-        assert_eq!(moved.len(), 1);
-        assert_eq!(moved[0].event_id, parent.id);
-        assert_eq!(moved[0].occurrence_key, key);
-        assert_eq!(moved[0].revision, updated.revision);
-        assert_eq!(moved[0].reminder_offsets_minutes, vec![60]);
+        assert_eq!(moved.occurrences.len(), 1);
+        assert_eq!(moved.occurrences[0].event_id, parent.id);
+        assert_eq!(moved.occurrences[0].occurrence_key, key);
+        assert_eq!(moved.occurrences[0].revision, updated.revision);
+        assert_eq!(moved.occurrences[0].reminder_offsets_minutes, vec![60]);
 
         assert!(matches!(
             store
@@ -2353,5 +2483,202 @@ mod override_and_settings_tests {
         .execute(store.pool())
         .await
         .is_err());
+    }
+}
+
+#[cfg(test)]
+mod assistant_reconciliation_tests {
+    use super::*;
+    use crate::{
+        calendar::domain::{parse_all_day_event, EventDraft},
+        calendar_store::EventRepository,
+    };
+
+    fn assistant_draft(title: &str) -> EventDraft {
+        EventDraft::validated_with_recurrence_and_reminders(
+            title.into(),
+            Some("private notes that must not enter the marker".into()),
+            Some("Private room".into()),
+            parse_all_day_event("2026-07-25", "2026-07-26").unwrap(),
+            None,
+            vec![10],
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn reconciliation_migration_is_minimal_and_clean_startup_is_clear() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SqliteEventStore::open(&directory.path().join("calendar.sqlite3"))
+            .await
+            .unwrap();
+
+        assert!(!store
+            .assistant_create_reconciliation_required()
+            .await
+            .unwrap());
+        let columns: String = sqlx::query_scalar(
+            "SELECT group_concat(name, ',')
+             FROM pragma_table_info('assistant_calendar_create_reconciliation')",
+        )
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+        assert_eq!(columns, "singleton_id,created_at_utc_ms");
+        let schema: String = sqlx::query_scalar(
+            "SELECT sql FROM sqlite_master
+             WHERE type = 'table' AND name = 'assistant_calendar_create_reconciliation'",
+        )
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+        for forbidden in [
+            "token",
+            "payload",
+            "prompt",
+            "provider",
+            "event_id",
+            "run_id",
+            "tool_call_id",
+        ] {
+            assert!(!schema.to_lowercase().contains(forbidden));
+        }
+    }
+
+    #[tokio::test]
+    async fn marker_is_inserted_before_event_mutation_and_commits_with_the_event() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SqliteEventStore::open(&directory.path().join("calendar.sqlite3"))
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TRIGGER require_assistant_marker_before_event
+             BEFORE INSERT ON events
+             WHEN NOT EXISTS (
+               SELECT 1 FROM assistant_calendar_create_reconciliation WHERE singleton_id = 1
+             )
+             BEGIN
+               SELECT RAISE(ABORT, 'assistant reconciliation marker missing');
+             END",
+        )
+        .execute(store.pool())
+        .await
+        .unwrap();
+
+        let created = store
+            .create_assistant_event(assistant_draft("Marker first"))
+            .await
+            .unwrap();
+        assert!(store.get(created.id).await.unwrap().is_some());
+        assert!(store
+            .assistant_create_reconciliation_required()
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn definitive_event_insert_failure_rolls_back_the_marker() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SqliteEventStore::open(&directory.path().join("calendar.sqlite3"))
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TRIGGER reject_assistant_event
+             BEFORE INSERT ON events
+             BEGIN
+               SELECT RAISE(ABORT, 'forced insert failure');
+             END",
+        )
+        .execute(store.pool())
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            store
+                .create_assistant_event(assistant_draft("Rollback"))
+                .await,
+            Err(StoreError::Database(_))
+        ));
+        assert!(!store
+            .assistant_create_reconciliation_required()
+            .await
+            .unwrap());
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM events")
+                .fetch_one(store.pool())
+                .await
+                .unwrap(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn successful_marker_survives_repository_reopen_until_acknowledged() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("calendar.sqlite3");
+        let store = SqliteEventStore::open(&path).await.unwrap();
+        let created = store
+            .create_assistant_event(assistant_draft("Persisted marker"))
+            .await
+            .unwrap();
+        drop(store);
+
+        let reopened = SqliteEventStore::open(&path).await.unwrap();
+        assert_eq!(
+            reopened.get(created.id).await.unwrap().unwrap().title,
+            "Persisted marker"
+        );
+        assert!(reopened
+            .assistant_create_reconciliation_required()
+            .await
+            .unwrap());
+        assert!(reopened
+            .acknowledge_assistant_create_reconciliation()
+            .await
+            .unwrap());
+        assert!(!reopened
+            .assistant_create_reconciliation_required()
+            .await
+            .unwrap());
+        assert!(!reopened
+            .acknowledge_assistant_create_reconciliation()
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn concurrent_assistant_creates_admit_exactly_one_event() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SqliteEventStore::open(&directory.path().join("calendar.sqlite3"))
+            .await
+            .unwrap();
+
+        let left_store = store.clone();
+        let right_store = store.clone();
+        let (left, right) = tokio::join!(
+            left_store.create_assistant_event(assistant_draft("Left")),
+            right_store.create_assistant_event(assistant_draft("Right")),
+        );
+        assert!(matches!(
+            (&left, &right),
+            (
+                Ok(_),
+                Err(StoreError::AssistantCreateReconciliationRequired)
+            ) | (
+                Err(StoreError::AssistantCreateReconciliationRequired),
+                Ok(_)
+            )
+        ));
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM events")
+                .fetch_one(store.pool())
+                .await
+                .unwrap(),
+            1
+        );
+        assert!(store
+            .assistant_create_reconciliation_required()
+            .await
+            .unwrap());
     }
 }

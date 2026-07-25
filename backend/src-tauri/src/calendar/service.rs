@@ -18,6 +18,12 @@ use super::{
 
 const MAX_SEARCH_MASTER_CANDIDATES: usize = 200;
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct EventSearchResult {
+    pub occurrences: Vec<OccurrenceRecord>,
+    pub has_more_candidates: bool,
+}
+
 #[derive(Clone)]
 pub struct CalendarService {
     repository: Arc<dyn EventRepository>,
@@ -34,6 +40,27 @@ impl CalendarService {
 
     pub async fn create_event(&self, draft: EventDraft) -> Result<EventRecord, CalendarError> {
         Ok(self.repository.create(draft).await?)
+    }
+
+    pub async fn create_assistant_event(
+        &self,
+        draft: EventDraft,
+    ) -> Result<EventRecord, CalendarError> {
+        Ok(self.repository.create_assistant_event(draft).await?)
+    }
+
+    pub async fn assistant_create_reconciliation_required(&self) -> Result<bool, CalendarError> {
+        Ok(self
+            .repository
+            .assistant_create_reconciliation_required()
+            .await?)
+    }
+
+    pub async fn acknowledge_assistant_create_reconciliation(&self) -> Result<bool, CalendarError> {
+        Ok(self
+            .repository
+            .acknowledge_assistant_create_reconciliation()
+            .await?)
     }
 
     pub async fn get_event(&self, id: EventId) -> Result<EventRecord, CalendarError> {
@@ -135,14 +162,14 @@ impl CalendarService {
         &self,
         query: EventSearchQuery,
         range: EventQueryRange,
-    ) -> Result<Vec<OccurrenceRecord>, CalendarError> {
-        let masters = self
+    ) -> Result<EventSearchResult, CalendarError> {
+        let search_page = self
             .repository
             .search(query.value(), range.clone(), MAX_SEARCH_MASTER_CANDIDATES)
             .await?;
         let needle = query.value().to_lowercase();
         let mut occurrences = Vec::new();
-        for master in masters {
+        for master in search_page.records {
             let master_matches = text_fields_match(
                 &master.title,
                 master.notes.as_deref(),
@@ -166,7 +193,10 @@ impl CalendarService {
         }
         sort_occurrences(&mut occurrences);
         occurrences.truncate(query.limit());
-        Ok(occurrences)
+        Ok(EventSearchResult {
+            occurrences,
+            has_more_candidates: search_page.has_more_candidates,
+        })
     }
 
     pub async fn update_event(
@@ -252,7 +282,7 @@ mod tests {
             error::{DomainError, StoreError},
             recurrence::RecurrenceRule,
         },
-        calendar_store::EventRepository,
+        calendar_store::{EventRepository, EventSearchPage},
     };
 
     struct StubRepository {
@@ -301,6 +331,21 @@ mod tests {
             Err(StoreError::InvalidData)
         }
 
+        async fn create_assistant_event(
+            &self,
+            _draft: EventDraft,
+        ) -> Result<EventRecord, StoreError> {
+            Err(StoreError::InvalidData)
+        }
+
+        async fn assistant_create_reconciliation_required(&self) -> Result<bool, StoreError> {
+            Ok(false)
+        }
+
+        async fn acknowledge_assistant_create_reconciliation(&self) -> Result<bool, StoreError> {
+            Ok(false)
+        }
+
         async fn get(&self, id: EventId) -> Result<Option<EventRecord>, StoreError> {
             Ok(self.records.iter().find(|record| record.id == id).cloned())
         }
@@ -346,9 +391,15 @@ mod tests {
             &self,
             _query: &str,
             _range: EventQueryRange,
-            _candidate_limit: usize,
-        ) -> Result<Vec<EventRecord>, StoreError> {
-            Ok(self.records.clone())
+            candidate_limit: usize,
+        ) -> Result<EventSearchPage, StoreError> {
+            let mut records = self.records.clone();
+            let has_more_candidates = records.len() > candidate_limit;
+            records.truncate(candidate_limit);
+            Ok(EventSearchPage {
+                records,
+                has_more_candidates,
+            })
         }
 
         async fn update(
@@ -541,12 +592,15 @@ mod tests {
         let second = service.search_events(query, range).await.unwrap();
 
         assert_eq!(first, second);
-        assert_eq!(first.len(), 3);
+        assert!(!first.has_more_candidates);
+        assert_eq!(first.occurrences.len(), 3);
         assert!(first
+            .occurrences
             .iter()
             .all(|occurrence| occurrence.event_id == recurring_id));
         assert_eq!(
             first
+                .occurrences
                 .iter()
                 .map(|occurrence| occurrence.occurrence_key.as_str())
                 .collect::<Vec<_>>(),
@@ -604,6 +658,49 @@ mod tests {
             .unwrap();
 
         assert_eq!(*limits.lock().unwrap(), [7, 7]);
+    }
+
+    #[tokio::test]
+    async fn search_propagates_exact_candidate_exhaustion_after_projection() {
+        let ended_start = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let mut ended = (1..=200_u128)
+            .map(|number| {
+                let mut record = all_day_series(number, ended_start, "FREQ=DAILY;COUNT=1");
+                record.title = format!("Candidate boundary ended {number:03}");
+                record
+            })
+            .collect::<Vec<_>>();
+        let range = EventQueryRange::validated(
+            1_784_620_800_000,
+            1_784_707_200_000,
+            "2026-07-21",
+            "2026-07-22",
+        )
+        .unwrap();
+        let query = EventSearchQuery::validated("candidate boundary".into(), 20).unwrap();
+
+        let exact = CalendarService::new(Arc::new(StubRepository {
+            records: ended.clone(),
+        }))
+        .search_events(query.clone(), range.clone())
+        .await
+        .unwrap();
+        assert!(exact.occurrences.is_empty());
+        assert!(!exact.has_more_candidates);
+
+        let mut live = all_day_series(
+            201,
+            NaiveDate::from_ymd_opt(2026, 7, 21).unwrap(),
+            "FREQ=DAILY;COUNT=1",
+        );
+        live.title = "Candidate boundary live".into();
+        ended.push(live);
+        let exhausted = CalendarService::new(Arc::new(StubRepository { records: ended }))
+            .search_events(query, range)
+            .await
+            .unwrap();
+        assert!(exhausted.occurrences.is_empty());
+        assert!(exhausted.has_more_candidates);
     }
 
     fn all_day_series(number: u128, start: NaiveDate, rule: &str) -> EventRecord {

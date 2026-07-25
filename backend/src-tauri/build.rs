@@ -27,6 +27,13 @@ fn main() {
         "backup_create",
         "backup_restore_preview",
         "backup_restore_commit",
+        "assistant_calendar_tool_execute",
+        "assistant_calendar_create_propose",
+        "assistant_calendar_create_revise",
+        "assistant_calendar_create_confirm",
+        "assistant_calendar_create_cancel",
+        "assistant_calendar_create_reconciliation_status",
+        "assistant_calendar_create_reconciliation_acknowledge",
     ]);
 
     #[cfg(target_os = "windows")]

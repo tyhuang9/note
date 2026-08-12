@@ -4,6 +4,13 @@
   "description": "Restricted quick-command overlay capability. It may only receive sanitized native events.",
   "windows": ["quick-command"],
   "permissions": [
+    "allow-voice-status-get",
+    "allow-voice-quick-command-ready",
+    "allow-voice-capture-start",
+    "allow-voice-capture-stop",
+    "allow-voice-capture-cancel",
+    "allow-voice-typed-proposal",
+    "allow-voice-proposal-submit",
     "core:event:allow-listen",
     "core:event:allow-unlisten"
   ]

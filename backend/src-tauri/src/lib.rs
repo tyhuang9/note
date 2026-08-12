@@ -9,9 +9,12 @@ mod mutation;
 mod notes;
 mod private_file;
 mod security;
+mod voice;
 
 use app_state::AppState;
 use tauri::Manager;
+#[cfg(desktop)]
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -20,6 +23,33 @@ pub fn run() {
         .append_invoke_initialization_script(
             security::BROWSER_MEDIA_CAPTURE_DEFENSE_IN_DEPTH_SCRIPT,
         );
+    #[cfg(desktop)]
+    let builder = builder.plugin(
+        tauri_plugin_global_shortcut::Builder::new()
+            .with_handler(|app, shortcut, event| {
+                let Some(state) = app.try_state::<AppState>() else {
+                    return;
+                };
+                let voice = state.voice.clone();
+                let is_hold_to_talk = voice::HOLD_TO_TALK_SHORTCUT
+                    .parse::<Shortcut>()
+                    .is_ok_and(|expected| expected == *shortcut);
+                if !voice.shortcut_registered()
+                    || !is_hold_to_talk
+                    || !app.global_shortcut().is_registered(*shortcut)
+                {
+                    return;
+                }
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    match event.state() {
+                        ShortcutState::Pressed => voice.shortcut_pressed(app).await,
+                        ShortcutState::Released => voice.shortcut_released(app).await,
+                    }
+                });
+            })
+            .build(),
+    );
     #[cfg(all(not(test), feature = "desktop-notifications"))]
     let builder = builder.plugin(tauri_plugin_notification::init());
     builder
@@ -73,7 +103,23 @@ pub fn run() {
             models_ai::api::models_ai_ollama_status,
             models_ai::api::models_ai_ollama_pull,
             models_ai::api::models_ai_ollama_cancel_pull,
-            models_ai::api::models_ai_ollama_remove
+            models_ai::api::models_ai_ollama_remove,
+            voice::voice_status_get,
+            voice::voice_quick_command_ready,
+            voice::voice_capture_start,
+            voice::voice_capture_stop,
+            voice::voice_capture_cancel,
+            voice::voice_typed_proposal,
+            voice::voice_proposal_submit,
+            voice::voice_config_get,
+            voice::voice_microphones_get,
+            voice::voice_microphone_select,
+            voice::voice_shortcuts_status_get,
+            voice::voice_shortcuts_register,
+            voice::voice_model_status,
+            voice::voice_model_install,
+            voice::voice_model_cancel_install,
+            voice::voice_model_remove
         ])
         .build(tauri::generate_context!())
         .expect("error while building Note")

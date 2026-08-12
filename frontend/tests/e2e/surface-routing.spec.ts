@@ -11,7 +11,6 @@ test("browser navigation defaults to the main note surface", async ({ page }) =>
 
 for (const surface of [
   { height: 520, heading: "Widget", id: "widget", path: "/widget.html", width: 360 },
-  { height: 180, heading: "Quick command", id: "quick-command", path: "/quick-command.html", width: 520 },
   { height: 720, heading: "Event editor", id: "event-editor", path: "/event-editor.html", width: 560 },
 ] as const) {
   test(`${surface.heading} renders an isolated accessible placeholder`, async ({
@@ -50,6 +49,25 @@ for (const surface of [
     await expect(page.getByRole("navigation", { name: "Primary workspace tools" })).toHaveCount(0);
   });
 }
+
+test("quick command remains isolated and presents native-only typed fallback", async ({
+  page,
+}) => {
+  await page.setViewportSize({ height: 180, width: 520 });
+  await page.goto("/quick-command.html");
+
+  const main = page.getByRole("main");
+  await expect(main).toHaveAttribute("data-surface", "quick-command");
+  await expect(page.getByRole("heading", { level: 1, name: "Quick command" })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Command mode" })).toHaveValue("assistant_command");
+  await expect(page.getByRole("textbox", { name: "Type a command or dictation" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Voice unavailable" })).toBeDisabled();
+  await expect(page.getByRole("status")).toContainText("Choose a mode");
+  await expect(page.getByText("Browser microphone capture is unavailable")).toBeVisible();
+  await expect(page.getByText("Calendar commands and confirmations are deferred")).toBeVisible();
+  await expect(page.locator(".canvas")).toHaveCount(0);
+  await expect(page.getByRole("navigation", { name: "Primary workspace tools" })).toHaveCount(0);
+});
 
 test("unknown development surface fails closed", async ({ page }) => {
   await page.goto("/unsupported.html");

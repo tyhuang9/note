@@ -103,30 +103,151 @@ body {
   font-weight: 650;
 }
 
-.auxiliary-surface--quick-command {
+.quick-command-surface {
+  display: grid;
+  width: 100%;
+  min-height: 100dvh;
+  place-items: center;
+  padding: 10px;
+  background: var(--note-background);
+}
+
+.quick-command-card {
+  display: grid;
+  width: min(100%, 620px);
+  gap: 8px;
+  border: 1px solid var(--note-border);
+  border-radius: 10px;
   padding: 12px;
+  background: var(--note-surface);
 }
 
-.auxiliary-surface--quick-command .auxiliary-surface-card {
-  width: min(100%, 496px);
-  padding: 12px 18px;
+.quick-command-heading {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
 }
 
-.auxiliary-surface--quick-command .auxiliary-surface-eyebrow {
-  margin-bottom: 3px;
+.quick-command-eyebrow {
+  margin: 0;
+  color: var(--note-status-text);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
-.auxiliary-surface--quick-command .auxiliary-surface-card h1 {
-  font-size: 22px;
+.quick-command-heading h1 {
+  margin: 0;
+  color: var(--note-text);
+  font-size: 20px;
+  letter-spacing: -0.02em;
 }
 
-.auxiliary-surface--quick-command .auxiliary-surface-card > p:not(.auxiliary-surface-eyebrow) {
-  margin: 4px 0 8px;
+.quick-command-controls {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.36fr) minmax(150px, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.quick-command-mode,
+.quick-command-input {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  color: var(--note-muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.quick-command-mode select,
+.quick-command-input input,
+.quick-command-actions button {
+  min-width: 0;
+  min-height: 32px;
+  border: 1px solid var(--note-border);
+  border-radius: 6px;
+  padding: 0 9px;
+  color: var(--note-text);
+  background: var(--note-surface);
+  font: inherit;
+}
+
+.quick-command-input input {
+  width: 100%;
+}
+
+.quick-command-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.quick-command-actions button {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.quick-command-actions button:first-child {
+  border-color: var(--note-status-border);
+  color: var(--note-status-text);
+  background: var(--note-status-background);
+}
+
+.quick-command-actions button:disabled,
+.quick-command-mode select:disabled,
+.quick-command-input input:disabled {
+  cursor: not-allowed;
+  opacity: 0.64;
+}
+
+.quick-command-mode select:focus-visible,
+.quick-command-input input:focus-visible,
+.quick-command-actions button:focus-visible {
+  outline: 2px solid #7c3aed;
+  outline-offset: 2px;
+}
+
+.quick-command-status,
+.quick-command-result,
+.quick-command-error {
+  margin: 0;
+  font-size: 12px;
   line-height: 1.35;
 }
 
-.auxiliary-surface--quick-command .auxiliary-surface-status {
-  min-height: 24px;
+.quick-command-status {
+  color: var(--note-muted);
+}
+
+.quick-command-result {
+  overflow-wrap: anywhere;
+  color: var(--note-text);
+}
+
+.quick-command-error {
+  color: #a62d2d;
+}
+
+.quick-command-deferred {
+  margin: 0;
+  color: var(--note-muted);
+  font-size: 11px;
+}
+
+@media (max-width: 540px) {
+  .quick-command-controls {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .quick-command-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
 }
 
 @media (prefers-color-scheme: dark) {

@@ -13,6 +13,7 @@ export type WorkspaceState = {
 export const AGENDA_WORKSPACE_TAB_ID = "agenda";
 export const AGENDA_WORKSPACE_TAB_TITLE = "Agenda";
 export const MODELS_AI_WORKSPACE_TAB_ID = "settings:models-ai";
+export const VOICE_SETTINGS_WORKSPACE_TAB_ID = "settings:voice";
 
 export function getNoteWorkspaceTabId(pageId: string) {
   return `note:${pageId}`;
@@ -58,6 +59,22 @@ export function openModelsAIWorkspaceTab(state: WorkspaceState): WorkspaceState 
   return state.selectedTabId === MODELS_AI_WORKSPACE_TAB_ID && tabs === state.tabs
     ? state
     : { selectedTabId: MODELS_AI_WORKSPACE_TAB_ID, tabs };
+}
+
+export function openVoiceSettingsWorkspaceTab(state: WorkspaceState): WorkspaceState {
+  const tabs = state.tabs.some((tab) => tab.id === VOICE_SETTINGS_WORKSPACE_TAB_ID)
+    ? state.tabs
+    : [
+        ...state.tabs,
+        {
+          id: VOICE_SETTINGS_WORKSPACE_TAB_ID,
+          title: "Voice",
+          view: { kind: "settings", section: "voice" },
+        } satisfies WorkspaceTab,
+      ];
+  return state.selectedTabId === VOICE_SETTINGS_WORKSPACE_TAB_ID && tabs === state.tabs
+    ? state
+    : { selectedTabId: VOICE_SETTINGS_WORKSPACE_TAB_ID, tabs };
 }
 
 export function setAgendaWorkspaceView(

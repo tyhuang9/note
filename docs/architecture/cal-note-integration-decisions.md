@@ -189,3 +189,13 @@ Applies to: Note integration worktree at base SHA `d7fd7b13d0964ed631e846fe6a6cc
 **Tradeoffs:** The UI intentionally does not provide unbounded scrolling, whole-calendar client caching, or speculative optimistic mutation. It performs additional bounded native reads after refreshes and lets native revision conflicts drive explicit draft-preserving resolution.
 
 **Consequences:** Each view owns independent request generations and errors; stale completions cannot overwrite newer state. Measured virtualization activates for large Agenda result sets. New calendar UI must preserve the fixed limits, coalesced refresh contract, and native-authoritative revisions rather than adding a second client-side calendar store.
+
+## ADR-019 — Native voice is generation-bound and quick command is proposal-only
+
+**Status:** Accepted in Phase 6
+
+**Decision:** Keep microphone capture, temporary audio, managed Whisper execution, shortcut activation, session/generation state, and timeout/cancellation authority in Rust. Give the quick-command webview only bounded status, capture controls, and proposal submission. It performs a post-listener readiness handshake for a current-generation replay; native routes the resulting sanitized proposal only to `main`.
+
+**Rationale:** Auxiliary window creation is asynchronous, physical capture/shortcut behavior is race-prone, and transcribed text must never become an implicit note, calendar, or assistant mutation. Rust can make terminal capture transitions one-shot, clean private staging, discard stale generation results, and enforce exact caller labels independently of renderer timing.
+
+**Consequences:** A first global shortcut may create/show only the quick-command window and then replay its current state after the window reports ready; it never focuses the main window. Typed and voice proposals require explicit main-window review or assistant submission. Main-only Voice settings owns opaque microphone selection, managed-model status/progress, and shortcut recovery; the restricted overlay receives none of those administrative capabilities.

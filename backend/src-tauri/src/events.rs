@@ -5,6 +5,11 @@ pub const WIDGET_STATUS_CHANGED: &str = "note://widget-status-changed";
 pub const VOICE_LIFECYCLE_RESET: &str = "note://voice-lifecycle-reset";
 pub const NAVIGATE: &str = "note://navigate";
 pub const MODEL_PROGRESS: &str = "note://model-progress";
+pub const VOICE_STATE: &str = "note://voice-state";
+pub const VOICE_TRANSCRIPT: &str = "note://voice-transcript";
+pub const VOICE_PROPOSAL: &str = "note://voice-proposal";
+pub const VOICE_SHORTCUT: &str = "note://voice-shortcut";
+pub const VOICE_MODEL_PROGRESS: &str = "note://voice-model-progress";
 
 #[cfg(test)]
 mod tests {
@@ -20,6 +25,11 @@ mod tests {
             VOICE_LIFECYCLE_RESET,
             NAVIGATE,
             MODEL_PROGRESS,
+            VOICE_STATE,
+            VOICE_TRANSCRIPT,
+            VOICE_PROPOSAL,
+            VOICE_SHORTCUT,
+            VOICE_MODEL_PROGRESS,
         ] {
             assert!(event.starts_with("note://"));
             assert!(!event.starts_with("cal://"));

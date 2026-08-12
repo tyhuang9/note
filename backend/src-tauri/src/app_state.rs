@@ -25,6 +25,7 @@ use crate::{
     models_ai::ModelsAiRuntime,
     mutation::MutationGate,
     notes::NotesService,
+    voice::VoiceState,
 };
 
 #[cfg(desktop)]
@@ -263,6 +264,7 @@ pub(crate) struct AppState {
     pub(crate) notes: NotesService,
     pub(crate) assistant: AssistantState,
     pub(crate) models_ai: ModelsAiRuntime,
+    pub(crate) voice: Arc<VoiceState>,
     calendar: Arc<CalendarReadiness>,
 }
 
@@ -281,6 +283,7 @@ impl AppState {
             notes: NotesService::new(app_data_dir.clone()),
             assistant: AssistantState::default(),
             models_ai: ModelsAiRuntime::new(&app_data_dir),
+            voice: Arc::new(VoiceState::new(app_data_dir.join("voice"))),
             calendar: CalendarReadiness::new(app_data_dir, initializer),
         }
     }

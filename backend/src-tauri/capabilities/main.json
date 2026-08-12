@@ -48,5 +48,14 @@
     "allow-models-ai-ollama-pull",
     "allow-models-ai-ollama-cancel-pull",
     "allow-models-ai-ollama-remove"
+    ,"allow-voice-config-get",
+    "allow-voice-microphones-get",
+    "allow-voice-microphone-select",
+    "allow-voice-shortcuts-status-get",
+    "allow-voice-shortcuts-register",
+    "allow-voice-model-status",
+    "allow-voice-model-install",
+    "allow-voice-model-cancel-install",
+    "allow-voice-model-remove"
   ]
 }

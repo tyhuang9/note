@@ -46,6 +46,22 @@ fn main() {
         "models_ai_ollama_pull",
         "models_ai_ollama_cancel_pull",
         "models_ai_ollama_remove",
+        "voice_status_get",
+        "voice_quick_command_ready",
+        "voice_capture_start",
+        "voice_capture_stop",
+        "voice_capture_cancel",
+        "voice_typed_proposal",
+        "voice_proposal_submit",
+        "voice_config_get",
+        "voice_microphones_get",
+        "voice_microphone_select",
+        "voice_shortcuts_status_get",
+        "voice_shortcuts_register",
+        "voice_model_status",
+        "voice_model_install",
+        "voice_model_cancel_install",
+        "voice_model_remove",
     ]);
 
     #[cfg(target_os = "windows")]

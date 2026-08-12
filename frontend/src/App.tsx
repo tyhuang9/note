@@ -17,11 +17,15 @@ import type {
   RefObject,
 } from "react";
 import { useEditorState } from "@tiptap/react";
+import { isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./App.css";
 import {
   AIProvidersSettings,
 } from "./features/settings/AIProvidersSettings";
 import { useAIProviderSettings } from "./features/settings/useAIProviderSettings";
+import { VoiceSettings } from "./features/voice/VoiceSettings";
 import { AssistantPanel } from "./features/assistant/AssistantPanel";
 import {
   AssistantRuntime,
@@ -41,6 +45,7 @@ import {
   getOpenNotePageIds,
   getSelectedNotePageId,
   openModelsAIWorkspaceTab,
+  openVoiceSettingsWorkspaceTab,
   openAgendaWorkspaceTab,
   reconcileWorkspaceNoteTabs,
   restoreWorkspaceState,
@@ -125,6 +130,11 @@ import {
   isAssistantNativeAvailable,
 } from "./native/assistantClient";
 import { modelsAIClient } from "./native/modelsAIClient";
+import {
+  routeVoiceProposal,
+  VOICE_PROPOSAL_EVENT,
+  type VoiceProposal,
+} from "./features/voice/voiceProposal";
 import type {
   AppData,
   AppSessionState,
@@ -258,6 +268,11 @@ type NotesPersistenceIssue = {
   error: NativeNotesError;
   operation: "load" | "save";
 };
+type VoiceProposalNotice = {
+  guidance: string;
+  proposal: VoiceProposal;
+  title: string;
+};
 
 function logNotesPersistenceError(summary: string, error: unknown) {
   if (isNativeNotesError(error)) {
@@ -378,6 +393,7 @@ const ASSISTANT_SEARCH_MATCH_LIMIT_TOTAL = 100;
 const ASSISTANT_TOOL_TEXT_LIMIT = 2_000;
 const ASSISTANT_PROMPT_LIMIT = 4_000;
 const ASSISTANT_HISTORY_LIMIT = 19;
+const MAX_HANDLED_VOICE_PROPOSALS = 128;
 const ASSISTANT_CONFIRM_OUTCOME_PENDING_MESSAGE = "Confirmation outcome is pending or unknown. Keep Note open and retry Confirm to reconcile this same proposal safely.";
 const ASSISTANT_CONFIRM_OUTCOME_UNRESOLVED_MESSAGE = "The event may already exist. Inspect Agenda or your calendar before attempting another create.";
 const ASSISTANT_CONSENT_CATEGORIES = [
@@ -1106,6 +1122,8 @@ function App() {
   const [assistantCalendarReconciliation, setAssistantCalendarReconciliation] = useState<AssistantCalendarReconciliation>({ state: "loading" });
   const [assistantCalendarReconciliationFocus, setAssistantCalendarReconciliationFocus] = useState<AssistantCalendarReconciliationFocus>({ request: 0, target: null });
   const [assistantFocusRequest, setAssistantFocusRequest] = useState(0);
+  const [voiceProposalNotice, setVoiceProposalNotice] =
+    useState<VoiceProposalNotice | null>(null);
   const [llamaHarnessSetupStatus, setLlamaHarnessSetupStatus] =
     useState<LlamaHarnessSetupStatus | null>(null);
   const [llamaHarnessCapabilities, setLlamaHarnessCapabilities] =
@@ -1175,6 +1193,8 @@ function App() {
   const assistantCalendarReconciliationMutationRef = useRef(0);
   const assistantCalendarReconciliationBusyRef = useRef(false);
   const assistantCalendarReconciliationMountedRef = useRef(false);
+  const isAssistantSendingRef = useRef(isAssistantSending);
+  const handledVoiceProposalIdsRef = useRef<string[]>([]);
   const assistantToggleButtonRef = useRef<HTMLButtonElement | null>(null);
   const createPageButtonRef = useRef<HTMLButtonElement | null>(null);
   const persistenceRetryButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -1214,6 +1234,7 @@ function App() {
   dataRef.current = data;
   assistantConsentRef.current = assistantConsent;
   assistantReviewRef.current = assistantReview;
+  isAssistantSendingRef.current = isAssistantSending;
   isSnapToGridEnabledRef.current = isGridVisible && isSnapToGridEnabled;
   editingBlockIdRef.current = editingBlockId;
   workspaceTabsRef.current = workspaceTabs;
@@ -1637,6 +1658,92 @@ function App() {
 
     wasNarrowWorkbenchRef.current = isNarrowWorkbench;
   }, [isAssistantOpen, isNarrowWorkbench]);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+
+    try {
+      if (getCurrentWindow().label !== "main") return;
+    } catch {
+      return;
+    }
+
+    let disposed = false;
+    let stopListening: (() => void | Promise<void>) | null = null;
+
+    void listen<unknown>(VOICE_PROPOSAL_EVENT, (event) => {
+      const route = routeVoiceProposal(
+        event.payload,
+        new Set(handledVoiceProposalIdsRef.current),
+      );
+      if (!route) return;
+
+      handledVoiceProposalIdsRef.current.push(route.proposal.proposalId);
+      if (handledVoiceProposalIdsRef.current.length > MAX_HANDLED_VOICE_PROPOSALS) {
+        handledVoiceProposalIdsRef.current.splice(
+          0,
+          handledVoiceProposalIdsRef.current.length - MAX_HANDLED_VOICE_PROPOSALS,
+        );
+      }
+
+      if (route.kind === "assistant") {
+        const assistantBusy = Boolean(
+          isAssistantSendingRef.current ||
+          assistantConsentRef.current ||
+          assistantReviewRef.current,
+        );
+        setIsAssistantOpen(true);
+        setVoiceProposalNotice({
+          guidance: assistantBusy
+            ? "Assistant is busy, so this command was not prefilled. Review and copy it manually; nothing was sent."
+            : "Review the prefilled Assistant prompt, then choose Send if you want to continue. Nothing was sent automatically.",
+          proposal: route.proposal,
+          title: "Voice assistant command ready for review",
+        });
+        if (!assistantBusy) {
+          setAssistantInput(route.proposal.text);
+          setAssistantStatus("Voice command prefilled. Review before sending.");
+          setAssistantError(null);
+        }
+        return;
+      }
+
+      if (route.kind === "note_review") {
+        const selectedPage = dataRef.current.pages.find(
+          (page) =>
+            page.id === selectedPageIdRef.current &&
+            page.folderId !== PAGE_TEMPLATE_FOLDER_ID,
+        );
+        setVoiceProposalNotice({
+          guidance: selectedPage
+            ? `Review this text, then paste it into the selected note “${selectedPage.title}” with the normal editor. No note was changed.`
+            : "No note is selected. Review this text and choose an existing note before pasting it with the normal editor. No note was changed.",
+          proposal: route.proposal,
+          title: "Voice dictation ready for review",
+        });
+        return;
+      }
+
+      setVoiceProposalNotice({
+        guidance: "Review this text, then use the normal Create root page action if you want a new note. No page or note was created.",
+        proposal: route.proposal,
+        title: "Quick-capture text ready for review",
+      });
+    })
+      .then((unlisten) => {
+        if (disposed) {
+          void unlisten();
+        } else {
+          stopListening = unlisten;
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      disposed = true;
+      void stopListening?.();
+    };
+  }, []);
 
   useEffect(() => {
     const requestedEntryOverlay = overlayEntryFocusRequestRef.current;
@@ -4806,6 +4913,20 @@ function App() {
     });
   }
 
+  function openVoiceSettings() {
+    const currentState = {
+      selectedTabId: selectedWorkspaceTabIdRef.current,
+      tabs: workspaceTabsRef.current,
+    };
+    const nextState = openVoiceSettingsWorkspaceTab(currentState);
+    workspaceTabsRef.current = nextState.tabs;
+    if (nextState.tabs !== currentState.tabs) setWorkspaceTabs(nextState.tabs);
+    activateWorkspaceTab(nextState.selectedTabId, nextState.tabs);
+    window.requestAnimationFrame(() => {
+      document.getElementById(getWorkspaceTabId(nextState.selectedTabId))?.focus();
+    });
+  }
+
   async function acknowledgeAssistantCalendarUnresolved() {
     const reconciliation = assistantCalendarReconciliationRef.current;
     if (
@@ -6276,6 +6397,19 @@ function App() {
       >
         {persistenceAnnouncement}
       </div>
+      {voiceProposalNotice ? (
+        <aside aria-atomic="true" aria-label="Voice proposal ready for review" role="status">
+          <strong>{voiceProposalNotice.title}</strong>
+          <p>{voiceProposalNotice.guidance}</p>
+          <p>
+            <span>Proposal text: </span>
+            <output>{voiceProposalNotice.proposal.text}</output>
+          </p>
+          <button onClick={() => setVoiceProposalNotice(null)} type="button">
+            Dismiss voice proposal
+          </button>
+        </aside>
+      ) : null}
       {persistenceIssue ? (
         <aside
           aria-busy={isPersistenceRetrying}
@@ -6662,11 +6796,16 @@ function App() {
         ) : selectedWorkspaceTab?.view.kind === "settings" ? (
           <section
             aria-labelledby={getWorkspaceTabId(selectedWorkspaceTab.id)}
-            className={selectedWorkspaceTab.view.section === "models-ai" ? "workspace-models-ai-panel" : "workspace-system-placeholder"}
+            className={selectedWorkspaceTab.view.section === "models-ai" || selectedWorkspaceTab.view.section === "voice" ? "workspace-models-ai-panel" : "workspace-system-placeholder"}
             id={WORKSPACE_PAGE_PANEL_ID}
             role="tabpanel"
           >
-            {selectedWorkspaceTab.view.section === "models-ai" ? <AIProvidersSettings
+            {selectedWorkspaceTab.view.section === "models-ai" ? <>
+              <nav aria-label="Settings sections" className="workspace-settings-navigation">
+                <span>Voice input and shortcuts</span>
+                <button onClick={openVoiceSettings} type="button">Open Voice settings</button>
+              </nav>
+              <AIProvidersSettings
               connectionStates={providerConnectionStates}
               defaultChatModelId={defaultChatModelId}
               defaultEmbeddingModelId={defaultEmbeddingModelId}
@@ -6695,7 +6834,8 @@ function App() {
               onSetDefaultEmbeddingModel={setDefaultEmbeddingModelId}
               onTestConnection={(providerId) => void testProviderConnection(providerId)}
               onUpdateProvider={updateAIProvider}
-            /> : <>
+              />
+            </> : selectedWorkspaceTab.view.section === "voice" ? <VoiceSettings /> : <>
               <p className="workspace-system-eyebrow">Workspace view</p>
               <h1>{selectedWorkspaceTab.title}</h1>
               <p>{selectedWorkspaceTab.view.section

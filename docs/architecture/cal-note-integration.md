@@ -298,9 +298,9 @@ Each step has a rollback boundary: the previous commit remains buildable, note J
 | 1 — Modular shell and native surface routing | **Complete** | Surface resolver and main/browser fallback, five HTML entries, typed notes client, workspace union and legacy restoration, extracted provider/assistant/settings boundaries, modular Rust state/error/event/mutation/notes/private-file/security modules, restrictive CSP, four exact-label capabilities, caller-label and bounded persistence tests; no calendar behavior. See the Phase 1 record below. |
 | 2 — Calendar kernel | **Accepted** | SQLite/migrations, bounded domain/repository APIs, recurrence/occurrences, revisions, reminders, search/paging, ICS, verified backup/restore, authorization, typed client, 160 passing Rust tests, and the supported default Playwright run are complete. Commit `b3ad26584731e49bf5b564fe265338a789182752` deliberately configures one worker for the suite's shared Vite server and host/browser resources; the unchanged default command passed 39/39 three consecutive times (117/117 aggregate). See the Phase 2 record below. |
 | 3 — React Agenda and Month | **Accepted** | Stable Agenda system tab with Agenda/Month, bounded native queries and rendering, accessible controlled editor, recurrence/reminder CRUD, responsive themed UI, and preserved Note workspace behavior. Final frontend E2E passed 65/65; see the Phase 3 record below. |
-| 4 — Unified assistant and calendar tools | Not started | Provider-neutral runtime, one registry, bounded grounding, expiring reviewed create-event actions, authorized windows, retained Note actions. |
-| 5 — App-managed models and credentials | Not started | Native Ollama management, unified model/provider state, progress/cancel/remove, native credential abstraction/migration, nonblocking startup. |
-| 6 — Native voice and quick command | Not started | Native device/capture/transcription, private files, cancellation/session race handling, global shortcuts, lightweight overlay, typed input fallback. |
+| 4 — Unified assistant and calendar tools | **Accepted** | Provider-neutral Note-owned runtime and registry, bounded Notes/Calendar grounding, expiring reviewed calendar creates, authorized native execution, and retained Note actions. Commit `a0cb007`. |
+| 5 — App-managed models and credentials | **Accepted** | Native Ollama/provider state and bounded networking, app-owned credential abstraction/migration, progress/cancel/remove, typed settings, and nonblocking startup. Commit `41c808a`. |
+| 6 — Native voice and quick command | **Accepted** | Native bounded CPAL capture and Whisper transcription, private staging, generation/session race handling, restricted quick-command lifecycle, global hold-to-talk, main-only Voice settings, and explicit typed/review fallback. |
 | 7 — Widget and tray | Not started | Restricted React widget, deterministic agenda, independent main/window lifecycle, stable floating mode, honest desktop fallback, bounded refresh, tray recovery. |
 | 8 — Cal import and unified backups | Not started | Read-only source validation/preview, duplicate policy, recovery backup, transactional import and count verification, versioned secret-free unified backup/restore. |
 | 9 — Release hardening | Not started | Instrumentation, measured budgets, accessibility/security review, synthetic performance data, supported-platform builds/tests and documented limitations; Cal unchanged. |
@@ -665,3 +665,19 @@ Two intermediate full-suite runs passed 64/65 but failed differently at the exis
 - `frontend/tests/e2e/native-workspace.spec.ts`
 - `frontend/tests/e2e/workspace-state.spec.ts`
 - Ephemeral direct-inspection evidence: `C:\tmp\phase3-calendar-qa\` (not committed)
+
+## Phase 4 implementation record
+
+Phase 4 is **accepted complete** in commit `a0cb007`. Note owns one tool registry and provider-neutral assistant runtime. Bounded notes and live calendar reads run through typed native clients; calendar creation is a reviewed, expiring native confirmation rather than a model-controlled mutation. The assistant remains window-authorized and keeps llama-harness as the optional tool-capable adapter.
+
+## Phase 5 implementation record
+
+Phase 5 is **accepted complete** in commit `41c808a`. Models & AI is a native-owned provider/model center: Ollama setup is bounded and cancellable, direct native providers are chat-only, and llama-harness remains the tool-capable option. Credential drafts are provider-bound and write-only; native storage binds credentials to the persisted provider kind, normalized endpoint, and data-sharing classification. Renderer startup is local-state-only, legacy secret migration is failure-safe, and model-progress subscriptions are scoped to the settings surface.
+
+## Phase 6 implementation record
+
+Phase 6 is **accepted complete**. Native Rust owns microphone enumeration/selection, bounded CPAL capture, private WAV staging, fixed-argv Whisper transcription, managed model verification/install/cancel/remove, hold-to-talk registration, session/generation state, and targeted events. Capture starts are idempotent, deadline and Stop race through one terminal claim, stale results are discarded, and completed sessions clear for repeat recording.
+
+Quick Command remains a restricted auxiliary surface. It handshakes after mounting listeners, receives a bounded current-generation replay, and may submit only a sanitized proposal to `main`; it cannot access assistant credentials, models, notes, calendar mutation, or storage directly. Main handles the proposal as explicit assistant prefill or review-only dictation/quick-capture text. The main-only Voice settings surface exposes opaque device selection, model lifecycle/progress/cancel, and global shortcut retry/conflict state.
+
+Final Phase 6 evidence: production build passed; focused Phase 4 assistant E2E passed 83/83, Phase 5 Models E2E 23/23, native workspace 9/9, and Rust 233/233. The complete 180-case frontend matrix had 174 passing; the six failures are the known date-dependent calendar fixture expectations for July 2026 and are unrelated to voice. Cal remained unchanged at its recorded reference SHA and raw porcelain digest.

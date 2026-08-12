@@ -56,6 +56,7 @@ async function installModelsAIMock(page: Page, options: MockOptions = {}) {
     };
     const calls: Array<{ command: string; body?: unknown }> = [];
     const callbacks = new Map<number, (event: unknown) => void>();
+    const listenerEvents = new Map<number, string>();
     let callbackId = 0;
     let migrationAttempts = 0;
     let progressDeliveries = 0;
@@ -63,10 +64,14 @@ async function installModelsAIMock(page: Page, options: MockOptions = {}) {
     window.modelsAIMock = {
       calls,
       writes: [],
-      activeProgressCallbacks: () => callbacks.size,
-      emitProgress: (payload) => callbacks.forEach((callback) => {
+      activeProgressCallbacks: () => [...listenerEvents].filter(([id, event]) =>
+        event === "note://model-progress" && callbacks.has(id)).length,
+      emitProgress: (payload) => listenerEvents.forEach((event, id) => {
+        if (event !== "note://model-progress") return;
+        const callback = callbacks.get(id);
+        if (!callback) return;
         progressDeliveries += 1;
-        callback({ event: "note://model-progress", id: 1, payload });
+        callback({ event: "note://model-progress", id, payload });
       }),
       progressDeliveries: () => progressDeliveries,
       resolveProgressListen: () => resolveProgressListen?.(),
@@ -121,10 +126,17 @@ async function installModelsAIMock(page: Page, options: MockOptions = {}) {
         if (command === "models_ai_ollama_cancel_pull") return { service: "ready", availableModels: [], managedModelInstalled: false, managedModelOwnedByNote: false, canRemove: false, pullInProgress: false };
         if (command === "plugin:event|listen") {
           const listenerId = body?.handler as number;
-          if (mockOptions.modelProgressListenReject) {
+          const event = body?.event;
+          if (typeof listenerId !== "number" || typeof event !== "string") {
+            throw new Error("Invalid native listener registration.");
+          }
+          listenerEvents.set(listenerId, event);
+          if (event === "note://model-progress" && mockOptions.modelProgressListenReject) {
+            callbacks.delete(listenerId);
+            listenerEvents.delete(listenerId);
             throw new Error("Model progress listener unavailable.");
           }
-          if (mockOptions.modelProgressListenDelay) {
+          if (event === "note://model-progress" && mockOptions.modelProgressListenDelay) {
             return new Promise((resolve) => {
               resolveProgressListen = () => resolve(listenerId);
             });
@@ -132,7 +144,15 @@ async function installModelsAIMock(page: Page, options: MockOptions = {}) {
           return listenerId;
         }
         if (command === "plugin:event|unlisten") {
-          if (mockOptions.modelProgressUnlistenReject) throw new Error("Model progress unlisten unavailable.");
+          const event = body?.event;
+          const listenerId = body?.eventId;
+          if (typeof listenerId === "number") {
+            callbacks.delete(listenerId);
+            listenerEvents.delete(listenerId);
+          }
+          if (event === "note://model-progress" && mockOptions.modelProgressUnlistenReject) {
+            throw new Error("Model progress unlisten unavailable.");
+          }
           return undefined;
         }
         if (command === "load_app_data") return { blocks: [], folders: [], pages: [], sessionState: { workspaceTabs: [], selectedWorkspaceTabId: "" } };
@@ -142,12 +162,23 @@ async function installModelsAIMock(page: Page, options: MockOptions = {}) {
       },
       metadata: { currentWindow: { label: "main" } },
     };
-    window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: (_event: string, id: number) => callbacks.delete(id) };
+    window.__TAURI_EVENT_PLUGIN_INTERNALS__ = {
+      unregisterListener: (_event: string, id: number) => {
+        callbacks.delete(id);
+        listenerEvents.delete(id);
+      },
+    };
   }, options);
 }
 
 async function startupCommands(page: Page) {
   return page.evaluate(() => window.modelsAIMock.calls.map((call) => call.command));
+}
+
+async function modelProgressEventCalls(page: Page, command: string) {
+  return page.evaluate((nativeCommand) => window.modelsAIMock.calls.filter((call) =>
+    call.command === nativeCommand &&
+    (call.body as { event?: unknown } | undefined)?.event === "note://model-progress"), command);
 }
 
 test("assistant probes Ollama without subscribing to progress, while Models & AI subscribes", async ({ page }) => {
@@ -164,11 +195,11 @@ test("assistant probes Ollama without subscribing to progress, while Models & AI
 
   await page.getByRole("button", { name: "AI assistant" }).click();
   await expect.poll(() => startupCommands(page)).toContain("models_ai_ollama_status");
-  expect(await startupCommands(page)).not.toContain("plugin:event|listen");
+  expect(await modelProgressEventCalls(page, "plugin:event|listen")).toHaveLength(0);
 
   await page.getByRole("button", { name: "Open Models & AI settings" }).click();
   await expect(page.getByRole("heading", { name: "Models & AI" })).toBeVisible();
-  await expect.poll(() => startupCommands(page)).toContain("plugin:event|listen");
+  await expect.poll(async () => (await modelProgressEventCalls(page, "plugin:event|listen")).length).toBe(1);
   await expect(page.locator(".workspace-models-ai-panel")).toHaveJSProperty("scrollWidth", await page.locator(".workspace-models-ai-panel").evaluate((node) => node.clientWidth));
 });
 
@@ -177,18 +208,18 @@ test("Models & AI owns one progress listener across close and reopen", async ({ 
   await page.goto("/");
   await page.getByRole("button", { name: "Open Models & AI settings" }).click();
   await expect.poll(() => page.evaluate(() => window.modelsAIMock.activeProgressCallbacks())).toBe(1);
-  await expect.poll(async () => (await startupCommands(page)).filter((command) => command === "plugin:event|listen")).toHaveLength(1);
-  const registration = await page.evaluate(() => window.modelsAIMock.calls.find((call) => call.command === "plugin:event|listen"));
+  await expect.poll(async () => (await modelProgressEventCalls(page, "plugin:event|listen")).length).toBe(1);
+  const [registration] = await modelProgressEventCalls(page, "plugin:event|listen");
   expect(registration?.body).toMatchObject({ event: "note://model-progress", target: { kind: "Any" } });
   expect(typeof (registration?.body as { handler?: unknown })?.handler).toBe("number");
 
   await page.getByRole("button", { name: "Create root page" }).click();
   await expect.poll(() => page.evaluate(() => window.modelsAIMock.activeProgressCallbacks())).toBe(0);
-  await expect.poll(async () => (await startupCommands(page)).filter((command) => command === "plugin:event|unlisten")).toHaveLength(1);
+  await expect.poll(async () => (await modelProgressEventCalls(page, "plugin:event|unlisten")).length).toBe(1);
 
   await page.getByRole("button", { name: "Open Models & AI settings" }).click();
   await expect.poll(() => page.evaluate(() => window.modelsAIMock.activeProgressCallbacks())).toBe(1);
-  await expect.poll(async () => (await startupCommands(page)).filter((command) => command === "plugin:event|listen")).toHaveLength(2);
+  await expect.poll(async () => (await modelProgressEventCalls(page, "plugin:event|listen")).length).toBe(2);
   await page.evaluate(() => window.modelsAIMock.emitProgress({ operationId: "reopen-pull", modelId: "ollama-local:lfm2.5-thinking:1.2b-q4_K_M", state: "downloading", completedBytes: 100, totalBytes: 1000 }));
   await expect(page.getByRole("button", { name: "Cancel download" })).toBeVisible();
   expect(await page.evaluate(() => window.modelsAIMock.progressDeliveries())).toBe(1);
@@ -214,7 +245,7 @@ test("progress listener cleanup consumes rejecting unlisten", async ({ page }) =
   await expect.poll(() => page.evaluate(() => window.modelsAIMock.activeProgressCallbacks())).toBe(1);
   await page.getByRole("button", { name: "Create root page" }).click();
   await expect.poll(() => page.evaluate(() => window.modelsAIMock.activeProgressCallbacks())).toBe(0);
-  await expect.poll(() => startupCommands(page)).toContain("plugin:event|unlisten");
+  await expect.poll(async () => (await modelProgressEventCalls(page, "plugin:event|unlisten")).length).toBe(1);
   expect(pageErrors).toEqual([]);
 });
 
@@ -228,7 +259,7 @@ test("late progress listener cleanup consumes rejecting unlisten", async ({ page
   await page.getByRole("button", { name: "Create root page" }).click();
   await page.evaluate(() => window.modelsAIMock.resolveProgressListen());
   await expect.poll(() => page.evaluate(() => window.modelsAIMock.activeProgressCallbacks())).toBe(0);
-  await expect.poll(() => startupCommands(page)).toContain("plugin:event|unlisten");
+  await expect.poll(async () => (await modelProgressEventCalls(page, "plugin:event|unlisten")).length).toBe(1);
   expect(pageErrors).toEqual([]);
 });
 
@@ -509,7 +540,7 @@ test("model progress exposes a cancellable live installation state", async ({ pa
   await installModelsAIMock(page);
   await page.goto("/");
   await page.getByRole("button", { name: "Open Models & AI settings" }).click();
-  await expect.poll(() => startupCommands(page)).toContain("plugin:event|listen");
+  await expect.poll(async () => (await modelProgressEventCalls(page, "plugin:event|listen")).length).toBe(1);
   await page.evaluate(() => window.modelsAIMock.emitProgress({ operationId: "pull-1", modelId: "ollama-local:lfm2.5-thinking:1.2b-q4_K_M", state: "downloading", completedBytes: 100, totalBytes: 1000 }));
   await expect(page.getByRole("button", { name: "Cancel download" })).toBeVisible();
   await page.getByRole("button", { name: "Cancel download" }).click();

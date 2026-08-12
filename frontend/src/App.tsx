@@ -129,6 +129,7 @@ import {
   assistantCalendarClient,
   isAssistantNativeAvailable,
 } from "./native/assistantClient";
+import { listenForMainCalendarNavigation } from "./native/mainNavigationClient";
 import { modelsAIClient } from "./native/modelsAIClient";
 import {
   routeVoiceProposal,
@@ -1730,6 +1731,26 @@ function App() {
         title: "Quick-capture text ready for review",
       });
     })
+      .then((unlisten) => {
+        if (disposed) {
+          void unlisten();
+        } else {
+          stopListening = unlisten;
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      disposed = true;
+      void stopListening?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    let stopListening: (() => void | Promise<void>) | null = null;
+
+    void listenForMainCalendarNavigation(openAgendaWorkspace)
       .then((unlisten) => {
         if (disposed) {
           void unlisten();

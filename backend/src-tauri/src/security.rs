@@ -106,6 +106,14 @@ mod tests {
                     "allow-voice-model-install",
                     "allow-voice-model-cancel-install",
                     "allow-voice-model-remove",
+                    "allow-widget-status-get",
+                    "allow-widget-show",
+                    "allow-widget-hide",
+                    "allow-widget-toggle",
+                    "allow-widget-set-locked",
+                    "allow-widget-set-size-preset",
+                    "allow-widget-set-requested-mode",
+                    "allow-widget-open-calendar",
                     "allow-load-app-data",
                     "allow-save-app-data",
                     "core:event:allow-listen",
@@ -118,6 +126,13 @@ mod tests {
                 WIDGET_CAPABILITY,
                 [
                     "allow-calendar-widget-agenda",
+                    "allow-widget-status-get",
+                    "allow-widget-show",
+                    "allow-widget-hide",
+                    "allow-widget-toggle",
+                    "allow-widget-set-locked",
+                    "allow-widget-set-size-preset",
+                    "allow-widget-open-calendar",
                     "core:event:allow-listen",
                     "core:event:allow-unlisten",
                 ]
@@ -172,15 +187,31 @@ mod tests {
     }
 
     #[test]
-    fn auxiliary_windows_are_non_created_and_use_separate_html_entries() {
+    fn requested_mode_permission_is_main_only() {
+        let permissions = |source: &str| {
+            let capability: Value = serde_json::from_str(source).unwrap();
+            capability["permissions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|permission| permission.as_str().unwrap().to_owned())
+                .collect::<BTreeSet<_>>()
+        };
+
+        assert!(permissions(MAIN_CAPABILITY).contains("allow-widget-set-requested-mode"));
+        assert!(!permissions(WIDGET_CAPABILITY).contains("allow-widget-set-requested-mode"));
+    }
+
+    #[test]
+    fn widget_is_dynamic_while_other_auxiliary_windows_remain_non_created() {
         let config: Value = serde_json::from_str(CONFIG).unwrap();
         let windows = config["app"]["windows"].as_array().unwrap();
-        assert_eq!(windows.len(), 4);
+        assert_eq!(windows.len(), 3);
         assert_eq!(windows[0]["label"], "main");
         assert_eq!(windows[0]["url"], "index.html");
 
+        assert!(!windows.iter().any(|window| window["label"] == "widget"));
         for (label, url) in [
-            ("widget", "widget.html"),
             ("quick-command", "quick-command.html"),
             ("event-editor", "event-editor.html"),
         ] {

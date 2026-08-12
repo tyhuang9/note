@@ -7,6 +7,12 @@ import {
   type CalendarReadiness,
   type CalendarSettings,
 } from "../../native/calendarClient";
+import {
+  WidgetSettingsClientError,
+  widgetSettingsClient,
+  type WidgetPlacementStatus,
+  type WidgetRequestedMode,
+} from "../../native/widgetSettingsClient";
 import { AGENDA_DAYS, addDays, groupByDate, isoDate, monthGridRange, occurrenceKey, rangeForDates, startOfMonth, timeLabel } from "./calendarUtils";
 import EventEditor, { type EditorState } from "./EventEditor";
 import "./calendar.css";
@@ -248,13 +254,67 @@ export default function CalendarWorkspace({ activeView, onViewChange }: { active
       <button className="calendar-button" onClick={() => { const today = isoDate(); setAnchor(today); setMonth(startOfMonth(today)); setSelectedDate(today); }} type="button">Today</button>
       {activeView === "month" && <><button aria-label="Previous month" className="calendar-icon-button" onClick={() => { const next = startOfMonth(addDays(month, -1)); setMonth(next); setSelectedDate(next); }} type="button">‹</button><button aria-label="Next month" className="calendar-icon-button" onClick={() => { const next = startOfMonth(addDays(month, 32)); setMonth(next); setSelectedDate(next); }} type="button">›</button></>}
       <label className="calendar-search"><span className="visually-hidden">Search events</span><input maxLength={200} onChange={(event) => setSearch(event.currentTarget.value)} placeholder="Search calendar" value={search} /></label>
-      <details className="calendar-settings"><summary>Settings</summary><label>Week starts <select value={settings.weekStartsOn} onChange={(event) => void saveSettings({ weekStartsOn: event.currentTarget.value as CalendarSettings["weekStartsOn"] })}><option value="monday">Monday</option><option value="sunday">Sunday</option></select></label><label>Time format <select value={settings.timeFormat} onChange={(event) => void saveSettings({ timeFormat: event.currentTarget.value as CalendarSettings["timeFormat"] })}><option value="system">System</option><option value="12h">12-hour</option><option value="24h">24-hour</option></select></label></details>
+      <details className="calendar-settings"><summary>Settings</summary><label>Week starts <select value={settings.weekStartsOn} onChange={(event) => void saveSettings({ weekStartsOn: event.currentTarget.value as CalendarSettings["weekStartsOn"] })}><option value="monday">Monday</option><option value="sunday">Sunday</option></select></label><label>Time format <select value={settings.timeFormat} onChange={(event) => void saveSettings({ timeFormat: event.currentTarget.value as CalendarSettings["timeFormat"] })}><option value="system">System</option><option value="12h">12-hour</option><option value="24h">24-hour</option></select></label><WidgetPlacementControl /></details>
     </div>
     {error && <div className="calendar-error" role="alert">{error.message}{["agenda", "month", "search"].includes(error.source) && <button onClick={retryError} type="button">Retry</button>}</div>}
     {search.trim() ? <SearchResults items={searchItems} onSelect={(occurrence) => setEditor({ occurrence, date: selectedDate, scope: occurrence.recurrenceRule ? "occurrence" : "series" })} settings={settings} timeZone={timeZone} /> : activeView === "agenda" ? <Agenda days={agenda.days} busy={agendaBusy} exhausted={agenda.exhausted} onEarlier={() => void loadAgenda("before")} onLater={() => void loadAgenda("after")} onSelect={(occurrence, date) => setEditor({ occurrence, date, scope: occurrence.recurrenceRule ? "occurrence" : "series" })} settings={settings} timeZone={timeZone} /> : <MonthGrid month={month} groups={monthGroups} selectedDate={selectedDate} onSelectDate={setSelectedDate} onSelect={setEditor} settings={settings} />}
     {activeView === "month" && <aside className="calendar-day-detail" aria-label={`Events on ${selectedDate}`}><h2>{new Intl.DateTimeFormat(undefined, { weekday: "long", month: "long", day: "numeric" }).format(new Date(`${selectedDate}T12:00:00`))}</h2><EventList date={selectedDate} items={selectedItems} settings={settings} timeZone={timeZone} onSelect={(occurrence) => setEditor({ occurrence, date: selectedDate, scope: occurrence.recurrenceRule ? "occurrence" : "series" })} /></aside>}
     {editor && <EventEditor initial={editor} settings={settings} displayTimeZone={timeZone} onClose={() => setEditor(null)} onChanged={refresh} />}
   </main>;
+}
+
+function WidgetPlacementControl() {
+  const [status, setStatus] = useState<WidgetPlacementStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const loadGeneration = useRef(0);
+
+  const loadStatus = useCallback(async () => {
+    const generation = ++loadGeneration.current;
+    setLoading(true);
+    setError(null);
+    try {
+      const nextStatus = await widgetSettingsClient.getStatus();
+      if (generation !== loadGeneration.current) return;
+      setStatus(nextStatus);
+    } catch (cause) {
+      if (generation !== loadGeneration.current) return;
+      setStatus(null);
+      setError(widgetPlacementMessage(cause));
+    } finally {
+      if (generation === loadGeneration.current) setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadStatus();
+    return () => { loadGeneration.current += 1; };
+  }, [loadStatus]);
+
+  async function setRequestedMode(mode: WidgetRequestedMode) {
+    if (!status || pending) return;
+
+    setPending(true);
+    setError(null);
+    try {
+      setStatus(await widgetSettingsClient.setRequestedMode(mode));
+    } catch (cause) {
+      setError(widgetPlacementMessage(cause));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  const feedback = loading
+    ? "Loading widget placement…"
+    : error
+      ? error
+      : status?.requestedMode === "desktop"
+        ? "Desktop placement is unavailable. The widget remains a Floating window."
+        : "Floating window placement is active.";
+
+  return <><label>Widget placement <select aria-describedby="widget-placement-feedback" disabled={!status || loading || pending} onChange={(event) => void setRequestedMode(event.currentTarget.value as WidgetRequestedMode)} value={status?.requestedMode ?? "floating"}><option value="floating">Floating</option><option value="desktop">Desktop</option></select></label><p id="widget-placement-feedback" role={error ? "alert" : "status"}>{pending ? "Updating widget placement…" : feedback}</p>{error && <button className="calendar-button" disabled={loading || pending} onClick={() => void loadStatus()} type="button">Retry widget placement</button>}</>;
 }
 
 function Readiness({ readiness, error, onRetry }: { readiness: CalendarReadiness; error: WorkspaceError | null; onRetry: () => Promise<void> }) {
@@ -343,3 +403,4 @@ function MonthGrid({ month, groups, selectedDate, onSelectDate, onSelect, settin
 function dayHeading(date: string) { return new Intl.DateTimeFormat(undefined, { weekday: "long", month: "short", day: "numeric" }).format(new Date(`${date}T12:00:00`)); }
 function dedupe(items: CalendarOccurrence[]) { const result = new Map<string, CalendarOccurrence>(); items.forEach((item) => result.set(occurrenceKey(item), item)); return [...result.values()]; }
 function messageFor(cause: unknown) { return cause instanceof CalendarClientError ? cause.message : "Calendar request failed. Please try again."; }
+function widgetPlacementMessage(cause: unknown) { return cause instanceof WidgetSettingsClientError ? cause.message : "Widget placement controls are unavailable."; }

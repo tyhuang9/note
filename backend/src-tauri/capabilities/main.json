@@ -56,6 +56,14 @@
     "allow-voice-model-status",
     "allow-voice-model-install",
     "allow-voice-model-cancel-install",
-    "allow-voice-model-remove"
+    "allow-voice-model-remove",
+    "allow-widget-status-get",
+    "allow-widget-show",
+    "allow-widget-hide",
+    "allow-widget-toggle",
+    "allow-widget-set-locked",
+    "allow-widget-set-size-preset",
+    "allow-widget-set-requested-mode",
+    "allow-widget-open-calendar"
   ]
 }

@@ -10,7 +10,6 @@ test("browser navigation defaults to the main note surface", async ({ page }) =>
 });
 
 for (const surface of [
-  { height: 520, heading: "Widget", id: "widget", path: "/widget.html", width: 360 },
   { height: 720, heading: "Event editor", id: "event-editor", path: "/event-editor.html", width: 560 },
 ] as const) {
   test(`${surface.heading} renders an isolated accessible placeholder`, async ({

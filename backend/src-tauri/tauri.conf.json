@@ -23,17 +23,6 @@
         "resizable": true
       },
       {
-        "label": "widget",
-        "url": "widget.html",
-        "title": "Note Widget",
-        "create": false,
-        "visible": false,
-        "width": 360,
-        "height": 520,
-        "decorations": false,
-        "resizable": false
-      },
-      {
         "label": "quick-command",
         "url": "quick-command.html",
         "title": "Note Quick Command",

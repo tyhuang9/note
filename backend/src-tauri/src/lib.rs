@@ -10,6 +10,7 @@ mod notes;
 mod private_file;
 mod security;
 mod voice;
+mod widget;
 
 use app_state::AppState;
 use tauri::Manager;
@@ -58,6 +59,7 @@ pub fn run() {
             let state = AppState::new(app_data_dir);
             state.start_calendar_initialization(Some(app.handle().clone()));
             app.manage(state);
+            widget::initialize(app)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -119,7 +121,15 @@ pub fn run() {
             voice::voice_model_status,
             voice::voice_model_install,
             voice::voice_model_cancel_install,
-            voice::voice_model_remove
+            voice::voice_model_remove,
+            widget::widget_status_get,
+            widget::widget_show,
+            widget::widget_hide,
+            widget::widget_toggle,
+            widget::widget_set_locked,
+            widget::widget_set_size_preset,
+            widget::widget_set_requested_mode,
+            widget::widget_open_calendar
         ])
         .build(tauri::generate_context!())
         .expect("error while building Note")

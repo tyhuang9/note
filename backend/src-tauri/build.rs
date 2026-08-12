@@ -62,6 +62,14 @@ fn main() {
         "voice_model_install",
         "voice_model_cancel_install",
         "voice_model_remove",
+        "widget_status_get",
+        "widget_show",
+        "widget_hide",
+        "widget_toggle",
+        "widget_set_locked",
+        "widget_set_size_preset",
+        "widget_set_requested_mode",
+        "widget_open_calendar",
     ]);
 
     #[cfg(target_os = "windows")]

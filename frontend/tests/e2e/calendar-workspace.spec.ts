@@ -258,6 +258,57 @@ test("a delayed native listener is unregistered after the calendar unmounts", as
   await expect.poll(() => page.evaluate(() => window.calendarMock.unlistenCount)).toBeGreaterThan(0);
 });
 
+test("main opens Agenda only for the exact native calendar navigation payload", async ({ page }) => {
+  await installCalendarMock(page);
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Agenda" })).toBeVisible();
+  await page.getByRole("button", { name: "Close Agenda" }).click();
+  await expect(page.getByRole("heading", { name: "Agenda" })).toHaveCount(0);
+
+  await page.evaluate(() => {
+    window.calendarMock.emit("note://navigate", { destination: "calendar", extra: true });
+    window.calendarMock.emit("note://navigate", { destination: "notes" });
+    window.calendarMock.emit("note://navigate", null);
+  });
+  await expect(page.getByRole("heading", { name: "Agenda" })).toHaveCount(0);
+
+  await page.evaluate(() => window.calendarMock.emit("note://navigate", { destination: "calendar" }));
+  await expect(page.getByRole("heading", { name: "Agenda" })).toBeVisible();
+});
+
+test("main requests widget placement with the bounded native mode envelope", async ({ page }) => {
+  await installCalendarMock(page);
+  await page.goto("/");
+  await page.getByText("Settings", { exact: true }).click();
+
+  const placement = page.getByLabel("Widget placement");
+  await expect(placement).toHaveValue("floating");
+  await placement.selectOption("desktop");
+  await expect(page.getByText("Desktop placement is unavailable. The widget remains a Floating window.")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.calendarMock.calls
+    .filter((call) => call.command === "widget_set_requested_mode")
+    .at(-1)?.body,
+  )).toEqual({ request: { mode: "desktop" } });
+});
+
+test("widget placement status can be retried after a transient native failure", async ({ page }) => {
+  await installCalendarMock(page, { widgetStatusFailures: 2 });
+  await page.goto("/");
+  await page.getByText("Settings", { exact: true }).click();
+
+  const placement = page.getByLabel("Widget placement");
+  await expect(placement).toBeDisabled();
+  await expect(page.getByRole("alert")).toHaveText("Widget placement controls are unavailable.");
+  await page.getByRole("button", { name: "Retry widget placement" }).click();
+  await expect(placement).toBeEnabled();
+  await expect(placement).toHaveValue("floating");
+  await placement.selectOption("desktop");
+  await expect.poll(() => page.evaluate(() => window.calendarMock.calls
+    .filter((call) => call.command === "widget_set_requested_mode")
+    .at(-1)?.body,
+  )).toEqual({ request: { mode: "desktop" } });
+});
+
 test("agenda exhaustion disables continuation without issuing another request", async ({ page }) => {
   await installCalendarMock(page, { exhausted: true });
   await page.goto("/");
@@ -349,10 +400,11 @@ test("calendar defines light and dark theme tokens locally", async ({ page }) =>
   await expect(workspace).toHaveCSS("background-color", "rgb(22, 22, 22)");
 });
 
-type MockOptions = { slowAgenda?: boolean; slowMonth?: boolean; pagination?: boolean; overnight?: boolean; manyEvents?: boolean; projectedSeries?: boolean; customRule?: boolean; untilRule?: boolean; conflictOnce?: boolean; settingsFail?: boolean; settingsOutOfOrder?: boolean; delayedListener?: boolean; defaultDuration?: number; exhausted?: boolean; unavailable?: boolean; retryFail?: boolean };
+type MockOptions = { slowAgenda?: boolean; slowMonth?: boolean; pagination?: boolean; overnight?: boolean; manyEvents?: boolean; projectedSeries?: boolean; customRule?: boolean; untilRule?: boolean; conflictOnce?: boolean; settingsFail?: boolean; settingsOutOfOrder?: boolean; delayedListener?: boolean; defaultDuration?: number; exhausted?: boolean; unavailable?: boolean; retryFail?: boolean; widgetStatusFailures?: number };
 
 async function installCalendarMock(page: Page, options: MockOptions = {}) {
   await page.addInitScript((mockOptions) => {
+    type Callback = (event: { payload: unknown }) => void;
     const id = "11111111-1111-4111-8111-111111111111";
     const calendarId = "22222222-2222-4222-8222-222222222222";
     const rule = mockOptions.customRule ? "FREQ=WEEKLY;BYDAY=TU,TH;COUNT=8" : mockOptions.untilRule ? "FREQ=WEEKLY;BYDAY=TU;UNTIL=20260804T130000Z" : "FREQ=WEEKLY;BYDAY=TU;COUNT=8";
@@ -373,18 +425,31 @@ async function installCalendarMock(page: Page, options: MockOptions = {}) {
     };
     const data = { blocks: [], folders: [], pages: [], sessionState: { selectedWorkspaceTabId: "agenda", workspaceTabs: [{ id: "agenda", title: "Agenda", view: { kind: "agenda", view: "agenda" } }] } };
     const calls: Array<{ command: string; body?: Record<string, unknown> }> = [];
+    const widgetStatus = {
+      requestedMode: "floating",
+      effectiveMode: "floating",
+      visibilityRequested: false,
+      visible: false,
+      locked: false,
+      sizePreset: "medium",
+      attached: false,
+    };
+    const callbacks = new Map<number, Callback>();
+    const listeners = new Map<string, number>();
+    let callbackId = 0;
     let releaseAgenda: (() => void) | undefined;
     let agendaReleased = !mockOptions.slowAgenda;
     let releaseMonth: (() => void) | undefined;
     let monthReleased = !mockOptions.slowMonth;
     let conflicted = false;
     let settingsFailed = false;
+    let widgetStatusFailures = 0;
     let settingsCall = 0;
     let releaseSettings: (() => void) | undefined;
     const addDate = (value: string, days: number) => { const date = new Date(`${value}T12:00:00Z`); date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10); };
     const occurrenceForDate = (date: string, index: number) => ({ ...occurrence, occurrenceKey: `${date}:${index}`, title: index ? `Planning ${index}` : occurrence.title, time: { temporalKind: "allDay", startDate: date, endDateExclusive: addDate(date, 1) } });
     let releaseListener: (() => void) | undefined;
-    window.calendarMock = { calls, releaseAgenda: () => { agendaReleased = true; releaseAgenda?.(); }, releaseMonth: () => { monthReleased = true; releaseMonth?.(); }, releaseListener: () => releaseListener?.(), releaseSettings: () => releaseSettings?.(), unlistenCount: 0 };
+    window.calendarMock = { calls, emit: (event: string, payload: unknown) => callbacks.get(listeners.get(event) ?? -1)?.({ payload }), releaseAgenda: () => { agendaReleased = true; releaseAgenda?.(); }, releaseMonth: () => { monthReleased = true; releaseMonth?.(); }, releaseListener: () => releaseListener?.(), releaseSettings: () => releaseSettings?.(), unlistenCount: 0 };
     window.isTauri = true;
     const modelsAIState = {
       schemaVersion: 1, revision: 1, legacyMigrationCompleted: true,
@@ -396,7 +461,11 @@ async function installCalendarMock(page: Page, options: MockOptions = {}) {
       ], models: [],
     };
     window.__TAURI_INTERNALS__ = {
-      transformCallback: () => 1,
+      transformCallback: (callback: Callback) => {
+        const id = ++callbackId;
+        callbacks.set(id, callback);
+        return id;
+      },
       invoke: async (command: string, body?: Record<string, unknown>) => {
         calls.push({ command, body });
         const request = body?.request as Record<string, unknown> | undefined;
@@ -405,6 +474,29 @@ async function installCalendarMock(page: Page, options: MockOptions = {}) {
         if (command === "save_app_data") return undefined;
         if (command === "calendar_readiness_get") return mockOptions.unavailable ? { state: "unavailable", initializationDurationMs: 1 } : { state: "ready", initializationDurationMs: 1 };
         if (command === "calendar_retry_initialization") { if (mockOptions.retryFail) throw { code: "storage_unavailable", message: "Retry failed." }; return { state: "ready", initializationDurationMs: 1 }; }
+        if (command === "widget_status_get") {
+          if (widgetStatusFailures < (mockOptions.widgetStatusFailures ?? 0)) {
+            widgetStatusFailures += 1;
+            throw { code: "widget_unavailable", message: "Native widget status failed." };
+          }
+          return widgetStatus;
+        }
+        if (command === "widget_set_requested_mode") {
+          const mode = request?.mode;
+          if (
+            !body ||
+            Object.keys(body).length !== 1 ||
+            !request ||
+            Object.keys(request).length !== 1 ||
+            (mode !== "floating" && mode !== "desktop")
+          ) {
+            throw new Error("widget_set_requested_mode requires { request: { mode } }");
+          }
+          widgetStatus.requestedMode = mode;
+          return mode === "desktop"
+            ? { ...widgetStatus, fallbackReason: "desktop_attachment_unavailable" }
+            : widgetStatus;
+        }
         if (command === "calendar_get_settings") return { defaultEventDurationMinutes: mockOptions.defaultDuration ?? 60, weekStartsOn: "monday", timeFormat: "system", defaultReminderMinutes: null };
         if (command === "calendar_update_settings") {
           if (mockOptions.settingsFail && !settingsFailed) { settingsFailed = true; throw { code: "storage_unavailable", message: "Settings save failed." }; }
@@ -445,7 +537,13 @@ async function installCalendarMock(page: Page, options: MockOptions = {}) {
         }
         if (command === "calendar_create_event") return { ...master, ...(request as object), recurrenceRule: request?.recurrenceRule ?? null };
         if (command === "calendar_delete_event" || command === "calendar_delete_occurrence") return undefined;
-        if (command === "plugin:event|listen") { if (mockOptions.delayedListener) await new Promise<void>((resolve) => { releaseListener = resolve; }); return 1; }
+        if (command === "plugin:event|listen") {
+          const event = body?.event;
+          const handler = body?.handler;
+          if (typeof event === "string" && typeof handler === "number") listeners.set(event, handler);
+          if (mockOptions.delayedListener) await new Promise<void>((resolve) => { releaseListener = resolve; });
+          return handler;
+        }
         if (command === "plugin:event|unlisten") { window.calendarMock.unlistenCount += 1; return undefined; }
         throw new Error(`Unexpected command: ${command}`);
       },
@@ -461,7 +559,7 @@ async function calendarRequests(page: Page, command: string): Promise<any[]> {
 
 declare global {
   interface Window {
-    calendarMock: { calls: Array<{ command: string; body?: Record<string, unknown> }>; releaseAgenda?: () => void; releaseMonth?: () => void; releaseListener?: () => void; releaseSettings?: () => void; unlistenCount: number };
+    calendarMock: { calls: Array<{ command: string; body?: Record<string, unknown> }>; emit: (event: string, payload: unknown) => void; releaseAgenda?: () => void; releaseMonth?: () => void; releaseListener?: () => void; releaseSettings?: () => void; unlistenCount: number };
     __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: (event: string, id: number) => void };
     __TAURI_INTERNALS__: { transformCallback: (callback: (...args: unknown[]) => unknown, once?: boolean) => number; invoke: (command: string, body?: Record<string, unknown>) => Promise<unknown>; metadata: { currentWindow: { label: string } } };
     isTauri: boolean;

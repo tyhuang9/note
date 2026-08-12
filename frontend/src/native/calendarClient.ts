@@ -103,11 +103,6 @@ export type CalendarReadiness =
   | { state: "ready"; initializationDurationMs: number }
   | { state: "unavailable"; initializationDurationMs: number };
 
-export type CalendarWidgetAgendaItem = Pick<
-  CalendarOccurrence,
-  "eventId" | "occurrenceKey" | "title" | "time"
->;
-
 export type ReminderPermissionStatus = "default" | "granted" | "denied";
 export type ReminderSchedulerStatus = "waitingForPermission" | "ready" | "error";
 export type ReminderStatus = {
@@ -434,12 +429,6 @@ export const calendarClient = {
       sessionId,
       duplicatePolicy,
     });
-  },
-};
-
-export const calendarWidgetClient = {
-  agenda(displayTimeZone: string): Promise<CalendarWidgetAgendaItem[]> {
-    return invokeCalendar("calendar_widget_agenda", { displayTimeZone });
   },
 };
 

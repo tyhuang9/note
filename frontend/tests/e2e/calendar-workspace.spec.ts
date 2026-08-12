@@ -386,11 +386,21 @@ async function installCalendarMock(page: Page, options: MockOptions = {}) {
     let releaseListener: (() => void) | undefined;
     window.calendarMock = { calls, releaseAgenda: () => { agendaReleased = true; releaseAgenda?.(); }, releaseMonth: () => { monthReleased = true; releaseMonth?.(); }, releaseListener: () => releaseListener?.(), releaseSettings: () => releaseSettings?.(), unlistenCount: 0 };
     window.isTauri = true;
+    const modelsAIState = {
+      schemaVersion: 1, revision: 1, legacyMigrationCompleted: true,
+      providers: [
+        { id: "ollama-local", name: "Ollama", kind: "ollama", baseUrl: "http://127.0.0.1:11434", enabled: true, dataSharing: "local", credentialConfigured: false, capabilities: { chat: true, embeddings: false, speechToText: false }, managed: true },
+        { id: "llama-harness", name: "llama-harness", kind: "llama_harness", baseUrl: "http://127.0.0.1:8787", enabled: true, dataSharing: "local", credentialConfigured: false, capabilities: { chat: true, embeddings: false, speechToText: false }, managed: true },
+        { id: "openai-compatible-local", name: "OpenAI-compatible local", kind: "openai_compatible", baseUrl: "http://127.0.0.1:1234/v1", enabled: true, dataSharing: "local", credentialConfigured: false, capabilities: { chat: true, embeddings: true, speechToText: false }, managed: true },
+        { id: "native-whisper", name: "Native Whisper", kind: "speech_to_text", enabled: false, dataSharing: "local", credentialConfigured: false, capabilities: { chat: false, embeddings: false, speechToText: true }, managed: true },
+      ], models: [],
+    };
     window.__TAURI_INTERNALS__ = {
       transformCallback: () => 1,
       invoke: async (command: string, body?: Record<string, unknown>) => {
         calls.push({ command, body });
         const request = body?.request as Record<string, unknown> | undefined;
+        if (command === "models_ai_state_get") return modelsAIState;
         if (command === "load_app_data") return data;
         if (command === "save_app_data") return undefined;
         if (command === "calendar_readiness_get") return mockOptions.unavailable ? { state: "unavailable", initializationDurationMs: 1 } : { state: "ready", initializationDurationMs: 1 };

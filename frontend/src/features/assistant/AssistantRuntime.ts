@@ -13,7 +13,7 @@ export type AssistantReview =
 type Pending = { call: AssistantToolCall; tool: ToolDefinition; input: Record<string, unknown>; runId: string; targetFingerprint?: string; proposal?: CalendarProposal; confirmationOutcomeUnknown?: boolean };
 export type RuntimeTransition = { kind: "completed"; response: AssistantProviderResponse } | { kind: "review"; review: AssistantReview };
 
-export type AssistantRuntimeErrorCode = "calendar_confirm_outcome_pending" | "calendar_confirm_outcome_unresolved" | "calendar_confirm_failed" | "calendar_create_blocked_unresolved" | "calendar_proposal_lost" | "calendar_created_reconciliation_ack_failed" | "calendar_created_follow_up_failed" | "note_changed_follow_up_failed" | "note_target_changed" | "tool_timeout";
+export type AssistantRuntimeErrorCode = "calendar_confirm_outcome_pending" | "calendar_confirm_outcome_unresolved" | "calendar_confirm_failed" | "calendar_create_blocked_unresolved" | "calendar_proposal_lost" | "calendar_created_reconciliation_ack_failed" | "calendar_created_follow_up_failed" | "note_changed_follow_up_failed" | "note_target_changed" | "tool_timeout" | "chat_only_tool_request";
 export class AssistantRuntimeError extends Error {
   constructor(readonly code: AssistantRuntimeErrorCode, message: string, readonly nativeCode?: string) { super(message); this.name = "AssistantRuntimeError"; }
 }
@@ -260,6 +260,9 @@ export class AssistantRuntime {
     }
   }
   private async advance(response: AssistantProviderResponse, generation: number): Promise<RuntimeTransition> {
+    if (!this.metadata.capabilities.tools && (response.status === "requires_action" || response.toolRequests.length > 0)) {
+      throw new AssistantRuntimeError("chat_only_tool_request", "The selected chat-only model requested tools, so Note rejected the response.");
+    }
     while (response.status === "requires_action") {
       if (generation !== this.runGeneration) throw new Error("A newer assistant run replaced this response.");
       if (++this.rounds > MAX_TOOL_ROUNDS) throw new Error("The assistant exceeded the tool round limit.");

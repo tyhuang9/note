@@ -34,6 +34,18 @@ fn main() {
         "assistant_calendar_create_cancel",
         "assistant_calendar_create_reconciliation_status",
         "assistant_calendar_create_reconciliation_acknowledge",
+        "models_ai_state_get",
+        "models_ai_settings_save",
+        "models_ai_migrate_legacy",
+        "models_ai_credential_set",
+        "models_ai_credential_delete",
+        "models_ai_provider_test",
+        "models_ai_provider_list_models",
+        "models_ai_chat",
+        "models_ai_ollama_status",
+        "models_ai_ollama_pull",
+        "models_ai_ollama_cancel_pull",
+        "models_ai_ollama_remove",
     ]);
 
     #[cfg(target_os = "windows")]

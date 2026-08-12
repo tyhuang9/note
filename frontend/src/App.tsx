@@ -40,6 +40,7 @@ import {
   getNoteWorkspaceTabId,
   getOpenNotePageIds,
   getSelectedNotePageId,
+  openModelsAIWorkspaceTab,
   openAgendaWorkspaceTab,
   reconcileWorkspaceNoteTabs,
   restoreWorkspaceState,
@@ -123,6 +124,7 @@ import {
   assistantCalendarClient,
   isAssistantNativeAvailable,
 } from "./native/assistantClient";
+import { modelsAIClient } from "./native/modelsAIClient";
 import type {
   AppData,
   AppSessionState,
@@ -145,6 +147,7 @@ type SidebarProps = {
   isCollapsed: boolean;
   isInert: boolean;
   isNarrowWorkbench: boolean;
+  isSettingsSelected: boolean;
   pageSearchFocusRequest: number;
   pageTemplates: AppData["pages"];
   pages: AppData["pages"];
@@ -164,6 +167,7 @@ type SidebarProps = {
   onBeforeWorkbenchTransition: () => boolean;
   onFocusPageSearch: (trigger?: HTMLElement) => void;
   onOpenAgenda: () => void;
+  onOpenSettings: () => void;
   onPageDragEnd: () => void;
   onPageDragStart: (pageId: string) => boolean;
   onPageDropOnFolder: (folderId: string) => boolean;
@@ -231,6 +235,8 @@ type AssistantRequestSnapshot = {
   notesContext: NotesContextSnapshot;
   prompt: string;
   provider: AssistantProviderMetadata;
+  providerId: string;
+  executionMode: "tools" | "chat_only";
   modelId: string;
   modelLabel: string;
   runFolderId: string;
@@ -362,7 +368,6 @@ const PASTED_BLOCK_OFFSET = 24;
 const TEXT_BLOCK_BORDER_WIDTH = 1;
 const TEXT_BLOCK_CONTENT_PADDING_LEFT = 10;
 const TEXT_BLOCK_CONTENT_PADDING_TOP = 5;
-const LLAMA_HARNESS_SELECTED_AGENT_KEY = "note.llamaHarness.selectedAgentId.v1";
 const ASSISTANT_READ_RESULT_MAX_BYTES = 16_000;
 const ASSISTANT_READ_CONTENT_BUDGET = 15_000;
 const ASSISTANT_PAGE_BLOCK_LIMIT = 24;
@@ -394,26 +399,6 @@ type SidebarSortOrder =
 type SidebarTabId = "files" | "search" | "bookmarks" | "templates";
 
 type HeroIconName = WorkbenchIconName;
-
-function readSelectedLlamaHarnessAgentId() {
-  if (typeof window === "undefined") {
-    return "";
-  }
-
-  return window.localStorage.getItem(LLAMA_HARNESS_SELECTED_AGENT_KEY) ?? "";
-}
-
-function writeSelectedLlamaHarnessAgentId(agentId: string) {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  if (agentId) {
-    window.localStorage.setItem(LLAMA_HARNESS_SELECTED_AGENT_KEY, agentId);
-  } else {
-    window.localStorage.removeItem(LLAMA_HARNESS_SELECTED_AGENT_KEY);
-  }
-}
 
 function llamaHarnessSetupMessage(status: LlamaHarnessSetupStatus) {
   switch (status.next_step) {
@@ -1126,28 +1111,47 @@ function App() {
   const [llamaHarnessCapabilities, setLlamaHarnessCapabilities] =
     useState<LlamaHarnessAppCapabilities | null>(null);
   const [llamaHarnessAgents, setLlamaHarnessAgents] = useState<LlamaHarnessAgent[]>([]);
-  const [selectedLlamaHarnessAgentId, setSelectedLlamaHarnessAgentId] = useState(
-    readSelectedLlamaHarnessAgentId,
-  );
   const [isLlamaHarnessLoading, setIsLlamaHarnessLoading] = useState(false);
   const {
     addProvider: addAIProvider,
-    close: closeAIProviderSettings,
+    cancelManagedModelInstall,
+    checkOllama,
     connectionStates: providerConnectionStates,
+    defaultChatModel,
     defaultChatModelId,
     defaultEmbeddingModelId,
+    deleteCredential: deleteProviderCredential,
     deleteProvider: deleteAIProvider,
-    isOpen: isAIProvidersOpen,
+    error: modelsAIError,
+    installManagedModel,
+    isDefaultChatModelChecking,
+    isSaving: isModelsAISaving,
+    loadStatus: modelsAILoadStatus,
+    message: modelsAIMessage,
     models: aiModels,
+    ollamaSetup,
+    pendingAction: modelsAIPendingAction,
     providers: aiProviders,
     refreshModels: refreshProviderModels,
+    removeManagedModel,
+    retryInitialState: retryModelsAIInitialState,
+    saveSettings: saveModelsAISettings,
+    selectedLlamaHarnessAgentId,
     selectedProviderId: selectedAIProviderId,
+    setCredential: setProviderCredential,
     setDefaultChatModelId,
     setDefaultEmbeddingModelId,
+    setSelectedLlamaHarnessAgentId,
     setSelectedProviderId: setSelectedAIProviderId,
     testConnection: testProviderConnection,
     updateProvider: updateAIProvider,
-  } = useAIProviderSettings();
+  } = useAIProviderSettings(
+    isAssistantOpen ||
+      (selectedWorkspaceTab?.view.kind === "settings" &&
+        selectedWorkspaceTab.view.section === "models-ai"),
+    selectedWorkspaceTab?.view.kind === "settings" &&
+      selectedWorkspaceTab.view.section === "models-ai",
+  );
   const [isLoaded, setIsLoaded] = useState(false);
   const [persistenceAvailable, setPersistenceAvailable] = useState(false);
   const [persistenceIssue, setPersistenceIssue] =
@@ -1586,24 +1590,38 @@ function App() {
       null,
     [activeLlamaHarnessAgents, selectedLlamaHarnessAgentId],
   );
-  const assistantAgentLabel = selectedLlamaHarnessAgent
-    ? `${selectedLlamaHarnessAgent.name} / ${llamaHarnessCapabilities?.model.modelName || "model not set"}`
-    : llamaHarnessSetupStatus?.ready
-      ? "No active agent selected"
-      : "llama-harness setup incomplete";
+  const defaultChatProvider = aiProviders.find(
+    (provider) => provider.id === defaultChatModel?.providerId,
+  );
+  const nativeProviderLabel = defaultChatProvider?.name.trim() || "Native provider";
+  const nativeModelLabel = defaultChatModel?.name.trim() || defaultChatModel?.runtimeName || "Native model";
+  const assistantAgentLabel = defaultChatModel && defaultChatProvider
+    ? `${nativeProviderLabel} / ${nativeModelLabel}`
+    : selectedLlamaHarnessAgent
+      ? `${selectedLlamaHarnessAgent.name} / ${llamaHarnessCapabilities?.model.modelName || "model not set"}`
+      : llamaHarnessSetupStatus?.ready
+        ? "No active agent selected"
+        : "No chat model selected";
   const assistantProviderMetadata = useMemo<AssistantProviderMetadata>(
-    () => ({
-      provider: llamaHarnessCapabilities?.model.provider
-        ? `local llama-harness; reported upstream ${llamaHarnessCapabilities.model.provider}`
-        : "local llama-harness; upstream provider unknown",
-      model:
-        llamaHarnessCapabilities?.model.id
-          ? `${llamaHarnessCapabilities.model.modelName || llamaHarnessCapabilities.model.name} (${llamaHarnessCapabilities.model.id})`
-          : selectedLlamaHarnessAgent?.name || "unknown model",
-      capabilities: { tools: true },
-      dataSharing: "unknown",
-    }),
-    [llamaHarnessCapabilities, selectedLlamaHarnessAgent],
+    () => defaultChatModel && defaultChatProvider
+      ? {
+          provider: nativeProviderLabel,
+          model: `${nativeModelLabel} (${defaultChatModel.id})`,
+          capabilities: { tools: defaultChatModel.executionMode === "tools" },
+          dataSharing: defaultChatProvider.dataSharing,
+        }
+      : {
+          provider: llamaHarnessCapabilities?.model.provider
+            ? `local llama-harness; reported upstream ${llamaHarnessCapabilities.model.provider}`
+            : "local llama-harness; upstream provider unknown",
+          model:
+            llamaHarnessCapabilities?.model.id
+              ? `${llamaHarnessCapabilities.model.modelName || llamaHarnessCapabilities.model.name} (${llamaHarnessCapabilities.model.id})`
+              : selectedLlamaHarnessAgent?.name || "unknown model",
+          capabilities: { tools: true },
+          dataSharing: "unknown",
+        },
+    [defaultChatModel, defaultChatProvider, llamaHarnessCapabilities, nativeModelLabel, nativeProviderLabel, selectedLlamaHarnessAgent],
   );
 
   useEffect(() => {
@@ -2009,14 +2027,10 @@ function App() {
   ]);
 
   useEffect(() => {
-    writeSelectedLlamaHarnessAgentId(selectedLlamaHarnessAgentId);
-  }, [selectedLlamaHarnessAgentId]);
-
-  useEffect(() => {
-    if (isAssistantOpen) {
+    if (isAssistantOpen && !defaultChatModel && !isDefaultChatModelChecking) {
       void refreshLlamaHarnessAssistant();
     }
-  }, [isAssistantOpen]);
+  }, [defaultChatModel, isAssistantOpen, isDefaultChatModelChecking]);
 
   useEffect(() => {
     assistantCalendarReconciliationMountedRef.current = true;
@@ -3580,13 +3594,11 @@ function App() {
       const activeAgents = capabilities.allowedAgents;
       setLlamaHarnessCapabilities(capabilities);
       setLlamaHarnessAgents(activeAgents);
-      setSelectedLlamaHarnessAgentId((currentAgentId) => {
-        if (activeAgents.some((agent) => agent.id === currentAgentId)) {
-          return currentAgentId;
-        }
-
-        return capabilities.defaultAgent.id || activeAgents[0]?.id || "";
-      });
+      if (!activeAgents.some((agent) => agent.id === selectedLlamaHarnessAgentId)) {
+        void setSelectedLlamaHarnessAgentId(
+          capabilities.defaultAgent.id || activeAgents[0]?.id || "",
+        );
+      }
       setAssistantStatus(activeAgents.length ? null : "Allow an active Note agent in llama-harness.");
     } catch (error) {
       setLlamaHarnessSetupStatus(null);
@@ -4189,6 +4201,42 @@ function App() {
     messages: AssistantMessage[],
     snapshot: AssistantRequestSnapshot,
   ) {
+    const { agentId, executionMode, modelId, notesContext, provider, providerId, runFolderId, runPageId } = snapshot;
+    if (executionMode === "chat_only") {
+      return new AssistantRuntime(
+        {
+          async start() {
+            const response = await modelsAIClient.chat(providerId, modelId, [
+              ...(notesContext.promptSummary.trim()
+                ? [{ role: "system" as const, content: `Current notes context:\n${notesContext.promptSummary.trim()}` }]
+                : []),
+              ...messages.map(({ content, role }) => ({ content, role })),
+            ]);
+            return {
+              runId: `native-chat-${Date.now()}`,
+              status: "completed" as const,
+              output: response.content,
+              toolRequests: [],
+            };
+          },
+          async continue() {
+            return {
+              runId: "native-chat",
+              status: "failed" as const,
+              output: "Chat-only models cannot continue tool calls.",
+              toolRequests: [],
+            };
+          },
+        },
+        provider,
+        {
+          read: async () => { throw new Error("Chat-only models cannot read Note tools."); },
+          write: async () => { throw new Error("Chat-only models cannot write Note tools."); },
+          describeWrite: () => { throw new Error("Chat-only models cannot propose Note writes."); },
+          fingerprintWrite: () => "chat-only",
+        },
+      );
+    }
     if (!llamaHarnessSetupStatus?.ready) {
       throw new Error(
         llamaHarnessSetupStatus
@@ -4201,7 +4249,6 @@ function App() {
       throw new Error("Create or activate an agent in llama-harness.");
     }
 
-    const { agentId, modelId, notesContext, provider, runFolderId, runPageId } = snapshot;
     return new AssistantRuntime(
       {
         async start(signal) {
@@ -4276,16 +4323,17 @@ function App() {
   }
 
   function captureAssistantRequest(prompt: string): AssistantRequestSnapshot {
-    if (!selectedLlamaHarnessAgent) {
-      throw new Error("Create or activate an agent in llama-harness.");
-    }
-    const model = llamaHarnessCapabilities?.model;
-    if (!model?.id) {
-      throw new Error("llama-harness did not report an exact model ID for this request.");
-    }
+    const nativeModel = defaultChatModel;
+    const nativeProvider = defaultChatProvider;
+    const harnessModel = llamaHarnessCapabilities?.model;
+    if (!nativeModel && !selectedLlamaHarnessAgent) throw new Error("Choose a chat model in Models & AI or activate a llama-harness agent.");
+    if (!nativeModel && !harnessModel?.id) throw new Error("llama-harness did not report an exact model ID for this request.");
     return {
-      agentId: selectedLlamaHarnessAgent.id,
-      agentLabel: selectedLlamaHarnessAgent.name || selectedLlamaHarnessAgent.id,
+      agentId: nativeModel ? "" : selectedLlamaHarnessAgent!.id,
+      agentLabel: nativeModel
+        ? nativeProvider?.name || nativeModel.name
+        : selectedLlamaHarnessAgent!.name || selectedLlamaHarnessAgent!.id,
+      executionMode: nativeModel?.executionMode ?? "tools",
       history: assistantMessages.slice(-ASSISTANT_HISTORY_LIMIT).map((message) => ({
         ...message,
         content: message.content.slice(0, ASSISTANT_PROMPT_LIMIT),
@@ -4297,8 +4345,9 @@ function App() {
       }),
       prompt,
       provider: { ...assistantProviderMetadata, capabilities: { ...assistantProviderMetadata.capabilities } },
-      modelId: model.id,
-      modelLabel: model.modelName || model.name || model.id,
+      modelId: nativeModel?.id ?? harnessModel!.id,
+      modelLabel: nativeModel?.name ?? (harnessModel!.modelName || harnessModel!.name || harnessModel!.id),
+      providerId: nativeProvider?.id ?? "llama-harness",
       runFolderId: selectedFolderIdRef.current,
       runPageId: selectedPageIdRef.current,
     };
@@ -4737,6 +4786,20 @@ function App() {
     if (nextState.tabs !== currentState.tabs) {
       setWorkspaceTabs(nextState.tabs);
     }
+    activateWorkspaceTab(nextState.selectedTabId, nextState.tabs);
+    window.requestAnimationFrame(() => {
+      document.getElementById(getWorkspaceTabId(nextState.selectedTabId))?.focus();
+    });
+  }
+
+  function openModelsAISettings() {
+    const currentState = {
+      selectedTabId: selectedWorkspaceTabIdRef.current,
+      tabs: workspaceTabsRef.current,
+    };
+    const nextState = openModelsAIWorkspaceTab(currentState);
+    workspaceTabsRef.current = nextState.tabs;
+    if (nextState.tabs !== currentState.tabs) setWorkspaceTabs(nextState.tabs);
     activateWorkspaceTab(nextState.selectedTabId, nextState.tabs);
     window.requestAnimationFrame(() => {
       document.getElementById(getWorkspaceTabId(nextState.selectedTabId))?.focus();
@@ -6268,6 +6331,10 @@ function App() {
         explorerToggleButtonRef={explorerToggleButtonRef}
         folders={data.folders}
         isAgendaSelected={selectedWorkspaceTab?.view.kind === "agenda"}
+        isSettingsSelected={
+          selectedWorkspaceTab?.view.kind === "settings" &&
+          selectedWorkspaceTab.view.section === "models-ai"
+        }
         isCollapsed={isExplorerPresentationCollapsed}
         isInert={isAssistantOverlayOpen}
         isNarrowWorkbench={isNarrowWorkbench}
@@ -6294,6 +6361,7 @@ function App() {
         onBeforeWorkbenchTransition={blockWorkbenchTransitionForPendingConfirmation}
         onFocusPageSearch={focusPageSearch}
         onOpenAgenda={openAgendaWorkspace}
+        onOpenSettings={openModelsAISettings}
         onPageDragEnd={endPageDrag}
         onPageDragStart={beginPageDrag}
         onPageDropOnFolder={(folderId) => {
@@ -6594,39 +6662,49 @@ function App() {
         ) : selectedWorkspaceTab?.view.kind === "settings" ? (
           <section
             aria-labelledby={getWorkspaceTabId(selectedWorkspaceTab.id)}
-            className="workspace-system-placeholder"
+            className={selectedWorkspaceTab.view.section === "models-ai" ? "workspace-models-ai-panel" : "workspace-system-placeholder"}
             id={WORKSPACE_PAGE_PANEL_ID}
             role="tabpanel"
           >
-            <p className="workspace-system-eyebrow">Workspace view</p>
-            <h1>{selectedWorkspaceTab.title}</h1>
-            <p>
-              {selectedWorkspaceTab.view.section
-                  ? `Settings section: ${selectedWorkspaceTab.view.section}`
-                  : "Settings are preserved for the upcoming native workspace."}
-            </p>
+            {selectedWorkspaceTab.view.section === "models-ai" ? <AIProvidersSettings
+              connectionStates={providerConnectionStates}
+              defaultChatModelId={defaultChatModelId}
+              defaultEmbeddingModelId={defaultEmbeddingModelId}
+              error={modelsAIError}
+              isSaving={isModelsAISaving}
+              loadStatus={modelsAILoadStatus}
+              message={modelsAIMessage}
+              models={aiModels}
+              ollamaSetup={ollamaSetup}
+              pendingAction={modelsAIPendingAction}
+              providers={aiProviders}
+              selectedProviderId={selectedAIProviderId}
+              onAddProvider={addAIProvider}
+              onCancelManagedModelInstall={() => void cancelManagedModelInstall()}
+              onCheckOllama={() => void checkOllama()}
+              onDeleteCredential={(providerId) => void deleteProviderCredential(providerId)}
+              onDeleteProvider={(providerId) => void deleteAIProvider(providerId)}
+              onInstallManagedModel={() => void installManagedModel()}
+              onRefreshModels={(providerId) => void refreshProviderModels(providerId)}
+              onRemoveManagedModel={() => void removeManagedModel()}
+              onRetryLoad={() => void retryModelsAIInitialState()}
+              onSave={() => void saveModelsAISettings()}
+              onSelectProvider={setSelectedAIProviderId}
+              onSetCredential={setProviderCredential}
+              onSetDefaultChatModel={setDefaultChatModelId}
+              onSetDefaultEmbeddingModel={setDefaultEmbeddingModelId}
+              onTestConnection={(providerId) => void testProviderConnection(providerId)}
+              onUpdateProvider={updateAIProvider}
+            /> : <>
+              <p className="workspace-system-eyebrow">Workspace view</p>
+              <h1>{selectedWorkspaceTab.title}</h1>
+              <p>{selectedWorkspaceTab.view.section
+                ? `Settings section: ${selectedWorkspaceTab.view.section}`
+                : "Settings are preserved for the upcoming native workspace."}</p>
+            </>}
           </section>
         ) : null}
       </section>
-      {isAIProvidersOpen ? (
-        <AIProvidersSettings
-          connectionStates={providerConnectionStates}
-          defaultChatModelId={defaultChatModelId}
-          defaultEmbeddingModelId={defaultEmbeddingModelId}
-          models={aiModels}
-          providers={aiProviders}
-          selectedProviderId={selectedAIProviderId}
-          onAddProvider={addAIProvider}
-          onClose={closeAIProviderSettings}
-          onDeleteProvider={deleteAIProvider}
-          onRefreshModels={refreshProviderModels}
-          onSelectProvider={setSelectedAIProviderId}
-          onSetDefaultChatModel={setDefaultChatModelId}
-          onSetDefaultEmbeddingModel={setDefaultEmbeddingModelId}
-          onTestConnection={testProviderConnection}
-          onUpdateProvider={updateAIProvider}
-        />
-      ) : null}
       {shouldRenderAssistantPanel ? (
         <AssistantPanel
           assistantError={assistantError}
@@ -6639,7 +6717,7 @@ function App() {
           focusRequest={assistantFocusRequest}
           harnessAgents={activeLlamaHarnessAgents}
           isHarnessLoading={isLlamaHarnessLoading}
-          isHarnessReady={Boolean(llamaHarnessSetupStatus?.ready)}
+          isHarnessReady={Boolean(defaultChatModel || llamaHarnessSetupStatus?.ready)}
           inputValue={assistantInput}
           isSending={isAssistantSending}
           messages={assistantMessages}
@@ -6668,6 +6746,7 @@ function App() {
           selectedBlockPreview={selectedAssistantBlockPreview}
           selectedHarnessAgentId={selectedLlamaHarnessAgent?.id ?? ""}
           selectedPageTitle={selectedPage?.title ?? null}
+          usesHarness={!defaultChatModel}
         />
       ) : null}
     </WorkbenchShell>
@@ -6682,6 +6761,7 @@ const Sidebar = memo(function Sidebar({
   explorerToggleButtonRef,
   folders,
   isAgendaSelected,
+  isSettingsSelected,
   isCollapsed,
   isInert,
   pageSearchFocusRequest,
@@ -6703,6 +6783,7 @@ const Sidebar = memo(function Sidebar({
   onBeforeWorkbenchTransition,
   onFocusPageSearch,
   onOpenAgenda,
+  onOpenSettings,
   onPageDragEnd,
   onPageDragStart,
   onPageDropOnFolder,
@@ -6973,7 +7054,9 @@ const Sidebar = memo(function Sidebar({
         Icon={HeroIcon}
         isAgendaSelected={isAgendaSelected}
         isExplorerCollapsed={isCollapsed}
+        isSettingsSelected={isSettingsSelected}
         onOpenAgenda={onOpenAgenda}
+        onOpenSettings={onOpenSettings}
         onSelectTab={openSidebarTab}
         onToggleExplorer={onToggleCollapse}
         templatePageCount={pageTemplates.length}

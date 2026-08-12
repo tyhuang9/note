@@ -35,6 +35,18 @@
     "allow-assistant-calendar-create-confirm",
     "allow-assistant-calendar-create-cancel",
     "allow-assistant-calendar-create-reconciliation-status",
-    "allow-assistant-calendar-create-reconciliation-acknowledge"
+    "allow-assistant-calendar-create-reconciliation-acknowledge",
+    "allow-models-ai-state-get",
+    "allow-models-ai-settings-save",
+    "allow-models-ai-migrate-legacy",
+    "allow-models-ai-credential-set",
+    "allow-models-ai-credential-delete",
+    "allow-models-ai-provider-test",
+    "allow-models-ai-provider-list-models",
+    "allow-models-ai-chat",
+    "allow-models-ai-ollama-status",
+    "allow-models-ai-ollama-pull",
+    "allow-models-ai-ollama-cancel-pull",
+    "allow-models-ai-ollama-remove"
   ]
 }

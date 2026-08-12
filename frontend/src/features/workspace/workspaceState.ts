@@ -12,6 +12,7 @@ export type WorkspaceState = {
 
 export const AGENDA_WORKSPACE_TAB_ID = "agenda";
 export const AGENDA_WORKSPACE_TAB_TITLE = "Agenda";
+export const MODELS_AI_WORKSPACE_TAB_ID = "settings:models-ai";
 
 export function getNoteWorkspaceTabId(pageId: string) {
   return `note:${pageId}`;
@@ -41,6 +42,22 @@ export function openAgendaWorkspaceTab(state: WorkspaceState): WorkspaceState {
   return state.selectedTabId === AGENDA_WORKSPACE_TAB_ID && tabs === state.tabs
     ? state
     : { selectedTabId: AGENDA_WORKSPACE_TAB_ID, tabs };
+}
+
+export function openModelsAIWorkspaceTab(state: WorkspaceState): WorkspaceState {
+  const tabs = state.tabs.some((tab) => tab.id === MODELS_AI_WORKSPACE_TAB_ID)
+    ? state.tabs
+    : [
+        ...state.tabs,
+        {
+          id: MODELS_AI_WORKSPACE_TAB_ID,
+          title: "Models & AI",
+          view: { kind: "settings", section: "models-ai" },
+        } satisfies WorkspaceTab,
+      ];
+  return state.selectedTabId === MODELS_AI_WORKSPACE_TAB_ID && tabs === state.tabs
+    ? state
+    : { selectedTabId: MODELS_AI_WORKSPACE_TAB_ID, tabs };
 }
 
 export function setAgendaWorkspaceView(

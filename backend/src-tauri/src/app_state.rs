@@ -22,6 +22,7 @@ use crate::{
         settings::SettingsService,
     },
     calendar_store::sqlite::SqliteEventStore,
+    models_ai::ModelsAiRuntime,
     mutation::MutationGate,
     notes::NotesService,
 };
@@ -261,6 +262,7 @@ pub(crate) struct AppState {
     pub(crate) calendar_mutations: MutationGate,
     pub(crate) notes: NotesService,
     pub(crate) assistant: AssistantState,
+    pub(crate) models_ai: ModelsAiRuntime,
     calendar: Arc<CalendarReadiness>,
 }
 
@@ -278,6 +280,7 @@ impl AppState {
             calendar_mutations: MutationGate::default(),
             notes: NotesService::new(app_data_dir.clone()),
             assistant: AssistantState::default(),
+            models_ai: ModelsAiRuntime::new(&app_data_dir),
             calendar: CalendarReadiness::new(app_data_dir, initializer),
         }
     }

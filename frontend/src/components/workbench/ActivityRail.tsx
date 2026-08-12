@@ -14,7 +14,9 @@ export interface ActivityRailProps {
   readonly Icon: WorkbenchIconComponent;
   readonly isAgendaSelected: boolean;
   readonly isExplorerCollapsed: boolean;
+  readonly isSettingsSelected: boolean;
   readonly onOpenAgenda: () => void;
+  readonly onOpenSettings: () => void;
   readonly onSelectTab: (
     tabId: ActivityRailTabId,
     trigger: HTMLButtonElement,
@@ -30,7 +32,9 @@ export const ActivityRail = memo(function ActivityRail({
   Icon,
   isAgendaSelected,
   isExplorerCollapsed,
+  isSettingsSelected,
   onOpenAgenda,
+  onOpenSettings,
   onSelectTab,
   onToggleExplorer,
   templatePageCount,
@@ -110,6 +114,16 @@ export const ActivityRail = memo(function ActivityRail({
           title="Open Agenda"
         >
           <Icon name="calendar" />
+        </button>
+        <button
+          type="button"
+          className={`rail-button ${isSettingsSelected ? "is-active" : ""}`}
+          aria-label="Open Models & AI settings"
+          aria-pressed={isSettingsSelected}
+          onClick={onOpenSettings}
+          title="Models & AI"
+        >
+          <Icon name="adjustments-horizontal" />
         </button>
       </div>
     </nav>

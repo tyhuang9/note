@@ -372,6 +372,19 @@ async function installAssistantNativeMock(
   await page.addInitScript((mockOptions) => {
     window.isTauri = true;
     const privateToken = "phase4-private-token-never-render";
+    let modelsAIState: Record<string, any> = {
+      schemaVersion: 1,
+      revision: 1,
+      legacyMigrationCompleted: true,
+      providers: [
+        { id: "ollama-local", name: "Ollama", kind: "ollama", baseUrl: "http://127.0.0.1:11434", enabled: true, dataSharing: "local", credentialConfigured: false, capabilities: { chat: true, embeddings: false, speechToText: false }, managed: true },
+        { id: "llama-harness", name: "llama-harness", kind: "llama_harness", baseUrl: "http://127.0.0.1:8787", enabled: true, dataSharing: "local", credentialConfigured: false, capabilities: { chat: true, embeddings: false, speechToText: false }, managed: true },
+        { id: "openai-compatible-local", name: "OpenAI-compatible local", kind: "openai_compatible", baseUrl: "http://127.0.0.1:1234/v1", enabled: true, dataSharing: "local", credentialConfigured: false, capabilities: { chat: true, embeddings: true, speechToText: false }, managed: true },
+        { id: "native-whisper", name: "Native Whisper", kind: "speech_to_text", enabled: false, dataSharing: "local", credentialConfigured: false, capabilities: { chat: false, embeddings: false, speechToText: true }, managed: true },
+      ],
+      models: [],
+      selectedLlamaHarnessAgentId: "test-agent",
+    };
     let firstConfirmToken: string | null = null;
     window.assistantNativeState = {
       commands: [],
@@ -386,6 +399,12 @@ async function installAssistantNativeMock(
       invoke: async (command: string, body?: Record<string, unknown>) => {
         window.assistantNativeState.commands.push(command);
         await window.__phase4NativeBridge("record", { command });
+        if (command === "models_ai_state_get") return modelsAIState;
+        if (command === "models_ai_settings_save") {
+          const request = body?.request as { selectedLlamaHarnessAgentId?: string | null } | undefined;
+          modelsAIState = { ...modelsAIState, revision: modelsAIState.revision + 1, selectedLlamaHarnessAgentId: request?.selectedLlamaHarnessAgentId ?? undefined };
+          return modelsAIState;
+        }
         if (command === "load_app_data") {
           return {
             blocks: [],

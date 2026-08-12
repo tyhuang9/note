@@ -19,7 +19,7 @@ interface AssistantPanelProps {
     | { state: "required"; agendaInspected: boolean; busy: boolean; error?: string }
     | { state: "unknown"; agendaInspected: boolean; busy: boolean; canRetryStatus: boolean; error: string };
   readonly calendarReconciliationFocus: { request: number; target: "acknowledge" | "openAgenda" | "retry" | null };
-  readonly consent: { agentId: string; agentLabel: string; categories: readonly string[]; modelId: string; modelLabel: string; prompt: string; provider: AssistantProviderMetadata } | null;
+  readonly consent: { agentId: string; agentLabel: string; categories: readonly string[]; executionMode: "tools" | "chat_only"; modelId: string; modelLabel: string; prompt: string; provider: AssistantProviderMetadata } | null;
   readonly focusRequest: number;
   readonly harnessAgents: ReadonlyArray<{
     readonly id: string;
@@ -28,6 +28,7 @@ interface AssistantPanelProps {
   readonly inputValue: string;
   readonly isHarnessLoading: boolean;
   readonly isHarnessReady: boolean;
+  readonly usesHarness: boolean;
   readonly isSending: boolean;
   readonly messages: readonly AssistantMessage[];
   readonly onClose: () => void;
@@ -63,7 +64,7 @@ function ConsentCard({ consent, isBusy, onCancel, onConfirm }: { consent: NonNul
   useEffect(() => { confirmRef.current?.focus(); }, [consent.agentId, consent.modelId, consent.prompt, consent.provider.provider]);
   return <section aria-busy={isBusy} aria-label="Assistant data sharing review" className="assistant-review-card">
     <h3>Review data sharing</h3>
-    <p>This request goes through <strong>local llama-harness</strong>. Its reported upstream routing label is <strong>{consent.provider.provider}</strong>, using reported model <strong>{consent.modelLabel}</strong> (<strong>{consent.modelId}</strong>). Note cannot independently verify the upstream provider identity or routing. Processing location is <strong>{consent.provider.dataSharing}</strong>, so Note cannot confirm this stays on this device.</p>
+    {consent.executionMode === "tools" ? <p>This request goes through <strong>local llama-harness</strong>. Its reported upstream routing label is <strong>{consent.provider.provider}</strong>, using reported model <strong>{consent.modelLabel}</strong> (<strong>{consent.modelId}</strong>). Note cannot independently verify the upstream provider identity or routing. Processing location is <strong>{consent.provider.dataSharing}</strong>, so Note cannot confirm this stays on this device.</p> : <p>This chat request goes through Note’s <strong>native Models &amp; AI service</strong> to <strong>{consent.provider.provider}</strong>, using <strong>{consent.modelLabel}</strong> (<strong>{consent.modelId}</strong>). The selected provider is marked <strong>{consent.provider.dataSharing}</strong>.</p>}
     <dl className="assistant-review-details">
       <div><dt>Agent</dt><dd>{consent.agentLabel} ({consent.agentId})</dd></div>
       <div><dt>Exact prompt</dt><dd>{consent.prompt}</dd></div>
@@ -301,6 +302,7 @@ export const AssistantPanel = memo(function AssistantPanel({
   inputValue,
   isHarnessLoading,
   isHarnessReady,
+  usesHarness,
   isSending,
   messages,
   onClose,
@@ -337,7 +339,7 @@ export const AssistantPanel = memo(function AssistantPanel({
     else composerRef.current?.focus();
   }, [focusRequest, isSending, review]);
   const consentLocked = Boolean(consent);
-  const canSend = inputValue.trim().length > 0 && !isSending && !consent && !review && isHarnessReady && Boolean(selectedHarnessAgentId);
+  const canSend = inputValue.trim().length > 0 && !isSending && !consent && !review && isHarnessReady && (!usesHarness || Boolean(selectedHarnessAgentId));
   const latestAssistantMessage = getLatestAssistantMessage(messages);
   const assistantOutputEligibility = buildAssistantActionRequest(
     "insert-text-block",
@@ -409,11 +411,11 @@ export const AssistantPanel = memo(function AssistantPanel({
 
       <section className="assistant-provider-summary" aria-label="Default AI model">
         <div>
-          <span>llama-harness agent</span>
+          <span>{usesHarness ? "llama-harness agent" : "Native chat model"}</span>
           <strong>{defaultChatModelLabel}</strong>
           <small>{providerMetadata.provider}; model {providerMetadata.model}; processing location {providerMetadata.dataSharing}</small>
         </div>
-        {isHarnessReady && harnessAgents.length > 0 ? (
+        {usesHarness && isHarnessReady && harnessAgents.length > 0 ? (
           <select
             aria-label="Assistant agent"
             aria-describedby={consentLocked ? "assistant-consent-controls-locked" : undefined}
@@ -428,9 +430,9 @@ export const AssistantPanel = memo(function AssistantPanel({
             ))}
           </select>
         ) : null}
-        <button aria-describedby={consentLocked ? "assistant-consent-controls-locked" : undefined} disabled={consentLocked || isHarnessLoading} onClick={onRefreshHarness} type="button">
+        {usesHarness ? <button aria-describedby={consentLocked ? "assistant-consent-controls-locked" : undefined} disabled={consentLocked || isHarnessLoading} onClick={onRefreshHarness} type="button">
           {isHarnessLoading ? "Checking..." : "Refresh"}
-        </button>
+        </button> : null}
         {consentLocked ? <small id="assistant-consent-controls-locked">Prompt, agent, and provider context are frozen until you send or keep this request private.</small> : null}
       </section>
 

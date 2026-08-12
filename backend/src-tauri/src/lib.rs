@@ -4,6 +4,7 @@ mod calendar;
 mod calendar_store;
 mod error;
 pub mod events;
+mod models_ai;
 mod mutation;
 mod notes;
 mod private_file;
@@ -60,7 +61,19 @@ pub fn run() {
             assistant::assistant_calendar_create_confirm,
             assistant::assistant_calendar_create_cancel,
             assistant::assistant_calendar_create_reconciliation_status,
-            assistant::assistant_calendar_create_reconciliation_acknowledge
+            assistant::assistant_calendar_create_reconciliation_acknowledge,
+            models_ai::api::models_ai_state_get,
+            models_ai::api::models_ai_settings_save,
+            models_ai::api::models_ai_migrate_legacy,
+            models_ai::api::models_ai_credential_set,
+            models_ai::api::models_ai_credential_delete,
+            models_ai::api::models_ai_provider_test,
+            models_ai::api::models_ai_provider_list_models,
+            models_ai::api::models_ai_chat,
+            models_ai::api::models_ai_ollama_status,
+            models_ai::api::models_ai_ollama_pull,
+            models_ai::api::models_ai_ollama_cancel_pull,
+            models_ai::api::models_ai_ollama_remove
         ])
         .build(tauri::generate_context!())
         .expect("error while building Note")

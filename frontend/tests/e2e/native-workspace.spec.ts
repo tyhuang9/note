@@ -60,6 +60,7 @@ test("mixed workspace tabs support keyboard selection and generic close", async 
   await expect(settingsTab).toBeFocused();
   await expect(settingsTab).toHaveAttribute("aria-selected", "true");
   await expect(page.getByText("Settings section: accounts")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open Models & AI settings" })).toHaveAttribute("aria-pressed", "false");
   await expect(settingsTab.locator("xpath=..")).toHaveAttribute("draggable", "false");
 
   await settingsTab.dblclick();
@@ -341,9 +342,19 @@ type NativeMockOptions = {
 async function installNativeMock(page: Page, options: NativeMockOptions) {
   await page.addInitScript((mockOptions) => {
     window.isTauri = true;
+    const modelsAIState = {
+      schemaVersion: 1, revision: 1, legacyMigrationCompleted: true,
+      providers: [
+        { id: "ollama-local", name: "Ollama", kind: "ollama", baseUrl: "http://127.0.0.1:11434", enabled: true, dataSharing: "local", credentialConfigured: false, capabilities: { chat: true, embeddings: false, speechToText: false }, managed: true },
+        { id: "llama-harness", name: "llama-harness", kind: "llama_harness", baseUrl: "http://127.0.0.1:8787", enabled: true, dataSharing: "local", credentialConfigured: false, capabilities: { chat: true, embeddings: false, speechToText: false }, managed: true },
+        { id: "openai-compatible-local", name: "OpenAI-compatible local", kind: "openai_compatible", baseUrl: "http://127.0.0.1:1234/v1", enabled: true, dataSharing: "local", credentialConfigured: false, capabilities: { chat: true, embeddings: true, speechToText: false }, managed: true },
+        { id: "native-whisper", name: "Native Whisper", kind: "speech_to_text", enabled: false, dataSharing: "local", credentialConfigured: false, capabilities: { chat: false, embeddings: false, speechToText: true }, managed: true },
+      ], models: [],
+    };
     window.__allowSaveSuccess = !mockOptions.saveError;
     window.__TAURI_INTERNALS__ = {
       invoke: async (command: string, body: unknown) => {
+        if (command === "models_ai_state_get") return modelsAIState;
         if (command === "load_app_data") {
           if (mockOptions.loadError) {
             throw mockOptions.loadError;

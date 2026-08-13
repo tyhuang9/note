@@ -621,7 +621,7 @@ fn terminal_contract(
 
 fn chat_contract(result: &RunResult) -> bool {
     result.status == RunStatus::Completed
-        && result.final_output.as_deref().map(str::trim) == Some("READY")
+        && result.final_output.as_deref() == Some("READY")
         && result.tool_calls.is_empty()
         && result.approvals.is_empty()
         && result.errors.is_empty()
@@ -1041,7 +1041,7 @@ mod tests {
 
     #[test]
     fn chat_and_timeout_contracts_reject_false_positive_failures() {
-        assert!(chat_contract(&run_result(
+        assert!(!chat_contract(&run_result(
             RunStatus::Completed,
             Some(" READY \n"),
             &[]

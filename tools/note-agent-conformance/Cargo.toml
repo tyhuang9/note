@@ -7,10 +7,11 @@ edition = "2021"
 publish = false
 
 [dependencies]
+futures-util = "0.3"
 jsonschema = { version = "0.37", default-features = false }
-llama-harness = { git = "https://github.com/tyhuang9/llama-harness", rev = "ea5d5b66013654bf14f8e123b609d8d4522f93dc", features = [] }
+llama-harness = { git = "https://github.com/tyhuang9/llama-harness", rev = "ea5d5b66013654bf14f8e123b609d8d4522f93dc", features = ["ollama"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["macros", "rt", "sync"] }
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 
 [dev-dependencies]

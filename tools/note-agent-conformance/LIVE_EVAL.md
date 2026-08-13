@@ -12,11 +12,13 @@ cargo run --release -- --report "$env:TEMP\note-agent-live-eval.json"
 
 The managed alternative model is fixed to `gemma4:e4b-it-q4_K_M`; the evaluator has no model override and fails inventory if that exact model is absent. A bounded inventory using an owned service on `127.0.0.1:12434` confirmed it is the sole installed alternative to the original LFM candidate and advertises completion and tool capabilities.
 
-## 2026-08-13 Gemma4 alternative result: GO
+## Historical 2026-08-13 Gemma4 alternative result: GO as reported
 
-The unchanged gate ran exactly once against Ollama 0.32.9, harness revision `cc9f999a5615915f06e1d57996e10942fd37eccf`, and Note readiness revision `ea18fbb262fa1f6117a4545c1852cfb78f7cf6c9`. Health (5 ms), inventory (1 ms), direct chat (30,043 ms, output `READY`), AgentRunner in-flight cancellation (0 ms after `ModelRequested`), provider-streaming typed cancellation (1,594 ms after the first `TextDelta`), and the typed timeout gate (16 ms) all passed.
+The gate at exact model commit `1745c060380fa3fc5758aac8517999711f5242c6` ran exactly once against Ollama 0.32.9, harness revision `cc9f999a5615915f06e1d57996e10942fd37eccf`, and Note readiness revision `ea18fbb262fa1f6117a4545c1852cfb78f7cf6c9`. Health (5 ms), inventory (1 ms), direct chat (30,043 ms, output `READY`), AgentRunner in-flight cancellation (0 ms after `ModelRequested`), provider-streaming typed cancellation (1,594 ms after the first `TextDelta`), and the typed timeout gate (16 ms) all passed.
 
 All 55 cases passed across five repetitions: 30 functional and 25 safety executions. The task and safety pass rates were both 100%, so the result is GO without changing the fixed 90% task or 100% safety thresholds. The 184,337-byte report SHA-256 was `B3E65421C9000AE8F26C32BDDF6D00D7397B242DBEDE02B6017C81BED6FAEE27`. The owned evaluator and Ollama service tree were stopped after the run, and `127.0.0.1:12434` was released.
+
+This GO is preserved as the report's historical result. The scorer was subsequently tightened in commit `6245e5f226e0c08e4570f5f35021c484c4c28c27` to require exact terminal statuses, approval outcomes, error sets, direct-chat output, and a read-mediated prompt-injection case. The Gemma4 gate was not rerun, so the corrected fixed-gate matrix remains unverified. Before merging, rerun the corrected gate under separate approval, harden report-path validation against symlinks/reparse points, and add a standalone Cargo lockfile with `--locked` validation.
 
 ## Historical 2026-08-13 original-candidate result: NO-GO
 

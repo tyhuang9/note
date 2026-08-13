@@ -232,6 +232,65 @@ export type ImportIcsCommitResult = {
   committedAtUtcMs: number;
 };
 
+export type CalImportPreviewItem = {
+  sourceEventId: string;
+  title: string;
+  temporalKind: "timed" | "allDay";
+  startLabel: string;
+  endLabel: string;
+};
+
+export type CalImportPreviewResult =
+  | { status: "cancelled" }
+  | {
+      status: "previewed";
+      sessionId: string;
+      fileName: string;
+      expiresAtUtcMs: number;
+      totalCount: number;
+      acceptedCount: number;
+      existingCount: number;
+      items: CalImportPreviewItem[];
+    };
+
+export type CalImportCommitResult = {
+  status: "committed";
+  acceptedCount: number;
+  importedCount: number;
+  skippedCount: number;
+  recoveryBackupFileName: string;
+  committedAtUtcMs: number;
+};
+
+export type UnifiedBackupCreateResult =
+  | { status: "cancelled" }
+  | {
+      status: "created";
+      fileName: string;
+      byteSize: number;
+      createdAtUtcMs: number;
+    };
+
+export type UnifiedBackupRestorePreviewResult =
+  | { status: "cancelled" }
+  | {
+      status: "previewed";
+      sessionId: string;
+      fileName: string;
+      byteSize: number;
+      expiresAtUtcMs: number;
+      hasNoteData: boolean;
+      hasCalendarSnapshot: boolean;
+    };
+
+export type UnifiedBackupRestoreCommitResult = {
+  status: "restored";
+  noteDataRestored: boolean;
+  calendarRestored: boolean;
+  recoveryBackupFileName: string;
+  restoredAtUtcMs: number;
+};
+
 export type OccurrenceEventDraft = Omit<EventDraft, "recurrenceRule"> & {
   recurrenceRule?: never;
 };
@@ -264,7 +323,12 @@ export type CalendarCommand =
   | "backup_restore_commit"
   | "export_ics"
   | "import_ics_preview"
-  | "import_ics_commit";
+  | "import_ics_commit"
+  | "cal_import_preview"
+  | "cal_import_commit"
+  | "unified_backup_create"
+  | "unified_backup_restore_preview"
+  | "unified_backup_restore_commit";
 
 const STORAGE_UNAVAILABLE: CalendarApiError = {
   code: "storage_unavailable",
@@ -429,6 +493,28 @@ export const calendarClient = {
       sessionId,
       duplicatePolicy,
     });
+  },
+
+  previewCalImport(): Promise<CalImportPreviewResult> {
+    return invokeCalendar("cal_import_preview");
+  },
+
+  commitCalImport(sessionId: string): Promise<CalImportCommitResult> {
+    return invokeCalendar("cal_import_commit", { sessionId });
+  },
+
+  createUnifiedBackup(): Promise<UnifiedBackupCreateResult> {
+    return invokeCalendar("unified_backup_create");
+  },
+
+  previewUnifiedBackupRestore(): Promise<UnifiedBackupRestorePreviewResult> {
+    return invokeCalendar("unified_backup_restore_preview");
+  },
+
+  commitUnifiedBackupRestore(
+    sessionId: string,
+  ): Promise<UnifiedBackupRestoreCommitResult> {
+    return invokeCalendar("unified_backup_restore_commit", { sessionId });
   },
 };
 

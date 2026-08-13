@@ -1,3 +1,4 @@
+use std::sync::atomic::Ordering;
 use std::{
     collections::HashMap,
     fs::{self, File},
@@ -409,6 +410,46 @@ impl NotesService {
         atomic_write_private(&self.data_path, &file_contents)
             .map_err(|_| NativeError::storage_unavailable())
     }
+
+    pub(crate) fn unified_backup_snapshot(&self) -> Result<Option<Vec<u8>>, NativeError> {
+        match fs::symlink_metadata(&self.data_path) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+                Err(NativeError::storage_unavailable())
+            }
+            Ok(_) => self
+                .load()
+                .and_then(|data| serialize_bounded(&data, MAX_APP_DATA_BYTES).map(Some)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(_) => Err(NativeError::storage_unavailable()),
+        }
+    }
+
+    pub(crate) fn restore_unified_backup_snapshot(&self, raw: &[u8]) -> Result<(), NativeError> {
+        let data = Self::validate_unified_backup_snapshot(raw)?;
+        self.save_with_limits(&data, PRODUCTION_VALIDATION_LIMITS)
+    }
+
+    pub(crate) fn clear_unified_backup_snapshot(&self) -> Result<(), NativeError> {
+        match fs::symlink_metadata(&self.data_path) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+                Err(NativeError::storage_unavailable())
+            }
+            Ok(_) => {
+                fs::remove_file(&self.data_path).map_err(|_| NativeError::storage_unavailable())
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(_) => Err(NativeError::storage_unavailable()),
+        }
+    }
+
+    pub(crate) fn validate_unified_backup_snapshot(
+        raw: &[u8],
+    ) -> Result<PersistedAppDataV1, NativeError> {
+        let data: PersistedAppDataV1 =
+            serde_json::from_slice(raw).map_err(|_| NativeError::invalid_data(Some("noteData")))?;
+        validate_app_data(&data, PRODUCTION_VALIDATION_LIMITS)?;
+        Ok(data)
+    }
 }
 
 fn ensure_notes_window_label(label: &str) -> Result<(), NativeError> {
@@ -425,6 +466,12 @@ pub(crate) fn load_app_data(
     state: State<'_, AppState>,
 ) -> Result<PersistedAppDataV1, NativeError> {
     ensure_notes_window_label(window.label())?;
+    if state
+        .unified_restore_recovery_pending
+        .load(Ordering::Acquire)
+    {
+        return Err(NativeError::recovery_required());
+    }
     state.notes.load()
 }
 
@@ -444,6 +491,12 @@ fn save_app_data_body(
     raw_byte_limit: usize,
 ) -> Result<(), NativeError> {
     ensure_notes_window_label(caller_label)?;
+    if state
+        .unified_restore_recovery_pending
+        .load(Ordering::Acquire)
+    {
+        return Err(NativeError::recovery_required());
+    }
     let raw = match body {
         InvokeBody::Raw(raw) => raw,
         InvokeBody::Json(_) => return Err(NativeError::invalid_data(Some("noteData"))),
@@ -452,7 +505,7 @@ fn save_app_data_body(
         return Err(NativeError::data_too_large("noteData"));
     }
 
-    let _admission = state.note_mutations.begin()?;
+    let _admission = state.begin_note_mutation()?;
     state.notes.save_raw(raw)
 }
 

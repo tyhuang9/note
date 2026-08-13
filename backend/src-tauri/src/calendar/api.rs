@@ -653,10 +653,7 @@ pub(crate) async fn create_event_authorized(
 ) -> Result<EventResponse, ApiError> {
     let draft = request.into_domain(None, Vec::new())?;
     let runtime = state.calendar_runtime().await?;
-    let _mutation = state
-        .calendar_mutations
-        .begin()
-        .map_err(|_| mutation_busy_api_error())?;
+    let _mutation = state.begin_calendar_mutation()?;
     let created = runtime
         .calendar
         .create_event(draft)
@@ -686,10 +683,7 @@ pub(crate) async fn update_event_authorized(
     validate_expected_revision(request.expected_revision)?;
     let id = EventId::parse(&request.event_id)?;
     let runtime = state.calendar_runtime().await?;
-    let _mutation = state
-        .calendar_mutations
-        .begin()
-        .map_err(|_| mutation_busy_api_error())?;
+    let _mutation = state.begin_calendar_mutation()?;
     let current = runtime
         .calendar
         .get_event(id)
@@ -731,10 +725,7 @@ pub(crate) async fn delete_event_authorized(
     validate_expected_revision(request.expected_revision)?;
     let id = EventId::parse(&request.event_id)?;
     let runtime = state.calendar_runtime().await?;
-    let _mutation = state
-        .calendar_mutations
-        .begin()
-        .map_err(|_| mutation_busy_api_error())?;
+    let _mutation = state.begin_calendar_mutation()?;
     runtime
         .calendar
         .delete_event(id, request.expected_revision)
@@ -764,10 +755,7 @@ pub(crate) async fn update_occurrence_authorized(
     validate_expected_revision(request.expected_revision)?;
     let id = EventId::parse(&request.event_id)?;
     let runtime = state.calendar_runtime().await?;
-    let _mutation = state
-        .calendar_mutations
-        .begin()
-        .map_err(|_| mutation_busy_api_error())?;
+    let _mutation = state.begin_calendar_mutation()?;
     let current = runtime
         .calendar
         .get_event(id)
@@ -813,10 +801,7 @@ pub(crate) async fn delete_occurrence_authorized(
     validate_expected_revision(request.expected_revision)?;
     let id = EventId::parse(&request.event_id)?;
     let runtime = state.calendar_runtime().await?;
-    let _mutation = state
-        .calendar_mutations
-        .begin()
-        .map_err(|_| mutation_busy_api_error())?;
+    let _mutation = state.begin_calendar_mutation()?;
     runtime
         .calendar
         .delete_occurrence(id, &request.occurrence_key, request.expected_revision)
@@ -852,10 +837,7 @@ pub async fn calendar_update_settings(
     ensure_main_window(&window)?;
     let patch = request.into_patch()?;
     let runtime = state.calendar_runtime().await?;
-    let _mutation = state
-        .calendar_mutations
-        .begin()
-        .map_err(|_| mutation_busy_api_error())?;
+    let _mutation = state.begin_calendar_mutation()?;
     let updated = runtime
         .settings
         .update(patch)

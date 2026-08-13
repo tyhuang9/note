@@ -138,9 +138,39 @@
 }
 
 .calendar-settings { position: relative; }
-.calendar-settings[open] { min-width: 170px; }
+.calendar-settings[open] { width: min(580px, calc(100vw - 48px)); min-width: 170px; }
 .calendar-settings label { display: block; margin-top: 8px; font-size: 13px; }
 .calendar-settings summary { display: flex; align-items: center; min-height: 44px; cursor: pointer; }
+.calendar-data-migration { display: grid; gap: 14px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--workbench-border); }
+.calendar-data-migration h2, .calendar-data-migration h3, .calendar-data-migration h4, .calendar-data-migration h5, .calendar-data-migration p { margin: 0; }
+.calendar-data-migration h2 { font-size: 16px; }
+.calendar-data-migration h3 { font-size: 14px; }
+.calendar-data-migration h4 { font-size: 14px; }
+.calendar-data-migration h5 { font-size: 13px; }
+.calendar-data-migration-intro, .calendar-data-migration-section-heading p, .calendar-data-migration-actions span { color: var(--workbench-text-secondary); font-size: 13px; }
+.calendar-data-migration-section { display: grid; gap: 10px; padding-top: 14px; border-top: 1px solid var(--workbench-border); }
+.calendar-data-migration-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.calendar-data-migration-section-heading > div { display: grid; gap: 5px; }
+.calendar-data-migration-preview, .calendar-data-migration-completion { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--workbench-border); border-radius: 6px; background: var(--workbench-panel); }
+.calendar-data-migration-completion { border-left: 3px solid #7654d8; }
+.calendar-data-migration-feedback { padding: 10px; border-left: 3px solid #7654d8; background: color-mix(in srgb, #7654d8 8%, transparent); font-size: 13px; }
+.calendar-data-migration-feedback.is-empty { display: none; }
+.calendar-data-migration-feedback.is-error { border-left-color: #c33; color: #a11; background: color-mix(in srgb, #c33 8%, transparent); }
+.app-shell.is-dark .calendar-data-migration-feedback.is-error { border-left-color: #ff9c92; color: #fff0ef; background: #4a171c; }
+.calendar-data-migration-counts, .calendar-data-migration-result-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.calendar-data-migration-result-list { grid-template-columns: minmax(0, 1fr); }
+.calendar-data-migration-counts div, .calendar-data-migration-result-list div { display: grid; gap: 3px; }
+.calendar-data-migration-counts dt, .calendar-data-migration-result-list dt { color: var(--workbench-text-secondary); font-size: 12px; }
+.calendar-data-migration-counts dd, .calendar-data-migration-result-list dd { margin: 0; overflow-wrap: anywhere; font-size: 13px; font-weight: 700; }
+.calendar-data-migration-policy { padding: 8px 10px; border-left: 3px solid #7654d8; background: color-mix(in srgb, #7654d8 8%, transparent); font-size: 13px; font-weight: 700; }
+.calendar-data-migration-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.calendar-data-migration-list li { display: grid; gap: 2px; padding: 8px; border: 1px solid var(--workbench-border); border-radius: 5px; font-size: 13px; }
+.calendar-data-migration-list span { color: var(--workbench-text-secondary); font-size: 12px; }
+.calendar-settings .calendar-data-migration-confirm { display: flex; align-items: flex-start; gap: 8px; margin-top: 0; font-size: 13px; }
+.calendar-data-migration-confirm input { width: auto; min-height: auto; margin-top: 2px; }
+.calendar-data-migration-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.calendar-data-migration-preview h4:focus, .calendar-data-migration-completion h4:focus, .calendar-data-migration-preview h4:focus-visible, .calendar-data-migration-completion h4:focus-visible { outline: 3px solid #5b36b7; outline-offset: 3px; }
+.app-shell.is-dark .calendar-data-migration-preview h4:focus, .app-shell.is-dark .calendar-data-migration-completion h4:focus, .app-shell.is-dark .calendar-data-migration-preview h4:focus-visible, .app-shell.is-dark .calendar-data-migration-completion h4:focus-visible { outline-color: #dccdff; }
 .calendar-error, .calendar-field-error { margin: 16px 0; padding: 12px; border: 1px solid #c33; border-radius: 6px; color: #a11; background: color-mix(in srgb, #c33 8%, transparent); }
 .calendar-error { display: flex; justify-content: space-between; gap: 12px; }
 .calendar-agenda { max-width: 900px; margin: 20px auto; }
@@ -199,6 +229,9 @@
 @media (max-width: 767px) {
   .calendar-workspace { padding: 16px; }
   .calendar-header { flex-direction: column; align-items: flex-start; }
+  .calendar-settings[open] { width: 100%; }
+  .calendar-data-migration-section-heading { flex-direction: column; }
+  .calendar-data-migration-counts { grid-template-columns: 1fr; }
   .calendar-cell { min-height: 86px; }
   .calendar-cell-item { font-size: 11px; }
   .calendar-event { flex-direction: column; align-items: flex-start; gap: 2px; }
@@ -209,6 +242,8 @@
 @media (forced-colors: active) {
   .calendar-cell.is-selected { outline: 3px solid Highlight; }
   .calendar-primary { color: HighlightText; background: Highlight; }
+  .calendar-data-migration-feedback.is-error, .app-shell.is-dark .calendar-data-migration-feedback.is-error { forced-color-adjust: none; border: 2px solid CanvasText; color: CanvasText; background: Canvas; }
+  .calendar-data-migration-preview h4:focus, .calendar-data-migration-completion h4:focus, .calendar-data-migration-preview h4:focus-visible, .calendar-data-migration-completion h4:focus-visible, .app-shell.is-dark .calendar-data-migration-preview h4:focus, .app-shell.is-dark .calendar-data-migration-completion h4:focus, .app-shell.is-dark .calendar-data-migration-preview h4:focus-visible, .app-shell.is-dark .calendar-data-migration-completion h4:focus-visible { forced-color-adjust: none; outline: 3px solid Highlight; outline-offset: 3px; color: CanvasText; background: Canvas; }
 }
 
 @media (prefers-reduced-motion: reduce) {

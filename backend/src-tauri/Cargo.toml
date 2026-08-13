@@ -39,6 +39,7 @@ uuid = { version = "1", features = ["v4", "v5"] }
 iana-time-zone = "0.1"
 getrandom = "0.3"
 sha2 = "0.10"
+zip = { version = "6.0.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 futures-util = "0.3"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }
 tauri-plugin-dialog = "2"

@@ -4,6 +4,7 @@ mod calendar;
 mod calendar_store;
 mod error;
 pub mod events;
+mod migration;
 mod models_ai;
 mod mutation;
 mod notes;
@@ -87,6 +88,11 @@ pub fn run() {
             calendar::backup::backup_create,
             calendar::backup::backup_restore_preview,
             calendar::backup::backup_restore_commit,
+            migration::cal_import_preview,
+            migration::cal_import_commit,
+            migration::unified_backup_create,
+            migration::unified_backup_restore_preview,
+            migration::unified_backup_restore_commit,
             assistant::assistant_calendar_tool_execute,
             assistant::assistant_calendar_create_propose,
             assistant::assistant_calendar_create_revise,

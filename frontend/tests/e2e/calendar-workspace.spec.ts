@@ -400,7 +400,87 @@ test("calendar defines light and dark theme tokens locally", async ({ page }) =>
   await expect(workspace).toHaveCSS("background-color", "rgb(22, 22, 22)");
 });
 
-type MockOptions = { slowAgenda?: boolean; slowMonth?: boolean; pagination?: boolean; overnight?: boolean; manyEvents?: boolean; projectedSeries?: boolean; customRule?: boolean; untilRule?: boolean; conflictOnce?: boolean; settingsFail?: boolean; settingsOutOfOrder?: boolean; delayedListener?: boolean; defaultDuration?: number; exhausted?: boolean; unavailable?: boolean; retryFail?: boolean; widgetStatusFailures?: number };
+test("data migration and unified backups require a mocked preview before confirmation", async ({ page }) => {
+  await installCalendarMock(page);
+  await page.goto("/");
+  await page.getByText("Settings", { exact: true }).click();
+  const panel = page.getByRole("region", { name: "Data migration & backups" });
+
+  await expect(panel).toContainText("Cal is opened read-only and is not changed.");
+  await panel.getByRole("button", { name: "Preview Cal import" }).click();
+  const importPreview = panel.getByRole("heading", { name: "Cal import preview" });
+  await expect(importPreview).toBeFocused();
+  await expect(panel.getByText("Existing events are skipped; no copies or replacements.")).toBeVisible();
+  await expect(panel.getByRole("list", { name: "Cal events to import" })).toContainText("Cal planning");
+  const confirmImport = panel.getByRole("button", { name: "Confirm Cal import" });
+  await expect(confirmImport).toBeDisabled();
+  await panel.getByLabel("I understand existing events will be skipped.").check();
+  await confirmImport.click();
+  const importCompletion = panel.getByRole("heading", { name: "Cal import completed" });
+  await expect(importCompletion).toBeFocused();
+  await expect(importCompletion.locator("..")).toContainText("cal-import-recovery.note-backup");
+  expect(await calendarRequests(page, "cal_import_commit")).toEqual([{ sessionId: "cal-import-session" }]);
+
+  await panel.getByRole("button", { name: "Create unified backup" }).click();
+  const backupFeedback = page.locator(".calendar-data-migration-feedback").filter({ hasText: "Unified backup created." });
+  await expect(backupFeedback).toHaveAttribute("role", "status");
+  await expect(backupFeedback).toHaveAttribute("aria-live", "polite");
+  await expect(backupFeedback).toHaveAttribute("aria-atomic", "true");
+  expect(await backupFeedback.evaluate((element) => !element.closest("[aria-busy]"))).toBe(true);
+  await expect(panel.getByRole("heading", { name: "Unified backup created" }).locator("..")).toContainText("note-unified-backup.note-backup");
+
+  await panel.getByRole("button", { name: "Preview backup restore" }).click();
+  const restorePreview = panel.getByRole("heading", { name: "Backup restore preview" });
+  await expect(restorePreview).toBeFocused();
+  await expect(panel).toContainText("Includes Note data");
+  await expect(panel).toContainText("Includes calendar snapshot");
+  const confirmRestore = panel.getByRole("button", { name: "Confirm backup restore" });
+  await expect(confirmRestore).toBeDisabled();
+  await panel.getByLabel("I understand that confirming restores the selected backup and creates a recovery backup.").check();
+  await confirmRestore.click();
+  const restoreCompletion = panel.getByRole("heading", { name: "Backup restore completed" });
+  await expect(restoreCompletion).toBeFocused();
+  await expect(restoreCompletion.locator("..")).toContainText("restore-recovery.note-backup");
+  expect(await calendarRequests(page, "unified_backup_restore_commit")).toEqual([{ sessionId: "unified-restore-session" }]);
+});
+
+test("data migration expiry returns focus to its relevant preview action", async ({ page }) => {
+  await installCalendarMock(page, { calImportPreviewExpired: true, unifiedRestorePreviewExpired: true });
+  await page.goto("/");
+  await page.getByText("Settings", { exact: true }).click();
+  const panel = page.getByRole("region", { name: "Data migration & backups" });
+
+  await panel.getByRole("button", { name: "Preview Cal import" }).click();
+  await panel.getByLabel("I understand existing events will be skipped.").check();
+  await panel.getByRole("button", { name: "Confirm Cal import" }).click();
+  await expect(page.getByRole("alert")).toContainText("Cal import preview has expired");
+  await expect(panel.getByRole("button", { name: "Preview Cal import" })).toBeFocused();
+  expect(await calendarRequests(page, "cal_import_commit")).toHaveLength(0);
+
+  await panel.getByRole("button", { name: "Preview backup restore" }).click();
+  await panel.getByLabel("I understand that confirming restores the selected backup and creates a recovery backup.").check();
+  await panel.getByRole("button", { name: "Confirm backup restore" }).click();
+  await expect(page.getByRole("alert")).toContainText("backup restore preview has expired");
+  await expect(panel.getByRole("button", { name: "Preview backup restore" })).toBeFocused();
+  expect(await calendarRequests(page, "unified_backup_restore_commit")).toHaveLength(0);
+});
+
+test("data migration exposes native failures as high-contrast dark alerts", async ({ page }) => {
+  await installCalendarMock(page, { calImportCommitFail: true });
+  await page.goto("/");
+  await page.locator(".app-shell").evaluate((element) => element.classList.add("is-dark"));
+  await page.getByText("Settings", { exact: true }).click();
+  const panel = page.getByRole("region", { name: "Data migration & backups" });
+
+  await panel.getByRole("button", { name: "Preview Cal import" }).click();
+  await panel.getByLabel("I understand existing events will be skipped.").check();
+  await panel.getByRole("button", { name: "Confirm Cal import" }).click();
+  const alert = page.getByRole("alert");
+  await expect(alert).toContainText("Cal import failed.");
+  await expect(alert).toHaveCSS("color", "rgb(255, 240, 239)");
+});
+
+type MockOptions = { slowAgenda?: boolean; slowMonth?: boolean; pagination?: boolean; overnight?: boolean; manyEvents?: boolean; projectedSeries?: boolean; customRule?: boolean; untilRule?: boolean; conflictOnce?: boolean; settingsFail?: boolean; settingsOutOfOrder?: boolean; delayedListener?: boolean; defaultDuration?: number; exhausted?: boolean; unavailable?: boolean; retryFail?: boolean; widgetStatusFailures?: number; calImportPreviewExpired?: boolean; unifiedRestorePreviewExpired?: boolean; calImportCommitFail?: boolean };
 
 async function installCalendarMock(page: Page, options: MockOptions = {}) {
   await page.addInitScript((mockOptions) => {
@@ -537,6 +617,52 @@ async function installCalendarMock(page: Page, options: MockOptions = {}) {
         }
         if (command === "calendar_create_event") return { ...master, ...(request as object), recurrenceRule: request?.recurrenceRule ?? null };
         if (command === "calendar_delete_event" || command === "calendar_delete_occurrence") return undefined;
+        if (command === "cal_import_preview") return {
+          status: "previewed",
+          sessionId: "cal-import-session",
+          fileName: "cal-events.db",
+          expiresAtUtcMs: mockOptions.calImportPreviewExpired ? Date.now() - 1 : Date.now() + 60_000,
+          totalCount: 3,
+          acceptedCount: 2,
+          existingCount: 1,
+          items: [
+            { sourceEventId: "cal-1", title: "Cal planning", temporalKind: "timed", startLabel: "Jul 21, 9:00 AM", endLabel: "Jul 21, 10:00 AM" },
+            { sourceEventId: "cal-2", title: "Cal all-day", temporalKind: "allDay", startLabel: "Jul 22", endLabel: "Jul 23" },
+          ],
+        };
+        if (command === "cal_import_commit") {
+          if (mockOptions.calImportCommitFail) throw { code: "migration_failed", message: "Cal import failed." };
+          return {
+          status: "committed",
+          acceptedCount: 2,
+          importedCount: 2,
+          skippedCount: 1,
+          recoveryBackupFileName: "cal-import-recovery.note-backup",
+          committedAtUtcMs: Date.now(),
+          };
+        }
+        if (command === "unified_backup_create") return {
+          status: "created",
+          fileName: "note-unified-backup.note-backup",
+          byteSize: 2048,
+          createdAtUtcMs: Date.now(),
+        };
+        if (command === "unified_backup_restore_preview") return {
+          status: "previewed",
+          sessionId: "unified-restore-session",
+          fileName: "note-unified-backup.note-backup",
+          byteSize: 2048,
+          expiresAtUtcMs: mockOptions.unifiedRestorePreviewExpired ? Date.now() - 1 : Date.now() + 60_000,
+          hasNoteData: true,
+          hasCalendarSnapshot: true,
+        };
+        if (command === "unified_backup_restore_commit") return {
+          status: "restored",
+          noteDataRestored: true,
+          calendarRestored: true,
+          recoveryBackupFileName: "restore-recovery.note-backup",
+          restoredAtUtcMs: Date.now(),
+        };
         if (command === "plugin:event|listen") {
           const event = body?.event;
           const handler = body?.handler;

@@ -22,6 +22,7 @@ use crate::{
         settings::SettingsService,
     },
     calendar_store::sqlite::SqliteEventStore,
+    error::NativeError,
     models_ai::ModelsAiRuntime,
     mutation::MutationGate,
     notes::NotesService,
@@ -39,6 +40,7 @@ pub(crate) struct CalendarRuntime {
     pub(crate) import: IcsImportState,
     pub(crate) export: IcsExportState,
     pub(crate) backup: BackupState,
+    pub(crate) migration: crate::migration::MigrationState,
     #[cfg(desktop)]
     pub(crate) reminders: Option<ReminderState>,
 }
@@ -48,6 +50,7 @@ impl CalendarRuntime {
         store: Arc<SqliteEventStore>,
         app_data_dir: &Path,
         app: Option<tauri::AppHandle>,
+        unified_restore_recovery_pending: Arc<AtomicBool>,
     ) -> Self {
         Self {
             calendar: CalendarService::new(store.clone()),
@@ -61,6 +64,11 @@ impl CalendarRuntime {
                     app_data_dir.join("calendar-restore-staging"),
                     app_data_dir.join("calendar-backups"),
                 ),
+            ),
+            migration: crate::migration::MigrationState::new(
+                store.clone(),
+                app_data_dir,
+                unified_restore_recovery_pending,
             ),
             #[cfg(desktop)]
             reminders: app.map(|app| ReminderState::new(store.clone(), app)),
@@ -77,6 +85,7 @@ enum CalendarState {
     },
     Unavailable {
         initialization_duration_ms: u64,
+        recovery_required: bool,
     },
 }
 
@@ -106,6 +115,7 @@ impl CalendarState {
             },
             Self::Unavailable {
                 initialization_duration_ms,
+                ..
             } => CalendarReadinessStatus::Unavailable {
                 initialization_duration_ms: *initialization_duration_ms,
             },
@@ -133,16 +143,22 @@ struct CalendarReadiness {
     state: RwLock<CalendarState>,
     changed: Notify,
     initializing: AtomicBool,
+    unified_restore_recovery_pending: Arc<AtomicBool>,
 }
 
 impl CalendarReadiness {
-    fn new(app_data_dir: PathBuf, initializer: Arc<dyn CalendarInitializer>) -> Arc<Self> {
+    fn new(
+        app_data_dir: PathBuf,
+        initializer: Arc<dyn CalendarInitializer>,
+        unified_restore_recovery_pending: Arc<AtomicBool>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             app_data_dir,
             initializer,
             state: RwLock::new(CalendarState::Loading),
             changed: Notify::new(),
             initializing: AtomicBool::new(false),
+            unified_restore_recovery_pending,
         })
     }
 
@@ -189,12 +205,39 @@ impl CalendarReadiness {
         let started = Instant::now();
         let database_path = self.app_data_dir.join("calendar.sqlite3");
         let next = match self.initializer.open(&database_path).await {
-            Ok(store) => CalendarState::Ready {
-                runtime: Arc::new(CalendarRuntime::new(store, &self.app_data_dir, app)),
-                initialization_duration_ms: elapsed_ms(started),
-            },
+            Ok(store) => {
+                let recovery_failed = self
+                    .unified_restore_recovery_pending
+                    .load(Ordering::Acquire)
+                    && crate::migration::recover_unified_restore_intent(
+                        &self.app_data_dir,
+                        store.clone(),
+                        self.unified_restore_recovery_pending.clone(),
+                    )
+                    .await
+                    .is_err();
+                if recovery_failed {
+                    CalendarState::Unavailable {
+                        initialization_duration_ms: elapsed_ms(started),
+                        recovery_required: true,
+                    }
+                } else {
+                    self.unified_restore_recovery_pending
+                        .store(false, Ordering::Release);
+                    CalendarState::Ready {
+                        runtime: Arc::new(CalendarRuntime::new(
+                            store,
+                            &self.app_data_dir,
+                            app,
+                            self.unified_restore_recovery_pending.clone(),
+                        )),
+                        initialization_duration_ms: elapsed_ms(started),
+                    }
+                }
+            }
             Err(_) => CalendarState::Unavailable {
                 initialization_duration_ms: elapsed_ms(started),
+                recovery_required: false,
             },
         };
         let ready = matches!(next, CalendarState::Ready { .. });
@@ -226,6 +269,10 @@ impl CalendarReadiness {
                 .clone();
             match state {
                 CalendarState::Ready { runtime, .. } => return Ok(runtime),
+                CalendarState::Unavailable {
+                    recovery_required: true,
+                    ..
+                } => return Err(recovery_required()),
                 CalendarState::Unavailable { .. } => return Err(storage_unavailable()),
                 CalendarState::Loading => {}
             }
@@ -256,11 +303,20 @@ const fn storage_unavailable() -> ApiError {
     }
 }
 
+const fn recovery_required() -> ApiError {
+    ApiError {
+        code: "unified_backup_recovery_required",
+        message: "A pending local backup recovery must finish before calendar data can be used.",
+        field: None,
+    }
+}
+
 pub(crate) struct AppState {
     // Notes and calendar writes are independently admitted. Calendar commands
     // wait for readiness before taking their gate, so startup cannot block notes.
     pub(crate) note_mutations: MutationGate,
     pub(crate) calendar_mutations: MutationGate,
+    pub(crate) unified_restore_recovery_pending: Arc<AtomicBool>,
     pub(crate) notes: NotesService,
     pub(crate) assistant: AssistantState,
     pub(crate) models_ai: ModelsAiRuntime,
@@ -277,14 +333,22 @@ impl AppState {
         app_data_dir: PathBuf,
         initializer: Arc<dyn CalendarInitializer>,
     ) -> Self {
+        let unified_restore_recovery_pending = Arc::new(AtomicBool::new(
+            crate::migration::unified_restore_intent_is_pending(&app_data_dir),
+        ));
         Self {
             note_mutations: MutationGate::default(),
             calendar_mutations: MutationGate::default(),
+            unified_restore_recovery_pending: unified_restore_recovery_pending.clone(),
             notes: NotesService::new(app_data_dir.clone()),
             assistant: AssistantState::default(),
             models_ai: ModelsAiRuntime::new(&app_data_dir),
             voice: Arc::new(VoiceState::new(app_data_dir.join("voice"))),
-            calendar: CalendarReadiness::new(app_data_dir, initializer),
+            calendar: CalendarReadiness::new(
+                app_data_dir,
+                initializer,
+                unified_restore_recovery_pending,
+            ),
         }
     }
 
@@ -297,7 +361,50 @@ impl AppState {
     }
 
     pub(crate) async fn calendar_runtime(&self) -> Result<Arc<CalendarRuntime>, ApiError> {
+        self.ensure_unified_restore_not_pending()?;
         self.calendar.wait(CALENDAR_READY_TIMEOUT).await
+    }
+
+    pub(crate) fn ensure_unified_restore_not_pending(&self) -> Result<(), ApiError> {
+        if self
+            .unified_restore_recovery_pending
+            .load(Ordering::Acquire)
+        {
+            return Err(recovery_required());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn begin_calendar_mutation(
+        &self,
+    ) -> Result<tokio::sync::MutexGuard<'_, ()>, ApiError> {
+        self.ensure_unified_restore_not_pending()?;
+        let admission = self
+            .calendar_mutations
+            .begin()
+            .map_err(|_| crate::calendar::api::mutation_busy_api_error())?;
+        self.ensure_unified_restore_not_pending()?;
+        Ok(admission)
+    }
+
+    pub(crate) fn begin_note_mutation(
+        &self,
+    ) -> Result<tokio::sync::MutexGuard<'_, ()>, NativeError> {
+        if self
+            .unified_restore_recovery_pending
+            .load(Ordering::Acquire)
+        {
+            return Err(NativeError::recovery_required());
+        }
+        let admission = self.note_mutations.begin()?;
+        if self
+            .unified_restore_recovery_pending
+            .load(Ordering::Acquire)
+        {
+            drop(admission);
+            return Err(NativeError::recovery_required());
+        }
+        Ok(admission)
     }
 
     pub(crate) fn ready_calendar_now(&self) -> Option<Arc<CalendarRuntime>> {

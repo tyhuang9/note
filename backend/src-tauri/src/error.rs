@@ -7,6 +7,8 @@ pub(crate) enum NativeErrorCode {
     ForbiddenWindow,
     InvalidData,
     MutationUnavailable,
+    #[serde(rename = "unified_backup_recovery_required")]
+    RecoveryRequired,
     StorageUnavailable,
 }
 
@@ -56,6 +58,14 @@ impl NativeError {
         Self {
             code: NativeErrorCode::StorageUnavailable,
             message: "Local note storage is unavailable.",
+            field: None,
+        }
+    }
+
+    pub(crate) const fn recovery_required() -> Self {
+        Self {
+            code: NativeErrorCode::RecoveryRequired,
+            message: "A pending local backup recovery must finish before Note data can be used.",
             field: None,
         }
     }

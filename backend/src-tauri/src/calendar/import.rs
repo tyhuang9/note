@@ -458,10 +458,7 @@ pub async fn import_ics_commit(
 ) -> Result<ImportIcsCommitResponse, ApiError> {
     ensure_main_window(&window)?;
     let runtime = app_state.calendar_runtime().await?;
-    let _mutation = app_state
-        .calendar_mutations
-        .begin()
-        .map_err(|_| mutation_busy_api_error())?;
+    let _mutation = app_state.begin_calendar_mutation()?;
     let state = &runtime.import;
     let _operation = state.operation.try_begin()?;
     let response = commit_staged_import(
@@ -475,14 +472,6 @@ pub async fn import_ics_commit(
     super::reminders::trigger_reminder_rebuild(&window);
     super::api::emit_calendar_changed(&window);
     Ok(response)
-}
-
-const fn mutation_busy_api_error() -> ApiError {
-    ApiError {
-        code: "data_operation_in_progress",
-        message: "Another local data operation is still finishing. Try again.",
-        field: None,
-    }
 }
 
 async fn commit_staged_import(

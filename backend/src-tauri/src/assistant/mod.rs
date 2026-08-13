@@ -14,8 +14,8 @@ use crate::{
     app_state::AppState,
     calendar::{
         api::{
-            emit_calendar_changed, ensure_main_window, mutation_busy_api_error, EventDraftRequest,
-            EventResponse, EventTimeRequest, EventTimeResponse,
+            emit_calendar_changed, ensure_main_window, EventDraftRequest, EventResponse,
+            EventTimeRequest, EventTimeResponse,
         },
         domain::{
             EventId, EventQueryRange, EventRecord, EventSearchQuery, EventTime, OccurrenceRecord,
@@ -728,10 +728,7 @@ async fn propose_create_authorized(
     request: CreateProposalRequest,
 ) -> Result<CreateProposalResponse, ApiError> {
     let runtime = state.calendar_runtime().await?;
-    let _mutation = state
-        .calendar_mutations
-        .begin()
-        .map_err(|_| mutation_busy_api_error())?;
+    let _mutation = state.begin_calendar_mutation()?;
     if runtime
         .calendar
         .assistant_create_reconciliation_required()
@@ -750,10 +747,7 @@ async fn create_assistant_event_authorized(
 ) -> Result<EventResponse, ApiError> {
     let draft = request.into_domain(None, Vec::new())?;
     let runtime = state.calendar_runtime().await?;
-    let _mutation = state
-        .calendar_mutations
-        .begin()
-        .map_err(|_| mutation_busy_api_error())?;
+    let _mutation = state.begin_calendar_mutation()?;
     let created = runtime
         .calendar
         .create_assistant_event(draft)
@@ -785,10 +779,7 @@ async fn acknowledge_reconciliation_authorized(
     mode: ReconciliationAcknowledgeMode,
 ) -> Result<ReconciliationAcknowledgeResponse, ApiError> {
     let runtime = state.calendar_runtime().await?;
-    let _mutation = state
-        .calendar_mutations
-        .begin()
-        .map_err(|_| mutation_busy_api_error())?;
+    let _mutation = state.begin_calendar_mutation()?;
     let acknowledged = runtime
         .calendar
         .acknowledge_assistant_create_reconciliation()

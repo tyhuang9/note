@@ -368,6 +368,31 @@ impl SqliteEventStore {
             }
         }
     }
+
+    // Unified restores create their verified recovery archive before either
+    // store is mutated. Reuse the exact staged-snapshot verification and the
+    // transactional replacement below without creating a second recovery
+    // snapshot after another store may already have been published.
+    pub(crate) async fn restore_staged_snapshot_after_recovery(
+        &self,
+        staged_path: &Path,
+        expected: &RestoreInspection,
+    ) -> Result<RestoreCurrentCounts, RestoreError> {
+        let _dispatch_barrier = self.calendar_mutation_guard().await;
+        let expected_schema = live_schema_definitions(self.pool()).await?;
+        let verified = inspect_restore_snapshot(staged_path, &expected_schema).await?;
+        if &verified != expected {
+            return Err(RestoreError::VerificationFailed);
+        }
+
+        replace_live_data(self.database_path(), staged_path, &|_| Ok(())).await?;
+        self.advance_reminder_data_generation();
+        Ok(RestoreCurrentCounts {
+            calendar_count: verified.backup.calendar_count,
+            event_count: verified.backup.event_count,
+            reminder_count: verified.backup.reminder_count,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

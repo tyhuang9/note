@@ -550,10 +550,7 @@ pub async fn backup_restore_commit(
 ) -> Result<RestoreCommitResponse, ApiError> {
     ensure_main_window(&window)?;
     let runtime = app_state.calendar_runtime().await?;
-    let _mutation = app_state
-        .calendar_mutations
-        .begin()
-        .map_err(|_| mutation_busy_api_error())?;
+    let _mutation = app_state.begin_calendar_mutation()?;
     let state = &runtime.backup;
     let _operation = state.operation.try_begin_restore()?;
     let restored = state
@@ -565,14 +562,6 @@ pub async fn backup_restore_commit(
     super::reminders::trigger_reminder_rebuild(&window);
     super::api::emit_calendar_changed(&window);
     Ok(restored)
-}
-
-const fn mutation_busy_api_error() -> ApiError {
-    ApiError {
-        code: "data_operation_in_progress",
-        message: "Another local data operation is still finishing. Try again.",
-        field: None,
-    }
 }
 
 #[cfg(test)]

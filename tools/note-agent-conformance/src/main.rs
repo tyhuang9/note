@@ -22,7 +22,7 @@ use tokio::sync::Notify;
 use tokio::time::timeout;
 
 const BASE_URL: &str = "http://127.0.0.1:12434";
-const DEFAULT_MODEL: &str = "lfm2.5-thinking:1.2b-q4_K_M";
+const DEFAULT_MODEL: &str = "gemma4:e4b-it-q4_K_M";
 const HARNESS_REVISION: &str = "cc9f999a5615915f06e1d57996e10942fd37eccf";
 const NOTE_READINESS_REVISION: &str = "ea18fbb262fa1f6117a4545c1852cfb78f7cf6c9";
 const REPEATS: usize = 5;
@@ -1146,7 +1146,7 @@ mod tests {
         assert_eq!(CANONICAL_TOOLS.len(), 10);
         assert!(CANONICAL_TOOLS.iter().all(|id| !id.starts_with("note.")));
         assert_eq!(BASE_URL, "http://127.0.0.1:12434");
-        assert_eq!(DEFAULT_MODEL, "lfm2.5-thinking:1.2b-q4_K_M");
+        assert_eq!(DEFAULT_MODEL, "gemma4:e4b-it-q4_K_M");
         assert_eq!(HARNESS_REVISION.len(), 40);
         assert_eq!(NOTE_READINESS_REVISION.len(), 40);
     }

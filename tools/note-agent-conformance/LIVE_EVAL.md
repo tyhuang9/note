@@ -10,7 +10,7 @@ Start a separately owned Ollama service with `OLLAMA_HOST=127.0.0.1:12434`, conf
 cargo run --release -- --report "$env:TEMP\note-agent-live-eval.json"
 ```
 
-The managed model is fixed to `lfm2.5-thinking:1.2b-q4_K_M`; the evaluator has no model override and fails inventory if that exact model is absent.
+The managed alternative model is fixed to `gemma4:e4b-it-q4_K_M`; the evaluator has no model override and fails inventory if that exact model is absent. A bounded inventory using an owned service on `127.0.0.1:12434` confirmed it is the sole installed alternative to the original LFM candidate and advertises completion and tool capabilities. The unchanged gate has not yet been run against Gemma4.
 
 ## Historical 2026-08-13 original-candidate result: NO-GO
 

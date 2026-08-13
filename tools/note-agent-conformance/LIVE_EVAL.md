@@ -10,12 +10,18 @@ Start a separately owned Ollama service with `OLLAMA_HOST=127.0.0.1:12434`, conf
 cargo run --release -- --report "$env:TEMP\note-agent-live-eval.json"
 ```
 
-The managed alternative model is fixed to `gemma4:e4b-it-q4_K_M`; the evaluator has no model override and fails inventory if that exact model is absent. A bounded inventory using an owned service on `127.0.0.1:12434` confirmed it is the sole installed alternative to the original LFM candidate and advertises completion and tool capabilities. The unchanged gate has not yet been run against Gemma4.
+The managed alternative model is fixed to `gemma4:e4b-it-q4_K_M`; the evaluator has no model override and fails inventory if that exact model is absent. A bounded inventory using an owned service on `127.0.0.1:12434` confirmed it is the sole installed alternative to the original LFM candidate and advertises completion and tool capabilities.
+
+## 2026-08-13 Gemma4 alternative result: GO
+
+The unchanged gate ran exactly once against Ollama 0.32.9, harness revision `cc9f999a5615915f06e1d57996e10942fd37eccf`, and Note readiness revision `ea18fbb262fa1f6117a4545c1852cfb78f7cf6c9`. Health (5 ms), inventory (1 ms), direct chat (30,043 ms, output `READY`), AgentRunner in-flight cancellation (0 ms after `ModelRequested`), provider-streaming typed cancellation (1,594 ms after the first `TextDelta`), and the typed timeout gate (16 ms) all passed.
+
+All 55 cases passed across five repetitions: 30 functional and 25 safety executions. The task and safety pass rates were both 100%, so the result is GO without changing the fixed 90% task or 100% safety thresholds. The 184,337-byte report SHA-256 was `B3E65421C9000AE8F26C32BDDF6D00D7397B242DBEDE02B6017C81BED6FAEE27`. The owned evaluator and Ollama service tree were stopped after the run, and `127.0.0.1:12434` was released.
 
 ## Historical 2026-08-13 original-candidate result: NO-GO
 
-The committed evaluator ran against Ollama 0.32.9 and the exact managed model. Health (3 ms), inventory (1 ms), direct chat (42,778 ms, output `READY`), AgentRunner in-flight cancellation (0 ms after `ModelRequested`), and the typed timeout gate (11 ms) passed. Provider-streaming cancellation failed after 1,184 ms because the first stream event was already `Completed` (20 input tokens, 512 output tokens), leaving no nonterminal event after which cancellation could be exercised.
+The committed evaluator ran against Ollama 0.32.9 and the original `lfm2.5-thinking:1.2b-q4_K_M` model. Health (3 ms), inventory (1 ms), direct chat (42,778 ms, output `READY`), AgentRunner in-flight cancellation (0 ms after `ModelRequested`), and the typed timeout gate (11 ms) passed. Provider-streaming cancellation failed after 1,184 ms because the first stream event was already `Completed` (20 input tokens, 512 output tokens), leaving no nonterminal event after which cancellation could be exercised.
 
 The preflight failure stopped the run before the functional/safety matrix, so zero cases ran and the result is a NO-GO. The report SHA-256 was `831E39431C43E5C21AB9E25CD7C111F7125B2EBF678123FE1F8C4790DA779EA6`. Do not weaken the gate; the next decision is whether to use a model/provider combination that exposes a cancellable incremental stream.
 
-The conformance and evaluator tool schemas, public result shapes, operation-specific revision bindings, harness pin, and readiness evidence were aligned after this recorded original-candidate run. The report digest above is historical; LFM was not rerun against the re-cut candidates, and the live functional/safety matrix remains unverified.
+The conformance and evaluator tool schemas, public result shapes, operation-specific revision bindings, harness pin, and readiness evidence were aligned after this recorded original-candidate run. The report digest above is historical; LFM was not rerun against the re-cut candidates, and its functional/safety matrix remains unverified.

@@ -12,8 +12,9 @@ use std::{
     collections::HashMap,
     env,
     error::Error,
-    fs,
-    path::PathBuf,
+    fs::{self, File, OpenOptions},
+    io::Write,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -650,18 +651,72 @@ fn score(cases: &[CaseReport]) -> (f64, f64, bool) {
     )
 }
 
-fn parse_args() -> Result<PathBuf, Box<dyn Error>> {
+#[derive(Debug)]
+struct ReportDestination {
+    path: PathBuf,
+    canonical_temp: PathBuf,
+}
+
+fn report_destination(report: &Path) -> Result<ReportDestination, Box<dyn Error>> {
+    let file_name = report
+        .file_name()
+        .filter(|name| !name.is_empty())
+        .ok_or("report requires a file name")?;
+    let parent = fs::canonicalize(report.parent().ok_or("report requires a parent")?)?;
+    let canonical_temp = fs::canonicalize(env::temp_dir())?;
+    if !parent.starts_with(&canonical_temp) {
+        return Err("report must be inside the OS temp directory".into());
+    }
+
+    // Write through the resolved parent rather than the caller's path. This prevents a
+    // symlink or Windows reparse point in the supplied parent path from redirecting the
+    // report after validation.
+    Ok(ReportDestination {
+        path: parent.join(file_name),
+        canonical_temp,
+    })
+}
+
+fn open_report_new(destination: &ReportDestination) -> std::io::Result<File> {
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&destination.path)
+}
+
+fn write_report(destination: &ReportDestination, contents: &[u8]) -> Result<(), Box<dyn Error>> {
+    let mut file = open_report_new(destination)?;
+
+    // Check the target after opening but before writing. If an attacker races a parent
+    // replacement with a symlink/reparse point, the opened file is never populated unless
+    // its resolved target is still under the canonical OS temp directory. Namespace changes
+    // after this check cannot redirect writes from the already-open file handle.
+    let write_result = (|| -> Result<(), Box<dyn Error>> {
+        let resolved_target = fs::canonicalize(&destination.path)?;
+        if !resolved_target.starts_with(&destination.canonical_temp) {
+            return Err("report target escaped the OS temp directory".into());
+        }
+
+        file.write_all(contents)?;
+        file.sync_all()?;
+        Ok(())
+    })();
+
+    if write_result.is_err() {
+        drop(file);
+        // `create_new` succeeded above, so this path was not an arbitrary pre-existing
+        // caller input. Cleanup is intentionally limited to that exact fresh report path.
+        let _ = fs::remove_file(&destination.path);
+    }
+    write_result
+}
+
+fn parse_args() -> Result<ReportDestination, Box<dyn Error>> {
     let args = env::args().skip(1).collect::<Vec<_>>();
     if args.len() != 2 || args[0] != "--report" {
         return Err("usage: note-agent-conformance --report <temp-json-path>".into());
     }
-    let report = PathBuf::from(&args[1]);
-    let parent = fs::canonicalize(report.parent().ok_or("report requires a parent")?)?;
-    let temp = fs::canonicalize(env::temp_dir())?;
-    if !parent.starts_with(temp) {
-        return Err("report must be inside the OS temp directory".into());
-    }
-    Ok(report)
+    report_destination(Path::new(&args[1]))
 }
 
 fn probe(started: Instant, passed: bool, detail: impl Into<String>) -> Probe {
@@ -916,7 +971,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         safety_pass_rate,
         go,
     };
-    fs::write(&report_path, serde_json::to_vec_pretty(&report)?)?;
+    write_report(&report_path, &serde_json::to_vec_pretty(&report)?)?;
     println!("{}", serde_json::to_string(&report)?);
     if go {
         Ok(())
@@ -928,6 +983,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn unique_temp_dir(name: &str) -> PathBuf {
+        let unique = format!(
+            "note-agent-conformance-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let path = env::temp_dir().join(unique);
+        fs::create_dir(&path).unwrap();
+        path
+    }
+
+    fn remove_dir_all_if_present(path: &Path) {
+        if path.exists() {
+            fs::remove_dir_all(path).unwrap();
+        }
+    }
 
     fn run_result(status: RunStatus, output: Option<&str>, errors: &[&str]) -> RunResult {
         RunResult {
@@ -987,6 +1062,83 @@ mod tests {
         assert_eq!(safety, 24.0 / 25.0);
         assert!(!go);
         assert_eq!(score(&[]), (0.0, 0.0, false));
+    }
+
+    #[test]
+    fn report_path_requires_a_new_file_and_preserves_an_existing_one() {
+        let directory = unique_temp_dir("existing-report");
+        let report = directory.join("report.json");
+        fs::write(&report, b"pre-existing evidence").unwrap();
+
+        let destination = report_destination(&report).unwrap();
+        let error = write_report(&destination, b"new result").unwrap_err();
+
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(fs::read(&report).unwrap(), b"pre-existing evidence");
+        remove_dir_all_if_present(&directory);
+    }
+
+    #[test]
+    fn report_path_writes_only_through_the_resolved_temp_parent() {
+        let directory = unique_temp_dir("resolved-parent");
+        let report = directory.join("report.json");
+        let destination = report_destination(&report).unwrap();
+
+        write_report(&destination, b"report body").unwrap();
+
+        assert_eq!(fs::read(&report).unwrap(), b"report body");
+        assert!(fs::canonicalize(&report)
+            .unwrap()
+            .starts_with(fs::canonicalize(env::temp_dir()).unwrap()));
+        remove_dir_all_if_present(&directory);
+    }
+
+    #[cfg(unix)]
+    fn create_dir_link(link: &Path, target: &Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(target, link)
+    }
+
+    #[cfg(windows)]
+    fn create_dir_link(link: &Path, target: &Path) -> std::io::Result<()> {
+        std::os::windows::fs::symlink_dir(target, link)
+    }
+
+    fn link_fixture_unavailable(error: &std::io::Error) -> bool {
+        matches!(
+            error.kind(),
+            std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::Unsupported
+        ) || cfg!(windows) && error.raw_os_error() == Some(1314)
+    }
+
+    #[test]
+    fn report_path_rejects_symlink_or_reparse_parent_outside_temp_when_supported() {
+        let directory = unique_temp_dir("symlink-parent");
+        let external = env::current_dir().unwrap().join(format!(
+            "note-agent-conformance-external-{}",
+            std::process::id()
+        ));
+        fs::create_dir(&external).unwrap();
+        let link = directory.join("outside-link");
+
+        match create_dir_link(&link, &external) {
+            Ok(()) => {
+                let error = report_destination(&link.join("report.json")).unwrap_err();
+                assert!(error
+                    .to_string()
+                    .contains("report must be inside the OS temp directory"));
+            }
+            // Windows symlinks are reparse points. Creation can be unavailable on hosts
+            // without the required developer/admin privilege; the parent canonicalization
+            // check is exercised whenever the platform permits creating one.
+            Err(error) if link_fixture_unavailable(&error) => {}
+            Err(error) => panic!("failed to create symlink/reparse test fixture: {error}"),
+        }
+
+        remove_dir_all_if_present(&directory);
+        remove_dir_all_if_present(&external);
     }
 
     #[test]

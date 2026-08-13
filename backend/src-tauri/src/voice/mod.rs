@@ -1107,6 +1107,7 @@ pub(crate) async fn voice_capture_start(
     state: State<'_, crate::app_state::AppState>,
     request: VoiceCaptureStartRequest,
 ) -> Result<VoiceSession, VoiceApiError> {
+    let _timer = crate::performance::Timer::start(crate::performance::Operation::VoiceCapture);
     ensure_quick_command_window(&window)?;
     let (session, _, deadline) = state.voice.start(request.mode).await;
     if let Some(deadline) = deadline {
@@ -1126,6 +1127,7 @@ pub(crate) async fn voice_capture_stop(
     state: State<'_, crate::app_state::AppState>,
     request: VoiceSessionRequest,
 ) -> Result<VoiceSession, VoiceApiError> {
+    let _timer = crate::performance::Timer::start(crate::performance::Operation::VoiceCapture);
     ensure_quick_command_window(&window)?;
     let (session, changed) = state
         .voice

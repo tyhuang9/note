@@ -467,6 +467,7 @@ pub async fn calendar_widget_agenda(
     state: State<'_, AppState>,
     request: WidgetAgendaRequest,
 ) -> Result<Vec<WidgetAgendaItemResponse>, ApiError> {
+    let _timer = crate::performance::Timer::start(crate::performance::Operation::WidgetRefresh);
     ensure_widget_window_label(window.label())?;
     let range = widget_agenda_range(Utc::now().timestamp_millis(), &request.display_time_zone)?;
     let mut items = state
@@ -516,6 +517,7 @@ pub async fn calendar_agenda_page(
     state: State<'_, AppState>,
     request: AgendaPageRequest,
 ) -> Result<AgendaPageResponse, ApiError> {
+    let _timer = crate::performance::Timer::start(crate::performance::Operation::CalendarAgenda);
     ensure_main_window(&window)?;
     let direction = request.direction;
     let (range, start_date, end_date_exclusive, display_time_zone, next_cursor, hard_exhausted) =
@@ -599,6 +601,7 @@ pub async fn calendar_search(
     state: State<'_, AppState>,
     request: SearchEventsRequest,
 ) -> Result<Vec<OccurrenceResponse>, ApiError> {
+    let _timer = crate::performance::Timer::start(crate::performance::Operation::CalendarSearch);
     ensure_main_window(&window)?;
     let (query, range) = request.into_domain()?;
     state
@@ -651,6 +654,7 @@ pub(crate) async fn create_event_authorized(
     state: &AppState,
     request: EventDraftRequest,
 ) -> Result<EventResponse, ApiError> {
+    let _timer = crate::performance::Timer::start(crate::performance::Operation::CalendarMutation);
     let draft = request.into_domain(None, Vec::new())?;
     let runtime = state.calendar_runtime().await?;
     let _mutation = state.begin_calendar_mutation()?;
@@ -680,6 +684,7 @@ pub(crate) async fn update_event_authorized(
     state: &AppState,
     request: UpdateEventRequest,
 ) -> Result<EventResponse, ApiError> {
+    let _timer = crate::performance::Timer::start(crate::performance::Operation::CalendarMutation);
     validate_expected_revision(request.expected_revision)?;
     let id = EventId::parse(&request.event_id)?;
     let runtime = state.calendar_runtime().await?;
@@ -722,6 +727,7 @@ pub(crate) async fn delete_event_authorized(
     state: &AppState,
     request: DeleteEventRequest,
 ) -> Result<(), ApiError> {
+    let _timer = crate::performance::Timer::start(crate::performance::Operation::CalendarMutation);
     validate_expected_revision(request.expected_revision)?;
     let id = EventId::parse(&request.event_id)?;
     let runtime = state.calendar_runtime().await?;
@@ -752,6 +758,7 @@ pub(crate) async fn update_occurrence_authorized(
     state: &AppState,
     request: UpdateOccurrenceRequest,
 ) -> Result<EventResponse, ApiError> {
+    let _timer = crate::performance::Timer::start(crate::performance::Operation::CalendarMutation);
     validate_expected_revision(request.expected_revision)?;
     let id = EventId::parse(&request.event_id)?;
     let runtime = state.calendar_runtime().await?;
@@ -798,6 +805,7 @@ pub(crate) async fn delete_occurrence_authorized(
     state: &AppState,
     request: DeleteOccurrenceRequest,
 ) -> Result<(), ApiError> {
+    let _timer = crate::performance::Timer::start(crate::performance::Operation::CalendarMutation);
     validate_expected_revision(request.expected_revision)?;
     let id = EventId::parse(&request.event_id)?;
     let runtime = state.calendar_runtime().await?;

@@ -268,6 +268,7 @@ pub(crate) async fn models_ai_ollama_status(
     window: WebviewWindow,
     state: State<'_, AppState>,
 ) -> Result<OllamaStatusResponse, ModelsAiError> {
+    let _timer = crate::performance::Timer::start(crate::performance::Operation::ModelStatus);
     ensure_main_window(&window)?;
     let provider = state.models_ai.store.provider(OLLAMA_PROVIDER_ID)?;
     let persisted_digest = state.models_ai.store.managed_digest()?;
@@ -321,6 +322,7 @@ pub(crate) async fn models_ai_ollama_pull(
     state: State<'_, AppState>,
     request: ManagedModelRequest,
 ) -> Result<OllamaStatusResponse, ModelsAiError> {
+    let _timer = crate::performance::Timer::start(crate::performance::Operation::ModelInstall);
     ensure_main_window(&window)?;
     require_managed(&request)?;
     let provider = enabled_provider(&state, OLLAMA_PROVIDER_ID)?;

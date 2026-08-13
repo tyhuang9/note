@@ -8,6 +8,7 @@ mod migration;
 mod models_ai;
 mod mutation;
 mod notes;
+mod performance;
 mod private_file;
 mod security;
 mod voice;
@@ -20,6 +21,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    performance::initialize();
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .append_invoke_initialization_script(
@@ -56,6 +58,8 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_notification::init());
     builder
         .setup(|app| {
+            let _main_activation =
+                performance::Timer::start(performance::Operation::MainActivation);
             let app_data_dir = app.path().app_data_dir()?;
             let state = AppState::new(app_data_dir);
             state.start_calendar_initialization(Some(app.handle().clone()));

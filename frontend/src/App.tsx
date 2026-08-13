@@ -115,6 +115,7 @@ import {
 } from "./native/notesClient";
 import { buildAssistantActionRequest } from "./services/assistantActions";
 import { buildNotesContext } from "./services/notesContext";
+import { measurePerformanceSync } from "./services/performance";
 import {
   createLlamaHarnessNoteRun,
   getLlamaHarnessNoteCapabilities,
@@ -4466,11 +4467,11 @@ function App() {
         ...message,
         content: message.content.slice(0, ASSISTANT_PROMPT_LIMIT),
       })),
-      notesContext: buildNotesContext({
+      notesContext: measurePerformanceSync("assistant.context", () => buildNotesContext({
         data: dataRef.current,
         selectedBlockIds: selectedBlockIdsRef.current,
         selectedPageId: selectedPageIdRef.current,
-      }),
+      })),
       prompt,
       provider: { ...assistantProviderMetadata, capabilities: { ...assistantProviderMetadata.capabilities } },
       modelId: nativeModel?.id ?? harnessModel!.id,
@@ -4893,30 +4894,32 @@ function App() {
   }
 
   function openAgendaWorkspace() {
-    const reconciliation = assistantCalendarReconciliationRef.current;
-    if (
-      (reconciliation.state === "required" || reconciliation.state === "unknown") &&
-      !reconciliation.agendaInspected
-    ) {
-      assistantCalendarReconciliationMutationRef.current += 1;
-      assistantCalendarReconciliationRequestRef.current += 1;
-      assistantCalendarReconciliationBusyRef.current = false;
-      updateAssistantCalendarReconciliation({ ...reconciliation, agendaInspected: true, busy: false });
-      setAssistantStatus("Agenda opened. Check for the event, then acknowledge the unresolved confirmation in Assistant.");
-    }
-    const currentState = {
-      selectedTabId: selectedWorkspaceTabIdRef.current,
-      tabs: workspaceTabsRef.current,
-    };
-    const nextState = openAgendaWorkspaceTab(currentState);
+    measurePerformanceSync("main.activation", () => {
+      const reconciliation = assistantCalendarReconciliationRef.current;
+      if (
+        (reconciliation.state === "required" || reconciliation.state === "unknown") &&
+        !reconciliation.agendaInspected
+      ) {
+        assistantCalendarReconciliationMutationRef.current += 1;
+        assistantCalendarReconciliationRequestRef.current += 1;
+        assistantCalendarReconciliationBusyRef.current = false;
+        updateAssistantCalendarReconciliation({ ...reconciliation, agendaInspected: true, busy: false });
+        setAssistantStatus("Agenda opened. Check for the event, then acknowledge the unresolved confirmation in Assistant.");
+      }
+      const currentState = {
+        selectedTabId: selectedWorkspaceTabIdRef.current,
+        tabs: workspaceTabsRef.current,
+      };
+      const nextState = openAgendaWorkspaceTab(currentState);
 
-    workspaceTabsRef.current = nextState.tabs;
-    if (nextState.tabs !== currentState.tabs) {
-      setWorkspaceTabs(nextState.tabs);
-    }
-    activateWorkspaceTab(nextState.selectedTabId, nextState.tabs);
-    window.requestAnimationFrame(() => {
-      document.getElementById(getWorkspaceTabId(nextState.selectedTabId))?.focus();
+      workspaceTabsRef.current = nextState.tabs;
+      if (nextState.tabs !== currentState.tabs) {
+        setWorkspaceTabs(nextState.tabs);
+      }
+      activateWorkspaceTab(nextState.selectedTabId, nextState.tabs);
+      window.requestAnimationFrame(() => {
+        document.getElementById(getWorkspaceTabId(nextState.selectedTabId))?.focus();
+      });
     });
   }
 

@@ -7,6 +7,7 @@ import {
   type WidgetStatus,
   widgetClient,
 } from "../native/widgetClient";
+import { measurePerformance } from "../services/performance";
 
 const REFRESH_DEBOUNCE_MS = 160;
 const sizePresets: Array<{ label: string; value: WidgetSizePreset }> = [
@@ -139,7 +140,7 @@ export default function WidgetSurface() {
     if (agendaLoaded.current) setAgendaError(null);
 
     try {
-      const nextAgenda = await widgetClient.agenda(timeZone);
+      const nextAgenda = await measurePerformance("widget.refresh", () => widgetClient.agenda(timeZone));
       if (!mounted.current || generation !== agendaGeneration.current) return;
       setAgenda(nextAgenda);
       setAgendaError(null);

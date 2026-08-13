@@ -224,6 +224,7 @@ impl WidgetState {
 }
 
 pub(crate) fn initialize(app: &App) -> tauri::Result<()> {
+    let _timer = crate::performance::Timer::start(crate::performance::Operation::WidgetCreation);
     let state_path = app.path().app_data_dir()?.join(WIDGET_STATE_FILE);
     app.manage(WidgetState::load(state_path));
 

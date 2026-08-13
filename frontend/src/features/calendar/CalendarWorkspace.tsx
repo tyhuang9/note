@@ -16,6 +16,7 @@ import {
 import { AGENDA_DAYS, addDays, groupByDate, isoDate, monthGridRange, occurrenceKey, rangeForDates, startOfMonth, timeLabel } from "./calendarUtils";
 import DataMigrationBackupPanel from "./DataMigrationBackupPanel";
 import EventEditor, { type EditorState } from "./EventEditor";
+import { measurePerformance } from "../../services/performance";
 import "./calendar.css";
 
 type View = "agenda" | "month";
@@ -92,12 +93,12 @@ export default function CalendarWorkspace({ activeView, onViewChange }: { active
       const boundary = direction === "before"
         ? current.days[0]?.date ?? resetAnchor
         : current.days.length ? addDays(current.days[current.days.length - 1].date, 1) : resetAnchor;
-      const page = await calendarClient.agendaPage({
+      const page = await measurePerformance("calendar.agenda", () => calendarClient.agendaPage({
         direction,
         ...(cursor ? { cursor } : { anchorDate: reset ? resetAnchor : boundary }),
         displayTimeZone: timeZone,
         limit: AGENDA_DAYS,
-      });
+      }));
       if (token !== agendaGeneration.current) return;
       setError((current) => current?.source === "agenda" ? null : current);
       const incoming = page.days.map((day) => ({ ...day, occurrences: dedupe(day.occurrences) }));
@@ -225,7 +226,7 @@ export default function CalendarWorkspace({ activeView, onViewChange }: { active
     }
     const timer = window.setTimeout(() => {
       const start = isoDate();
-      void calendarClient.searchEvents({ ...rangeForDates(start, addDays(start, 366)), query, limit: 50 })
+      void measurePerformance("calendar.search", () => calendarClient.searchEvents({ ...rangeForDates(start, addDays(start, 366)), query, limit: 50 }))
         .then((items) => {
           if (token === searchGeneration.current) {
             setSearchItems(dedupe(items));

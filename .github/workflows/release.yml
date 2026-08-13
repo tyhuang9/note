@@ -75,6 +75,13 @@ jobs:
         working-directory: frontend
         run: npm install
 
+      - name: Check native Rust code
+        working-directory: backend/src-tauri
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets --all-features --locked -- -D warnings
+          cargo test --all-targets --all-features --locked
+
       - name: Build frontend
         run: npm run build
 

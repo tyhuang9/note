@@ -202,6 +202,8 @@ impl CalendarReadiness {
     }
 
     async fn initialize(&self, app: Option<tauri::AppHandle>) {
+        let _timer =
+            crate::performance::Timer::start(crate::performance::Operation::CalendarInitialization);
         let started = Instant::now();
         let database_path = self.app_data_dir.join("calendar.sqlite3");
         let next = match self.initializer.open(&database_path).await {

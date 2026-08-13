@@ -93,3 +93,54 @@ On Linux, if AppImage packaging fails but `.deb` is enough for validation, run:
 ```bash
 npm run tauri:build -- --bundles deb
 ```
+
+## Phase 9: Local Performance Evidence and Privacy
+
+When Note can install its global tracing subscriber, the application records bounded local Rust
+tracing spans to a nonblocking stderr sink. If a global subscriber already exists, these sink
+diagnostics are not installed, exported, or recorded. Browser User Timing entries are transient
+developer diagnostics: the application neither observes nor retains them. Both use fixed operation
+names and elapsed time only. Covered paths include main activation, calendar initialization,
+agenda paging/search/mutations, assistant context, provider start, and tool work, model
+status/install, voice capture/transcription, and widget creation/agenda refresh. These are local
+diagnostics: no telemetry endpoint, network export, request payload, or content logging is added.
+
+Measured locally by the deterministic synthetic calendar test (1,000 synthetic all-day records):
+
+```bash
+cd backend/src-tauri
+cargo test synthetic_calendar_operations_record_local_duration_samples -- --nocapture
+```
+
+The test creates a temporary SQLite calendar with 1,000 generic synthetic records, then reports
+raw p50/p95 samples for list, search, and a create/delete CRUD cycle without enforcing
+hardware-dependent thresholds. On the Phase 9 Windows host (debug test profile), the recorded
+samples were list p50/p95 22/23 ms, search 5/6 ms, and CRUD 0/0 ms. These are local reference
+samples, not release targets or cross-platform claims.
+For release validation, run:
+
+```bash
+cd backend/src-tauri
+cargo fmt --check
+cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo test --all-targets --all-features --locked
+cd ../../frontend
+npm run build
+```
+
+Unverified: packaged-app startup or first-ready timing, microphone/device capture behavior, external
+model provider latency (including provider start), and browser Performance API availability on each
+target OS. The GitHub Actions
+matrix runs Windows, macOS, and Linux native formatting, clippy, tests, frontend builds, and Tauri
+packaging; local measurements still depend on host hardware and OS services.
+
+Privacy rule: operation identifiers are compile-time fixed labels. Never add note text, event
+titles, transcripts, prompts, credentials, identifiers, URLs, file paths, or error bodies to spans,
+marks, measurements, tests, or release evidence.
+
+The latest full `npm run test:e2e` run hit the 240-second host cap and was terminated; its reporter
+then returned EPIPE without a test-level result. That run is unverified and is neither a pass nor a
+fail result. Separately, the serial Chromium E2E baseline before this focused helper test was 146
+of 152 passing. The six known failures are date-pinned calendar fixture checks; they remain
+unverified until their fixed calendar dates are refreshed. This workflow does not represent that
+suite as fully green.

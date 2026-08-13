@@ -646,6 +646,7 @@ pub async fn assistant_calendar_tool_execute(
     state: State<'_, AppState>,
     request: ToolExecuteRequest,
 ) -> Result<ToolExecuteResponse, ApiError> {
+    let _timer = crate::performance::Timer::start(crate::performance::Operation::AssistantTool);
     ensure_main_window(&window)?;
     execute_read_tool(&state, request).await
 }
@@ -656,6 +657,7 @@ pub async fn assistant_calendar_create_propose(
     state: State<'_, AppState>,
     request: CreateProposalRequest,
 ) -> Result<CreateProposalResponse, ApiError> {
+    let _timer = crate::performance::Timer::start(crate::performance::Operation::AssistantTool);
     ensure_main_window(&window)?;
     propose_create_authorized(&state, request).await
 }
@@ -676,6 +678,7 @@ pub async fn assistant_calendar_create_confirm(
     state: State<'_, AppState>,
     request: CreateTerminalRequest,
 ) -> Result<CreateConfirmResponse, ApiError> {
+    let _timer = crate::performance::Timer::start(crate::performance::Operation::AssistantTool);
     ensure_main_window(&window)?;
     match state.assistant.acquire_confirmation(&request).await? {
         ConfirmationLease::Replay(result) => confirm_response(result?, true),

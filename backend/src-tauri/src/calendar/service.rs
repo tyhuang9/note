@@ -436,6 +436,97 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn synthetic_calendar_operations_record_local_duration_samples() {
+        let start_date = NaiveDate::from_ymd_opt(2026, 7, 21).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            crate::calendar_store::sqlite::SqliteEventStore::open(
+                &directory.path().join("calendar.sqlite3"),
+            )
+            .await
+            .unwrap(),
+        );
+        let service = CalendarService::new(store);
+        for number in 1..=1_000 {
+            service
+                .create_event(
+                    EventDraft::validated(
+                        format!("Synthetic {number}"),
+                        None,
+                        None,
+                        EventTime::AllDay {
+                            start_date,
+                            end_date_exclusive: start_date.succ_opt().unwrap(),
+                        },
+                    )
+                    .unwrap(),
+                )
+                .await
+                .unwrap();
+        }
+        let range = EventQueryRange::validated(
+            1_784_620_800_000,
+            1_784_707_200_000,
+            "2026-07-21",
+            "2026-07-22",
+        )
+        .unwrap();
+        let mut list_samples = Vec::new();
+        let mut search_samples = Vec::new();
+        let mut crud_samples = Vec::new();
+        for _ in 0..11 {
+            let started = std::time::Instant::now();
+            let listed = service.list_events(range.clone()).await.unwrap();
+            list_samples.push(started.elapsed().as_millis());
+            assert_eq!(listed.len(), 1_000);
+            let started = std::time::Instant::now();
+            let searched = service
+                .search_events(
+                    EventSearchQuery::validated("synthetic".into(), 50).unwrap(),
+                    range.clone(),
+                )
+                .await
+                .unwrap();
+            search_samples.push(started.elapsed().as_millis());
+            assert!(!searched.occurrences.is_empty());
+            let started = std::time::Instant::now();
+            let created = service
+                .create_event(
+                    EventDraft::validated(
+                        "Synthetic CRUD".into(),
+                        None,
+                        None,
+                        EventTime::AllDay {
+                            start_date,
+                            end_date_exclusive: start_date.succ_opt().unwrap(),
+                        },
+                    )
+                    .unwrap(),
+                )
+                .await
+                .unwrap();
+            service
+                .delete_event(created.id, created.revision)
+                .await
+                .unwrap();
+            crud_samples.push(started.elapsed().as_millis());
+        }
+        for (operation, samples) in [
+            ("calendar.list", &mut list_samples),
+            ("calendar.search", &mut search_samples),
+            ("calendar.crud", &mut crud_samples),
+        ] {
+            samples.sort_unstable();
+            let p50 = samples[samples.len() / 2];
+            let p95 = samples[(samples.len() * 95).div_ceil(100) - 1];
+            println!("performance_sample operation={operation} p50_ms={p50} p95_ms={p95}");
+            assert!(operation
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte == b'.'));
+        }
+    }
+
+    #[tokio::test]
     async fn aggregate_limit_applies_to_nonrecurring_records() {
         let start_date = NaiveDate::from_ymd_opt(2026, 7, 21).unwrap();
         let records = (1..=1_001_u128)

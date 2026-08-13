@@ -33,6 +33,8 @@ pub(crate) async fn transcribe(
     mut cancelled: watch::Receiver<bool>,
     staging_root: &Path,
 ) -> Result<String, TranscriptionError> {
+    let _timer =
+        crate::performance::Timer::start(crate::performance::Operation::VoiceTranscription);
     if *cancelled.borrow() {
         return Err(TranscriptionError::Cancelled);
     }

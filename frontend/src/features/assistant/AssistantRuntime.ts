@@ -1,6 +1,7 @@
 import type { EventDraft } from "../../native/calendarClient";
 import { assistantCalendarClient, isAssistantNativeClientError, type CalendarProposal, type CalendarReview } from "../../native/assistantClient";
 import { ASSISTANT_SCHEMA_VERSION, MAX_TOOL_CALLS_PER_ROUND, MAX_TOOL_CALLS_TOTAL, MAX_TOOL_ROUNDS, resolveAssistantTool, validateAssistantToolResult, type ToolDefinition } from "./toolRegistry";
+import { measurePerformance } from "../../services/performance";
 
 export type AssistantProviderMetadata = { provider: string; model: string; capabilities: { tools: boolean }; dataSharing: "local" | "remote" | "unknown" };
 export type AssistantToolCall = { id: string; toolId: string; arguments: unknown };
@@ -95,7 +96,7 @@ export class AssistantRuntime {
     this.rounds = 0;
     const generation = this.runGeneration;
     try {
-      const response = await this.provider.start(this.controller.signal);
+      const response = await measurePerformance("assistant.provider", () => this.provider.start(this.controller!.signal));
       this.assertCurrent(generation);
       return await this.advance(response, generation);
     } finally {
@@ -290,9 +291,9 @@ export class AssistantRuntime {
         return { kind: "review", review: this.tools.describeWrite(entry.tool, entry.input!) };
       }
       const results = await Promise.all(prepared.map(async (entry) => {
-        const result = await withToolTimeout(entry.tool, async () => entry.tool.operation.startsWith("calendar.")
+        const result = await measurePerformance("assistant.tool", () => withToolTimeout(entry.tool, async () => entry.tool.operation.startsWith("calendar.")
           ? (await assistantCalendarClient.execute(entry.tool.id, entry.tool.schemaVersion, entry.input!)).result
-          : this.tools.read(entry.tool, entry.input!), `${entry.tool.id} read`, this.controller?.signal);
+          : this.tools.read(entry.tool, entry.input!), `${entry.tool.id} read`, this.controller?.signal));
         this.assertCurrent(generation);
         validatedToolResult(entry.tool, result);
         return { toolCallId: entry.call.id, toolId: entry.tool.id, result };

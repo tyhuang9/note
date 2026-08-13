@@ -204,6 +204,6 @@ Applies to: Note integration worktree at base SHA `d7fd7b13d0964ed631e846fe6a6cc
 
 **Status:** Accepted for development conformance only
 
-**Decision:** A future runner is embedded in Note's Rust process. It selects its model from Models & AI, emits approvals/events only to `main`, and uses the fixed `note-assistant-v1` profile. Dynamic and user-provided manifests are out of v1. Native calendar services remain authoritative; no HTTP or `:8787` compatibility adapter is introduced.
+**Decision:** A future runner is embedded in Note's Rust process. It selects its model from Models & AI, emits approvals/events only to `main`, and uses the fixed `note-assistant-v1` profile. Dynamic and user-provided manifests are out of v1. Native calendar services remain authoritative; no HTTP or `:8787` compatibility adapter is introduced. The frozen development conformance and host-contract candidate is llama-harness revision `cc9f999a5615915f06e1d57996e10942fd37eccf`; production integration must remain bound to this exact revision until a separately reviewed update is accepted.
 
 **Consequences:** Note snapshots and write proposals carry page/block revision bindings. Immediately before a note mutation, native code must compare the current revision with the captured binding; a mismatch fails with zero mutation. An edited or otherwise revised proposal must be revalidated and rebound before it can be approved. The development-only conformance harness is an isolated Cargo workspace and does not alter production runtime wiring.

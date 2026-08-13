@@ -1,20 +1,12 @@
-{
-  "profile": "note-assistant-v1",
-  "version": 1,
-  "modelSource": "models-ai-selection",
-  "dynamicManifests": false,
-  "userManifests": false,
-  "limits": { "maximumCallsPerRound": 8, "maximumCallsTotal": 24, "maximumRounds": 5 },
-  "tools": [
-    { "id": "notes.read_page", "risk": "read", "confirmationRequired": false },
-    { "id": "notes.read_selection", "risk": "read", "confirmationRequired": false },
-    { "id": "notes.search", "risk": "read", "confirmationRequired": false },
-    { "id": "notes.insert_text", "risk": "write", "confirmationRequired": true },
-    { "id": "notes.append_text", "risk": "write", "confirmationRequired": true },
-    { "id": "notes.replace_text", "risk": "write", "confirmationRequired": true },
-    { "id": "calendar.query", "risk": "read", "confirmationRequired": false },
-    { "id": "calendar.search", "risk": "read", "confirmationRequired": false },
-    { "id": "calendar.get_event", "risk": "read", "confirmationRequired": false },
-    { "id": "calendar.create_event", "risk": "write", "confirmationRequired": true }
-  ]
-}
+{"profile":"note-assistant-v1","version":1,"modelSource":"models-ai-selection","dynamicManifests":false,"userManifests":false,"limits":{"maximumCallsPerRound":8,"maximumCallsTotal":24,"maximumRounds":5},"tools":[
+{"id":"notes.read_page","schemaVersion":1,"description":"Read bounded text snippets from the active Note page.","risk":"read","confirmationRequired":false,"authorizedWindows":["main"],"timeoutMs":10000,"maximumResultBytes":16000,"providerDataSharing":"bounded_note_content","schemaHash":"c6f1ec0cd44ba1f0cb28ce9c54509d62390a571a2c4e1c1d051b2db2a170e2cc"},
+{"id":"notes.read_selection","schemaVersion":1,"description":"Read bounded selected text snippets.","risk":"read","confirmationRequired":false,"authorizedWindows":["main"],"timeoutMs":10000,"maximumResultBytes":16000,"providerDataSharing":"bounded_note_content","schemaHash":"0881013b4882161cc3716b3306605b6a5cd1ec1bcb51767002f8f5d150470e6e"},
+{"id":"notes.search","schemaVersion":1,"description":"Search Note page titles and matched block identifiers with explicit completeness.","risk":"read","confirmationRequired":false,"authorizedWindows":["main"],"timeoutMs":10000,"maximumResultBytes":16000,"providerDataSharing":"bounded_note_content","schemaHash":"7095d5a6d6360a8fabf3cc60935ec7fd0d2b7bacb9615619239e7ffc40e1dba2"},
+{"id":"notes.insert_text","schemaVersion":1,"description":"Propose inserting text on the active page; requires user review.","risk":"write","confirmationRequired":true,"authorizedWindows":["main"],"timeoutMs":120000,"maximumResultBytes":16000,"providerDataSharing":"bounded_note_content","schemaHash":"38e667a8aba57922f56539c9a40301401dc66b317fdf6e60232964fd8e28db83"},
+{"id":"notes.append_text","schemaVersion":1,"description":"Propose appending text to one active-page block; requires user review.","risk":"write","confirmationRequired":true,"authorizedWindows":["main"],"timeoutMs":120000,"maximumResultBytes":16000,"providerDataSharing":"bounded_note_content","schemaHash":"fb00c62d32925fab6fc7d3c119caf9b5f3331e98096ce0ca4eec45742ca9aa4b"},
+{"id":"notes.replace_text","schemaVersion":1,"description":"Propose replacing one active-page block; requires user review.","risk":"write","confirmationRequired":true,"authorizedWindows":["main"],"timeoutMs":120000,"maximumResultBytes":16000,"providerDataSharing":"bounded_note_content","schemaHash":"fb00c62d32925fab6fc7d3c119caf9b5f3331e98096ce0ca4eec45742ca9aa4b"},
+{"id":"calendar.query","schemaVersion":1,"description":"Query up to 25 calendar occurrences in a bounded range.","risk":"read","confirmationRequired":false,"authorizedWindows":["main"],"timeoutMs":10000,"maximumResultBytes":131072,"providerDataSharing":"sanitized_calendar_content","schemaHash":"4bc9164a0fb990388abae5f8c7abbccd8b10a437be15a5f39ff173a18c67ad01"},
+{"id":"calendar.search","schemaVersion":1,"description":"Search up to 20 calendar occurrences with explicit completeness.","risk":"read","confirmationRequired":false,"authorizedWindows":["main"],"timeoutMs":10000,"maximumResultBytes":131072,"providerDataSharing":"sanitized_calendar_content","schemaHash":"8232fa02d560a82fa3852f2bed477283831d74033f95a22d24c966c7548af9fd"},
+{"id":"calendar.get_event","schemaVersion":1,"description":"Read one sanitized calendar event.","risk":"read","confirmationRequired":false,"authorizedWindows":["main"],"timeoutMs":10000,"maximumResultBytes":131072,"providerDataSharing":"sanitized_calendar_content","schemaHash":"2f2da6f2c81837baf8b9ec588bb1da81adc09b518d15485f356a517a6e7f40bc"},
+{"id":"calendar.create_event","schemaVersion":1,"description":"Propose one calendar event for explicit user review.","risk":"write","confirmationRequired":true,"authorizedWindows":["main"],"timeoutMs":120000,"maximumResultBytes":131072,"providerDataSharing":"sanitized_calendar_content","schemaHash":"7aea15584b0e68e8ee04d8fb9728f08bbd670dea56a816eee99f4a3cee18aeaf"}
+]}

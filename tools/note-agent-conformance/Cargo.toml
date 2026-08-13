@@ -1,0 +1,13 @@
+[workspace]
+
+[package]
+name = "note-agent-conformance"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+llama-harness = { git = "https://github.com/tyhuang9/llama-harness", rev = "a3a8152f40c849c67d7ae4577fc63a3f4e2fcd16", features = [] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }

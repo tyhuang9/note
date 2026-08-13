@@ -274,6 +274,7 @@ export type AssistantToolManifest = ReturnType<typeof getAssistantToolManifest>;
 /** Stable v1 surface for the future embedded runner; compatibility aliases stay production-only. */
 export function getCanonicalAssistantToolManifestV1() {
   const manifest = getAssistantToolManifest();
+  const canonicalIds = ["notes.read_page", "notes.read_selection", "notes.search", "notes.insert_text", "notes.append_text", "notes.replace_text", "calendar.query", "calendar.search", "calendar.get_event", "calendar.create_event"];
   return {
     profile: "note-assistant-v1",
     version: 1,
@@ -281,6 +282,6 @@ export function getCanonicalAssistantToolManifestV1() {
     dynamicManifests: false,
     userManifests: false,
     limits: manifest.limits,
-    tools: manifest.tools.filter((tool) => !tool.compatibilityAliasFor),
+    tools: manifest.tools.filter((tool) => canonicalIds.includes(tool.id)),
   };
 }

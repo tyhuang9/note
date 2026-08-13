@@ -199,3 +199,11 @@ Applies to: Note integration worktree at base SHA `d7fd7b13d0964ed631e846fe6a6cc
 **Rationale:** Auxiliary window creation is asynchronous, physical capture/shortcut behavior is race-prone, and transcribed text must never become an implicit note, calendar, or assistant mutation. Rust can make terminal capture transitions one-shot, clean private staging, discard stale generation results, and enforce exact caller labels independently of renderer timing.
 
 **Consequences:** A first global shortcut may create/show only the quick-command window and then replay its current state after the window reports ready; it never focuses the main window. Typed and voice proposals require explicit main-window review or assistant submission. Main-only Voice settings owns opaque microphone selection, managed-model status/progress, and shortcut recovery; the restricted overlay receives none of those administrative capabilities.
+
+## ADR-020 — Future agent runner is embedded, fixed-profile, and revision-bound
+
+**Status:** Accepted for development conformance only
+
+**Decision:** A future runner is embedded in Note's Rust process. It selects its model from Models & AI, emits approvals/events only to `main`, and uses the fixed `note-assistant-v1` profile. Dynamic and user-provided manifests are out of v1. Native calendar services remain authoritative; no HTTP or `:8787` compatibility adapter is introduced.
+
+**Consequences:** Note snapshots and write proposals carry page/block revision bindings. Immediately before a note mutation, native code must compare the current revision with the captured binding; a mismatch fails with zero mutation. An edited or otherwise revised proposal must be revalidated and rebound before it can be approved. The development-only conformance harness is an isolated Cargo workspace and does not alter production runtime wiring.

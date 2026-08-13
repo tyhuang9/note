@@ -270,3 +270,17 @@ export function getAssistantToolManifest() {
   };
 }
 export type AssistantToolManifest = ReturnType<typeof getAssistantToolManifest>;
+
+/** Stable v1 surface for the future embedded runner; compatibility aliases stay production-only. */
+export function getCanonicalAssistantToolManifestV1() {
+  const manifest = getAssistantToolManifest();
+  return {
+    profile: "note-assistant-v1",
+    version: 1,
+    modelSource: "models-ai-selection",
+    dynamicManifests: false,
+    userManifests: false,
+    limits: manifest.limits,
+    tools: manifest.tools.filter((tool) => !tool.compatibilityAliasFor),
+  };
+}

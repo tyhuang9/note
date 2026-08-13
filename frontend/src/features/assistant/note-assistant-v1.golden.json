@@ -1,0 +1,20 @@
+{
+  "profile": "note-assistant-v1",
+  "version": 1,
+  "modelSource": "models-ai-selection",
+  "dynamicManifests": false,
+  "userManifests": false,
+  "limits": { "maximumCallsPerRound": 8, "maximumCallsTotal": 24, "maximumRounds": 5 },
+  "tools": [
+    { "id": "notes.read_page", "risk": "read", "confirmationRequired": false },
+    { "id": "notes.read_selection", "risk": "read", "confirmationRequired": false },
+    { "id": "notes.search", "risk": "read", "confirmationRequired": false },
+    { "id": "notes.insert_text", "risk": "write", "confirmationRequired": true },
+    { "id": "notes.append_text", "risk": "write", "confirmationRequired": true },
+    { "id": "notes.replace_text", "risk": "write", "confirmationRequired": true },
+    { "id": "calendar.query", "risk": "read", "confirmationRequired": false },
+    { "id": "calendar.search", "risk": "read", "confirmationRequired": false },
+    { "id": "calendar.get_event", "risk": "read", "confirmationRequired": false },
+    { "id": "calendar.create_event", "risk": "write", "confirmationRequired": true }
+  ]
+}

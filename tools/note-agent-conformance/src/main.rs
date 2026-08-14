@@ -23,8 +23,8 @@ use tokio::time::timeout;
 
 const BASE_URL: &str = "http://127.0.0.1:12434";
 const DEFAULT_MODEL: &str = "gemma4:e4b-it-q4_K_M";
-const HARNESS_REVISION: &str = "cc9f999a5615915f06e1d57996e10942fd37eccf";
-const NOTE_READINESS_REVISION: &str = "ea18fbb262fa1f6117a4545c1852cfb78f7cf6c9";
+const HARNESS_REVISION: &str = "ea5d5b66013654bf14f8e123b609d8d4522f93dc";
+const NOTE_READINESS_REVISION: &str = "03d2833f4df47c9ea8181d227538ce0dcac61cd6";
 const REPEATS: usize = 5;
 const CANONICAL_TOOLS: [&str; 10] = [
     "notes.read_page",

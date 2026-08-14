@@ -1,5 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
 
+test.use({ timezoneId: "America/Chicago" });
+
+test.beforeEach(async ({ page }) => {
+  await page.clock.install({ time: new Date("2026-07-21T12:00:00-05:00") });
+});
+
 test("calendar shows a bounded agenda, month detail, and an accessible editor", async ({ page }) => {
   await installCalendarMock(page);
   await page.goto("/");

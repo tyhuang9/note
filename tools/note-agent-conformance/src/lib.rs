@@ -359,7 +359,15 @@ mod tests {
             if matches!(self.mode, ApprovalMode::Grant) && requires_note_binding(&tool.id) {
                 let binding = {
                     let state = self.state.lock().unwrap();
-                    revision_binding(&tool.id, arguments, &state).unwrap()
+                    revision_binding(&tool.id, arguments, &state)
+                };
+                let Some(binding) = binding else {
+                    return Ok(ApprovalRecord {
+                        call_id: context.call_id.clone(),
+                        tool_id: tool.id.clone(),
+                        granted: false,
+                        reason: "write arguments cannot be bound to the current revision".into(),
+                    });
                 };
                 self.bindings
                     .lock()
@@ -462,6 +470,39 @@ mod tests {
         for id in CANONICAL_TOOLS {
             let tool = NoteTool::new(id, state.clone(), bindings.clone());
             assert_eq!(tool.definition().arguments_schema, input_schema(id));
+        }
+    }
+
+    #[tokio::test]
+    async fn granted_writes_fail_closed_when_revision_binding_is_missing_or_invalid() {
+        let state = Arc::new(Mutex::new(AppState::default()));
+        let bindings = Arc::new(Mutex::new(HashMap::new()));
+        let approval = ControlledApproval {
+            mode: ApprovalMode::Grant,
+            state: state.clone(),
+            bindings: bindings.clone(),
+            mutate_after_capture: true,
+        };
+        let tool = NoteTool::new("notes.replace_text", state.clone(), bindings.clone());
+        let context = ToolCallContext {
+            run_id: "run".into(),
+            trace_id: "trace".into(),
+            call_id: "call".into(),
+            tool_id: "notes.replace_text".into(),
+        };
+
+        for arguments in [
+            json!({"content": "updated"}),
+            json!({"blockId": 1, "content": "updated"}),
+        ] {
+            let record = approval
+                .approve_with_context(&context, tool.definition(), &arguments, &request())
+                .await
+                .unwrap();
+            assert!(!record.granted);
+            assert_eq!(record.call_id, "call");
+            assert!(bindings.lock().unwrap().is_empty());
+            assert_eq!(*state.lock().unwrap(), AppState::default());
         }
     }
 

@@ -420,7 +420,7 @@ checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 [[package]]
 name = "llama-harness"
 version = "0.1.0"
-source = "git+https://github.com/tyhuang9/llama-harness?rev=33a77afd192ad20ab859b74dcbef65f1b1cbf6d7#33a77afd192ad20ab859b74dcbef65f1b1cbf6d7"
+source = "git+https://github.com/tyhuang9/llama-harness?rev=ea5d5b66013654bf14f8e123b609d8d4522f93dc#ea5d5b66013654bf14f8e123b609d8d4522f93dc"
 dependencies = [
  "async-trait",
  "llama-harness-core",
@@ -430,7 +430,7 @@ dependencies = [
 [[package]]
 name = "llama-harness-core"
 version = "0.1.0"
-source = "git+https://github.com/tyhuang9/llama-harness?rev=33a77afd192ad20ab859b74dcbef65f1b1cbf6d7#33a77afd192ad20ab859b74dcbef65f1b1cbf6d7"
+source = "git+https://github.com/tyhuang9/llama-harness?rev=ea5d5b66013654bf14f8e123b609d8d4522f93dc#ea5d5b66013654bf14f8e123b609d8d4522f93dc"
 dependencies = [
  "async-trait",
  "jsonschema",

@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 jsonschema = { version = "0.37", default-features = false }
-llama-harness = { git = "https://github.com/tyhuang9/llama-harness", rev = "cc9f999a5615915f06e1d57996e10942fd37eccf", features = [] }
+llama-harness = { git = "https://github.com/tyhuang9/llama-harness", rev = "33a77afd192ad20ab859b74dcbef65f1b1cbf6d7", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt", "sync"] }

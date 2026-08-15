@@ -34,6 +34,28 @@ export type PersistedPageViewport = {
   zoomLevel: number;
 };
 
+export type TextFontFamily =
+  | "system-ui"
+  | "Arial"
+  | "Georgia"
+  | "Times New Roman"
+  | "Courier New";
+
+export type TextFontSize = "12px" | "14px" | "16px" | "18px" | "24px" | "32px";
+
+export type TextFormatDefaults = {
+  bold: boolean;
+  italic: boolean;
+  strike: boolean;
+  underline: boolean;
+  bulletList: boolean;
+  orderedList: boolean;
+  blockquote: boolean;
+  code: boolean;
+  fontFamily: TextFontFamily;
+  fontSize: TextFontSize;
+};
+
 export type AppSessionState = {
   isAssistantOpen?: boolean;
   isExplorerCollapsed?: boolean;
@@ -41,6 +63,7 @@ export type AppSessionState = {
   selectedPageId?: string;
   openPageTabIds?: string[];
   pageViewports?: Record<string, PersistedPageViewport>;
+  textFormatDefaults?: Partial<TextFormatDefaults>;
 };
 
 export type AppData = {

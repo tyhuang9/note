@@ -1,8 +1,8 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { Mark, Node as TiptapNode, mergeAttributes, type Editor, type JSONContent } from "@tiptap/core";
-import { AllSelection, TextSelection, type EditorState } from "@tiptap/pm/state";
+import { AllSelection, TextSelection } from "@tiptap/pm/state";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import {
@@ -166,7 +166,11 @@ type TextBlockViewProps = {
   onEditEnd: (blockId: string) => void;
   onDelete: (blockId: string) => void;
   onEdit: (blockId: string) => void;
-  onActiveEditorChange: (editor: Editor | null) => void;
+  onActiveEditorChange: (
+    blockId: string,
+    editor: Editor,
+    isActive: boolean,
+  ) => void;
   onCanvasPanEnd: (event: ReactPointerEvent<HTMLElement>) => void;
   onCanvasPanMove: (event: ReactPointerEvent<HTMLElement>) => void;
   onCanvasPanStart: (event: ReactPointerEvent<HTMLElement>) => void;
@@ -177,7 +181,6 @@ type TextBlockViewProps = {
     element: HTMLDivElement | null,
   ) => void;
   onSelect: (blockId: string, additive?: boolean) => void;
-  onSelectAllBlocks: () => void;
   onUpdate: (blockId: string, updates: BlockUpdates) => void;
   onVisualDragCancel: () => void;
   onVisualDragEnd: (clientX: number, clientY: number) => void;
@@ -215,7 +218,6 @@ export const TextBlockView = memo(function TextBlockView({
   onInteractionModeChange,
   onBlockElementChange,
   onSelect,
-  onSelectAllBlocks,
   onUpdate,
   onVisualDragCancel,
   onVisualDragEnd,
@@ -245,6 +247,7 @@ export const TextBlockView = memo(function TextBlockView({
   );
   const commitTimerRef = useRef<number | null>(null);
   const autosizeRafId = useRef<number | null>(null);
+  const toolbarExitCleanupRef = useRef<(() => void) | null>(null);
   const lastAppliedSizeRef = useRef<{
     width: number;
     height: number;
@@ -253,8 +256,6 @@ export const TextBlockView = memo(function TextBlockView({
     key: string;
     source: HTMLElement | null;
   } | null>(null);
-  const [isContentSelected, setIsContentSelected] = useState(false);
-
   const setBlockElement = useCallback(
     (element: HTMLDivElement | null) => {
       blockRef.current = element;
@@ -294,6 +295,8 @@ export const TextBlockView = memo(function TextBlockView({
       if (autosizeRafId.current !== null) {
         window.cancelAnimationFrame(autosizeRafId.current);
       }
+
+      toolbarExitCleanupRef.current?.();
     };
   }, []);
 
@@ -604,10 +607,6 @@ export const TextBlockView = memo(function TextBlockView({
   }
 
   function handleEditorChange(editor: Editor) {
-    if (isContentSelected) {
-      setIsContentSelected(false);
-    }
-
     draftContentRef.current = editor.getText({ blockSeparator: "\n" });
     draftRichContentRef.current = editor.getJSON();
     applyAutosize();
@@ -672,9 +671,65 @@ export const TextBlockView = memo(function TextBlockView({
     );
   }
 
+  function clearDeferredToolbarExit() {
+    toolbarExitCleanupRef.current?.();
+  }
+
+  function finalizeEditorExit(editor: Editor) {
+    clearDeferredToolbarExit();
+    onActiveEditorChange(block.id, editor, false);
+    window.getSelection()?.removeAllRanges();
+
+    if (editor.isDestroyed) {
+      return;
+    }
+
+    commitEditorDraft(editor, {
+      deleteEmpty: true,
+      endEdit: true,
+      includeSizeUpdates: true,
+    });
+  }
+
+  function deferEditorExitAfterToolbarTransfer(editor: Editor) {
+    clearDeferredToolbarExit();
+
+    const isEditorTarget = (target: EventTarget | null) =>
+      target instanceof Node && editor.view.dom.contains(target);
+    const handleFocusIn = (event: FocusEvent) => {
+      if (isEditorTarget(event.target)) {
+        clearDeferredToolbarExit();
+        return;
+      }
+
+      if (!isToolbarBlurTarget(event.target)) {
+        finalizeEditorExit(editor);
+      }
+    };
+    const handlePointerDown = (event: PointerEvent) => {
+      if (
+        !isEditorTarget(event.target) &&
+        !isToolbarBlurTarget(event.target)
+      ) {
+        finalizeEditorExit(editor);
+      }
+    };
+    const cleanup = () => {
+      document.removeEventListener("focusin", handleFocusIn, true);
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+
+      if (toolbarExitCleanupRef.current === cleanup) {
+        toolbarExitCleanupRef.current = null;
+      }
+    };
+
+    toolbarExitCleanupRef.current = cleanup;
+    document.addEventListener("focusin", handleFocusIn, true);
+    document.addEventListener("pointerdown", handlePointerDown, true);
+  }
+
   function handleEditorBlur(editor: Editor, event: FocusEvent) {
     if (
-      document.body.dataset.noteToolbarInteraction === "true" ||
       isToolbarBlurTarget(event.relatedTarget) ||
       isToolbarBlurTarget(document.activeElement)
     ) {
@@ -683,38 +738,26 @@ export const TextBlockView = memo(function TextBlockView({
         endEdit: false,
         includeSizeUpdates: false,
       });
-      onActiveEditorChange(editor);
+      onActiveEditorChange(block.id, editor, true);
+      deferEditorExitAfterToolbarTransfer(editor);
       return;
     }
 
-    setIsContentSelected(false);
-    onActiveEditorChange(null);
-    window.getSelection()?.removeAllRanges();
-    commitEditorDraft(editor, {
-      deleteEmpty: true,
-      endEdit: true,
-      includeSizeUpdates: true,
-    });
+    finalizeEditorExit(editor);
   }
 
   function leaveEditorForBlockSelection(additive = false) {
-    setIsContentSelected(false);
+    const editor = editorRef.current;
+
+    clearDeferredToolbarExit();
     blurActiveTextEntry();
     window.getSelection()?.removeAllRanges();
-    onActiveEditorChange(null);
-    onSelect(block.id, additive);
-  }
 
-  function handleSelectAllBlocksFromEditor(editor: Editor) {
-    setIsContentSelected(false);
-    onActiveEditorChange(null);
-    window.getSelection()?.removeAllRanges();
-    commitEditorDraft(editor, {
-      deleteEmpty: true,
-      endEdit: true,
-      includeSizeUpdates: true,
-    });
-    onSelectAllBlocks();
+    if (editor) {
+      onActiveEditorChange(block.id, editor, false);
+    }
+
+    onSelect(block.id, additive);
   }
 
   function startDrag(event: ReactPointerEvent<HTMLDivElement>) {
@@ -973,7 +1016,6 @@ export const TextBlockView = memo(function TextBlockView({
         isSelected && isMultiSelected ? "is-multi-selected" : ""
       } ${
         isSelected && !isEditing ? "is-canvas-mode" : ""
-      } ${isContentSelected ? "is-content-selected" : ""
       }`}
       onClick={(event) => {
         event.stopPropagation();
@@ -1046,22 +1088,21 @@ export const TextBlockView = memo(function TextBlockView({
           onCaretPointHandled={() => {
             pendingCaretPoint.current = null;
           }}
-          onEditorReady={(editor) => {
-            editorRef.current = editor;
-            onActiveEditorChange(editor);
-
-            if (editor) {
+          onEditorReady={(editor, isActive) => {
+            if (isActive) {
+              editorRef.current = editor;
+              onActiveEditorChange(block.id, editor, true);
               scheduleAutosize();
+              return;
             }
+
+            if (editorRef.current === editor) {
+              editorRef.current = null;
+            }
+
+            onActiveEditorChange(block.id, editor, false);
           }}
           onFocusEndHandled={onFocusEndHandled}
-          onSelectContent={() => {
-            setIsContentSelected(true);
-          }}
-          onSelectAllBlocks={handleSelectAllBlocksFromEditor}
-          onSelectionReset={() => {
-            setIsContentSelected(false);
-          }}
           shouldFocusEnd={shouldFocusEnd}
         />
       ) : null}
@@ -1191,15 +1232,10 @@ type TiptapBlockEditorProps = {
   onCaretPointHandled: () => void;
   onCanvasPanStart: (event: ReactPointerEvent<HTMLElement>) => void;
   onChange: (editor: Editor) => void;
-  onEditorReady: (editor: Editor | null) => void;
+  onEditorReady: (editor: Editor, isActive: boolean) => void;
   onFocusEndHandled: () => void;
-  onSelectContent: () => void;
-  onSelectAllBlocks: (editor: Editor) => void;
-  onSelectionReset: () => void;
   shouldFocusEnd: boolean;
 };
-
-type CtrlASelectionStage = "none" | "line" | "manual-line-confirmed" | "all";
 
 type ClipboardEditorImage =
   | {
@@ -1224,23 +1260,12 @@ function TiptapBlockEditor({
   onChange,
   onEditorReady,
   onFocusEndHandled,
-  onSelectContent,
-  onSelectAllBlocks,
-  onSelectionReset,
   shouldFocusEnd,
 }: TiptapBlockEditorProps) {
-  const ctrlAStageRef = useRef<CtrlASelectionStage>("none");
-  const onSelectContentRef = useRef(onSelectContent);
-  const onSelectAllBlocksRef = useRef(onSelectAllBlocks);
-  const onSelectionResetRef = useRef(onSelectionReset);
   const editorExtensions = useMemo(
     () => [...tiptapExtensions, createSlashCommandExtension(block.id)],
     [block.id],
   );
-
-  onSelectContentRef.current = onSelectContent;
-  onSelectAllBlocksRef.current = onSelectAllBlocks;
-  onSelectionResetRef.current = onSelectionReset;
 
   const editor = useEditor(
     {
@@ -1255,69 +1280,40 @@ function TiptapBlockEditor({
           role: "textbox",
         },
         handleKeyDown: (view, event) => {
+          if (
+            (event.key === "Backspace" || event.key === "Delete") &&
+            view.state.selection instanceof AllSelection
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+
+            const transaction = view.state.tr.deleteSelection();
+
+            view.dispatch(
+              transaction
+                .setSelection(TextSelection.create(transaction.doc, 1))
+                .scrollIntoView(),
+            );
+            return true;
+          }
+
           const isCtrlA =
             (event.metaKey || event.ctrlKey) &&
+            !event.altKey &&
             event.key.toLowerCase() === "a";
 
           if (!isCtrlA) {
-            ctrlAStageRef.current = "none";
             return false;
           }
 
           event.preventDefault();
           event.stopPropagation();
 
-          if (isWholeEditorDocumentSelected(view.state)) {
-            if (editor) {
-              ctrlAStageRef.current = "none";
-              onSelectAllBlocksRef.current(editor);
-            }
-
-            return true;
-          }
-
-          const selectAllContent = () => {
-            view.dispatch(
-              view.state.tr
-                .setSelection(new AllSelection(view.state.doc))
-                .scrollIntoView(),
-            );
-            ctrlAStageRef.current = "all";
-            onSelectContentRef.current();
-          };
-
-          if (
-            ctrlAStageRef.current === "line" ||
-            ctrlAStageRef.current === "manual-line-confirmed" ||
-            ctrlAStageRef.current === "all"
-          ) {
-            selectAllContent();
-            return true;
-          }
-
-          const selectionScope = getSelectionLineScope(view.state);
-
-          if (selectionScope === "multi-line") {
-            selectAllContent();
-            return true;
-          }
-
-          const currentLineRange = getCurrentLineSelectionRange(view.state);
-
           view.dispatch(
             view.state.tr
-              .setSelection(
-                TextSelection.create(
-                  view.state.doc,
-                  currentLineRange.from,
-                  currentLineRange.to,
-                ),
-              )
+              .setSelection(new AllSelection(view.state.doc))
               .scrollIntoView(),
           );
-          ctrlAStageRef.current =
-            selectionScope === "single-line" ? "manual-line-confirmed" : "line";
-          onSelectionResetRef.current();
           return true;
         },
         handlePaste: (_view, event) => {
@@ -1334,19 +1330,9 @@ function TiptapBlockEditor({
         },
       },
       onBlur: ({ editor, event }) => {
-        ctrlAStageRef.current = "none";
         onBlur(editor, event);
       },
-      onSelectionUpdate: ({ editor }) => {
-        if (isWholeEditorDocumentSelected(editor.state)) {
-          onSelectContentRef.current();
-          return;
-        }
-
-        onSelectionResetRef.current();
-      },
       onUpdate: ({ editor }) => {
-        ctrlAStageRef.current = "none";
         onChange(editor);
       },
     },
@@ -1358,8 +1344,7 @@ function TiptapBlockEditor({
       return;
     }
 
-    ctrlAStageRef.current = "none";
-    onEditorReady(editor);
+    onEditorReady(editor, true);
     let focusRafId: number | null = null;
     let placementRafId: number | null = null;
 
@@ -1398,7 +1383,7 @@ function TiptapBlockEditor({
         window.cancelAnimationFrame(placementRafId);
       }
 
-      onEditorReady(null);
+      onEditorReady(editor, false);
     };
   }, [
     editor,
@@ -1415,24 +1400,11 @@ function TiptapBlockEditor({
     return null;
   }
 
-  function resetCtrlAStage() {
-    ctrlAStageRef.current = "none";
-  }
-
   return (
     <>
       <EditorContent
         className="text-block-editor"
         editor={editor}
-        onKeyDown={(event) => {
-          if (!((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a")) {
-            resetCtrlAStage();
-          }
-        }}
-        onMouseDown={() => {
-          resetCtrlAStage();
-          onSelectionReset();
-        }}
         onPointerDown={(event) => {
           if (event.button === 2) {
             onCanvasPanStart(event);
@@ -1590,67 +1562,6 @@ function getImageDimensions(source: string) {
     image.onerror = () => resolve(null);
     image.src = source;
   });
-}
-
-type SelectionLineScope = "caret" | "single-line" | "multi-line" | "all";
-
-function getCurrentLineSelectionRange(state: EditorState) {
-  return getTextblockRangeAtPosition(state, state.selection.$anchor.pos);
-}
-
-function getSelectionLineScope(state: EditorState): SelectionLineScope {
-  const { selection } = state;
-
-  if (isWholeEditorDocumentSelected(state)) {
-    return "all";
-  }
-
-  if (selection.empty) {
-    return "caret";
-  }
-
-  const fromRange = getTextblockRangeAtPosition(state, selection.from);
-  const toRange = getTextblockRangeAtPosition(
-    state,
-    Math.max(selection.from, selection.to - 1),
-  );
-
-  return fromRange.from === toRange.from && fromRange.to === toRange.to
-    ? "single-line"
-    : "multi-line";
-}
-
-function getTextblockRangeAtPosition(state: EditorState, position: number) {
-  const { doc } = state;
-  const resolvedPosition = doc.resolve(
-    Math.max(0, Math.min(position, doc.content.size)),
-  );
-
-  for (let depth = resolvedPosition.depth; depth > 0; depth -= 1) {
-    const node = resolvedPosition.node(depth);
-
-    if (node.isTextblock) {
-      return {
-        from: resolvedPosition.start(depth),
-        to: resolvedPosition.end(depth),
-      };
-    }
-  }
-
-  return {
-    from: 1,
-    to: Math.max(1, doc.content.size - 1),
-  };
-}
-
-function isWholeEditorDocumentSelected(state: EditorState) {
-  const { doc, selection } = state;
-
-  return (
-    !selection.empty &&
-    selection.from <= 0 &&
-    selection.to >= doc.content.size
-  );
 }
 
 function areRichContentsEqual(

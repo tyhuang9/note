@@ -2393,15 +2393,6 @@ h2 {
   z-index: 6;
 }
 
-.text-block.is-content-selected {
-  border-color: var(--accent-purple);
-  border-style: solid;
-  outline: 0;
-  background: #ffffff;
-  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.16);
-  z-index: 5;
-}
-
 .text-block.is-dragging {
   background: #ffffff;
   cursor: grabbing;
@@ -2491,12 +2482,6 @@ h2 {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
-}
-
-.text-block.is-content-selected .text-block-editor .ProseMirror::selection,
-.text-block.is-content-selected .text-block-editor .ProseMirror *::selection {
-  color: inherit;
-  background: transparent;
 }
 
 .text-block-rich-content p {
@@ -3638,18 +3623,6 @@ h2 {
   background: #24222b;
 }
 
-.app-shell.is-dark .text-block.is-content-selected {
-  border-color: var(--accent-purple-strong);
-  background: #24222b;
-  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.2);
-}
-
-.app-shell.is-dark .text-block.is-content-selected .text-block-editor .ProseMirror::selection,
-.app-shell.is-dark .text-block.is-content-selected .text-block-editor .ProseMirror *::selection {
-  color: inherit;
-  background: transparent;
-}
-
 .app-shell.is-dark .text-block:hover .text-block-header,
 .app-shell.is-dark .text-block.is-selected .text-block-header,
 .app-shell.is-dark .text-block.is-editing .text-block-header {
@@ -4380,7 +4353,6 @@ h2 {
 .app-shell.is-dark .text-block.is-selected,
 .app-shell.is-dark .text-block.is-multi-selected,
 .app-shell.is-dark .text-block.is-editing,
-.app-shell.is-dark .text-block.is-content-selected,
 .app-shell.is-dark .text-block.is-dragging {
   border-radius: 8px;
   background: var(--workbench-panel);
@@ -4391,8 +4363,7 @@ h2 {
 }
 
 .app-shell.is-dark .text-block.is-selected,
-.app-shell.is-dark .text-block.is-multi-selected,
-.app-shell.is-dark .text-block.is-content-selected {
+.app-shell.is-dark .text-block.is-multi-selected {
   border-color: #a78bfa;
   box-shadow:
     0 0 0 1px #a78bfa,

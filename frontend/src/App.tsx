@@ -102,7 +102,14 @@ import {
   type LlamaHarnessSetupStatus,
   submitLlamaHarnessNoteToolResults,
 } from "./services/llamaHarnessAssistant";
-import type { AppData, AppSessionState, TextBlock } from "./types";
+import type {
+  AppData,
+  AppSessionState,
+  TextBlock,
+  TextFontFamily,
+  TextFontSize,
+  TextFormatDefaults,
+} from "./types";
 
 type SidebarProps = {
   bookmarkedPages: AppData["pages"];
@@ -199,18 +206,11 @@ type ToolbarActionId =
   | "blockquote"
   | "code";
 
-type TextFontFamily =
-  | "system-ui"
-  | "Arial"
-  | "Georgia"
-  | "Times New Roman"
-  | "Courier New";
+type TextFormatState = TextFormatDefaults;
 
-type TextFontSize = "12px" | "14px" | "16px" | "18px" | "24px" | "32px";
-
-type TextFormatState = Record<ToolbarActionId, boolean> & {
-  fontFamily: TextFontFamily;
-  fontSize: TextFontSize;
+type ActiveTextEditorOwner = {
+  blockId: string;
+  editor: Editor;
 };
 
 type CreateTextBlockOptions = {
@@ -432,13 +432,6 @@ function areIdSelectionsEqual(firstIds: string[], secondIds: string[]) {
   );
 }
 
-function markToolbarInteraction() {
-  document.body.dataset.noteToolbarInteraction = "true";
-  window.setTimeout(() => {
-    delete document.body.dataset.noteToolbarInteraction;
-  }, 100);
-}
-
 const defaultTextFormatState: TextFormatState = {
   bold: false,
   italic: false,
@@ -451,6 +444,17 @@ const defaultTextFormatState: TextFormatState = {
   fontFamily: "system-ui",
   fontSize: "18px",
 };
+
+const toolbarActionIds: ToolbarActionId[] = [
+  "bold",
+  "italic",
+  "strike",
+  "underline",
+  "bulletList",
+  "orderedList",
+  "blockquote",
+  "code",
+];
 
 const inlineFormatMarks: Partial<Record<ToolbarActionId, string>> = {
   bold: "bold",
@@ -487,6 +491,33 @@ function normalizeTextFontSize(value: unknown): TextFontSize {
   return textFontSizeOptions.includes(value as TextFontSize)
     ? (value as TextFontSize)
     : defaultTextFormatState.fontSize;
+}
+
+function normalizeTextFormatDefaults(value: unknown): TextFormatState {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { ...defaultTextFormatState };
+  }
+
+  const savedDefaults = value as Record<string, unknown>;
+  const normalizedDefaults = {
+    ...defaultTextFormatState,
+    fontFamily: normalizeTextFontFamily(savedDefaults.fontFamily),
+    fontSize: normalizeTextFontSize(savedDefaults.fontSize),
+  };
+
+  for (const formatId of toolbarActionIds) {
+    normalizedDefaults[formatId] =
+      typeof savedDefaults[formatId] === "boolean"
+        ? savedDefaults[formatId]
+        : defaultTextFormatState[formatId];
+  }
+
+  if (normalizedDefaults.bulletList && normalizedDefaults.orderedList) {
+    normalizedDefaults.bulletList = false;
+    normalizedDefaults.orderedList = false;
+  }
+
+  return normalizedDefaults;
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -837,9 +868,10 @@ function App() {
   const [draggedPageIds, setDraggedPageIds] = useState<string[]>([]);
   const [pageDropTargetFolderId, setPageDropTargetFolderId] = useState<string | null>(null);
   const [isStarterDismissed, setIsStarterDismissed] = useState(false);
-  const [activeTextEditor, setActiveTextEditor] = useState<Editor | null>(null);
+  const [activeTextEditor, setActiveTextEditor] =
+    useState<ActiveTextEditorOwner | null>(null);
   const [textFormatState, setTextFormatState] =
-    useState<TextFormatState>(defaultTextFormatState);
+    useState<TextFormatState>(() => ({ ...defaultTextFormatState }));
   const [assistantMessages, setAssistantMessages] = useState<AssistantMessage[]>([]);
   const [assistantInput, setAssistantInput] = useState("");
   const [assistantStatus, setAssistantStatus] = useState<string | null>(null);
@@ -908,6 +940,9 @@ function App() {
   const selectedFolderIdRef = useRef(selectedFolderId);
   const selectedPageIdRef = useRef(selectedPageId);
   const selectedSidebarPageIdsRef = useRef<string[]>(selectedSidebarPageIds);
+  const activeTextEditorRef = useRef<ActiveTextEditorOwner | null>(
+    activeTextEditor,
+  );
   const textFormatStateRef = useRef<TextFormatState>(textFormatState);
   const draggedPageIdsRef = useRef<string[]>([]);
   const draggedPrimaryPageIdRef = useRef<string | null>(null);
@@ -921,6 +956,7 @@ function App() {
   selectedFolderIdRef.current = selectedFolderId;
   selectedPageIdRef.current = selectedPageId;
   selectedSidebarPageIdsRef.current = selectedSidebarPageIds;
+  activeTextEditorRef.current = activeTextEditor;
   textFormatStateRef.current = textFormatState;
   zoomLevelRef.current = zoomLevel;
 
@@ -1466,6 +1502,12 @@ function App() {
         setIsDarkMode(savedData.isDarkMode ?? true);
         setIsSidebarCollapsed(savedSessionState?.isExplorerCollapsed ?? false);
         setIsAssistantOpen(savedSessionState?.isAssistantOpen ?? false);
+        const savedTextFormatDefaults = normalizeTextFormatDefaults(
+          savedSessionState?.textFormatDefaults,
+        );
+
+        textFormatStateRef.current = savedTextFormatDefaults;
+        setTextFormatState(savedTextFormatDefaults);
         pageViewportsRef.current = normalizePageViewports(
           savedSessionState?.pageViewports,
           validPageIds,
@@ -1685,6 +1727,7 @@ function App() {
     persistenceAvailable,
     selectedFolderId,
     selectedPageId,
+    textFormatState,
     zoomLevel,
   ]);
 
@@ -1781,6 +1824,7 @@ function App() {
         validPageIds,
       ),
       pageViewports,
+      textFormatDefaults: { ...textFormatStateRef.current },
     };
   }
 
@@ -2524,6 +2568,7 @@ function App() {
 
       if (
         (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
         event.key.toLowerCase() === "a" &&
         !currentEditingBlockId &&
         !isTextEntryTarget(event.target)
@@ -4663,7 +4708,6 @@ function App() {
         cloneElement.removeAttribute("data-block-id");
         cloneElement.setAttribute("aria-hidden", "true");
         cloneElement.classList.remove(
-          "is-content-selected",
           "is-drag-source-hidden",
           "is-editing",
         );
@@ -4852,10 +4896,63 @@ function App() {
     setFocusEndBlockId(null);
   }, []);
 
+  const handleActiveTextEditorChange = useCallback(
+    (blockId: string, editor: Editor, isActive: boolean) => {
+      if (isActive) {
+        if (
+          editingBlockIdRef.current !== blockId ||
+          editor.isDestroyed
+        ) {
+          return;
+        }
+
+        const currentOwner = activeTextEditorRef.current;
+        const nextOwner =
+          currentOwner?.blockId === blockId && currentOwner.editor === editor
+            ? currentOwner
+            : { blockId, editor };
+
+        activeTextEditorRef.current = nextOwner;
+        setActiveTextEditor(nextOwner);
+        return;
+      }
+
+      const currentOwner = activeTextEditorRef.current;
+
+      if (
+        currentOwner?.blockId !== blockId ||
+        currentOwner.editor !== editor
+      ) {
+        return;
+      }
+
+      activeTextEditorRef.current = null;
+      setActiveTextEditor((renderedOwner) =>
+        renderedOwner?.blockId === blockId && renderedOwner.editor === editor
+          ? null
+          : renderedOwner,
+      );
+    },
+    [],
+  );
+
   function getActiveWritableTextEditor() {
-    return activeTextEditor && !activeTextEditor.isDestroyed
-      ? activeTextEditor
-      : null;
+    const activeOwner = activeTextEditorRef.current;
+
+    if (!activeOwner) {
+      return null;
+    }
+
+    if (activeOwner.editor.isDestroyed) {
+      handleActiveTextEditorChange(
+        activeOwner.blockId,
+        activeOwner.editor,
+        false,
+      );
+      return null;
+    }
+
+    return activeOwner.editor;
   }
 
   function applyFormattingToSelectedBlocks(
@@ -4877,30 +4974,47 @@ function App() {
   }
 
   function leaveTextEditing() {
+    const activeOwner = activeTextEditorRef.current;
+
     blurActiveTextEntry();
     window.getSelection()?.removeAllRanges();
-    setActiveTextEditor(null);
+
+    if (activeOwner) {
+      handleActiveTextEditorChange(
+        activeOwner.blockId,
+        activeOwner.editor,
+        false,
+      );
+    }
+
+    editingBlockIdRef.current = null;
     setEditingBlockId(null);
   }
 
   function setTextFontFamily(fontFamily: TextFontFamily) {
-    const nextFormatState = {
-      ...textFormatStateRef.current,
-      fontFamily,
-    };
     const editor = getActiveWritableTextEditor();
-
-    textFormatStateRef.current = nextFormatState;
-    setTextFormatState(nextFormatState);
 
     if (editor) {
       editor
         .chain()
         .focus()
-        .setMark("textStyle", getTextStyleAttrs(nextFormatState))
+        .setMark("textStyle", {
+          fontFamily:
+            fontFamily === defaultTextFormatState.fontFamily
+              ? null
+              : fontFamily,
+        })
         .run();
       return;
     }
+
+    const nextFormatState = {
+      ...textFormatStateRef.current,
+      fontFamily,
+    };
+
+    textFormatStateRef.current = nextFormatState;
+    setTextFormatState(nextFormatState);
 
     applyFormattingToSelectedBlocks((block) =>
       applyTextStyleStateToBlock(block, nextFormatState),
@@ -4908,23 +5022,27 @@ function App() {
   }
 
   function setTextFontSize(fontSize: TextFontSize) {
-    const nextFormatState = {
-      ...textFormatStateRef.current,
-      fontSize,
-    };
     const editor = getActiveWritableTextEditor();
-
-    textFormatStateRef.current = nextFormatState;
-    setTextFormatState(nextFormatState);
 
     if (editor) {
       editor
         .chain()
         .focus()
-        .setMark("textStyle", getTextStyleAttrs(nextFormatState))
+        .setMark("textStyle", {
+          fontSize:
+            fontSize === defaultTextFormatState.fontSize ? null : fontSize,
+        })
         .run();
       return;
     }
+
+    const nextFormatState = {
+      ...textFormatStateRef.current,
+      fontSize,
+    };
+
+    textFormatStateRef.current = nextFormatState;
+    setTextFormatState(nextFormatState);
 
     applyFormattingToSelectedBlocks((block) =>
       applyTextStyleStateToBlock(block, nextFormatState),
@@ -4932,14 +5050,7 @@ function App() {
   }
 
   function toggleTextFormat(formatId: ToolbarActionId) {
-    const nextFormatState = getNextTextFormatState(
-      textFormatStateRef.current,
-      formatId,
-    );
     const editor = getActiveWritableTextEditor();
-
-    textFormatStateRef.current = nextFormatState;
-    setTextFormatState(nextFormatState);
 
     if (editor) {
       switch (formatId) {
@@ -4969,6 +5080,14 @@ function App() {
           return;
       }
     }
+
+    const nextFormatState = getNextTextFormatState(
+      textFormatStateRef.current,
+      formatId,
+    );
+
+    textFormatStateRef.current = nextFormatState;
+    setTextFormatState(nextFormatState);
 
     applyFormattingToSelectedBlocks((block) =>
       applyFormatStateToBlock(block, formatId, nextFormatState),
@@ -5375,7 +5494,7 @@ function App() {
         }
       >
         <PageHeader
-          activeTextEditor={activeTextEditor}
+          activeTextEditor={activeTextEditor?.editor ?? null}
           assistantToggleButtonRef={assistantToggleButtonRef}
           isAssistantOpen={shouldRenderAssistantPanel}
           isGridVisible={isGridVisible}
@@ -5545,12 +5664,11 @@ function App() {
                 onDelete={deleteBlock}
                 onEdit={editBlock}
                 onEditEnd={endBlockEdit}
-                onSelectAllBlocks={selectAllVisibleBlocks}
                 onCanvasPanEnd={endCanvasInteraction}
                 onCanvasPanMove={updateCanvasInteraction}
                 onCanvasPanStart={startCanvasPan}
                 onFocusEndHandled={handleFocusEndHandled}
-                onActiveEditorChange={setActiveTextEditor}
+                onActiveEditorChange={handleActiveTextEditorChange}
                 onInteractionModeChange={setActiveMode}
                 onBlockElementChange={registerBlockElement}
                 onSelect={selectBlock}
@@ -6762,64 +6880,81 @@ function GlobalTextToolbar({
       };
     },
   });
-  const activeFontFamily = toolbarState?.fontFamily ?? formatState.fontFamily;
-  const activeFontSize = toolbarState?.fontSize ?? formatState.fontSize;
+  // useEditorState retains its last snapshot while the editor prop transitions
+  // to null, so only expose that snapshot while the editor still owns the
+  // toolbar. Outside editing, the toolbar must reflect global defaults.
+  const editorToolbarState = editor ? toolbarState : null;
+  const activeFontFamily =
+    editorToolbarState?.fontFamily ?? formatState.fontFamily;
+  const activeFontSize = editorToolbarState?.fontSize ?? formatState.fontSize;
 
   const actions: ToolbarAction[] = [
     {
       icon: "bold",
       id: "bold",
-      isActive: toolbarState?.isBold ?? formatState.bold,
-      isDisabled: toolbarState ? !toolbarState.canToggleBold : false,
+      isActive: editorToolbarState?.isBold ?? formatState.bold,
+      isDisabled: editorToolbarState ? !editorToolbarState.canToggleBold : false,
       title: "Bold",
     },
     {
       icon: "italic",
       id: "italic",
-      isActive: toolbarState?.isItalic ?? formatState.italic,
-      isDisabled: toolbarState ? !toolbarState.canToggleItalic : false,
+      isActive: editorToolbarState?.isItalic ?? formatState.italic,
+      isDisabled: editorToolbarState
+        ? !editorToolbarState.canToggleItalic
+        : false,
       title: "Italic",
     },
     {
       icon: "strikethrough",
       id: "strike",
-      isActive: toolbarState?.isStrike ?? formatState.strike,
-      isDisabled: toolbarState ? !toolbarState.canToggleStrike : false,
+      isActive: editorToolbarState?.isStrike ?? formatState.strike,
+      isDisabled: editorToolbarState
+        ? !editorToolbarState.canToggleStrike
+        : false,
       title: "Strikethrough",
     },
     {
       icon: "underline",
       id: "underline",
-      isActive: toolbarState?.isUnderline ?? formatState.underline,
-      isDisabled: toolbarState ? !toolbarState.canToggleUnderline : false,
+      isActive: editorToolbarState?.isUnderline ?? formatState.underline,
+      isDisabled: editorToolbarState
+        ? !editorToolbarState.canToggleUnderline
+        : false,
       title: "Underline",
     },
     {
       icon: "list-bullet",
       id: "bulletList",
-      isActive: toolbarState?.isBulletList ?? formatState.bulletList,
-      isDisabled: toolbarState ? !toolbarState.canToggleBulletList : false,
+      isActive: editorToolbarState?.isBulletList ?? formatState.bulletList,
+      isDisabled: editorToolbarState
+        ? !editorToolbarState.canToggleBulletList
+        : false,
       title: "Bullet list",
     },
     {
       icon: "numbered-list",
       id: "orderedList",
-      isActive: toolbarState?.isOrderedList ?? formatState.orderedList,
-      isDisabled: toolbarState ? !toolbarState.canToggleOrderedList : false,
+      isActive: editorToolbarState?.isOrderedList ?? formatState.orderedList,
+      isDisabled: editorToolbarState
+        ? !editorToolbarState.canToggleOrderedList
+        : false,
       title: "Ordered list",
     },
     {
       icon: "quote",
       id: "blockquote",
-      isActive: toolbarState?.isBlockquote ?? formatState.blockquote,
-      isDisabled: toolbarState ? !toolbarState.canToggleBlockquote : false,
+      isActive: editorToolbarState?.isBlockquote ?? formatState.blockquote,
+      isDisabled: editorToolbarState
+        ? !editorToolbarState.canToggleBlockquote
+        : false,
       title: "Quote",
     },
     {
       icon: "code-bracket",
       id: "code",
-      isActive: toolbarState?.isCode ?? formatState.code,
-      isDisabled: toolbarState ? !toolbarState.canToggleCode : false,
+      isActive: editorToolbarState?.isCode ?? formatState.code,
+      isDisabled: editorToolbarState ? !editorToolbarState.canToggleCode : false,
       title: "Code",
     },
   ];
@@ -6829,14 +6964,11 @@ function GlobalTextToolbar({
       aria-label="Text formatting"
       className="global-text-toolbar"
       onMouseDown={(event) => {
-        markToolbarInteraction();
-
         if (!(event.target instanceof HTMLSelectElement)) {
           event.preventDefault();
         }
       }}
       onPointerDown={(event) => {
-        markToolbarInteraction();
         event.stopPropagation();
 
         if (!(event.target instanceof HTMLSelectElement)) {

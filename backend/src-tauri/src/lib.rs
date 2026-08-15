@@ -55,6 +55,10 @@ struct AppSessionState {
     selected_page_id: Option<String>,
     open_page_tab_ids: Option<Vec<String>>,
     page_viewports: Option<HashMap<String, PageViewport>>,
+    // Keep this field lossless so malformed or newer values do not prevent the
+    // rest of the user's note data from loading. The frontend owns validation
+    // and normalization of individual formatting defaults.
+    text_format_defaults: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -110,4 +114,98 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![load_app_data, save_app_data])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const OLD_SESSION_JSON: &str = r#"
+        {
+          "folders": [],
+          "pages": [],
+          "blocks": [],
+          "isDarkMode": true,
+          "sessionState": {
+            "isAssistantOpen": false,
+            "isExplorerCollapsed": true,
+            "openPageTabIds": []
+          }
+        }
+    "#;
+
+    #[test]
+    fn deserializes_session_json_without_text_format_defaults() {
+        let data: AppData = serde_json::from_str(OLD_SESSION_JSON).unwrap();
+        let session_state = data.session_state.unwrap();
+
+        assert!(session_state.text_format_defaults.is_none());
+        assert_eq!(session_state.is_explorer_collapsed, Some(true));
+    }
+
+    #[test]
+    fn text_format_defaults_round_trip_as_optional_session_data() {
+        let json = r#"
+            {
+              "folders": [],
+              "pages": [],
+              "blocks": [],
+              "sessionState": {
+                "textFormatDefaults": {
+                  "bold": true,
+                  "italic": false,
+                  "strike": false,
+                  "underline": true,
+                  "bulletList": false,
+                  "orderedList": false,
+                  "blockquote": false,
+                  "code": false,
+                  "fontFamily": "Georgia",
+                  "fontSize": "24px"
+                }
+              }
+            }
+        "#;
+        let data: AppData = serde_json::from_str(json).unwrap();
+        let serialized = serde_json::to_string(&data).unwrap();
+        let round_tripped: AppData = serde_json::from_str(&serialized).unwrap();
+        let defaults = round_tripped
+            .session_state
+            .unwrap()
+            .text_format_defaults
+            .unwrap();
+
+        assert_eq!(defaults["bold"], true);
+        assert_eq!(defaults["underline"], true);
+        assert_eq!(defaults["fontFamily"], "Georgia");
+        assert_eq!(defaults["fontSize"], "24px");
+    }
+
+    #[test]
+    fn malformed_text_format_defaults_do_not_reject_saved_notes() {
+        let json = r#"
+            {
+              "folders": [],
+              "pages": [],
+              "blocks": [],
+              "sessionState": {
+                "textFormatDefaults": {
+                  "underline": "invalid",
+                  "bulletList": true,
+                  "orderedList": true,
+                  "fontFamily": 42
+                }
+              }
+            }
+        "#;
+        let data: AppData = serde_json::from_str(json).unwrap();
+        let defaults = data
+            .session_state
+            .unwrap()
+            .text_format_defaults
+            .unwrap();
+
+        assert_eq!(defaults["underline"], "invalid");
+        assert_eq!(defaults["fontFamily"], 42);
+    }
 }

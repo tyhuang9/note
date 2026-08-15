@@ -28,6 +28,7 @@ import { CanvasElementRenderer } from "./canvas/components/CanvasElementRenderer
 import { CanvasInteractionOverlay } from "./canvas/components/CanvasInteractionOverlay";
 import { CanvasViewport } from "./canvas/components/CanvasViewport";
 import { CanvasWorldLayer } from "./canvas/components/CanvasWorldLayer";
+import { useCanvasInteraction } from "./canvas/interaction/useCanvasInteraction";
 import { ActivityRail } from "./components/workbench/ActivityRail";
 import { WorkbenchShell } from "./components/workbench/WorkbenchShell";
 import {
@@ -61,10 +62,8 @@ import type {
   OffscreenGroup,
   PanOffset,
   PageViewport,
-  PanState,
   SearchMatch,
   SelectionRect,
-  SelectionState,
   ViewportRect,
 } from "./appTypes";
 import type {
@@ -81,9 +80,7 @@ import {
   createId,
   emptyData,
   getOffscreenDirection,
-  getSelectionRect,
   isTextEntryTarget,
-  rectsIntersect,
 } from "./editorUtils";
 import {
   callOpenAICompatibleWhisperTranscription,
@@ -1081,10 +1078,8 @@ function App() {
   const overlayReturnFocusRequestRef = useRef(false);
   const wasNarrowWorkbenchRef = useRef(false);
   const canvasViewportRef = useRef<ViewportRect | null>(null);
-  const panState = useRef<PanState | null>(null);
   const panOffsetRef = useRef<PanOffset>(panOffset);
   const panRafId = useRef<number | null>(null);
-  const selectionState = useRef<SelectionState | null>(null);
   const selectionRafId = useRef<number | null>(null);
   const pendingSelectionRect = useRef<SelectionRect | null>(null);
   const searchCache = useRef<Map<string, SearchMatch[]>>(new Map());
@@ -2915,38 +2910,6 @@ function App() {
 
       selectionRafId.current = null;
     });
-  }
-
-  function getCanvasPoint(clientX: number, clientY: number): CanvasPoint | null {
-    const canvasContentElement = canvasContentRef.current;
-
-    if (!canvasContentElement) {
-      return null;
-    }
-
-    const canvasContentRect = canvasContentElement.getBoundingClientRect();
-    const scaleX =
-      canvasContentElement.offsetWidth > 0
-        ? canvasContentRect.width / canvasContentElement.offsetWidth
-        : 0;
-    const scaleY =
-      canvasContentElement.offsetHeight > 0
-        ? canvasContentRect.height / canvasContentElement.offsetHeight
-        : 0;
-
-    if (
-      !Number.isFinite(scaleX) ||
-      !Number.isFinite(scaleY) ||
-      scaleX <= 0 ||
-      scaleY <= 0
-    ) {
-      return null;
-    }
-
-    return {
-      x: (clientX - canvasContentRect.left) / scaleX,
-      y: (clientY - canvasContentRect.top) / scaleY,
-    };
   }
 
   function updateZoom(delta: number) {
@@ -5233,30 +5196,6 @@ function App() {
     );
   }
 
-  function selectCanvas() {
-    leaveTextEditing();
-    setSelectedBlockIds([]);
-    hideSelectionRectangle();
-    setIsCanvasKeyboardActive(true);
-    setActiveMode("canvas");
-  }
-
-  function isCanvasBackgroundTarget(target: EventTarget | null) {
-    if (!(target instanceof HTMLElement)) {
-      return false;
-    }
-
-    if (
-      target.closest(
-        ".text-block, .offscreen-indicators, .search-panel, .canvas-starter",
-      )
-    ) {
-      return false;
-    }
-
-    return target.closest(".canvas, .canvas-content, .canvas-grid") !== null;
-  }
-
   function handleChromePointerDown(event: ReactPointerEvent<HTMLElement>) {
     if (!isTextEntryTarget(event.target)) {
       leaveTextEditing();
@@ -5268,206 +5207,27 @@ function App() {
     setIsCanvasKeyboardActive(false);
   }
 
-  function startCanvasPan(event: React.PointerEvent<HTMLElement>) {
-    event.preventDefault();
-    event.stopPropagation();
-    leaveTextEditing();
-    panState.current = {
-      startClientX: event.clientX,
-      startClientY: event.clientY,
-      startPanX: panOffsetRef.current.x,
-      startPanY: panOffsetRef.current.y,
-      currentPanX: panOffsetRef.current.x,
-      currentPanY: panOffsetRef.current.y,
-    };
-    setInsertionPoint(null);
-    setIsCanvasKeyboardActive(true);
-    setActiveMode("panning");
-    event.currentTarget.setPointerCapture(event.pointerId);
-  }
-
-  function startCanvasInteraction(event: React.PointerEvent<HTMLElement>) {
-    if (!isCanvasBackgroundTarget(event.target)) {
-      return;
-    }
-
-    selectCanvas();
-    event.preventDefault();
-
-    if (event.button === 2) {
-      startCanvasPan(event);
-    } else {
-      const startPoint = getCanvasPoint(event.clientX, event.clientY);
-
-      if (!startPoint) {
-        return;
-      }
-
-      selectionState.current = {
-        startX: startPoint.x,
-        startY: startPoint.y,
-        currentX: startPoint.x,
-        currentY: startPoint.y,
-        didMove: false,
-      };
-      setInsertionPoint(startPoint);
-      hideSelectionRectangle();
-    }
-
-    event.currentTarget.setPointerCapture(event.pointerId);
-  }
-
-  function updateCanvasInteraction(event: React.PointerEvent<HTMLElement>) {
-    const currentPan = panState.current;
-    const currentSelection = selectionState.current;
-
-    if (!currentPan && !currentSelection) {
-      return;
-    }
-
-    if (currentPan) {
-      const deltaX = event.clientX - currentPan.startClientX;
-      const deltaY = event.clientY - currentPan.startClientY;
-      const nextPanOffset = {
-        x: currentPan.startPanX + deltaX,
-        y: currentPan.startPanY + deltaY,
-      };
-
-      currentPan.currentPanX = nextPanOffset.x;
-      currentPan.currentPanY = nextPanOffset.y;
-      scheduleCanvasContentTransform(nextPanOffset);
-      return;
-    }
-
-    const canvasElement = canvasRef.current;
-
-    if (!currentSelection || !canvasElement) {
-      return;
-    }
-
-    const currentPoint = getCanvasPoint(event.clientX, event.clientY);
-
-    if (!currentPoint) {
-      return;
-    }
-
-    currentSelection.currentX = currentPoint.x;
-    currentSelection.currentY = currentPoint.y;
-
-    if (
-      Math.abs(currentSelection.currentX - currentSelection.startX) > 2 ||
-      Math.abs(currentSelection.currentY - currentSelection.startY) > 2
-    ) {
-      if (!currentSelection.didMove) {
-        currentSelection.didMove = true;
-        setActiveMode("selecting");
-        setInsertionPoint(null);
-      }
-
-      scheduleSelectionRectangle(getSelectionRect(currentSelection));
-    }
-  }
-
-  function endCanvasInteraction(event: React.PointerEvent<HTMLElement>) {
-    const currentPan = panState.current;
-    const currentSelection = selectionState.current;
-
-    if (!currentPan && !currentSelection) {
-      return;
-    }
-
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-
-    if (currentPan) {
-      const nextPanOffset = {
-        x: currentPan.currentPanX,
-        y: currentPan.currentPanY,
-      };
-
-      panOffsetRef.current = nextPanOffset;
-      setPanOffset(nextPanOffset);
-      setActiveMode("canvas");
-    }
-
-    if (currentSelection?.didMove) {
-      const nextSelectionRect = getSelectionRect(currentSelection);
-      const nextSelectedBlockIds = visibleBlocks
-        .filter((block) =>
-          rectsIntersect(nextSelectionRect, {
-            x: block.x,
-            y: block.y,
-            width: block.width,
-            height: block.height,
-          }),
-        )
-        .map((block) => block.id);
-
-      setSelectedBlockIds(nextSelectedBlockIds);
-      setActiveMode(nextSelectedBlockIds.length > 0 ? "selected" : "canvas");
-    } else {
-      setActiveMode("canvas");
-    }
-
-    panState.current = null;
-    selectionState.current = null;
-    pendingSelectionRect.current = null;
-    hideSelectionRectangle();
-  }
-
-  function handleCanvasWheel(event: React.WheelEvent<HTMLElement>) {
-    event.preventDefault();
-
-    if (event.metaKey || event.ctrlKey) {
-      const currentZoom = zoomLevelRef.current;
-      const nextZoom = Math.min(
-        MAX_ZOOM,
-        Math.max(
-          MIN_ZOOM,
-          currentZoom + (event.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP),
-        ),
-      );
-
-      if (nextZoom === currentZoom) {
-        return;
-      }
-
-      const canvasRect = event.currentTarget.getBoundingClientRect();
-      const pointerX = event.clientX - canvasRect.left;
-      const pointerY = event.clientY - canvasRect.top;
-      const canvasPointX =
-        (pointerX - panOffsetRef.current.x) / currentZoom;
-      const canvasPointY =
-        (pointerY - panOffsetRef.current.y) / currentZoom;
-      const nextPanOffset = {
-        x: pointerX - canvasPointX * nextZoom,
-        y: pointerY - canvasPointY * nextZoom,
-      };
-
-      zoomLevelRef.current = nextZoom;
-      panOffsetRef.current = nextPanOffset;
-      setZoomLevel(nextZoom);
-      setPanOffset(nextPanOffset);
-      setLivePanOffset(nextPanOffset);
-      return;
-    }
-
-    const shiftScrollDelta =
-      Math.abs(event.deltaX) > Math.abs(event.deltaY)
-        ? event.deltaX
-        : event.deltaY;
-    const nextPanOffset = {
-      x:
-        panOffsetRef.current.x -
-        (event.shiftKey ? shiftScrollDelta : event.deltaX),
-      y: panOffsetRef.current.y - (event.shiftKey ? 0 : event.deltaY),
-    };
-
-    panOffsetRef.current = nextPanOffset;
-    setLivePanOffset(nextPanOffset);
-    setPanOffset(nextPanOffset);
-  }
+  const canvasInteraction = useCanvasInteraction({
+    canvasContentRef,
+    canvasRef,
+    hideSelectionRectangle,
+    leaveTextEditing,
+    maxZoom: MAX_ZOOM,
+    minZoom: MIN_ZOOM,
+    panOffsetRef,
+    scheduleCanvasContentTransform,
+    scheduleSelectionRectangle,
+    setActiveMode,
+    setInsertionPoint,
+    setIsCanvasKeyboardActive,
+    setLivePanOffset,
+    setPanOffset,
+    setSelectedElementIds: setSelectedBlockIds,
+    setZoomLevel,
+    visibleElements: visibleBlocks,
+    zoomLevelRef,
+    zoomStep: ZOOM_STEP,
+  });
 
   function focusSearchMatch(matchIndex: number) {
     if (searchMatches.length === 0) {
@@ -5681,11 +5441,11 @@ function App() {
           }
           activeMode={activeMode}
           id={WORKSPACE_PAGE_PANEL_ID}
-          onPointerCancel={endCanvasInteraction}
-          onPointerDown={startCanvasInteraction}
-          onPointerMove={updateCanvasInteraction}
-          onPointerUp={endCanvasInteraction}
-          onWheel={handleCanvasWheel}
+          onPointerCancel={canvasInteraction.handlePointerEnd}
+          onPointerDown={canvasInteraction.handlePointerDown}
+          onPointerMove={canvasInteraction.handlePointerMove}
+          onPointerUp={canvasInteraction.handlePointerEnd}
+          onWheel={canvasInteraction.handleWheel}
           ref={canvasRef}
         >
           {offscreenGroups.length > 0 ? (
@@ -5801,9 +5561,9 @@ function App() {
                 onEdit={editBlock}
                 onEditEnd={endBlockEdit}
                 onSelectAllBlocks={selectAllVisibleBlocks}
-                onCanvasPanEnd={endCanvasInteraction}
-                onCanvasPanMove={updateCanvasInteraction}
-                onCanvasPanStart={startCanvasPan}
+                onCanvasPanEnd={canvasInteraction.handlePointerEnd}
+                onCanvasPanMove={canvasInteraction.handlePointerMove}
+                onCanvasPanStart={canvasInteraction.startPan}
                 onFocusEndHandled={handleFocusEndHandled}
                 onActiveEditorChange={setActiveTextEditor}
                 onInteractionModeChange={setActiveMode}
@@ -5828,7 +5588,7 @@ function App() {
                   isSelected={selectedBlockIds.includes(block.id)}
                   key={block.id}
                   onBlockElementChange={registerBlockElement}
-                  onCanvasPanStart={startCanvasPan}
+                  onCanvasPanStart={canvasInteraction.startPan}
                   onInteractionModeChange={setActiveMode}
                   onSelect={selectBlock}
                   onUpdate={updateImageElement}

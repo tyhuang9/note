@@ -120,13 +120,16 @@ function createSlashCommandRenderer(pluginKey: PluginKey) {
       return;
     }
 
+    const positionElement = floatingElement;
+    const positionProps = props;
+
     const reference = {
-      contextElement: props.editor.view.dom,
+      contextElement: positionProps.editor.view.dom,
       getBoundingClientRect: () =>
-        props?.clientRect?.() ?? new DOMRect(0, 0, 0, 0),
+        positionProps.clientRect?.() ?? new DOMRect(0, 0, 0, 0),
     };
 
-    void computePosition(reference, floatingElement, {
+    void computePosition(reference, positionElement, {
       middleware: [
         offset(8),
         flip({ padding: 8 }),
@@ -144,15 +147,19 @@ function createSlashCommandRenderer(pluginKey: PluginKey) {
       placement: "bottom-start",
       strategy: "fixed",
     }).then(({ x, y }) => {
-      if (!floatingElement) {
+      if (floatingElement !== positionElement || props !== positionProps) {
         return;
       }
 
-      Object.assign(floatingElement.style, {
+      Object.assign(positionElement.style, {
         left: `${x}px`,
         top: `${y}px`,
         visibility: "visible",
       });
+    }).catch(() => {
+      if (floatingElement === positionElement && props === positionProps) {
+        exitSuggestion(positionProps.editor.view, pluginKey);
+      }
     });
   }
 

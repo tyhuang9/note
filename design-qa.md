@@ -7,9 +7,9 @@
 
 **Implementation evidence**
 
-- Full dark state: `C:\Users\huang\AppData\Local\Temp\note-slash-menu-dark-full.png`
-- Focused dark popup: `C:\Users\huang\AppData\Local\Temp\note-slash-menu-dark-popup.png`
-- Focused light filtered popup: `C:\Users\huang\AppData\Local\Temp\note-slash-menu-light-filtered.png`
+- Full dark state: `docs/qa/note-slash-menu-dark-full.png`
+- Focused dark popup: `docs/qa/note-slash-menu-dark-popup.png`
+- Focused light filtered popup: `docs/qa/note-slash-menu-light-filtered.png`
 
 **Viewport and normalization**
 
@@ -26,7 +26,7 @@
 
 **Focused-region comparison evidence**
 
-- Typography: labels, secondary descriptions, category headers, hints, and footer have a clear five-level hierarchy. The shared system font and compact weights match Note's workbench.
+- Typography: labels, secondary descriptions, category headers, hints, and footer have a clear five-level hierarchy. The shared system font and compact weights match Note's workbench, and command copy wraps without information loss at 200% text size.
 - Spacing and layout rhythm: 34px icon tiles, 52px minimum rows, 6px menu inset, 10px row gaps, 10px radius, and a fixed footer produce a compact but scannable menu. Overflow is contained in the list, not the footer.
 - Colors and tokens: dark and light surfaces preserve readable foreground/secondary contrast; the selected state uses Note purple in both themes without losing the label or description.
 - Image and icon quality: no raster imagery is required. All visible icons use the shared Note HeroIcon renderer and remain crisp at 1x capture density.
@@ -46,7 +46,8 @@
 **Comparison history**
 
 - Pass 1: compared the supplied reference screenshots with the dark full view, focused dark popup, and focused light filtered popup. No P0/P1/P2 findings required a visual-fix iteration.
-- Pass 2: independent review identified missing scroll affordance and ambiguous simultaneous hover/active styling. The menu added a stateful overflow cue, stable scrollbar gutter, neutral non-active hover, stronger hints, keycap styling, and a high-contrast active indicator. Post-fix evidence: `C:\Users\huang\AppData\Local\Temp\note-slash-menu-dark-popup-v3.png`. No P0/P1/P2 visual findings remain.
+- Pass 2: independent review identified missing scroll affordance and ambiguous simultaneous hover/active styling. The menu added a stateful overflow cue, stable scrollbar gutter, neutral non-active hover, stronger hints, keycap styling, and a high-contrast active indicator. Post-fix evidence: `docs/qa/note-slash-menu-dark-popup.png`. No P0/P1/P2 visual findings remain.
+- Pass 3: accessibility review identified ellipsized copy at enlarged text sizes. Labels and descriptions now wrap, and a 320px viewport test verifies full copy and horizontal containment at 200% text size.
 
 **Implementation checklist**
 

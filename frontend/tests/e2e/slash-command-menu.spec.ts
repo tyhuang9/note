@@ -353,6 +353,34 @@ test("composition, pointer hover, backspace, and outside clicks dismiss safely",
   await expect(page.locator(".slash-command-popup")).toHaveCount(0);
 });
 
+test("destroying one editor cleans its popup before another editor opens", async ({
+  page,
+}) => {
+  await openInitialNote(page);
+  await openSlashMenu(page, 300, 180);
+  const firstBlockId = await page
+    .locator(".text-block")
+    .last()
+    .getAttribute("data-block-id");
+  const firstMenuId = await slashMenu(page).getAttribute("id");
+
+  expect(firstBlockId).toBeTruthy();
+  expect(firstMenuId).toBeTruthy();
+  await openSlashMenu(page, 650, 320);
+
+  const secondMenu = slashMenu(page);
+  const secondMenuId = await secondMenu.getAttribute("id");
+  const firstBlock = page.locator(
+    `.text-block[data-block-id="${firstBlockId ?? ""}"]`,
+  );
+
+  await expect(secondMenu).toHaveCount(1);
+  expect(secondMenuId).toBeTruthy();
+  expect(secondMenuId).not.toBe(firstMenuId);
+  await expect(firstBlock.locator(".text-block-display")).toHaveText("/");
+  await expect(firstBlock.locator("[aria-controls]")).toHaveCount(0);
+});
+
 test("pointer selection executes all nine commands and removes the query", async ({
   browser,
 }) => {
@@ -699,6 +727,47 @@ test("menu clamps to a phone-width viewport without clipping its footer", async 
     .poll(() =>
       popup.evaluate((element) => element.scrollWidth <= element.clientWidth),
     )
+    .toBe(true);
+});
+
+test("menu copy reflows without truncation at 200% text size", async ({
+  page,
+}) => {
+  const viewport = { width: 320, height: 480 };
+  await page.setViewportSize(viewport);
+  await openInitialNote(page);
+  await page.addStyleTag({
+    content: `
+      .slash-command-label { font-size: 28px !important; line-height: 38px !important; }
+      .slash-command-description { font-size: 24px !important; line-height: 34px !important; }
+    `,
+  });
+  await clickCanvas(page, 150, 190);
+  await page.keyboard.type("/");
+
+  const popup = page.locator(".slash-command-popup");
+  const firstOption = popup.getByRole("option").first();
+
+  await expect(popup).toBeVisible();
+  await expect(firstOption.locator(".slash-command-label")).toHaveCSS(
+    "white-space",
+    "normal",
+  );
+  await expect(firstOption.locator(".slash-command-description")).toHaveText(
+    "Continue with plain text",
+  );
+  await expect
+    .poll(() =>
+      popup.evaluate((element) => element.scrollWidth <= element.clientWidth),
+    )
+    .toBe(true);
+  await expect
+    .poll(() =>
+      firstOption.evaluate((element) => element.scrollWidth <= element.clientWidth),
+    )
+    .toBe(true);
+  await expect
+    .poll(() => isContainedInViewport(popup, viewport))
     .toBe(true);
 });
 

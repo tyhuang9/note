@@ -2705,22 +2705,20 @@ h2 {
 }
 
 .slash-command-label {
-  overflow: hidden;
   font-size: 14px;
   font-weight: 700;
   line-height: 19px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .slash-command-description {
-  overflow: hidden;
   color: #626b7b;
   font-size: 12px;
   font-weight: 500;
   line-height: 17px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .slash-command-empty {

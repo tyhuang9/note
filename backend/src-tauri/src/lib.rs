@@ -4,6 +4,8 @@ use std::fs;
 use std::path::PathBuf;
 use tauri::Manager;
 
+pub mod storage;
+
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AppData {

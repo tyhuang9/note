@@ -1,0 +1,24 @@
+{
+  "folders": [{ "id": "folder-image", "name": "Media" }],
+  "pages": [
+    {
+      "folderId": "folder-image",
+      "id": "page-image",
+      "title": "Standalone image"
+    }
+  ],
+  "blocks": [
+    {
+      "content": "",
+      "height": 160,
+      "id": "block-image",
+      "imageData": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+      "imageName": "legacy-pixel.png",
+      "pageId": "page-image",
+      "width": 240,
+      "x": 64,
+      "y": 96
+    }
+  ],
+  "isDarkMode": false
+}

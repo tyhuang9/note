@@ -1,0 +1,33 @@
+{
+  "folders": [{ "id": "folder-mixed", "name": "Project" }],
+  "pages": [
+    {
+      "folderId": "folder-mixed",
+      "id": "page-mixed",
+      "title": "Mixed text and image"
+    }
+  ],
+  "blocks": [
+    {
+      "content": "Text beside an image",
+      "height": 104,
+      "id": "block-mixed-text",
+      "pageId": "page-mixed",
+      "width": 320,
+      "x": 80,
+      "y": 80
+    },
+    {
+      "content": "",
+      "height": 160,
+      "id": "block-mixed-image",
+      "imageData": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+      "imageName": "mixed.png",
+      "pageId": "page-mixed",
+      "width": 240,
+      "x": 460,
+      "y": 80
+    }
+  ],
+  "isDarkMode": false
+}

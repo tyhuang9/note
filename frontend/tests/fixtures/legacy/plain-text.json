@@ -1,0 +1,22 @@
+{
+  "folders": [{ "id": "folder-plain", "name": "Notes" }],
+  "pages": [
+    {
+      "folderId": "folder-plain",
+      "id": "page-plain",
+      "title": "Plain text"
+    }
+  ],
+  "blocks": [
+    {
+      "content": "A plain legacy note.",
+      "height": 96,
+      "id": "block-plain",
+      "pageId": "page-plain",
+      "width": 320,
+      "x": 120,
+      "y": 160
+    }
+  ],
+  "isDarkMode": false
+}

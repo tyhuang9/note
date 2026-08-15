@@ -1,0 +1,26 @@
+{
+  "folders": [{ "id": "folder-session", "name": "Workspace" }],
+  "pages": [
+    {
+      "folderId": "folder-session",
+      "id": "page-session",
+      "isBookmarked": true,
+      "title": "Session viewport"
+    }
+  ],
+  "blocks": [],
+  "isDarkMode": false,
+  "sessionState": {
+    "isAssistantOpen": true,
+    "isExplorerCollapsed": false,
+    "openPageTabIds": ["page-session"],
+    "pageViewports": {
+      "page-session": {
+        "panOffset": { "x": -180, "y": 72 },
+        "zoomLevel": 1.25
+      }
+    },
+    "selectedFolderId": "folder-session",
+    "selectedPageId": "page-session"
+  }
+}

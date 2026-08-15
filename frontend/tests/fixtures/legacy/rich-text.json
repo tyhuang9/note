@@ -1,0 +1,37 @@
+{
+  "folders": [{ "id": "folder-rich", "name": "Notes" }],
+  "pages": [
+    {
+      "folderId": "folder-rich",
+      "id": "page-rich",
+      "title": "Rich text"
+    }
+  ],
+  "blocks": [
+    {
+      "content": "Bold legacy text",
+      "height": 112,
+      "id": "block-rich",
+      "pageId": "page-rich",
+      "richContent": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Bold legacy text",
+                "marks": [{ "type": "bold" }]
+              }
+            ]
+          }
+        ]
+      },
+      "width": 360,
+      "x": 96,
+      "y": 128
+    }
+  ],
+  "isDarkMode": true
+}

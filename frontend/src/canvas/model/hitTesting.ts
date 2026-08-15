@@ -1,4 +1,4 @@
-import type { CanvasElement, ElementId } from "./elements";
+import type { CanvasElement, ElementId, InkElement } from "./elements";
 import { isBoxCanvasElement } from "./elements";
 import type { CanvasPoint, CanvasRect } from "./geometry";
 
@@ -34,6 +34,33 @@ export function boundsContainBounds(container: Bounds, candidate: Bounds): boole
   const a = normalizeBounds(container);
   const b = normalizeBounds(candidate);
   return b.x >= a.x && b.y >= a.y && b.x + b.width <= a.x + a.width && b.y + b.height <= a.y + a.height;
+}
+
+/** Squared-distance-safe point-to-segment calculation used for painted ink hit targets. */
+export function pointToSegmentDistance(
+  point: CanvasPoint,
+  start: CanvasPoint,
+  end: CanvasPoint,
+): number {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared === 0) return Math.hypot(point.x - start.x, point.y - start.y);
+  const t = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared));
+  return Math.hypot(point.x - (start.x + dx * t), point.y - (start.y + dy * t));
+}
+
+/** Tests a world point against the actual local stroke path, not its rectangular bounds. */
+export function inkContainsPoint(
+  element: InkElement,
+  point: CanvasPoint,
+  tolerance = 0,
+): boolean {
+  const radius = Math.max(0, tolerance) + element.brush.size / 2;
+  const points = element.points.map(([x, y]) => ({ x: element.x + x, y: element.y + y }));
+  if (points.length === 0) return false;
+  if (points.length === 1) return Math.hypot(point.x - points[0].x, point.y - points[0].y) <= radius;
+  return points.slice(1).some((end, index) => pointToSegmentDistance(point, points[index], end) <= radius);
 }
 
 export function getMarqueeElementIds(

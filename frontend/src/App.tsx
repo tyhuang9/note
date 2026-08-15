@@ -26,9 +26,16 @@ import { TextBlockView } from "./components/TextBlockView";
 import { ImageElementView } from "./components/ImageElementView";
 import { CanvasElementRenderer } from "./canvas/components/CanvasElementRenderer";
 import { CanvasInteractionOverlay } from "./canvas/components/CanvasInteractionOverlay";
+import { CanvasToolPalette } from "./canvas/components/CanvasToolPalette";
 import { CanvasViewport } from "./canvas/components/CanvasViewport";
 import { CanvasWorldLayer } from "./canvas/components/CanvasWorldLayer";
+import { InkElementView } from "./canvas/components/InkElementView";
 import { useCanvasInteraction } from "./canvas/interaction/useCanvasInteraction";
+import {
+  drawingToolForShortcut,
+  useInkInteraction,
+  type DrawingTool,
+} from "./canvas/interaction/useInkInteraction";
 import { ActivityRail } from "./components/workbench/ActivityRail";
 import { WorkbenchShell } from "./components/workbench/WorkbenchShell";
 import {
@@ -113,8 +120,16 @@ import {
   type ImageElement,
   type BoxCanvasElement,
   type CanvasElement,
+  type InkElement,
   type TextElement,
 } from "./canvas/model/elements";
+import {
+  HIGHLIGHTER_BRUSH,
+  normalizeInkGeometry,
+  PEN_BRUSH,
+  scaleInkElement,
+  type RawInkPoint,
+} from "./canvas/model/ink";
 import {
   assetDataUrl,
   assetRequestFromDataUrl,
@@ -1017,6 +1032,7 @@ function App() {
   const [selectedBlockIds, setSelectedBlockIds] = useState<string[]>([]);
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
   const [activeMode, setActiveMode] = useState<InteractionMode>("canvas");
+  const [activeTool, setActiveTool] = useState<DrawingTool>("select");
   const [panOffset, setPanOffset] = useState<PanOffset>({ x: 0, y: 0 });
   const [livePanOffset, setLivePanOffset] = useState<PanOffset>(panOffset);
   const [insertionPoint, setInsertionPoint] = useState<InsertionPoint | null>(null);
@@ -1126,8 +1142,10 @@ function App() {
   const draggedPageIdsRef = useRef<string[]>([]);
   const draggedPrimaryPageIdRef = useRef<string | null>(null);
   const zoomLevelRef = useRef(zoomLevel);
+  const activeToolRef = useRef<DrawingTool>(activeTool);
 
   dataRef.current = data;
+  activeToolRef.current = activeTool;
   isSnapToGridEnabledRef.current = isGridVisible && isSnapToGridEnabled;
   editingBlockIdRef.current = editingBlockId;
   openPageTabIdsRef.current = openPageTabIds;
@@ -2996,6 +3014,20 @@ function App() {
         }
 
         selectAllVisibleBlocks();
+        return;
+      }
+
+      const shortcutTool = drawingToolForShortcut(event);
+      if (
+        !currentEditingBlockId &&
+        !isTextEntryTarget(event.target) &&
+        (!insertionPoint || event.key === "Escape") &&
+        shortcutTool
+      ) {
+        event.preventDefault();
+        activeToolRef.current = shortcutTool;
+        setActiveTool(shortcutTool);
+        setInsertionPoint(null);
         return;
       }
 
@@ -4994,6 +5026,36 @@ function App() {
     });
   }, []);
 
+  const updateInkElement = useCallback((elementId: string, updates: { x?: number; y?: number }) => {
+    setBlocksWithHistory((currentElements) => currentElements.map((element) =>
+      element.id === elementId && element.type === "ink" && !element.locked
+        ? { ...element, ...updates, updatedAt: Date.now() }
+        : element,
+    ));
+  }, []);
+
+  const resizeInkElement = useCallback((elementId: string, ratio: number) => {
+    setBlocksWithHistory((currentElements) => currentElements.map((element) =>
+      element.id === elementId && element.type === "ink" && !element.locked
+        ? { ...scaleInkElement(element, ratio), updatedAt: Date.now() }
+        : element,
+    ));
+  }, []);
+
+  const eraseInkElements = useCallback((elementIds: readonly string[]) => {
+    const ids = new Set(elementIds);
+    if (ids.size === 0) return;
+    setBlocksWithHistory((currentElements) => currentElements.filter(
+      (element) => !(element.type === "ink" && !element.locked && ids.has(element.id)),
+    ));
+    const nextSelection = selectedBlockIdsRef.current.filter((id) => !ids.has(id));
+    selectedBlockIdsRef.current = nextSelection;
+    setSelectedBlockIds(nextSelection);
+    setEditingBlockId(null);
+    setInsertionPoint(null);
+    setActiveMode(nextSelection.length > 0 ? "selected" : "canvas");
+  }, []);
+
   const registerBlockElement = useCallback(
     (blockId: string, element: HTMLDivElement | null) => {
       if (element) {
@@ -5538,6 +5600,61 @@ function App() {
     zoomStep: ZOOM_STEP,
   });
 
+  const completeInkStroke = useCallback(
+    (tool: "pen" | "highlighter", points: readonly RawInkPoint[]) => {
+      const pageId = selectedPageIdRef.current;
+      if (!pageId) return;
+
+      const brush = tool === "pen" ? PEN_BRUSH : HIGHLIGHTER_BRUSH;
+      const geometry = normalizeInkGeometry(
+        points,
+        brush.size,
+        brush.simulatePressure,
+      );
+      const elementId = createId("ink");
+      const timestamp = Date.now();
+
+      setBlocksWithHistory((currentElements) => {
+        const element: InkElement = {
+          ...geometry,
+          brush: {
+            ...brush,
+            color: { ...brush.color },
+          },
+          createdAt: timestamp,
+          id: elementId,
+          locked: false,
+          opacity: brush.opacity,
+          pageId,
+          rotation: 0,
+          type: "ink",
+          updatedAt: timestamp,
+          zIndex: currentElements.length,
+        };
+        return [...currentElements, element];
+      });
+      selectedBlockIdsRef.current = [elementId];
+      setSelectedBlockIds([elementId]);
+      setEditingBlockId(null);
+      setInsertionPoint(null);
+      setIsCanvasKeyboardActive(true);
+      setActiveMode("selected");
+    },
+    [],
+  );
+
+  const inkInteraction = useInkInteraction({
+    activeToolRef,
+    canvasContentRef,
+    liveDraftLayerRef,
+    onCompleteStroke: completeInkStroke,
+    onEraseStrokes: eraseInkElements,
+    visibleInkElements: () => dataRef.current.elements.filter(
+      (element): element is InkElement => element.pageId === selectedPageIdRef.current && element.type === "ink",
+    ),
+    zoomLevelRef,
+  });
+
   function focusSearchMatch(matchIndex: number) {
     if (searchMatches.length === 0) {
       return;
@@ -5768,12 +5885,26 @@ function App() {
           activeMode={activeMode}
           id={WORKSPACE_PAGE_PANEL_ID}
           onPointerCancel={canvasInteraction.handlePointerEnd}
+          onPointerCancelCapture={inkInteraction.handlePointerCancelCapture}
           onPointerDown={canvasInteraction.handlePointerDown}
+          onPointerDownCapture={inkInteraction.handlePointerDownCapture}
           onPointerMove={canvasInteraction.handlePointerMove}
+          onPointerMoveCapture={inkInteraction.handlePointerMoveCapture}
           onPointerUp={canvasInteraction.handlePointerEnd}
+          onPointerUpCapture={inkInteraction.handlePointerUpCapture}
           onWheel={canvasInteraction.handleWheel}
           ref={canvasRef}
         >
+          <div onPointerDown={(event) => event.stopPropagation()}>
+            <CanvasToolPalette
+              activeTool={activeTool}
+              onToolSelect={(tool) => {
+                activeToolRef.current = tool;
+                setActiveTool(tool);
+                setInsertionPoint(null);
+              }}
+            />
+          </div>
           {offscreenGroups.length > 0 ? (
             <div
               className={`offscreen-indicators ${
@@ -5872,6 +6003,25 @@ function App() {
               <CanvasElementRenderer
                 element={element}
                 key={element.id}
+                renderInk={(inkElement) => (
+                  <InkElementView
+                    element={inkElement}
+                    isDragSourceHidden={dragSourceBlockIds.includes(inkElement.id)}
+                    isMultiSelected={selectedBlockIds.length > 1}
+                    isSelected={selectedBlockIds.includes(inkElement.id)}
+                    onCanvasPanStart={canvasInteraction.startPan}
+                    onElementChange={registerBlockElement}
+                    onInteractionModeChange={setActiveMode}
+                    onResize={resizeInkElement}
+                    onSelect={selectBlock}
+                    onUpdate={updateInkElement}
+                    onVisualDragCancel={cancelVisualDrag}
+                    onVisualDragEnd={endVisualDrag}
+                    onVisualDragMove={moveVisualDrag}
+                    onVisualDragStart={startVisualDrag}
+                    zoomLevel={zoomLevel}
+                  />
+                )}
                 renderText={(block) => (
                   <TextBlockView
                 block={block}

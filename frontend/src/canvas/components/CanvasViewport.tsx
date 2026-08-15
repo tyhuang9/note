@@ -10,9 +10,13 @@ type CanvasViewportProps = {
   children: ReactNode;
   id: string;
   onPointerCancel: PointerEventHandler<HTMLElement>;
+  onPointerCancelCapture?: PointerEventHandler<HTMLElement>;
   onPointerDown: PointerEventHandler<HTMLElement>;
+  onPointerDownCapture?: PointerEventHandler<HTMLElement>;
   onPointerMove: PointerEventHandler<HTMLElement>;
+  onPointerMoveCapture?: PointerEventHandler<HTMLElement>;
   onPointerUp: PointerEventHandler<HTMLElement>;
+  onPointerUpCapture?: PointerEventHandler<HTMLElement>;
   onWheel: WheelEventHandler<HTMLElement>;
 };
 
@@ -25,9 +29,13 @@ export const CanvasViewport = forwardRef<HTMLElement, CanvasViewportProps>(
       children,
       id,
       onPointerCancel,
+      onPointerCancelCapture,
       onPointerDown,
+      onPointerDownCapture,
       onPointerMove,
+      onPointerMoveCapture,
       onPointerUp,
+      onPointerUpCapture,
       onWheel,
     },
     ref,
@@ -40,9 +48,13 @@ export const CanvasViewport = forwardRef<HTMLElement, CanvasViewportProps>(
         id={id}
         onContextMenu={(event) => event.preventDefault()}
         onPointerCancel={onPointerCancel}
+        onPointerCancelCapture={onPointerCancelCapture}
         onPointerDown={onPointerDown}
+        onPointerDownCapture={onPointerDownCapture}
         onPointerMove={onPointerMove}
+        onPointerMoveCapture={onPointerMoveCapture}
         onPointerUp={onPointerUp}
+        onPointerUpCapture={onPointerUpCapture}
         onWheel={onWheel}
         ref={ref}
         role="tabpanel"

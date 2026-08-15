@@ -29,8 +29,17 @@ test("SQLite bridge reconciles structure before scene changes and reloads text",
     commands.lastIndexOf("apply_scene_changes"),
   );
 
+  await page.getByRole("button", { name: "Pen (P)" }).click();
+  await page.mouse.move(bounds.x + 320, bounds.y + 360);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + 470, bounds.y + 400, { steps: 8 });
+  await page.mouse.up();
+  await expect(page.locator('[data-canvas-element-type="ink"]')).toHaveCount(1);
+  await expect(page.locator(".persistence-status")).toHaveText("Saved");
+
   await page.reload();
   await expect(page.locator(".text-block-display")).toContainText("Persisted text");
+  await expect(page.locator('[data-canvas-element-type="ink"]')).toHaveCount(1);
   await expect(page.locator(".persistence-status")).toHaveText("Saved");
 });
 

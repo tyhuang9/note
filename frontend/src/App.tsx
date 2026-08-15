@@ -24,6 +24,10 @@ import { AssistantPanel } from "./components/AssistantPanel";
 import { InlineRename } from "./components/InlineRename";
 import { TextBlockView } from "./components/TextBlockView";
 import { ImageElementView } from "./components/ImageElementView";
+import { CanvasElementRenderer } from "./canvas/components/CanvasElementRenderer";
+import { CanvasInteractionOverlay } from "./canvas/components/CanvasInteractionOverlay";
+import { CanvasViewport } from "./canvas/components/CanvasViewport";
+import { CanvasWorldLayer } from "./canvas/components/CanvasWorldLayer";
 import { ActivityRail } from "./components/workbench/ActivityRail";
 import { WorkbenchShell } from "./components/workbench/WorkbenchShell";
 import {
@@ -1065,6 +1069,7 @@ function App() {
   const dataRef = useRef<AppData>(data);
   const canvasRef = useRef<HTMLElement | null>(null);
   const canvasContentRef = useRef<HTMLDivElement | null>(null);
+  const liveDraftLayerRef = useRef<SVGSVGElement | null>(null);
   const selectionRectRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const explorerPanelRef = useRef<HTMLDivElement | null>(null);
@@ -2899,11 +2904,13 @@ function App() {
       const selectionElement = selectionRectRef.current;
 
       if (nextRect && selectionElement) {
+        const zoom = zoomLevelRef.current;
+        const pan = panOffsetRef.current;
         selectionElement.style.display = "block";
-        selectionElement.style.left = `${nextRect.x}px`;
-        selectionElement.style.top = `${nextRect.y}px`;
-        selectionElement.style.width = `${nextRect.width}px`;
-        selectionElement.style.height = `${nextRect.height}px`;
+        selectionElement.style.left = `${pan.x + nextRect.x * zoom}px`;
+        selectionElement.style.top = `${pan.y + nextRect.y * zoom}px`;
+        selectionElement.style.width = `${nextRect.width * zoom}px`;
+        selectionElement.style.height = `${nextRect.height * zoom}px`;
       }
 
       selectionRafId.current = null;
@@ -5668,24 +5675,18 @@ function App() {
           onToggleTextFormat={toggleTextFormat}
         />
 
-        <section
-          aria-labelledby={
+        <CanvasViewport
+          labelledBy={
             selectedPageId ? getWorkspaceTabId(selectedPageId) : undefined
           }
-          className={`canvas ${activeMode === "canvas" ? "is-canvas-selected" : ""} ${
-            activeMode === "panning" ? "is-panning" : ""
-          } ${activeMode === "selecting" ? "is-selecting" : ""
-          }`}
-          aria-label="Freeform note canvas"
+          activeMode={activeMode}
           id={WORKSPACE_PAGE_PANEL_ID}
           onPointerCancel={endCanvasInteraction}
-          onContextMenu={(event) => event.preventDefault()}
           onPointerDown={startCanvasInteraction}
           onPointerMove={updateCanvasInteraction}
           onPointerUp={endCanvasInteraction}
           onWheel={handleCanvasWheel}
           ref={canvasRef}
-          role="tabpanel"
         >
           {offscreenGroups.length > 0 ? (
             <div
@@ -5774,17 +5775,19 @@ function App() {
               </button>
             </div>
           ) : null}
-          <div
-            className="canvas-content"
+          <CanvasWorldLayer
+            isGridVisible={isGridVisible}
+            liveDraftLayerRef={liveDraftLayerRef}
+            panOffset={panOffset}
             ref={canvasContentRef}
-            style={{
-              transform: `translate3d(${panOffset.x}px, ${panOffset.y}px, 0) scale(${zoomLevel})`,
-            }}
+            zoomLevel={zoomLevel}
           >
-            {isGridVisible ? <div className="canvas-grid" /> : null}
-            {visibleBlocks.map((block) =>
-              isTextElement(block) ? (
-              <TextBlockView
+            {visibleBlocks.map((element) => (
+              <CanvasElementRenderer
+                element={element}
+                key={element.id}
+                renderText={(block) => (
+                  <TextBlockView
                 block={block}
                 activeSearchRange={
                   activeSearchMatch?.blockId === block.id ? activeSearchMatch : null
@@ -5814,9 +5817,10 @@ function App() {
                 searchQuery={searchQuery}
                 shouldFocusEnd={focusEndBlockId === block.id}
                 zoomLevel={zoomLevel}
-              />
-              ) : block.type === "image" ? (
-                <ImageElementView
+                  />
+                )}
+                renderImage={(block) => (
+                  <ImageElementView
                   element={block}
                   imageSource={imageSourcesByAssetIdRef.current.get(block.assetId)}
                   isDragSourceHidden={dragSourceBlockIds.includes(block.id)}
@@ -5833,10 +5837,10 @@ function App() {
                   onVisualDragMove={moveVisualDrag}
                   onVisualDragStart={startVisualDrag}
                   zoomLevel={zoomLevel}
-                />
-              ) : null,
-            )}
-            <div className="selection-rectangle" ref={selectionRectRef} />
+                  />
+                )}
+              />
+            ))}
             {insertionPoint ? (
               <div
                 className="canvas-caret"
@@ -5846,7 +5850,8 @@ function App() {
                 }}
               />
             ) : null}
-          </div>
+          </CanvasWorldLayer>
+          <CanvasInteractionOverlay marqueeRef={selectionRectRef} />
           {shouldShowStarterShortcuts ? (
             <div
               className="canvas-starter"
@@ -5876,7 +5881,7 @@ function App() {
               <p>Select or create a page</p>
             </div>
           ) : null}
-        </section>
+        </CanvasViewport>
       </section>
       {isAIProvidersOpen ? (
         <AIProvidersSettings

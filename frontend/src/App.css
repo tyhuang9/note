@@ -2024,6 +2024,21 @@ h2 {
   will-change: transform;
 }
 
+.canvas-live-draft-layer {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.canvas-interaction-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  overflow: hidden;
+  pointer-events: none;
+}
+
 .canvas-grid {
   --canvas-grid-size: 24px;
   --canvas-grid-offset: calc(var(--canvas-grid-size) / -2);

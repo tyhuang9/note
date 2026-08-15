@@ -37,6 +37,24 @@ test("desktop workbench docks its explorer and assistant", async ({ page }, test
   });
 });
 
+test("canvas subsystem keeps world content and interaction overlay in separate layers", async ({ page }) => {
+  await createInitialNote(page);
+  const canvas = page.getByRole("tabpanel");
+  const bounds = await canvas.boundingBox();
+  if (!bounds) throw new Error("Canvas bounds were not available.");
+
+  await page.mouse.click(bounds.x + 280, bounds.y + 240);
+  await page.keyboard.type("Layered element");
+
+  await expect(canvas.locator(":scope > .canvas-content")).toHaveCount(1);
+  await expect(canvas.locator(":scope > .canvas-interaction-overlay")).toHaveCount(1);
+  await expect(canvas.getByTestId("canvas-live-draft-layer")).toHaveCount(1);
+  await expect(canvas.locator('[data-canvas-element-type="text"]')).toHaveAttribute(
+    "data-canvas-element-id",
+    /.+/,
+  );
+});
+
 test("canvas caret follows the rendered canvas transform", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await createInitialNote(page);

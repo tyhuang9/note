@@ -167,6 +167,8 @@ export const ImageElementView = memo(function ImageElementView({
       aria-label={`Select and move image${element.fileName ? ` ${element.fileName}` : ""}`}
       aria-pressed={isSelected}
       data-block-id={element.id}
+      data-canvas-element-id={element.id}
+      data-canvas-element-type={element.type}
       onKeyDown={handleRootKeyDown}
       onContextMenu={(event) => event.preventDefault()}
       onPointerCancel={(event) => {

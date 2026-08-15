@@ -120,7 +120,11 @@ export const AIProvidersSettings = memo(function AIProvidersSettings({
             </button>
           </div>
 
-          <div className="ai-provider-items">
+          <div
+            aria-label="AI providers"
+            className="ai-provider-items"
+            role="listbox"
+          >
             {providers.length === 0 ? (
               <p className="ai-provider-empty">No providers</p>
             ) : (
@@ -130,11 +134,13 @@ export const AIProvidersSettings = memo(function AIProvidersSettings({
 
                 return (
                   <button
+                    aria-selected={provider.id === selectedProvider?.id}
                     className={`ai-provider-item ${
                       provider.id === selectedProvider?.id ? "is-selected" : ""
                     }`}
                     key={provider.id}
                     onClick={() => onSelectProvider(provider.id)}
+                    role="option"
                     type="button"
                   >
                     <span className="ai-provider-item-title">{provider.name}</span>

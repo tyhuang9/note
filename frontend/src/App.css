@@ -3,6 +3,9 @@
   --accent-purple-strong: #a78bfa;
   --accent-purple-soft: rgba(139, 92, 246, 0.18);
   --accent-purple-muted: rgba(139, 92, 246, 0.1);
+  --focus-ring: #6d28d9;
+  --selected-state-background: rgba(109, 40, 217, 0.1);
+  --selected-state-border: rgba(109, 40, 217, 0.45);
   --workbench-app: #121212;
   --workbench-panel: #1e1e1e;
   --workbench-surface: #2c2c2c;
@@ -213,7 +216,7 @@ button:disabled {
 }
 
 .rail-button.is-active {
-  box-shadow: inset 2px 0 0 var(--accent-purple);
+  box-shadow: inset 0 0 0 1px var(--selected-state-border);
 }
 
 .rail-button.has-count::after {
@@ -837,10 +840,10 @@ h2 {
 
 .nav-item.is-active,
 .nav-item.is-selected {
-  border-color: transparent;
+  border-color: var(--selected-state-border);
   color: #1d2939;
-  background: rgba(139, 92, 246, 0.12);
-  box-shadow: inset 2px 0 0 var(--accent-purple);
+  background: var(--selected-state-background);
+  box-shadow: inset 0 0 0 1px var(--selected-state-border);
 }
 
 .nav-item.is-open:not(.is-selected) {
@@ -1059,11 +1062,15 @@ h2 {
   -webkit-appearance: none;
 }
 
-.text-toolbar-select:hover,
-.text-toolbar-select:focus-visible {
-  outline: none;
+.text-toolbar-select:hover {
   border-color: #aab6c4;
   background-color: #f4f7fa;
+}
+
+.text-toolbar-select:focus-visible {
+  border-color: var(--focus-ring);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .text-toolbar-select option {
@@ -1747,7 +1754,7 @@ h2 {
 }
 
 .ai-provider-item.is-selected {
-  box-shadow: inset 2px 0 0 var(--accent-purple);
+  box-shadow: inset 0 0 0 1px var(--selected-state-border);
 }
 
 .ai-provider-item-title,
@@ -2643,8 +2650,8 @@ h2 {
 
 .slash-command-item[aria-selected="true"] {
   color: #372580;
-  background: #f0edff;
-  box-shadow: inset 3px 0 #6d28d9;
+  background: var(--selected-state-background);
+  box-shadow: inset 0 0 0 1px var(--selected-state-border);
 }
 
 .slash-command-item:hover:not([aria-selected="true"]) {
@@ -2778,8 +2785,8 @@ h2 {
 
 .slash-command-popup.is-dark .slash-command-item[aria-selected="true"] {
   color: #f3f0ff;
-  background: rgba(139, 92, 246, 0.24);
-  box-shadow: inset 3px 0 #c4b5fd;
+  background: var(--selected-state-background);
+  box-shadow: inset 0 0 0 1px var(--selected-state-border);
 }
 
 .slash-command-popup.is-dark
@@ -2938,7 +2945,7 @@ h2 {
 }
 
 .app-shell.is-dark .rail-button.is-active {
-  box-shadow: inset 2px 0 0 #8b5cf6;
+  box-shadow: inset 0 0 0 1px var(--selected-state-border);
 }
 
 .app-shell.is-dark .rail-button.has-count::after {
@@ -3130,8 +3137,8 @@ h2 {
 .app-shell.is-dark .nav-item.is-selected {
   border-color: transparent;
   color: #ededed;
-  background: #313131;
-  box-shadow: inset 2px 0 0 #8b5cf6;
+  background: var(--selected-state-background);
+  box-shadow: inset 0 0 0 1px var(--selected-state-border);
 }
 
 .app-shell.is-dark .nav-item.is-open:not(.is-selected) {
@@ -3806,7 +3813,7 @@ h2 {
 }
 
 .rail-button.is-active {
-  box-shadow: inset 2px 0 0 var(--accent-purple-strong);
+  box-shadow: inset 0 0 0 1px var(--selected-state-border);
 }
 
 .sidebar-main {
@@ -4243,8 +4250,8 @@ h2 {
 .app-shell.is-dark .rail-button.is-active {
   border-color: transparent;
   color: #a78bfa;
-  background: rgba(139, 92, 246, 0.1);
-  box-shadow: inset 2px 0 0 #a78bfa;
+  background: var(--selected-state-background);
+  box-shadow: inset 0 0 0 1px var(--selected-state-border);
 }
 
 .app-shell.is-dark .page-header {
@@ -4586,5 +4593,79 @@ h2 {
 
   .slash-command-item {
     transition: none;
+  }
+}
+
+/* Accessible interaction states intentionally live after theme and viewport
+   overrides so a late workbench rule cannot restore a left-edge accent. */
+.app-shell.is-dark,
+.slash-command-popup.is-dark {
+  --focus-ring: #c4b5fd;
+  --selected-state-background: rgba(196, 181, 253, 0.12);
+  --selected-state-border: rgba(196, 181, 253, 0.55);
+}
+
+.rail-button.is-active,
+.nav-item.is-active,
+.nav-item.is-selected,
+.ai-provider-item.is-selected,
+.slash-command-item[aria-selected="true"] {
+  border-color: transparent;
+  background: var(--selected-state-background);
+  box-shadow: inset 0 0 0 1px var(--selected-state-border);
+}
+
+.app-shell.is-dark .ai-provider-item.is-selected {
+  border-color: transparent;
+  background: var(--selected-state-background);
+  box-shadow: inset 0 0 0 1px var(--selected-state-border);
+}
+
+button:focus-visible,
+select:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+[role="treeitem"]:focus-visible,
+[role="option"]:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.app-shell.is-dark button:focus-visible,
+.app-shell.is-dark select:focus-visible,
+.app-shell.is-dark input:focus-visible,
+.app-shell.is-dark textarea:focus-visible,
+.app-shell.is-dark [role="treeitem"]:focus-visible,
+.app-shell.is-dark [role="option"]:focus-visible {
+  outline-color: var(--focus-ring);
+}
+
+.text-block.is-editing:focus-within {
+  border-color: var(--selected-state-border);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+@media (forced-colors: active) {
+  button:focus-visible,
+  select:focus-visible,
+  input:focus-visible,
+  textarea:focus-visible,
+  [role="treeitem"]:focus-visible,
+  [role="option"]:focus-visible,
+  .text-block.is-editing:focus-within {
+    outline-color: Highlight;
+  }
+
+  .rail-button.is-active,
+  .nav-item.is-active,
+  .nav-item.is-selected,
+  .ai-provider-item.is-selected,
+  .slash-command-item[aria-selected="true"] {
+    border-color: Highlight;
+    color: CanvasText;
+    background: Canvas;
+    box-shadow: inset 0 0 0 1px Highlight;
+    forced-color-adjust: none;
   }
 }

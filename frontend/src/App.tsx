@@ -6276,7 +6276,12 @@ const Sidebar = memo(function Sidebar({
                 </button>
               </div>
             </div>
-            <div className="file-tree" role="tree" aria-label="Folders and pages">
+            <div
+              aria-label="Folders and pages"
+              aria-multiselectable="true"
+              className="file-tree"
+              role="tree"
+            >
               {rootPages.map((page) => {
                 const isPageSelected = selectedPageIdSet.has(page.id);
                 const isPageOpen = page.id === selectedPageId;
@@ -6289,6 +6294,7 @@ const Sidebar = memo(function Sidebar({
                     } ${isPageOpen ? "is-open" : ""} ${
                       isPageDragging ? "is-dragging" : ""
                     }`}
+                    aria-selected={isPageSelected}
                     draggable={editingPageId !== page.id}
                     key={page.id}
                     role="treeitem"
@@ -6372,6 +6378,7 @@ const Sidebar = memo(function Sidebar({
                         folder.id === pageDropTargetFolderId ? "is-drop-target" : ""
                       }`}
                       aria-expanded={isFolderExpanded}
+                      aria-selected={folder.id === selectedFolderId}
                       role="treeitem"
                       onDoubleClick={() => onSetEditingFolderId(folder.id)}
                       onClick={() => onSelectFolder(folder.id)}
@@ -6459,6 +6466,7 @@ const Sidebar = memo(function Sidebar({
                               } ${isPageOpen ? "is-open" : ""} ${
                                 isPageDragging ? "is-dragging" : ""
                               }`}
+                              aria-selected={isPageSelected}
                               draggable={editingPageId !== page.id}
                               key={page.id}
                               role="treeitem"

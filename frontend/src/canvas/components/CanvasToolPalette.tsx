@@ -34,4 +34,3 @@ export function CanvasToolPalette({ activeTool, onToolSelect }: CanvasToolPalett
     </div>
   );
 }
-

@@ -3,6 +3,10 @@ import type { InkElement } from "../model/elements";
 
 export type StrokeOutlinePoint = readonly [number, number];
 
+function roundOutlineCoordinate(value: number) {
+  return Math.round(value * 100) / 100;
+}
+
 export function getInkOutline(element: Pick<InkElement, "points" | "brush">): StrokeOutlinePoint[] {
   return getStroke(
     element.points.map(([x, y, pressure]) => [x, y, pressure]),
@@ -20,8 +24,8 @@ export function getInkOutline(element: Pick<InkElement, "points" | "brush">): St
 /** Deterministic SVG path encoding for a perfect-freehand outline. */
 export function outlineToSvgPath(outline: readonly StrokeOutlinePoint[]): string {
   if (outline.length === 0) return "";
-  if (outline.length === 1) return `M ${outline[0][0]} ${outline[0][1]} Z`;
-  return `${outline.map(([x, y], index) => `${index === 0 ? "M" : "L"} ${x} ${y}`).join(" ")} Z`;
+  if (outline.length === 1) return `M ${roundOutlineCoordinate(outline[0][0])} ${roundOutlineCoordinate(outline[0][1])} Z`;
+  return `${outline.map(([x, y], index) => `${index === 0 ? "M" : "L"} ${roundOutlineCoordinate(x)} ${roundOutlineCoordinate(y)}`).join(" ")} Z`;
 }
 
 export function inkPath(element: Pick<InkElement, "points" | "brush">): string {

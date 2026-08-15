@@ -49,7 +49,12 @@ export const CanvasViewport = forwardRef<HTMLElement, CanvasViewportProps>(
         onContextMenu={(event) => event.preventDefault()}
         onPointerCancel={onPointerCancel}
         onPointerCancelCapture={onPointerCancelCapture}
-        onPointerDown={onPointerDown}
+        onPointerDown={(event) => {
+          if (event.target === event.currentTarget) {
+            event.currentTarget.focus({ preventScroll: true });
+          }
+          onPointerDown(event);
+        }}
         onPointerDownCapture={onPointerDownCapture}
         onPointerMove={onPointerMove}
         onPointerMoveCapture={onPointerMoveCapture}
@@ -58,6 +63,7 @@ export const CanvasViewport = forwardRef<HTMLElement, CanvasViewportProps>(
         onWheel={onWheel}
         ref={ref}
         role="tabpanel"
+        tabIndex={0}
       >
         {children}
       </section>

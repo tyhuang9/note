@@ -94,3 +94,37 @@ test("samples pen points in world space after pan and cursor-anchored zoom", asy
   expect(inkBounds.x + inkBounds.width).toBeGreaterThanOrEqual(end.x - 12);
   expect(inkBounds.y + inkBounds.height).toBeGreaterThanOrEqual(end.y - 12);
 });
+
+test("scopes drawing shortcuts to canvas and tool focus without stealing typed text", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /create new note/i }).click();
+
+  const select = page.getByRole("button", { name: "Select (V)" });
+  const pen = page.getByRole("button", { name: "Pen (P)" });
+  const highlighter = page.getByRole("button", { name: "Highlighter (H)" });
+  const unrelatedControl = page.getByRole("button", { name: "Dark mode" });
+  const canvas = page.getByRole("tabpanel");
+
+  await unrelatedControl.focus();
+  await page.keyboard.press("p");
+  await expect(select).toHaveAttribute("aria-pressed", "true");
+  await expect(pen).toHaveAttribute("aria-pressed", "false");
+
+  await canvas.focus();
+  await page.keyboard.press("p");
+  await expect(pen).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("Escape");
+  await expect(select).toHaveAttribute("aria-pressed", "true");
+
+  await pen.focus();
+  await page.keyboard.press("h");
+  await expect(highlighter).toHaveAttribute("aria-pressed", "true");
+  await select.click();
+
+  const bounds = await canvas.boundingBox();
+  if (!bounds) throw new Error("Canvas bounds were not available.");
+  await page.mouse.click(bounds.x + 280, bounds.y + 230);
+  await page.keyboard.press("p");
+  await expect(page.locator(".text-block-editor-content").last()).toContainText("p");
+  await expect(select).toHaveAttribute("aria-pressed", "true");
+});

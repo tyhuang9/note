@@ -39,5 +39,6 @@ describe("perfect-freehand stroke paths", () => {
     expect(inkPath(pen)).toMatch(/ Z$/);
     expect(inkPath(highlighter)).not.toEqual(inkPath(pen));
     expect(outlineToSvgPath([])).toBe("");
+    expect(outlineToSvgPath([[1.2345, 6.789]])).toBe("M 1.23 6.79 Z");
   });
 });

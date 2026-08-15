@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef } from "react";
+import { memo, useEffect, useId, useMemo, useRef } from "react";
 import type { KeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import type { InteractionMode } from "../../appTypes";
 import type { InkElement } from "../model/elements";
@@ -71,7 +71,12 @@ export const InkElementView = memo(function InkElementView({
   const rootRef = useRef<HTMLDivElement | null>(null);
   const hitSurfaceRef = useRef<HTMLDivElement | null>(null);
   const resizeRef = useRef<ResizeState | null>(null);
-  const path = inkPath(element);
+  const rawPathId = useId();
+  const pathId = `ink-path-${rawPathId.replace(/:/g, "")}`;
+  const path = useMemo(
+    () => inkPath(element),
+    [element.brush, element.points],
+  );
 
   const setRoot = (node: HTMLDivElement | null) => {
     rootRef.current = node;
@@ -158,7 +163,7 @@ export const InkElementView = memo(function InkElementView({
 
   return (
     <div
-      className={`ink-element ${isSelected ? "is-selected" : ""} ${isSelected && isMultiSelected ? "is-multi-selected" : ""} ${isDragSourceHidden ? "is-drag-source-hidden" : ""}`}
+      className={`ink-element ${element.brush.kind === "highlighter" ? "is-highlighter" : ""} ${isSelected ? "is-selected" : ""} ${isSelected && isMultiSelected ? "is-multi-selected" : ""} ${isDragSourceHidden ? "is-drag-source-hidden" : ""}`}
       data-block-id={element.id}
       data-canvas-element-id={element.id}
       data-canvas-element-type="ink"
@@ -218,8 +223,10 @@ export const InkElementView = memo(function InkElementView({
         tabIndex={0}
       >
         <svg className="ink-element-path" height="100%" preserveAspectRatio="none" viewBox={`0 0 ${element.width} ${element.height}`} width="100%">
-          <path className="ink-element-content-path" d={path} fill="currentColor" style={{ opacity: element.opacity }} />
-          <path className="ink-element-hit-target" d={path} fill="transparent" stroke="transparent" strokeWidth={12 / Math.max(zoomLevel, 0.01)} />
+          <defs><path d={path} id={pathId} /></defs>
+          <use className="ink-element-content-path" fill="currentColor" href={`#${pathId}`} style={{ opacity: element.opacity }} />
+          {element.brush.kind === "highlighter" ? <use className="ink-element-highlighter-edge" href={`#${pathId}`} /> : null}
+          <use className="ink-element-hit-target" fill="transparent" href={`#${pathId}`} stroke="transparent" strokeWidth={12 / Math.max(zoomLevel, 0.01)} />
         </svg>
       </div>
       {isSelected && !element.locked ? (

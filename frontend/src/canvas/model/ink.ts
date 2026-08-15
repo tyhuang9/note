@@ -1,6 +1,7 @@
 import type { CanvasColor, InkElement, InkPoint } from "./elements";
 
 export type RawInkPoint = Readonly<{ x: number; y: number; pressure: number }>;
+export const MAX_INK_POINTS = 20_000;
 
 export const PEN_BRUSH = {
   color: { kind: "theme", token: "foreground" } as CanvasColor,
@@ -41,24 +42,31 @@ export function normalizeInkGeometry(
   brushSize: number,
   simulatePressure = true,
 ): Pick<InkElement, "x" | "y" | "width" | "height" | "points"> {
-  const valid = points.filter(
-    (point) => Number.isFinite(point.x) && Number.isFinite(point.y),
-  );
-  if (valid.length === 0) {
-    throw new Error("An ink stroke requires at least one finite point.");
-  }
   const unique: RawInkPoint[] = [];
-  for (const point of valid) {
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  for (const point of points) {
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
     const previous = unique[unique.length - 1];
     if (!previous || Math.hypot(point.x - previous.x, point.y - previous.y) >= 0.1) {
       unique.push(point);
+      minX = Math.min(minX, point.x);
+      minY = Math.min(minY, point.y);
+      maxX = Math.max(maxX, point.x);
+      maxY = Math.max(maxY, point.y);
+      if (unique.length === MAX_INK_POINTS) break;
     }
   }
+  if (unique.length === 0) {
+    throw new Error("An ink stroke requires at least one finite point.");
+  }
   const padded = Math.max(2, brushSize * 1.5);
-  const minX = Math.min(...unique.map((point) => point.x)) - padded;
-  const minY = Math.min(...unique.map((point) => point.y)) - padded;
-  const maxX = Math.max(...unique.map((point) => point.x)) + padded;
-  const maxY = Math.max(...unique.map((point) => point.y)) + padded;
+  minX -= padded;
+  minY -= padded;
+  maxX += padded;
+  maxY += padded;
   const local: InkPoint[] = unique.map((point) => [
     round(point.x - minX),
     round(point.y - minY),

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, type RefObject } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
-import { HIGHLIGHTER_BRUSH, normalizePressure, PEN_BRUSH, type RawInkPoint } from "../model/ink";
+import { HIGHLIGHTER_BRUSH, MAX_INK_POINTS, normalizePressure, PEN_BRUSH, type RawInkPoint } from "../model/ink";
 import type { InkElement } from "../model/elements";
 import { inkContainsPoint } from "../model/hitTesting";
 import { screenToleranceToWorld } from "../model/geometry";
@@ -32,12 +32,14 @@ type InkSession = {
   points: RawInkPoint[];
   previewRaf: number | null;
   tool: InkTool;
+  viewport: ViewportMetrics;
 };
 
 type EraserSession = {
   elementIds: Set<string>;
   kind: "erasing";
   pointerId: number;
+  viewport: ViewportMetrics;
 };
 
 type InkInteractionSession = InkSession | EraserSession;
@@ -85,8 +87,9 @@ export function screenSampleToWorld(
 
 export function drawingToolForShortcut(
   event: Readonly<Pick<KeyboardEvent, "altKey" | "ctrlKey" | "key" | "metaKey">>,
+  hasCanvasOrToolFocus = true,
 ): DrawingTool | null {
-  if (event.altKey || event.ctrlKey || event.metaKey) return null;
+  if (!hasCanvasOrToolFocus || event.altKey || event.ctrlKey || event.metaKey) return null;
   if (event.key === "Escape") return "select";
   switch (event.key.toLowerCase()) {
     case "v": return "select";
@@ -111,6 +114,19 @@ function isPaletteTarget(target: EventTarget | null) {
   return target instanceof Element && target.closest(".canvas-tool-palette") !== null;
 }
 
+function readViewportMetrics(content: HTMLDivElement): ViewportMetrics | null {
+  const rect = content.getBoundingClientRect();
+  const viewport = {
+    height: rect.height,
+    left: rect.left,
+    offsetHeight: content.offsetHeight,
+    offsetWidth: content.offsetWidth,
+    top: rect.top,
+    width: rect.width,
+  };
+  return viewport.offsetHeight > 0 && viewport.offsetWidth > 0 ? viewport : null;
+}
+
 /**
  * Pointer-capture adapter for transient freehand previews. Persistent elements
  * are created only once, when the captured pointer ends.
@@ -126,11 +142,11 @@ export function useInkInteraction({
 }: UseInkInteractionOptions) {
   const optionsRef = useRef({ activeToolRef, canvasContentRef, liveDraftLayerRef, onCompleteStroke, onEraseStrokes, visibleInkElements, zoomLevelRef });
   const sessionRef = useRef<InkInteractionSession | null>(null);
+  const previewPathRef = useRef<SVGPathElement | null>(null);
   optionsRef.current = { activeToolRef, canvasContentRef, liveDraftLayerRef, onCompleteStroke, onEraseStrokes, visibleInkElements, zoomLevelRef };
 
   const clearPreview = useCallback(() => {
-    const draftLayer = optionsRef.current.liveDraftLayerRef.current;
-    if (draftLayer) draftLayer.replaceChildren();
+    previewPathRef.current?.remove();
   }, []);
 
   const paintPreview = useCallback((session: InkSession) => {
@@ -138,11 +154,14 @@ export function useInkInteraction({
     const draftLayer = liveDraftLayerRef.current;
     if (!draftLayer) return;
     const brush = brushFor(session.tool);
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    const path = previewPathRef.current ?? document.createElementNS("http://www.w3.org/2000/svg", "path");
+    previewPathRef.current = path;
     path.setAttribute("d", inkPath({ points: session.points.map((point) => [point.x, point.y, point.pressure]), brush }));
     path.setAttribute("fill", brush.color.kind === "fixed" ? brush.color.value : "var(--workbench-text)");
     path.setAttribute("fill-opacity", String(brush.opacity));
-    draftLayer.replaceChildren(path);
+    path.setAttribute("stroke", session.tool === "highlighter" ? "var(--canvas-highlighter-edge)" : "none");
+    path.setAttribute("stroke-width", session.tool === "highlighter" ? "1.5" : "0");
+    if (path.parentNode !== draftLayer) draftLayer.append(path);
   }, []);
 
   const schedulePreview = useCallback((session: InkSession) => {
@@ -154,45 +173,31 @@ export function useInkInteraction({
   }, [paintPreview]);
 
   const appendSamples = useCallback((event: ReactPointerEvent<HTMLElement>, session: InkSession) => {
-    const content = optionsRef.current.canvasContentRef.current;
-    if (!content) return;
-    const rect = content.getBoundingClientRect();
-    const viewport: ViewportMetrics = {
-      height: rect.height,
-      left: rect.left,
-      offsetHeight: content.offsetHeight,
-      offsetWidth: content.offsetWidth,
-      top: rect.top,
-      width: rect.width,
-    };
     const brush = brushFor(session.tool);
     for (const sample of pointerSamples(event)) {
-      const point = screenSampleToWorld(sample, viewport, brush.simulatePressure);
-      if (point) session.points.push(point);
+      const point = screenSampleToWorld(sample, session.viewport, brush.simulatePressure);
+      const previous = session.points[session.points.length - 1];
+      if (
+        point &&
+        session.points.length < MAX_INK_POINTS &&
+        (!previous || Math.hypot(point.x - previous.x, point.y - previous.y) >= 0.1)
+      ) {
+        session.points.push(point);
+      }
     }
     schedulePreview(session);
   }, [schedulePreview]);
 
   const collectEraserTargets = useCallback((event: ReactPointerEvent<HTMLElement>, session: EraserSession) => {
     const current = optionsRef.current;
-    const content = current.canvasContentRef.current;
-    if (!content) return;
-    const rect = content.getBoundingClientRect();
-    const viewport: ViewportMetrics = {
-      height: rect.height,
-      left: rect.left,
-      offsetHeight: content.offsetHeight,
-      offsetWidth: content.offsetWidth,
-      top: rect.top,
-      width: rect.width,
-    };
     const tolerance = screenToleranceToWorld(12, { zoom: Math.max(0.01, current.zoomLevelRef.current) });
     const candidates = current.visibleInkElements();
     for (const sample of pointerSamples(event)) {
-      const point = screenSampleToWorld(sample, viewport, false);
+      const point = screenSampleToWorld(sample, session.viewport, false);
       if (!point) continue;
       for (const element of candidates) {
-        if (!element.locked && inkContainsPoint(element, point, tolerance)) session.elementIds.add(element.id);
+        if (session.elementIds.has(element.id) || element.locked) continue;
+        if (inkContainsPoint(element, point, tolerance)) session.elementIds.add(element.id);
       }
     }
   }, []);
@@ -208,13 +213,17 @@ export function useInkInteraction({
     ) {
       return;
     }
+    const content = optionsRef.current.canvasContentRef.current;
+    const viewport = content && readViewportMetrics(content);
+    if (!viewport) return;
     const session: InkInteractionSession = isDrawingTool(tool)
-      ? { kind: "drawing", pointerId: event.pointerId, points: [], previewRaf: null, tool }
-      : { elementIds: new Set(), kind: "erasing", pointerId: event.pointerId };
+      ? { kind: "drawing", pointerId: event.pointerId, points: [], previewRaf: null, tool, viewport }
+      : { elementIds: new Set(), kind: "erasing", pointerId: event.pointerId, viewport };
     sessionRef.current = session;
     if (session.kind === "drawing") appendSamples(event, session);
     else collectEraserTargets(event, session);
     event.currentTarget.setPointerCapture(event.pointerId);
+    event.currentTarget.focus({ preventScroll: true });
     event.preventDefault();
     event.stopPropagation();
   }, [appendSamples, collectEraserTargets]);
@@ -254,6 +263,7 @@ export function useInkInteraction({
     }
     sessionRef.current = null;
     clearPreview();
+    previewPathRef.current = null;
   }, [clearPreview]);
 
   return {

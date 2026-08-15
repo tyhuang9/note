@@ -1435,6 +1435,21 @@ function App() {
     zoomLevel,
   ]);
   canvasViewportRef.current = canvasViewport;
+  const renderedCanvasElements = useMemo(() => {
+    if (!canvasViewport) return visibleBlocks;
+    const overscan = 160 / Math.max(zoomLevel, 0.01);
+    const selectedIds = new Set(selectedBlockIds);
+    return visibleBlocks.filter((element) =>
+      element.type !== "ink" ||
+      selectedIds.has(element.id) ||
+      (
+        element.x + element.width >= canvasViewport.x - overscan &&
+        element.x <= canvasViewport.x + canvasViewport.width + overscan &&
+        element.y + element.height >= canvasViewport.y - overscan &&
+        element.y <= canvasViewport.y + canvasViewport.height + overscan
+      ),
+    );
+  }, [canvasViewport, selectedBlockIds, visibleBlocks, zoomLevel]);
   const offscreenGroups = useMemo<OffscreenGroup[]>(() => {
     if (!canvasViewport || visibleBlocks.length === 0) {
       return [];
@@ -3017,7 +3032,11 @@ function App() {
         return;
       }
 
-      const shortcutTool = drawingToolForShortcut(event);
+      const shortcutTarget = event.target instanceof Element ? event.target : null;
+      const hasCanvasOrToolFocus =
+        shortcutTarget === canvasRef.current ||
+        Boolean(shortcutTarget?.closest(".canvas-tool-palette, [data-canvas-element-id], [data-block-id]"));
+      const shortcutTool = drawingToolForShortcut(event, hasCanvasOrToolFocus);
       if (
         !currentEditingBlockId &&
         !isTextEntryTarget(event.target) &&
@@ -5999,7 +6018,7 @@ function App() {
             ref={canvasContentRef}
             zoomLevel={zoomLevel}
           >
-            {visibleBlocks.map((element) => (
+            {renderedCanvasElements.map((element) => (
               <CanvasElementRenderer
                 element={element}
                 key={element.id}

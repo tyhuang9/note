@@ -17,6 +17,9 @@
   --canvas-tool-text: #202936;
   --canvas-selection: #7c3aed;
   --canvas-selection-soft: rgba(124, 58, 237, 0.2);
+  --canvas-tool-active-text: #5b21b6;
+  --canvas-focus: #005fcc;
+  --canvas-highlighter-edge: #6b5200;
   --dark-app: var(--workbench-app);
   --dark-canvas: var(--workbench-canvas);
   --dark-panel: var(--workbench-panel);
@@ -2111,12 +2114,12 @@ h2 {
 
 .canvas-tool-palette button[aria-pressed="true"] {
   border-color: var(--canvas-selection);
-  color: var(--canvas-selection);
+  color: var(--canvas-tool-active-text);
   background: var(--canvas-selection-soft);
 }
 
 .canvas-tool-palette button:focus-visible {
-  outline: 2px solid var(--canvas-selection);
+  outline: 3px solid var(--canvas-focus);
   outline-offset: 1px;
 }
 
@@ -2138,7 +2141,7 @@ h2 {
 }
 
 .ink-element-hit-surface:focus-visible {
-  outline: 2px solid var(--canvas-selection);
+  outline: 3px solid var(--canvas-focus);
   outline-offset: 2px;
 }
 
@@ -2148,7 +2151,15 @@ h2 {
 }
 
 .ink-element-content-path {
-  pointer-events: all;
+  pointer-events: none;
+}
+
+.ink-element-highlighter-edge {
+  fill: none;
+  stroke: var(--canvas-highlighter-edge);
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
 }
 
 .ink-element.is-selected::after {
@@ -2187,9 +2198,19 @@ h2 {
   bottom: 8px;
   width: 6px;
   height: 6px;
-  border: 1px solid var(--canvas-selection);
+  border: 2px solid var(--canvas-focus);
   border-radius: 1px;
   background: var(--canvas-tool-bg);
+}
+
+.ink-resize-handle:focus-visible {
+  outline: 3px solid var(--canvas-focus);
+  outline-offset: 1px;
+}
+
+.canvas:focus-visible {
+  outline: 3px solid var(--canvas-focus);
+  outline-offset: -3px;
 }
 
 .canvas-interaction-overlay {
@@ -2880,6 +2901,9 @@ h2 {
   --canvas-tool-text: #f5f5f5;
   --canvas-selection: #a78bfa;
   --canvas-selection-soft: rgba(167, 139, 250, 0.22);
+  --canvas-tool-active-text: #ede9fe;
+  --canvas-focus: #c4b5fd;
+  --canvas-highlighter-edge: #ffe066;
   color: var(--dark-text);
   background: #151515;
 }

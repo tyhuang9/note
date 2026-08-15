@@ -57,10 +57,29 @@ export function inkContainsPoint(
   tolerance = 0,
 ): boolean {
   const radius = Math.max(0, tolerance) + element.brush.size / 2;
-  const points = element.points.map(([x, y]) => ({ x: element.x + x, y: element.y + y }));
+  if (
+    point.x < element.x - radius ||
+    point.y < element.y - radius ||
+    point.x > element.x + element.width + radius ||
+    point.y > element.y + element.height + radius
+  ) {
+    return false;
+  }
+  const points = element.points;
   if (points.length === 0) return false;
-  if (points.length === 1) return Math.hypot(point.x - points[0].x, point.y - points[0].y) <= radius;
-  return points.slice(1).some((end, index) => pointToSegmentDistance(point, points[index], end) <= radius);
+  let startX = element.x + points[0][0];
+  let startY = element.y + points[0][1];
+  if (points.length === 1) return Math.hypot(point.x - startX, point.y - startY) <= radius;
+  for (let index = 1; index < points.length; index += 1) {
+    const endX = element.x + points[index][0];
+    const endY = element.y + points[index][1];
+    if (pointToSegmentDistance(point, { x: startX, y: startY }, { x: endX, y: endY }) <= radius) {
+      return true;
+    }
+    startX = endX;
+    startY = endY;
+  }
+  return false;
 }
 
 export function getMarqueeElementIds(

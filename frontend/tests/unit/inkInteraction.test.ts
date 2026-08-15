@@ -68,6 +68,7 @@ describe("drawing shortcuts", () => {
   it("does not claim modified or unrelated shortcuts", () => {
     expect(drawingToolForShortcut({ altKey: false, ctrlKey: true, key: "p", metaKey: false })).toBeNull();
     expect(drawingToolForShortcut({ altKey: false, ctrlKey: false, key: "x", metaKey: false })).toBeNull();
+    expect(drawingToolForShortcut({ altKey: false, ctrlKey: false, key: "p", metaKey: false }, false)).toBeNull();
   });
 });
 
@@ -94,5 +95,24 @@ describe("painted ink hit testing", () => {
     expect(inkContainsPoint(ink, { x: 125, y: 103 }, 2)).toBe(true);
     expect(inkContainsPoint(ink, { x: 125, y: 120 }, 2)).toBe(false);
     expect(pointToSegmentDistance({ x: 5, y: 4 }, { x: 0, y: 0 }, { x: 10, y: 0 })).toBe(4);
+  });
+
+  it("early-rejects outside expanded bounds without walking points", () => {
+    const points = new Proxy(ink.points, {
+      get(target, property, receiver) {
+        if (property === "0") throw new Error("point walk should be skipped");
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    expect(inkContainsPoint({ ...ink, points }, { x: -10_000, y: -10_000 }, 8)).toBe(false);
+  });
+
+  it("walks tuples directly without map or slice allocations", () => {
+    const points = [...ink.points];
+    Object.defineProperties(points, {
+      map: { value: () => { throw new Error("map should not run"); } },
+      slice: { value: () => { throw new Error("slice should not run"); } },
+    });
+    expect(inkContainsPoint({ ...ink, points }, { x: 125, y: 102 }, 2)).toBe(true);
   });
 });

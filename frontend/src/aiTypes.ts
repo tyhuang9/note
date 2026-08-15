@@ -1,4 +1,5 @@
-import type { AppData, TextBlock } from "./types";
+import type { TextElement } from "./canvas/model/elements";
+import type { AppData } from "./types";
 
 export type ProviderType =
   | "ollama"
@@ -79,7 +80,7 @@ export type SttTranscriptionResponse = {
 };
 
 export type NotesContextBlock = Pick<
-  TextBlock,
+  TextElement,
   "content" | "height" | "id" | "pageId" | "width" | "x" | "y"
 >;
 

@@ -1,4 +1,7 @@
-import type { JSONContent } from "@tiptap/core";
+import type { CanvasElement, TextElement } from "./canvas/model/elements";
+
+/** @deprecated Use TextElement. Kept only while legacy helper names are migrated. */
+export type TextBlock = TextElement;
 
 export type Folder = {
   id: string;
@@ -10,20 +13,6 @@ export type Page = {
   folderId: string;
   title: string;
   isBookmarked?: boolean;
-};
-
-export type TextBlock = {
-  id: string;
-  pageId: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  content: string;
-  richContent?: JSONContent;
-  isWidthManuallyResized?: boolean;
-  imageData?: string;
-  imageName?: string;
 };
 
 export type PersistedPageViewport = {
@@ -44,9 +33,9 @@ export type AppSessionState = {
 };
 
 export type AppData = {
+  elements: CanvasElement[];
   folders: Folder[];
   pages: Page[];
-  blocks: TextBlock[];
   isDarkMode?: boolean;
   sessionState?: AppSessionState;
 };

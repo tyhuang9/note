@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { AppData } from "../../src/types";
+import type { LegacyAppData } from "../../src/canvas/persistence/legacyAppData";
 import mixedTextImage from "../fixtures/legacy/mixed-text-image.json";
 import plainText from "../fixtures/legacy/plain-text.json";
 import richText from "../fixtures/legacy/rich-text.json";
 import sessionViewport from "../fixtures/legacy/session-viewport.json";
 import standaloneImage from "../fixtures/legacy/standalone-image.json";
 
-const fixtures: Record<string, AppData> = {
+const fixtures: Record<string, LegacyAppData> = {
   mixedTextImage,
   plainText,
   richText,
@@ -30,7 +30,7 @@ for (const fixture of Object.values(fixtures)) {
   deepFreeze(fixture);
 }
 
-function assertAppDataFixture(data: AppData) {
+function assertAppDataFixture(data: LegacyAppData) {
   expect(data).toEqual(expect.objectContaining({
     blocks: expect.any(Array),
     folders: expect.any(Array),

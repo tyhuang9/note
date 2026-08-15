@@ -21,7 +21,7 @@ import type {
   SearchMatch,
 } from "../appTypes";
 import { blurActiveTextEntry } from "../editorUtils";
-import type { TextBlock } from "../types";
+import type { TextElement } from "../canvas/model/elements";
 
 type DragState = {
   pointerId: number;
@@ -154,7 +154,7 @@ const tiptapExtensions = [StarterKit, TextStyle, RichImage];
 const TEXT_BLOCK_HORIZONTAL_PADDING = 18;
 
 type TextBlockViewProps = {
-  block: TextBlock;
+  block: TextElement;
   activeSearchRange: SearchMatch | null;
   isEditing: boolean;
   isDragSourceHidden: boolean;
@@ -363,13 +363,6 @@ export const TextBlockView = memo(function TextBlockView({
     forceFixedWidth = false,
     measureContent = draftRichContentRef.current,
   ) {
-    if (block.imageData) {
-      return {
-        width: Math.max(MIN_BLOCK_WIDTH, block.width),
-        height: Math.max(MIN_BLOCK_HEIGHT, block.height),
-      };
-    }
-
     const widthMeasureElement = widthMeasureRef.current;
     const heightMeasureElement = heightMeasureRef.current;
     const nextWidth = widthOverride ?? block.width;
@@ -1010,6 +1003,9 @@ export const TextBlockView = memo(function TextBlockView({
         top: block.y,
         width: block.width,
         height: block.height,
+        zIndex: isSelected || isEditing || isDragSourceHidden
+          ? Math.max(block.zIndex, 1000)
+          : block.zIndex,
       }}
     >
       <div
@@ -1031,7 +1027,7 @@ export const TextBlockView = memo(function TextBlockView({
         role="button"
         tabIndex={0}
       />
-      {isEditing && !block.imageData ? (
+      {isEditing ? (
         <TiptapBlockEditor
           block={block}
           onBlur={handleEditorBlur}
@@ -1064,7 +1060,7 @@ export const TextBlockView = memo(function TextBlockView({
           shouldFocusEnd={shouldFocusEnd}
         />
       ) : null}
-      {!isEditing && !block.imageData ? (
+      {!isEditing ? (
         <div
           className="text-block-display text-block-rich-content"
           onClick={(event) => {
@@ -1122,18 +1118,6 @@ export const TextBlockView = memo(function TextBlockView({
             : { children: renderRichBlockContent(block) })}
         />
       ) : null}
-      {block.imageData ? (
-        <img
-          alt={block.imageName || "Pasted image"}
-          className="text-block-image"
-          onPointerDown={(event) => {
-            if (event.button === 2) {
-              onCanvasPanStart(event);
-            }
-          }}
-          src={block.imageData}
-        />
-      ) : null}
       {(["e"] as ResizeDirection[]).map((direction) => (
         <div
           aria-label={`Resize text block ${direction}`}
@@ -1144,20 +1128,18 @@ export const TextBlockView = memo(function TextBlockView({
           tabIndex={0}
         />
       ))}
-      {!block.imageData ? (
-        <>
-          <div
-            aria-hidden="true"
-            className="text-block-measurer text-block-rich-content text-block-width-measurer"
-            ref={widthMeasureRef}
-          />
-          <div
-            aria-hidden="true"
-            className="text-block-measurer text-block-rich-content text-block-height-measurer"
-            ref={heightMeasureRef}
-          />
-        </>
-      ) : null}
+      <>
+        <div
+          aria-hidden="true"
+          className="text-block-measurer text-block-rich-content text-block-width-measurer"
+          ref={widthMeasureRef}
+        />
+        <div
+          aria-hidden="true"
+          className="text-block-measurer text-block-rich-content text-block-height-measurer"
+          ref={heightMeasureRef}
+        />
+      </>
     </div>
   );
 }, areTextBlockViewPropsEqual);
@@ -1182,7 +1164,7 @@ function areSearchRangesEqual(
 }
 
 type TiptapBlockEditorProps = {
-  block: TextBlock;
+  block: TextElement;
   initialCaretOffset: number | null;
   initialCaretPoint: CaretPoint | null;
   onBlur: (editor: Editor, event: FocusEvent) => void;
@@ -1653,7 +1635,7 @@ function areRichContentsEqual(
   return JSON.stringify(firstContent) === JSON.stringify(secondContent);
 }
 
-function getTipTapContent(block: TextBlock): JSONContent {
+function getTipTapContent(block: TextElement): JSONContent {
   if (
     block.richContent &&
     (!block.content.trim() || hasTipTapRenderableContent(block.richContent))
@@ -1808,7 +1790,7 @@ function hasTipTapRenderableContent(content: JSONContent): boolean {
   return content.content?.some(hasTipTapRenderableContent) ?? false;
 }
 
-function renderRichBlockContent(block: TextBlock) {
+function renderRichBlockContent(block: TextElement) {
   try {
     return renderTipTapContent(getTipTapContent(block));
   } catch {

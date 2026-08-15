@@ -1,4 +1,4 @@
-import type { TextBlock } from "./types";
+import type { ImageElement, TextElement } from "./canvas/model/elements";
 
 export type InteractionMode =
   | "canvas"
@@ -76,13 +76,11 @@ export type ViewportRect = {
   height: number;
 };
 
-export type BlockUpdates = Partial<
+export type TextElementUpdates = Partial<
   Pick<
-    TextBlock,
+    TextElement,
     | "content"
     | "height"
-    | "imageData"
-    | "imageName"
     | "isWidthManuallyResized"
     | "richContent"
     | "width"
@@ -90,5 +88,10 @@ export type BlockUpdates = Partial<
     | "y"
   >
 >;
+
+/** @deprecated Use TextElementUpdates. */
+export type BlockUpdates = TextElementUpdates;
+
+export type ImageElementUpdates = Partial<Pick<ImageElement, "height" | "width" | "x" | "y">>;
 
 export type ResizeDirection = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";

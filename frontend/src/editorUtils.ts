@@ -1,10 +1,11 @@
-import type { AppData, TextBlock } from "./types";
+import type { BoxCanvasElement } from "./canvas/model/elements";
+import type { AppData } from "./types";
 import type { InteractionMode, OffscreenGroup, SelectionRect, SelectionState, ViewportRect } from "./appTypes";
 
 export const emptyData: AppData = {
   folders: [],
   pages: [],
-  blocks: [],
+  elements: [],
   isDarkMode: false,
 };
 
@@ -72,7 +73,7 @@ export function rectsIntersect(first: SelectionRect, second: SelectionRect) {
 }
 
 export function getOffscreenDirection(
-  block: Pick<TextBlock, "height" | "width" | "x" | "y">,
+  block: Pick<BoxCanvasElement, "height" | "width" | "x" | "y">,
   viewport: ViewportRect,
 ): OffscreenGroup["direction"] | null {
   if (

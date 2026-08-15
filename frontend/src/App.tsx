@@ -23,6 +23,7 @@ import {
 import { AssistantPanel } from "./components/AssistantPanel";
 import { InlineRename } from "./components/InlineRename";
 import { TextBlockView } from "./components/TextBlockView";
+import { ImageElementView } from "./components/ImageElementView";
 import { ActivityRail } from "./components/workbench/ActivityRail";
 import { WorkbenchShell } from "./components/workbench/WorkbenchShell";
 import {
@@ -47,7 +48,8 @@ import {
   ZOOM_STEP,
 } from "./constants";
 import type {
-  BlockUpdates,
+  TextElementUpdates,
+  ImageElementUpdates,
   CanvasPoint,
   CanvasSize,
   InsertionPoint,
@@ -104,7 +106,22 @@ import {
   type LlamaHarnessSetupStatus,
   submitLlamaHarnessNoteToolResults,
 } from "./services/llamaHarnessAssistant";
-import type { AppData, AppSessionState, TextBlock } from "./types";
+import {
+  isTextElement,
+  isBoxCanvasElement,
+  type ImageElement,
+  type BoxCanvasElement,
+  type CanvasElement,
+  type TextElement,
+} from "./canvas/model/elements";
+import {
+  fromLegacyAppData,
+  toLegacyAppData,
+  type LegacyAppData,
+} from "./canvas/persistence/legacyAppData";
+import type { AppData, AppSessionState } from "./types";
+
+type BlockUpdates = TextElementUpdates;
 
 type SidebarProps = {
   bookmarkedPages: AppData["pages"];
@@ -252,15 +269,16 @@ type DragLayerSession = {
   zoomLevel: number;
 };
 
-type CopiedBlock = Omit<TextBlock, "id" | "pageId" | "x" | "y"> & {
+type CopyableElement = TextElement | ImageElement;
+type CopiedBlock = Omit<CopyableElement, "id" | "pageId" | "x" | "y"> & {
   offsetX: number;
   offsetY: number;
 };
 
-type CopiedPageBlock = Omit<TextBlock, "id" | "pageId">;
+type CopiedPageBlock = Omit<CopyableElement, "id" | "pageId">;
 
 type CopiedPage = Omit<AppData["pages"][number], "id" | "folderId"> & {
-  blocks: CopiedPageBlock[];
+  elements: CopiedPageBlock[];
   viewport?: PageViewport;
 };
 
@@ -871,7 +889,7 @@ function plainTextToRichContent(text: string): JSONContent {
   };
 }
 
-function getBlockRichContent(block: TextBlock) {
+function getBlockRichContent(block: TextElement) {
   return block.richContent ?? plainTextToRichContent(block.content);
 }
 
@@ -940,9 +958,9 @@ function applyTextStyleToRichContent(
 }
 
 function applyTextStyleStateToBlock(
-  block: TextBlock,
+  block: TextElement,
   formatState: TextFormatState,
-): TextBlock {
+): TextElement {
   return {
     ...block,
     richContent: applyTextStyleToRichContent(
@@ -953,10 +971,10 @@ function applyTextStyleStateToBlock(
 }
 
 function applyFormatStateToBlock(
-  block: TextBlock,
+  block: TextElement,
   formatId: ToolbarActionId,
   formatState: TextFormatState,
-): TextBlock {
+): TextElement {
   const inlineMark = inlineFormatMarks[formatId];
 
   if (inlineMark) {
@@ -1068,8 +1086,10 @@ function App() {
   const copiedBlocksRef = useRef<CopiedBlock[]>([]);
   const copiedPagesRef = useRef<CopiedPage[]>([]);
   const copiedContentKindRef = useRef<"blocks" | "pages" | null>(null);
-  const undoBlockHistoryRef = useRef<TextBlock[][]>([]);
-  const redoBlockHistoryRef = useRef<TextBlock[][]>([]);
+  // In-memory assets may outlive their elements during this migration; reclamation is deferred.
+  const imageSourcesByAssetIdRef = useRef<Map<string, string>>(new Map());
+  const undoBlockHistoryRef = useRef<CanvasElement[][]>([]);
+  const redoBlockHistoryRef = useRef<CanvasElement[][]>([]);
   const blockElementsRef = useRef<Map<string, HTMLElement>>(new Map());
   const dragLayerSessionRef = useRef<DragLayerSession | null>(null);
   const assistantMediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -1127,11 +1147,11 @@ function App() {
       return null;
     }
 
-    const selectedBlock = data.blocks.find(
+    const selectedBlock = data.elements.find(
       (block) => block.id === selectedBlockIds[0],
     );
 
-    if (!selectedBlock || selectedBlock.imageData) {
+    if (!selectedBlock || !isTextElement(selectedBlock)) {
       return null;
     }
 
@@ -1140,7 +1160,7 @@ function App() {
     return normalizedContent
       ? `${normalizedContent.slice(0, 88)}${normalizedContent.length > 88 ? "…" : ""}`
       : "Empty text block";
-  }, [data.blocks, selectedBlockIds]);
+  }, [data.elements, selectedBlockIds]);
   const isWorkspaceEmpty =
     isLoaded && data.folders.length === 0 && data.pages.length === 0;
   const pageTemplates = useMemo(
@@ -1156,8 +1176,8 @@ function App() {
     [data.pages],
   );
   const visibleBlocks = useMemo(
-    () => data.blocks.filter((block) => block.pageId === selectedPageId),
-    [data.blocks, selectedPageId],
+    () => data.elements.filter((block): block is CanvasElement & BoxCanvasElement => block.pageId === selectedPageId && isBoxCanvasElement(block)),
+    [data.elements, selectedPageId],
   );
   const openPages = useMemo<OpenPageTab[]>(() => {
     const pagesById = new Map(
@@ -1165,7 +1185,7 @@ function App() {
         .filter((page) => !isTemplatePage(page))
         .map((page) => [page.id, page]),
     );
-    const pageIdsWithBlocks = new Set(data.blocks.map((block) => block.pageId));
+    const pageIdsWithBlocks = new Set(data.elements.map((block) => block.pageId));
 
     return openPageTabIds.flatMap((pageId) => {
       const page = pagesById.get(pageId);
@@ -1180,7 +1200,7 @@ function App() {
           ]
         : [];
     });
-  }, [data.blocks, data.pages, openPageTabIds]);
+  }, [data.elements, data.pages, openPageTabIds]);
   const shouldShowStarterShortcuts =
     !isStarterDismissed && (isWorkspaceEmpty || openPages.length === 0);
   const folderNamesById = useMemo(() => {
@@ -1193,9 +1213,12 @@ function App() {
     return folderNames;
   }, [data.folders]);
   const blocksByPageId = useMemo(() => {
-    const pageBlocks = new Map<string, TextBlock[]>();
+    const pageBlocks = new Map<string, TextElement[]>();
 
-    for (const block of data.blocks) {
+    for (const block of data.elements) {
+      if (!isTextElement(block)) {
+        continue;
+      }
       const currentBlocks = pageBlocks.get(block.pageId);
 
       if (currentBlocks) {
@@ -1206,7 +1229,7 @@ function App() {
     }
 
     return pageBlocks;
-  }, [data.blocks]);
+  }, [data.elements]);
   const pageSearchResults = useMemo<PageSearchResult[]>(() => {
     const normalizedQuery = pageSearchQuery.trim().toLowerCase();
 
@@ -1267,7 +1290,8 @@ function App() {
       return [];
     }
 
-    const cacheKey = `${selectedPageId}:${nextQuery}:${visibleBlocks
+    const textVisibleBlocks = visibleBlocks.filter(isTextElement);
+    const cacheKey = `${selectedPageId}:${nextQuery}:${textVisibleBlocks
       .map((block) => `${block.id}:${block.x}:${block.y}:${block.content}`)
       .join("|")}`;
     const cachedMatches = searchCache.current.get(cacheKey);
@@ -1276,7 +1300,7 @@ function App() {
       return cachedMatches;
     }
 
-    const nextMatches = visibleBlocks
+    const nextMatches = textVisibleBlocks
       .flatMap((block) => {
         const matches: SearchMatch[] = [];
         const content = block.content.toLowerCase();
@@ -1294,8 +1318,8 @@ function App() {
         return matches;
       })
       .sort((firstMatch, secondMatch) => {
-        const firstBlock = visibleBlocks.find((block) => block.id === firstMatch.blockId);
-        const secondBlock = visibleBlocks.find((block) => block.id === secondMatch.blockId);
+        const firstBlock = textVisibleBlocks.find((block) => block.id === firstMatch.blockId);
+        const secondBlock = textVisibleBlocks.find((block) => block.id === secondMatch.blockId);
 
         if (!firstBlock || !secondBlock) {
           return 0;
@@ -1582,7 +1606,14 @@ function App() {
 
     async function loadData() {
       try {
-        const savedData = await invoke<AppData>("load_app_data");
+        const legacyData = await invoke<LegacyAppData>("load_app_data");
+        const loaded = fromLegacyAppData(legacyData, new Date());
+        const savedData = loaded.data;
+        imageSourcesByAssetIdRef.current = loaded.imageSourcesByAssetId;
+
+        for (const warning of loaded.warnings) {
+          console.warn(warning);
+        }
 
         if (!isMounted) {
           return;
@@ -1836,13 +1867,18 @@ function App() {
     }
 
     const saveTimer = window.setTimeout(() => {
-      invoke("save_app_data", {
-        data: {
+      const legacyData = toLegacyAppData({
           ...data,
           isDarkMode,
           sessionState: getSessionState(),
-        },
-      }).catch((error) => {
+        }, imageSourcesByAssetIdRef.current);
+
+      if (!legacyData) {
+        console.warn("Could not save local note data: an element is unsupported or its image source is unavailable.");
+        return;
+      }
+
+      invoke("save_app_data", { data: legacyData }).catch((error) => {
         console.warn("Could not save local note data.", error);
       });
     }, SAVE_DELAY_MS);
@@ -1889,20 +1925,26 @@ function App() {
     return () => document.body.classList.remove("is-interacting");
   }, [activeMode]);
 
-  function cloneBlocks(blocks: TextBlock[]) {
-    return blocks.map((block) => ({ ...block }));
+  function cloneBlocks(blocks: CanvasElement[]) {
+    return blocks.map((block) =>
+      isTextElement(block)
+        ? { ...block, richContent: cloneRichContent(block.richContent) }
+        : { ...block },
+    );
   }
 
-  function cloneRichContent(richContent: TextBlock["richContent"]) {
+  function cloneRichContent(richContent: TextElement["richContent"]) {
     return richContent ? structuredClone(richContent) : undefined;
   }
 
-  function cloneCopiedPageBlock(block: TextBlock): CopiedPageBlock {
-    const { id: _id, pageId: _pageId, richContent, ...blockFields } = block;
+  function cloneCopiedPageBlock(block: CopyableElement): CopiedPageBlock {
+    const { id: _id, pageId: _pageId, ...blockFields } = block;
 
     return {
       ...blockFields,
-      ...(richContent ? { richContent: cloneRichContent(richContent) } : {}),
+      ...(isTextElement(block) && block.richContent
+        ? { richContent: cloneRichContent(block.richContent) }
+        : {}),
     };
   }
 
@@ -1959,12 +2001,14 @@ function App() {
     };
   }
 
-  function cloneBlocksForPage(blocks: TextBlock[], pageId: string) {
+  function cloneBlocksForPage(blocks: CanvasElement[], pageId: string) {
     return blocks.map((block) => ({
       ...block,
       id: createId("block"),
       pageId,
-      richContent: cloneRichContent(block.richContent),
+      ...(isTextElement(block)
+        ? { richContent: cloneRichContent(block.richContent) }
+        : {}),
     }));
   }
 
@@ -2030,7 +2074,7 @@ function App() {
     };
   }
 
-  function snapBlockPosition<T extends Pick<TextBlock, "x" | "y">>(block: T): T {
+  function snapBlockPosition<T extends BoxCanvasElement>(block: T): T {
     if (!isSnapToGridEnabledRef.current) {
       return block;
     }
@@ -2066,33 +2110,15 @@ function App() {
     return snappedUpdates;
   }
 
-  function areBlocksEqual(firstBlocks: TextBlock[], secondBlocks: TextBlock[]) {
+  function areBlocksEqual(firstBlocks: CanvasElement[], secondBlocks: CanvasElement[]) {
     if (firstBlocks.length !== secondBlocks.length) {
       return false;
     }
 
-    return firstBlocks.every((firstBlock, index) => {
-      const secondBlock = secondBlocks[index];
-
-      return (
-        firstBlock.id === secondBlock.id &&
-        firstBlock.pageId === secondBlock.pageId &&
-        firstBlock.x === secondBlock.x &&
-        firstBlock.y === secondBlock.y &&
-        firstBlock.width === secondBlock.width &&
-        firstBlock.height === secondBlock.height &&
-        firstBlock.content === secondBlock.content &&
-        JSON.stringify(firstBlock.richContent) ===
-          JSON.stringify(secondBlock.richContent) &&
-        firstBlock.isWidthManuallyResized ===
-          secondBlock.isWidthManuallyResized &&
-        firstBlock.imageData === secondBlock.imageData &&
-        firstBlock.imageName === secondBlock.imageName
-      );
-    });
+    return firstBlocks.every((firstBlock, index) => JSON.stringify(firstBlock) === JSON.stringify(secondBlocks[index]));
   }
 
-  function pushBlockUndoSnapshot(blocks: TextBlock[]) {
+  function pushBlockUndoSnapshot(blocks: CanvasElement[]) {
     undoBlockHistoryRef.current = [
       ...undoBlockHistoryRef.current.slice(-(MAX_BLOCK_HISTORY_ENTRIES - 1)),
       cloneBlocks(blocks),
@@ -2101,20 +2127,20 @@ function App() {
   }
 
   function setBlocksWithHistory(
-    getNextBlocks: (currentBlocks: TextBlock[]) => TextBlock[],
+    getNextBlocks: (currentBlocks: CanvasElement[]) => CanvasElement[],
   ) {
     const currentData = dataRef.current;
-    const nextBlocks = getNextBlocks(currentData.blocks);
+    const nextBlocks = getNextBlocks(currentData.elements);
 
-    if (areBlocksEqual(currentData.blocks, nextBlocks)) {
+    if (areBlocksEqual(currentData.elements, nextBlocks)) {
       return;
     }
 
-    pushBlockUndoSnapshot(currentData.blocks);
+    pushBlockUndoSnapshot(currentData.elements);
 
     const nextData = {
       ...currentData,
-      blocks: nextBlocks,
+      elements: nextBlocks,
     };
 
     dataRef.current = nextData;
@@ -2139,7 +2165,7 @@ function App() {
     }
 
     const currentData = dataRef.current;
-    const currentSnapshot = cloneBlocks(currentData.blocks);
+    const currentSnapshot = cloneBlocks(currentData.elements);
 
     if (direction === "undo") {
       redoBlockHistoryRef.current = [
@@ -2159,7 +2185,7 @@ function App() {
 
     const nextData = {
       ...currentData,
-      blocks: cloneBlocks(snapshot),
+      elements: cloneBlocks(snapshot),
     };
 
     dataRef.current = nextData;
@@ -2190,14 +2216,19 @@ function App() {
     const minX = Math.min(...blocksToCopy.map((block) => block.x));
     const minY = Math.min(...blocksToCopy.map((block) => block.y));
 
-    copiedBlocksRef.current = blocksToCopy.map(
-      ({ id: _id, pageId: _pageId, x, y, richContent, ...block }) => ({
-        ...block,
-        ...(richContent ? { richContent: cloneRichContent(richContent) } : {}),
-        offsetX: x - minX,
-        offsetY: y - minY,
-      }),
-    );
+    copiedBlocksRef.current = blocksToCopy
+      .filter((block): block is CopyableElement => block.type === "text" || block.type === "image")
+      .map((block) => {
+        const { id: _id, pageId: _pageId, x, y, ...blockFields } = block;
+        return {
+          ...blockFields,
+          ...(isTextElement(block) && block.richContent
+            ? { richContent: cloneRichContent(block.richContent) }
+            : {}),
+          offsetX: x - minX,
+          offsetY: y - minY,
+        } as CopiedBlock;
+      });
     copiedContentKindRef.current = "blocks";
 
     return true;
@@ -2219,8 +2250,10 @@ function App() {
 
       return {
         ...pageFields,
-        blocks: currentData.blocks
-          .filter((block) => block.pageId === page.id)
+        elements: currentData.elements
+          .filter((block): block is CopyableElement =>
+            block.pageId === page.id && (block.type === "text" || block.type === "image"),
+          )
           .map(cloneCopiedPageBlock),
         viewport: clonePageViewport(page.id),
       };
@@ -2254,10 +2287,10 @@ function App() {
 
     const currentEditingBlockId = editingBlockIdRef.current;
     const currentEditingBlock = currentEditingBlockId
-      ? dataRef.current.blocks.find((block) => block.id === currentEditingBlockId)
+      ? dataRef.current.elements.find((block) => block.id === currentEditingBlockId)
       : null;
 
-    if (currentEditingBlock) {
+    if (currentEditingBlock && isBoxCanvasElement(currentEditingBlock)) {
       return snapPoint({
         x: currentEditingBlock.x,
         y: currentEditingBlock.y + currentEditingBlock.height + PASTED_BLOCK_OFFSET,
@@ -2471,19 +2504,15 @@ function App() {
           y: pasteOrigin.y - pastedGroupSize.height / 2,
         }
       : pasteOrigin;
-    const pastedBlocks = copiedBlocksRef.current.map((block) => ({
-      id: createId("block"),
-      pageId: selectedPageId,
-      x: pastedGroupOrigin.x + block.offsetX,
-      y: pastedGroupOrigin.y + block.offsetY,
-      width: block.width,
-      height: block.height,
-      content: block.content,
-      richContent: cloneRichContent(block.richContent),
-      isWidthManuallyResized: block.isWidthManuallyResized,
-      imageData: block.imageData,
-      imageName: block.imageName,
-    }));
+    const pastedBlocks: CopyableElement[] = copiedBlocksRef.current.map(
+      ({ offsetX, offsetY, ...block }) => ({
+        ...block,
+        id: createId("block"),
+        pageId: selectedPageId,
+        x: pastedGroupOrigin.x + offsetX,
+        y: pastedGroupOrigin.y + offsetY,
+      } as CopyableElement),
+    );
 
     setBlocksWithHistory((currentBlocks) => [
       ...currentBlocks,
@@ -2510,10 +2539,10 @@ function App() {
     const folderId = selectedFolderIdRef.current || ROOT_FOLDER_ID;
 
     const pastedPages: AppData["pages"] = [];
-    const pastedBlocks: TextBlock[] = [];
+    const pastedBlocks: CanvasElement[] = [];
 
     for (const copiedPage of copiedPagesRef.current) {
-      const { blocks, viewport, ...pageFields } = copiedPage;
+      const { elements, viewport, ...pageFields } = copiedPage;
       const pageId = createId("page");
 
       pastedPages.push({
@@ -2522,12 +2551,11 @@ function App() {
         folderId,
       });
       pastedBlocks.push(
-        ...blocks.map((block) => ({
+        ...elements.map((block) => ({
           ...block,
           id: createId("block"),
           pageId,
-          richContent: cloneRichContent(block.richContent),
-        })),
+        } as CanvasElement)),
       );
 
       if (viewport) {
@@ -2549,7 +2577,7 @@ function App() {
         folderId,
         pastedPages,
       ),
-      blocks: [...currentData.blocks, ...pastedBlocks],
+      elements: [...currentData.elements, ...pastedBlocks],
     };
     const firstPastedPageId = pastedPages[0].id;
 
@@ -2594,7 +2622,7 @@ function App() {
 
   const selectAllVisibleBlocks = useCallback(() => {
     const currentPageId = selectedPageIdRef.current;
-    const visibleBlockIds = dataRef.current.blocks
+    const visibleBlockIds = dataRef.current.elements
       .filter((block) => block.pageId === currentPageId)
       .map((block) => block.id);
 
@@ -3043,7 +3071,7 @@ function App() {
       return {
         folders: nextFolders,
         pages: nextPages,
-        blocks: currentData.blocks.filter(
+        elements: currentData.elements.filter(
           (block) => !deletedPageIds.has(block.pageId),
         ),
       };
@@ -3335,8 +3363,10 @@ function App() {
       page,
       ...(includeBlocks
         ? {
-            blocks: dataRef.current.blocks
-              .filter((block) => block.pageId === page.id)
+            blocks: dataRef.current.elements
+              .filter((block): block is TextElement =>
+                block.pageId === page.id && isTextElement(block),
+              )
               .sort(compareToolBlocksByPosition)
               .map(toToolBlock),
           }
@@ -3347,8 +3377,10 @@ function App() {
   function getSelectedTextBlocks() {
     const selectedIds = new Set(selectedBlockIdsRef.current);
 
-    return dataRef.current.blocks
-      .filter((block) => selectedIds.has(block.id))
+    return dataRef.current.elements
+      .filter((block): block is TextElement =>
+        selectedIds.has(block.id) && isTextElement(block),
+      )
       .sort(compareToolBlocksByPosition);
   }
 
@@ -3360,9 +3392,10 @@ function App() {
 
     const pages = dataRef.current.pages
       .map((page) => {
-        const matchedBlocks = dataRef.current.blocks.filter(
-          (block) =>
+        const matchedBlocks = dataRef.current.elements.filter(
+          (block): block is TextElement =>
             block.pageId === page.id &&
+            isTextElement(block) &&
             block.content.toLocaleLowerCase().includes(normalizedQuery),
         );
         const titleMatches = page.title.toLocaleLowerCase().includes(normalizedQuery);
@@ -3404,7 +3437,9 @@ function App() {
       content,
       textFormatStateRef.current,
     );
-    const block: TextBlock = {
+    const timestamp = Date.now();
+    const block: TextElement = {
+      createdAt: timestamp,
       id: blockId,
       pageId: page.id,
       x: blockPosition.x,
@@ -3412,6 +3447,12 @@ function App() {
       width: DEFAULT_BLOCK_WIDTH,
       height: DEFAULT_BLOCK_HEIGHT,
       content,
+      locked: false,
+      opacity: 1,
+      rotation: 0,
+      type: "text",
+      updatedAt: timestamp,
+      zIndex: dataRef.current.elements.length,
       ...(formattedRichContent ? { richContent: formattedRichContent } : {}),
       isWidthManuallyResized: false,
     };
@@ -3446,7 +3487,7 @@ function App() {
       throw new Error("At least one block field is required.");
     }
 
-    const nextBlock: TextBlock = {
+    const nextBlock: TextElement = {
       ...block,
       ...(content !== undefined ? { content, richContent: undefined } : {}),
       ...(x !== undefined ? { x } : {}),
@@ -3613,7 +3654,7 @@ function App() {
 
   function getActivePageBlockForTool(blockId: string) {
     const page = getActivePageForTool();
-    const block = dataRef.current.blocks.find((currentBlock) => currentBlock.id === blockId);
+    const block = dataRef.current.elements.find((currentBlock) => currentBlock.id === blockId);
 
     if (!block) {
       throw new Error("blockId does not exist.");
@@ -3621,14 +3662,14 @@ function App() {
     if (block.pageId !== page.id) {
       throw new Error("Mutating Note tools are scoped to the active page.");
     }
-    if (block.imageData) {
+    if (!isTextElement(block)) {
       throw new Error("Only text blocks are supported by Note tools.");
     }
 
     return block;
   }
 
-  function toToolBlock(block: TextBlock) {
+  function toToolBlock(block: TextElement) {
     return {
       content: block.content,
       height: block.height,
@@ -3640,7 +3681,7 @@ function App() {
     };
   }
 
-  function compareToolBlocksByPosition(firstBlock: TextBlock, secondBlock: TextBlock) {
+  function compareToolBlocksByPosition(firstBlock: TextElement, secondBlock: TextElement) {
     return (
       firstBlock.y - secondBlock.y ||
       firstBlock.x - secondBlock.x ||
@@ -4057,7 +4098,7 @@ function App() {
       return false;
     }
 
-    const selectedBlock = dataRef.current.blocks.find(
+    const selectedBlock = dataRef.current.elements.find(
       (block) => block.id === selectedBlockId,
     );
 
@@ -4067,7 +4108,7 @@ function App() {
       return false;
     }
 
-    if (selectedBlock.imageData) {
+    if (!isTextElement(selectedBlock)) {
       setAssistantError("Select one text block before using this assistant action.");
       setAssistantStatus(null);
       return false;
@@ -4236,7 +4277,7 @@ function App() {
 
     const templatePageId = createId("template-page");
     const templateBlocks = cloneBlocksForPage(
-      currentData.blocks.filter((block) => block.pageId === sourcePageId),
+      currentData.elements.filter((block) => block.pageId === sourcePageId),
       templatePageId,
     );
     const nextData = {
@@ -4249,7 +4290,7 @@ function App() {
           title: sourcePage.title,
         },
       ],
-      blocks: [...currentData.blocks, ...templateBlocks],
+      elements: [...currentData.elements, ...templateBlocks],
     };
 
     dataRef.current = nextData;
@@ -4274,10 +4315,10 @@ function App() {
         ...currentData.pages,
         { id: pageId, folderId, title: templatePage.title },
       ],
-      blocks: [
-        ...currentData.blocks,
+      elements: [
+        ...currentData.elements,
         ...cloneBlocksForPage(
-          currentData.blocks.filter((block) => block.pageId === templatePageId),
+          currentData.elements.filter((block) => block.pageId === templatePageId),
           pageId,
         ),
       ],
@@ -4314,7 +4355,7 @@ function App() {
     const nextData = {
       ...currentData,
       pages: currentData.pages.filter((page) => page.id !== templatePageId),
-      blocks: currentData.blocks.filter(
+      elements: currentData.elements.filter(
         (block) => block.pageId !== templatePageId,
       ),
     };
@@ -4476,7 +4517,7 @@ function App() {
       return {
         ...currentData,
         pages: nextPages,
-        blocks: currentData.blocks.filter((block) => block.pageId !== pageId),
+        elements: currentData.elements.filter((block) => block.pageId !== pageId),
       };
     });
   }
@@ -4554,12 +4595,19 @@ function App() {
       content,
       textFormatStateRef.current,
     );
+    const timestamp = Date.now();
 
     setBlocksWithHistory((currentBlocks) => [
       ...currentBlocks,
       {
+        createdAt: timestamp,
         id: blockId,
+        locked: false,
+        opacity: 1,
         pageId: selectedPageId,
+        rotation: 0,
+        type: "text",
+        updatedAt: timestamp,
         x: blockPosition.x,
         y: blockPosition.y,
         width: DEFAULT_BLOCK_WIDTH,
@@ -4567,6 +4615,7 @@ function App() {
         content,
         ...(formattedRichContent ? { richContent: formattedRichContent } : {}),
         isWidthManuallyResized: false,
+        zIndex: currentBlocks.length,
       },
     ]);
     editingBlockIdRef.current = blockId;
@@ -4589,23 +4638,34 @@ function App() {
     }
 
     const blockId = createId("block");
+    const assetId = createId("image-asset");
     const blockPosition = snapPoint({ x, y });
+    const timestamp = Date.now();
 
     setBlocksWithHistory((currentBlocks) => [
       ...currentBlocks,
       {
+        assetId,
+        createdAt: timestamp,
+        fileName: imageName,
+        fit: "contain",
         id: blockId,
+        locked: false,
+        naturalHeight: 220,
+        naturalWidth: 320,
+        opacity: 1,
         pageId: selectedPageId,
+        rotation: 0,
+        type: "image",
+        updatedAt: timestamp,
         x: blockPosition.x,
         y: blockPosition.y,
         width: 320,
         height: 220,
-        content: imageName,
-        isWidthManuallyResized: true,
-        imageData,
-        imageName,
+        zIndex: currentBlocks.length,
       },
     ]);
+    imageSourcesByAssetIdRef.current.set(assetId, imageData);
     setSelectedBlockIds([blockId]);
     setEditingBlockId(null);
     setIsCanvasKeyboardActive(true);
@@ -4618,7 +4678,7 @@ function App() {
 
     setData((currentData) => {
       let didChange = false;
-      const nextBlocks = currentData.blocks.map((block) => {
+      const nextBlocks = currentData.elements.map((block) => {
         if (block.id !== blockId) {
           return block;
         }
@@ -4632,10 +4692,26 @@ function App() {
         }
 
         didChange = true;
-        return { ...block, ...nextUpdates };
+        return { ...block, ...nextUpdates, updatedAt: Date.now() };
       });
 
-      return didChange ? { ...currentData, blocks: nextBlocks } : currentData;
+      return didChange ? { ...currentData, elements: nextBlocks } : currentData;
+    });
+  }, []);
+
+  const updateImageElement = useCallback((elementId: string, updates: ImageElementUpdates) => {
+    setData((currentData) => {
+      let didChange = false;
+      const elements = currentData.elements.map((element) => {
+        if (element.id !== elementId || element.type !== "image") return element;
+        const hasChanges = Object.entries(updates).some(
+          ([key, value]) => element[key as keyof ImageElement] !== value,
+        );
+        if (!hasChanges) return element;
+        didChange = true;
+        return { ...element, ...updates, updatedAt: Date.now() };
+      });
+      return didChange ? { ...currentData, elements } : currentData;
     });
   }, []);
 
@@ -4934,7 +5010,7 @@ function App() {
     if (movedEnough) {
       setBlocksWithHistory((currentBlocks) =>
         currentBlocks.map((block) =>
-          blockIdsToMove.has(block.id)
+          blockIdsToMove.has(block.id) && isBoxCanvasElement(block)
             ? snapBlockPosition({
                 ...block,
                 x: block.x + offset.x,
@@ -5034,7 +5110,7 @@ function App() {
   }
 
   function applyFormattingToSelectedBlocks(
-    updateBlockFormat: (block: TextBlock) => TextBlock,
+    updateBlockFormat: (block: TextElement) => TextElement,
   ) {
     const selectedIds = new Set(selectedBlockIdsRef.current);
 
@@ -5044,7 +5120,7 @@ function App() {
 
     setBlocksWithHistory((currentBlocks) =>
       currentBlocks.map((block) =>
-        selectedIds.has(block.id) && !block.imageData
+        selectedIds.has(block.id) && isTextElement(block)
           ? updateBlockFormat(block)
           : block,
       ),
@@ -5706,7 +5782,8 @@ function App() {
             }}
           >
             {isGridVisible ? <div className="canvas-grid" /> : null}
-            {visibleBlocks.map((block) => (
+            {visibleBlocks.map((block) =>
+              isTextElement(block) ? (
               <TextBlockView
                 block={block}
                 activeSearchRange={
@@ -5738,7 +5815,27 @@ function App() {
                 shouldFocusEnd={focusEndBlockId === block.id}
                 zoomLevel={zoomLevel}
               />
-            ))}
+              ) : block.type === "image" ? (
+                <ImageElementView
+                  element={block}
+                  imageSource={imageSourcesByAssetIdRef.current.get(block.assetId)}
+                  isDragSourceHidden={dragSourceBlockIds.includes(block.id)}
+                  isMultiSelected={selectedBlockIds.length > 1}
+                  isSelected={selectedBlockIds.includes(block.id)}
+                  key={block.id}
+                  onBlockElementChange={registerBlockElement}
+                  onCanvasPanStart={startCanvasPan}
+                  onInteractionModeChange={setActiveMode}
+                  onSelect={selectBlock}
+                  onUpdate={updateImageElement}
+                  onVisualDragCancel={cancelVisualDrag}
+                  onVisualDragEnd={endVisualDrag}
+                  onVisualDragMove={moveVisualDrag}
+                  onVisualDragStart={startVisualDrag}
+                  zoomLevel={zoomLevel}
+                />
+              ) : null,
+            )}
             <div className="selection-rectangle" ref={selectionRectRef} />
             {insertionPoint ? (
               <div

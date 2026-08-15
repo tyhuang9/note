@@ -1,0 +1,82 @@
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderDto {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PageDto {
+    pub id: String,
+    pub folder_id: String,
+    pub title: String,
+    #[serde(default)]
+    pub is_bookmarked: bool,
+    pub revision: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceData {
+    pub folders: Vec<FolderDto>,
+    pub pages: Vec<PageDto>,
+    pub elements: Vec<Value>,
+    pub is_dark_mode: Option<bool>,
+    pub session_state: Option<Value>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneChangeBatch {
+    pub page_id: String,
+    pub base_revision: i64,
+    #[serde(default)]
+    pub upserts: Vec<Value>,
+    #[serde(default)]
+    pub deleted_element_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneChangeResult {
+    pub page_id: String,
+    pub new_revision: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageDiagnostics {
+    pub database_path: String,
+    pub schema_version: i64,
+    pub imported_legacy_data: bool,
+    pub backup_path: Option<String>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveAssetRequest {
+    pub data_base64: String,
+    pub media_type: String,
+    pub file_name: Option<String>,
+    pub natural_width: Option<u32>,
+    pub natural_height: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetDto {
+    pub id: String,
+    pub file_name: String,
+    pub media_type: String,
+    pub byte_size: u64,
+    pub natural_width: Option<u32>,
+    pub natural_height: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_base64: Option<String>,
+}

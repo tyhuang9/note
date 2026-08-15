@@ -85,6 +85,10 @@ export class SceneChangeQueue {
     return this.start(pageId, this.get(pageId));
   }
 
+  forgetPage(pageId: string) {
+    this.pages.delete(pageId);
+  }
+
   private get(pageId: string): PageQueueState {
     let state = this.pages.get(pageId);
     if (!state) {

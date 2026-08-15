@@ -14,7 +14,7 @@ import type {
   Ref,
 } from "react";
 import { useEditorState } from "@tiptap/react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import "./App.css";
 import {
   AIProvidersSettings,
@@ -116,8 +116,18 @@ import {
   type TextElement,
 } from "./canvas/model/elements";
 import {
+  assetDataUrl,
+  assetRequestFromDataUrl,
+  createSceneRepository,
+  type SceneRepository,
+  type StoragePage,
+} from "./canvas/persistence/sceneRepository";
+import {
+  SceneChangeQueue,
+  type SaveState,
+} from "./canvas/persistence/sceneChangeQueue";
+import {
   fromLegacyAppData,
-  toLegacyAppData,
   type LegacyAppData,
 } from "./canvas/persistence/legacyAppData";
 import type { AppData, AppSessionState } from "./types";
@@ -317,6 +327,8 @@ type SidebarSortOrder =
   | "created-desc"
   | "created-asc";
 type SidebarTabId = "files" | "search" | "bookmarks" | "templates";
+type PersistenceStatus = SaveState;
+type PendingAssetUpload = { dataUrl: string; fileName: string };
 
 type HeroIconName = WorkbenchIconName;
 
@@ -1063,6 +1075,8 @@ function App() {
   >({});
   const [isLoaded, setIsLoaded] = useState(false);
   const [persistenceAvailable, setPersistenceAvailable] = useState(false);
+  const [persistenceStatus, setPersistenceStatus] =
+    useState<PersistenceStatus>({ kind: "saved" });
   const dataRef = useRef<AppData>(data);
   const canvasRef = useRef<HTMLElement | null>(null);
   const canvasContentRef = useRef<HTMLDivElement | null>(null);
@@ -1088,6 +1102,11 @@ function App() {
   const copiedContentKindRef = useRef<"blocks" | "pages" | null>(null);
   // In-memory assets may outlive their elements during this migration; reclamation is deferred.
   const imageSourcesByAssetIdRef = useRef<Map<string, string>>(new Map());
+  const pendingAssetUploadsRef = useRef<Map<string, PendingAssetUpload>>(new Map());
+  const repositoryRef = useRef<SceneRepository | null>(null);
+  const sceneChangeQueueRef = useRef<SceneChangeQueue | null>(null);
+  const pageRevisionsRef = useRef<Map<string, number>>(new Map());
+  const persistenceChainRef = useRef<Promise<void>>(Promise.resolve());
   const undoBlockHistoryRef = useRef<CanvasElement[][]>([]);
   const redoBlockHistoryRef = useRef<CanvasElement[][]>([]);
   const blockElementsRef = useRef<Map<string, HTMLElement>>(new Map());
@@ -1606,12 +1625,34 @@ function App() {
 
     async function loadData() {
       try {
-        const legacyData = await invoke<LegacyAppData>("load_app_data");
-        const loaded = fromLegacyAppData(legacyData, new Date());
-        const savedData = loaded.data;
-        imageSourcesByAssetIdRef.current = loaded.imageSourcesByAssetId;
-
-        for (const warning of loaded.warnings) {
+        const repository = createSceneRepository();
+        const diagnostics = await repository.initializeStorage();
+        const workspace = await repository.loadWorkspace();
+        const savedData: AppData = {
+          elements: workspace.elements,
+          folders: workspace.folders,
+          isDarkMode: workspace.isDarkMode,
+          pages: workspace.pages.map(({ revision: _revision, ...page }) => page),
+          sessionState: workspace.sessionState,
+        };
+        const imageSourcesByAssetId = new Map<string, string>();
+        const imageElements = workspace.elements.filter(
+          (element): element is ImageElement => element.type === "image",
+        );
+        const imageResults = await Promise.allSettled(
+          imageElements.map(async (element) => ({
+            assetId: element.assetId,
+            source: assetDataUrl(await repository.loadAsset(element.assetId)),
+          })),
+        );
+        for (const result of imageResults) {
+          if (result.status === "fulfilled") {
+            imageSourcesByAssetId.set(result.value.assetId, result.value.source);
+          } else {
+            console.warn("Could not load a managed canvas image.", result.reason);
+          }
+        }
+        for (const warning of [...diagnostics.warnings, ...workspace.warnings]) {
           console.warn(warning);
         }
 
@@ -1668,6 +1709,27 @@ function App() {
             ? savedFolderId
             : savedData.folders[0]?.id ?? ROOT_FOLDER_ID);
 
+        repositoryRef.current = repository;
+        imageSourcesByAssetIdRef.current = imageSourcesByAssetId;
+        pageRevisionsRef.current = new Map(
+          workspace.pages.map((page: StoragePage) => [page.id, page.revision]),
+        );
+        const queue = new SceneChangeQueue(
+          (batch) => repository.applySceneChanges(batch),
+          (_pageId, state) => {
+            if (isMounted) {
+              setPersistenceStatus(state);
+            }
+          },
+        );
+        for (const page of workspace.pages) {
+          queue.seed(
+            page.id,
+            page.revision,
+            workspace.elements.filter((element) => element.pageId === page.id),
+          );
+        }
+        sceneChangeQueueRef.current = queue;
         setData(savedData);
         setIsDarkMode(savedData.isDarkMode ?? true);
         setIsSidebarCollapsed(savedSessionState?.isExplorerCollapsed ?? false);
@@ -1687,8 +1749,53 @@ function App() {
         setInsertionPoint(null);
         setIsEditingHeaderTitle(false);
         setPersistenceAvailable(true);
+        setPersistenceStatus({ kind: "saved" });
       } catch (error) {
-        console.warn("Could not load local note data.", error);
+        // Vite/Playwright runs without a Tauri command bridge. Keep that path
+        // usable in-memory. A desktop storage failure must never look like a
+        // successful empty workspace, so show read-only legacy data if it is
+        // still available and leave persistence disabled.
+        console.warn("SQLite note storage is unavailable; using this session only.", error);
+        repositoryRef.current = null;
+        sceneChangeQueueRef.current = null;
+        setPersistenceAvailable(false);
+        if (!isTauri() || !isMounted) {
+          return;
+        }
+        const storageError = error instanceof Error ? error : new Error(String(error));
+        setPersistenceStatus({ kind: "failed", error: storageError });
+        try {
+          const legacy = fromLegacyAppData(
+            await invoke<LegacyAppData>("load_app_data"),
+            new Date(),
+          );
+          if (!isMounted) {
+            return;
+          }
+          imageSourcesByAssetIdRef.current = legacy.imageSourcesByAssetId;
+          setData(legacy.data);
+          setIsDarkMode(legacy.data.isDarkMode ?? true);
+          const legacyPageIds = new Set(
+            legacy.data.pages
+              .filter((page) => !isTemplatePage(page))
+              .map((page) => page.id),
+          );
+          const recoveredPageId = legacy.data.sessionState?.selectedPageId &&
+            legacyPageIds.has(legacy.data.sessionState.selectedPageId)
+            ? legacy.data.sessionState.selectedPageId
+            : legacy.data.pages.find((page) => !isTemplatePage(page))?.id ?? "";
+          const recoveredPage = legacy.data.pages.find((page) => page.id === recoveredPageId);
+          pageViewportsRef.current = normalizePageViewports(
+            legacy.data.sessionState?.pageViewports,
+            legacyPageIds,
+          );
+          setSelectedFolderId(recoveredPage?.folderId ?? ROOT_FOLDER_ID);
+          setSelectedPageId(recoveredPageId);
+          setOpenPageTabIds(recoveredPageId ? [recoveredPageId] : []);
+          restorePageViewport(recoveredPageId);
+        } catch (legacyError) {
+          console.error("Could not recover legacy note data after SQLite failed.", legacyError);
+        }
       } finally {
         if (isMounted) {
           setIsLoaded(true);
@@ -1867,19 +1974,10 @@ function App() {
     }
 
     const saveTimer = window.setTimeout(() => {
-      const legacyData = toLegacyAppData({
-          ...data,
-          isDarkMode,
-          sessionState: getSessionState(),
-        }, imageSourcesByAssetIdRef.current);
-
-      if (!legacyData) {
-        console.warn("Could not save local note data: an element is unsupported or its image source is unavailable.");
-        return;
-      }
-
-      invoke("save_app_data", { data: legacyData }).catch((error) => {
-        console.warn("Could not save local note data.", error);
+      queueWorkspacePersistence({
+        ...data,
+        isDarkMode,
+        sessionState: getSessionState(),
       });
     }, SAVE_DELAY_MS);
 
@@ -1889,6 +1987,30 @@ function App() {
     isAssistantOpen,
     isDarkMode,
     isLoaded,
+    isSidebarCollapsed,
+    openPageTabIds,
+    panOffset.x,
+    panOffset.y,
+    persistenceAvailable,
+    selectedFolderId,
+    selectedPageId,
+    zoomLevel,
+  ]);
+
+  useEffect(() => {
+    if (!persistenceAvailable) {
+      return;
+    }
+    const flushBeforeClose = () => {
+      // Browsers do not guarantee async completion during unload, but this is
+      // still useful for Tauri lifecycle paths that permit the promise to run.
+      void flushPendingPersistence();
+    };
+    window.addEventListener("beforeunload", flushBeforeClose);
+    return () => window.removeEventListener("beforeunload", flushBeforeClose);
+  }, [
+    isAssistantOpen,
+    isDarkMode,
     isSidebarCollapsed,
     openPageTabIds,
     panOffset.x,
@@ -1999,6 +2121,142 @@ function App() {
       ),
       pageViewports,
     };
+  }
+
+  function queueWorkspacePersistence(snapshot: AppData): Promise<void> {
+    const next = persistenceChainRef.current
+      .catch(() => undefined)
+      .then(() => persistWorkspaceSnapshot(snapshot));
+    persistenceChainRef.current = next;
+    // Effects intentionally do not await this promise. Keep the rejection
+    // handled here while still returning it to explicit flush/retry callers.
+    void next.catch(() => undefined);
+    return next;
+  }
+
+  async function uploadPendingAssets(
+    repository: SceneRepository,
+    snapshot: AppData,
+  ): Promise<AppData> {
+    const replacements = new Map<string, { assetId: string; source: string; naturalHeight: number; naturalWidth: number }>();
+    for (const image of snapshot.elements.filter(
+      (element): element is ImageElement => element.type === "image",
+    )) {
+      const pending = pendingAssetUploadsRef.current.get(image.assetId);
+      if (!pending) {
+        continue;
+      }
+      const saved = await repository.saveAsset(
+        assetRequestFromDataUrl(
+          await managedImageDataUrl(pending.dataUrl),
+          { fileName: pending.fileName },
+        ),
+      );
+      replacements.set(image.assetId, {
+        assetId: saved.id,
+        naturalHeight: saved.naturalHeight ?? image.naturalHeight,
+        naturalWidth: saved.naturalWidth ?? image.naturalWidth,
+        source: pending.dataUrl,
+      });
+    }
+    if (replacements.size === 0) {
+      return snapshot;
+    }
+    const uploadTimestamp = Date.now();
+    const replaceElements = (elements: CanvasElement[]) => elements.map((element) => {
+      if (element.type !== "image") {
+        return element;
+      }
+      const replacement = replacements.get(element.assetId);
+      return replacement
+        ? {
+            ...element,
+            assetId: replacement.assetId,
+            naturalHeight: replacement.naturalHeight,
+            naturalWidth: replacement.naturalWidth,
+            updatedAt: uploadTimestamp,
+          }
+        : element;
+    });
+    for (const [oldAssetId, replacement] of replacements) {
+      pendingAssetUploadsRef.current.delete(oldAssetId);
+      imageSourcesByAssetIdRef.current.delete(oldAssetId);
+      imageSourcesByAssetIdRef.current.set(replacement.assetId, replacement.source);
+    }
+    const uploadedSnapshot = {
+      ...snapshot,
+      elements: replaceElements(snapshot.elements),
+    };
+    const currentData = dataRef.current;
+    const nextData = {
+      ...currentData,
+      elements: replaceElements(currentData.elements),
+    };
+    dataRef.current = nextData;
+    setData(nextData);
+    return uploadedSnapshot;
+  }
+
+  async function persistWorkspaceSnapshot(snapshot: AppData): Promise<void> {
+    const repository = repositoryRef.current;
+    const queue = sceneChangeQueueRef.current;
+    if (!repository || !queue) {
+      return;
+    }
+
+    setPersistenceStatus({ kind: "saving" });
+    try {
+      const persistableSnapshot = await uploadPendingAssets(repository, snapshot);
+      // Do not delete a page or folder while an older element batch is still
+      // queued. The structure transaction can then safely cascade deletions.
+      await queue.flush();
+      const structure = await repository.reconcileWorkspaceStructure({
+        folders: persistableSnapshot.folders,
+        isDarkMode: persistableSnapshot.isDarkMode,
+        pages: persistableSnapshot.pages,
+      });
+      const currentPageIds = new Set(persistableSnapshot.pages.map((page) => page.id));
+      for (const pageId of pageRevisionsRef.current.keys()) {
+        if (!currentPageIds.has(pageId)) {
+          queue.forgetPage(pageId);
+        }
+      }
+      pageRevisionsRef.current = new Map(
+        structure.pages.map((page) => [page.id, page.revision]),
+      );
+      for (const page of structure.pages) {
+        queue.setRevision(page.id, page.revision);
+      }
+      await Promise.all(
+        structure.pages.map((page) =>
+          queue.replacePage(
+            page.id,
+            persistableSnapshot.elements.filter((element) => element.pageId === page.id),
+          ),
+        ),
+      );
+      await repository.saveSessionState(persistableSnapshot.sessionState ?? {});
+      setPersistenceStatus({ kind: "saved" });
+    } catch (reason) {
+      const error = reason instanceof Error ? reason : new Error(String(reason));
+      setPersistenceStatus({ kind: "failed", error });
+      throw error;
+    }
+  }
+
+  async function flushPendingPersistence(): Promise<void> {
+    if (!persistenceAvailable) {
+      return;
+    }
+    await queueWorkspacePersistence({
+      ...dataRef.current,
+      isDarkMode,
+      sessionState: getSessionState(),
+    });
+  }
+
+  function retryPersistence() {
+    void flushPendingPersistence();
   }
 
   function cloneBlocksForPage(blocks: CanvasElement[], pageId: string) {
@@ -2403,7 +2661,7 @@ function App() {
         return;
       }
 
-      createImageBlock(
+      void createImageBlock(
         pasteOrigin.x,
         pasteOrigin.y,
         reader.result,
@@ -2466,7 +2724,7 @@ function App() {
     const pasteOrigin = getImagePasteOrigin();
 
     if (clipboardImage.kind === "source") {
-      createImageBlock(
+      void createImageBlock(
         pasteOrigin.x,
         pasteOrigin.y,
         clipboardImage.source,
@@ -2951,6 +3209,7 @@ function App() {
       return;
     }
 
+    void flushPendingPersistence();
     rememberPageViewport(selectedPageId);
     selectedPageIdRef.current = nextPageId;
     setSelectedPageId(nextPageId);
@@ -4131,6 +4390,7 @@ function App() {
       return;
     }
 
+    void flushPendingPersistence();
     const closedTabIndex = currentTabIds.indexOf(pageId);
     const nextTabIds = currentTabIds.filter((currentPageId) => currentPageId !== pageId);
 
@@ -4597,18 +4857,67 @@ function App() {
     setInsertionPoint(null);
   }
 
-  function createImageBlock(
+  function readBlobAsDataUrl(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error ?? new Error("Could not read image data."));
+      reader.onload = () =>
+        typeof reader.result === "string"
+          ? resolve(reader.result)
+          : reject(new Error("Could not read image data."));
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function managedImageDataUrl(source: string): Promise<string> {
+    if (source.startsWith("data:image/")) {
+      return source;
+    }
+    const response = await fetch(source);
+    if (!response.ok) {
+      throw new Error(`Could not download pasted image (${response.status}).`);
+    }
+    return readBlobAsDataUrl(await response.blob());
+  }
+
+  async function createImageBlock(
     x: number,
     y: number,
     imageData: string,
     imageName: string,
   ) {
-    if (!selectedPageId) {
+    const pageId = selectedPageIdRef.current;
+    if (!pageId) {
       return;
     }
 
     const blockId = createId("block");
-    const assetId = createId("image-asset");
+    let assetId = createId("image-asset");
+    let sourceForDisplay = imageData;
+    let naturalWidth = 320;
+    let naturalHeight = 220;
+    const repository = repositoryRef.current;
+    if (repository) {
+      try {
+        const managedDataUrl = await managedImageDataUrl(imageData);
+        const asset = await repository.saveAsset(
+          assetRequestFromDataUrl(managedDataUrl, { fileName: imageName }),
+        );
+        assetId = asset.id;
+        sourceForDisplay = managedDataUrl;
+        naturalWidth = asset.naturalWidth ?? naturalWidth;
+        naturalHeight = asset.naturalHeight ?? naturalHeight;
+      } catch (reason) {
+        const error = reason instanceof Error ? reason : new Error(String(reason));
+        // Keep the user-visible image in memory and let the normal retry path
+        // upload it before the scene batch is ever sent.
+        pendingAssetUploadsRef.current.set(assetId, {
+          dataUrl: imageData,
+          fileName: imageName,
+        });
+        setPersistenceStatus({ kind: "failed", error });
+      }
+    }
     const blockPosition = snapPoint({ x, y });
     const timestamp = Date.now();
 
@@ -4621,21 +4930,21 @@ function App() {
         fit: "contain",
         id: blockId,
         locked: false,
-        naturalHeight: 220,
-        naturalWidth: 320,
+        naturalHeight,
+        naturalWidth,
         opacity: 1,
-        pageId: selectedPageId,
+        pageId,
         rotation: 0,
         type: "image",
         updatedAt: timestamp,
         x: blockPosition.x,
         y: blockPosition.y,
-        width: 320,
-        height: 220,
+        width: naturalWidth,
+        height: naturalHeight,
         zIndex: currentBlocks.length,
       },
     ]);
-    imageSourcesByAssetIdRef.current.set(assetId, imageData);
+    imageSourcesByAssetIdRef.current.set(assetId, sourceForDisplay);
     setSelectedBlockIds([blockId]);
     setEditingBlockId(null);
     setIsCanvasKeyboardActive(true);
@@ -5434,6 +5743,23 @@ function App() {
           onSetTextFontSize={setTextFontSize}
           onToggleTextFormat={toggleTextFormat}
         />
+
+        {persistenceAvailable || persistenceStatus.kind === "failed" ? (
+          <div
+            aria-live="polite"
+            className={`persistence-status persistence-status-${persistenceStatus.kind}`}
+            role="status"
+          >
+            {persistenceStatus.kind === "saving" ? "Saving" : null}
+            {persistenceStatus.kind === "saved" ? "Saved" : null}
+            {persistenceStatus.kind === "failed" ? (
+              <>
+                <span>Save failed: {persistenceStatus.error.message}</span>
+                <button onClick={retryPersistence} type="button">Retry save</button>
+              </>
+            ) : null}
+          </div>
+        ) : null}
 
         <CanvasViewport
           labelledBy={

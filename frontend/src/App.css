@@ -1002,8 +1002,48 @@ h2 {
 .workspace {
   display: grid;
   grid-template-rows: 50px minmax(0, 1fr);
+  position: relative;
   min-width: 0;
   min-height: 0;
+}
+
+.persistence-status {
+  position: absolute;
+  z-index: 35;
+  top: 56px;
+  right: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  border: 1px solid #d7dce3;
+  border-radius: 999px;
+  padding: 3px 9px;
+  color: #526170;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.1);
+  font-size: 12px;
+}
+
+.persistence-status-saving {
+  color: #315b8c;
+}
+
+.persistence-status-failed {
+  border-color: #dc8b8b;
+  color: #9e2525;
+}
+
+.persistence-status button {
+  border: 0;
+  border-radius: 5px;
+  padding: 2px 5px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: underline;
 }
 
 .page-header {

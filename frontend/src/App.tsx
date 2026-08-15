@@ -24,16 +24,14 @@ import { AssistantPanel } from "./components/AssistantPanel";
 import { InlineRename } from "./components/InlineRename";
 import { TextBlockView } from "./components/TextBlockView";
 import { ActivityRail } from "./components/workbench/ActivityRail";
+import { HeroIcon } from "./components/workbench/HeroIcon";
 import { WorkbenchShell } from "./components/workbench/WorkbenchShell";
 import {
   getWorkspaceTabId,
   WORKSPACE_PAGE_PANEL_ID,
   WorkspaceTabs,
 } from "./components/workbench/WorkspaceTabs";
-import type {
-  WorkbenchIconName,
-  WorkbenchIconProps,
-} from "./components/workbench/icons";
+import type { WorkbenchIconName } from "./components/workbench/icons";
 import { useWorkbenchViewport } from "./components/workbench/useWorkbenchViewport";
 import {
   DEFAULT_BLOCK_HEIGHT,
@@ -408,179 +406,6 @@ function getOffscreenDirectionLabel(
   return labels[direction];
 }
 
-function HeroIcon({ name }: Readonly<WorkbenchIconProps>) {
-  return (
-    <svg
-      aria-hidden="true"
-      className="hero-icon"
-      fill="none"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth="1.8"
-      viewBox="0 0 24 24"
-    >
-      {name === "adjustments-horizontal" ? (
-        <>
-          <path d="M4.5 7.5h6m3 0h6M4.5 16.5h9m3 0h3" />
-          <path d="M10.5 5.25v4.5M16.5 14.25v4.5" />
-        </>
-      ) : null}
-      {name === "archive-box" ? (
-        <>
-          <path d="M3.75 7.5h16.5" />
-          <path d="M5.25 7.5v10.125A2.625 2.625 0 0 0 7.875 20.25h8.25a2.625 2.625 0 0 0 2.625-2.625V7.5" />
-          <path d="M8.25 7.5V5.625A1.875 1.875 0 0 1 10.125 3.75h3.75A1.875 1.875 0 0 1 15.75 5.625V7.5" />
-        </>
-      ) : null}
-      {name === "arrows-up-down" ? (
-        <>
-          <path d="M8.25 6.75 12 3m0 0 3.75 3.75M12 3v18" />
-          <path d="M15.75 17.25 12 21m0 0-3.75-3.75" />
-        </>
-      ) : null}
-      {name === "bookmark" ? (
-        <path d="M17.25 21 12 17.25 6.75 21V5.25A2.25 2.25 0 0 1 9 3h6a2.25 2.25 0 0 1 2.25 2.25V21Z" />
-      ) : null}
-      {name === "bold" ? (
-        <>
-          <path d="M7.5 4.75h5.25a3.25 3.25 0 0 1 0 6.5H7.5z" />
-          <path d="M7.5 11.25h6.25a4 4 0 0 1 0 8H7.5z" />
-        </>
-      ) : null}
-      {name === "check" ? <path d="m4.5 12.75 6 6 9-13.5" /> : null}
-      {name === "chevron-down" ? <path d="m6 9 6 6 6-6" /> : null}
-      {name === "chevron-right" ? <path d="m9 6 6 6-6 6" /> : null}
-      {name === "chevron-up" ? <path d="m6 15 6-6 6 6" /> : null}
-      {name === "code-bracket" ? (
-        <>
-          <path d="m9 7.5-4.5 4.5L9 16.5" />
-          <path d="m15 7.5 4.5 4.5-4.5 4.5" />
-        </>
-      ) : null}
-      {name === "document-plus" ? (
-        <>
-          <path d="M14.25 3.75H7.5A2.25 2.25 0 0 0 5.25 6v12A2.25 2.25 0 0 0 7.5 20.25h9A2.25 2.25 0 0 0 18.75 18V8.25L14.25 3.75Z" />
-          <path d="M14.25 3.75v4.5h4.5M12 11.25v5.25m2.625-2.625h-5.25" />
-        </>
-      ) : null}
-      {name === "document-text" ? (
-        <>
-          <path d="M14.25 3.75H7.5A2.25 2.25 0 0 0 5.25 6v12A2.25 2.25 0 0 0 7.5 20.25h9A2.25 2.25 0 0 0 18.75 18V8.25L14.25 3.75Z" />
-          <path d="M14.25 3.75v4.5h4.5M8.25 13.5h7.5M8.25 16.5h4.5" />
-        </>
-      ) : null}
-      {name === "eye" ? (
-        <>
-          <path d="M2.25 12s3.75-6.75 9.75-6.75S21.75 12 21.75 12s-3.75 6.75-9.75 6.75S2.25 12 2.25 12Z" />
-          <path d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
-        </>
-      ) : null}
-      {name === "eye-slash" ? (
-        <>
-          <path d="M3 3 21 21" />
-          <path d="M10.5 5.4c.48-.1.98-.15 1.5-.15 6 0 9.75 6.75 9.75 6.75a18.2 18.2 0 0 1-2.76 3.48" />
-          <path d="M6.38 6.9C3.74 8.76 2.25 12 2.25 12s3.75 6.75 9.75 6.75c1.86 0 3.5-.65 4.9-1.54" />
-          <path d="M9.88 9.88a3 3 0 0 0 4.24 4.24" />
-        </>
-      ) : null}
-      {name === "folder" ? (
-        <path d="M3.75 6.75A2.25 2.25 0 0 1 6 4.5h4.125l2.25 2.25H18A2.25 2.25 0 0 1 20.25 9v7.5A2.25 2.25 0 0 1 18 18.75H6a2.25 2.25 0 0 1-2.25-2.25V6.75Z" />
-      ) : null}
-      {name === "folder-plus" ? (
-        <>
-          <path d="M3.75 6.75A2.25 2.25 0 0 1 6 4.5h4.125l2.25 2.25H18A2.25 2.25 0 0 1 20.25 9v7.5A2.25 2.25 0 0 1 18 18.75H6a2.25 2.25 0 0 1-2.25-2.25V6.75Z" />
-          <path d="M12 10.5v5.25m2.625-2.625h-5.25" />
-        </>
-      ) : null}
-      {name === "italic" ? <path d="M10.5 5.25h6M7.5 18.75h6M14.25 5.25l-4.5 13.5" /> : null}
-      {name === "list-bullet" ? (
-        <>
-          <path d="M8.25 6.75h11.25M8.25 12h11.25M8.25 17.25h11.25" />
-          <path d="M4.5 6.75h.01M4.5 12h.01M4.5 17.25h.01" />
-        </>
-      ) : null}
-      {name === "magnifying-glass" ? (
-        <path d="m21 21-4.35-4.35m1.35-5.4a6.75 6.75 0 1 1-13.5 0 6.75 6.75 0 0 1 13.5 0Z" />
-      ) : null}
-      {name === "moon" ? (
-        <path d="M21 14.25A8.25 8.25 0 0 1 9.75 3a7.5 7.5 0 1 0 11.25 11.25Z" />
-      ) : null}
-      {name === "numbered-list" ? (
-        <>
-          <path d="M9 6.75h10.5M9 12h10.5M9 17.25h10.5" />
-          <path d="M4.5 5.25h1.5v3M4.5 8.25h3" />
-          <path d="M4.5 11.25h2.25L4.5 14.25h2.25" />
-          <path d="M4.5 16.5h2.25a.75.75 0 0 1 0 1.5H5.25m1.5 0a.75.75 0 0 1 0 1.5H4.5" />
-        </>
-      ) : null}
-      {name === "panel" ? (
-        <>
-          <path d="M4.5 5.25A1.5 1.5 0 0 1 6 3.75h12a1.5 1.5 0 0 1 1.5 1.5v13.5a1.5 1.5 0 0 1-1.5 1.5H6a1.5 1.5 0 0 1-1.5-1.5V5.25Z" />
-          <path d="M9 3.75v16.5" />
-        </>
-      ) : null}
-      {name === "pencil-square" ? (
-        <>
-          <path d="M16.86 4.49 19.5 7.13m-11.25 8.62 2.72-.54a2.25 2.25 0 0 0 1.19-.63l7.08-7.08a1.87 1.87 0 0 0-2.64-2.64l-7.08 7.08a2.25 2.25 0 0 0-.63 1.19l-.54 2.72Z" />
-          <path d="M18.75 13.5v4.125a2.625 2.625 0 0 1-2.625 2.625h-9.75A2.625 2.625 0 0 1 3.75 17.625v-9.75A2.625 2.625 0 0 1 6.375 5.25H10.5" />
-        </>
-      ) : null}
-      {name === "plus" ? <path d="M12 5.25v13.5M5.25 12h13.5" /> : null}
-      {name === "quote" ? (
-        <>
-          <path d="M8.75 7.5H6.5A2.5 2.5 0 0 0 4 10v1.75h4.75v4.75H4" />
-          <path d="M18.5 7.5h-2.25a2.5 2.5 0 0 0-2.5 2.5v1.75h4.75v4.75h-4.75" />
-        </>
-      ) : null}
-      {name === "rectangle-stack" ? (
-        <>
-          <path d="M6.75 7.5h10.5M6.75 12h10.5M6.75 16.5h10.5" />
-          <path d="M3.75 5.25A1.5 1.5 0 0 1 5.25 3.75h13.5a1.5 1.5 0 0 1 1.5 1.5v13.5a1.5 1.5 0 0 1-1.5 1.5H5.25a1.5 1.5 0 0 1-1.5-1.5V5.25Z" />
-        </>
-      ) : null}
-      {name === "sparkles" ? (
-        <>
-          <path d="m12 3 1.38 4.12L17.5 8.5l-4.12 1.38L12 14l-1.38-4.12L6.5 8.5l4.12-1.38L12 3Z" />
-          <path d="m18.5 13 .78 2.22L21.5 16l-2.22.78L18.5 19l-.78-2.22L15.5 16l2.22-.78L18.5 13ZM5.5 14l.58 1.42L7.5 16l-1.42.58L5.5 18l-.58-1.42L3.5 16l1.42-.58L5.5 14Z" />
-        </>
-      ) : null}
-      {name === "squares-2x2" ? (
-        <>
-          <path d="M4.5 4.5h6v6h-6zM13.5 4.5h6v6h-6zM4.5 13.5h6v6h-6zM13.5 13.5h6v6h-6z" />
-        </>
-      ) : null}
-      {name === "star" ? (
-        <path d="m12 3.75 2.53 5.13 5.66.82-4.1 4 1 5.64L12 16.68l-5.09 2.66 1-5.64-4.1-4 5.66-.82L12 3.75Z" />
-      ) : null}
-      {name === "strikethrough" ? (
-        <>
-          <path d="M5.25 12h13.5" />
-          <path d="M16.5 6.75A4.5 4.5 0 0 0 12.75 5.25h-1a3.25 3.25 0 0 0-1.5 6.13l3.5 1.5a3.25 3.25 0 0 1-1.5 6.12h-1a4.5 4.5 0 0 1-3.75-1.5" />
-        </>
-      ) : null}
-      {name === "sun" ? (
-        <>
-          <path d="M12 4.5V3M12 21v-1.5M4.5 12H3M21 12h-1.5M6.34 6.34 5.28 5.28M18.72 18.72l-1.06-1.06M17.66 6.34l1.06-1.06M5.28 18.72l1.06-1.06" />
-          <path d="M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z" />
-        </>
-      ) : null}
-      {name === "trash" ? (
-        <>
-          <path d="M4.5 6.75h15M9.75 6.75V5.25A1.5 1.5 0 0 1 11.25 3.75h1.5a1.5 1.5 0 0 1 1.5 1.5v1.5" />
-          <path d="m9 10.5.45 7.5m5.55-7.5-.45 7.5M6.75 6.75l.75 12A1.5 1.5 0 0 0 9 20.25h6a1.5 1.5 0 0 0 1.5-1.5l.75-12" />
-        </>
-      ) : null}
-      {name === "underline" ? (
-        <>
-          <path d="M7.5 5.25v6a4.5 4.5 0 0 0 9 0v-6" />
-          <path d="M6 20.25h12" />
-        </>
-      ) : null}
-      {name === "x-mark" ? <path d="M6 6l12 12M18 6 6 18" /> : null}
-    </svg>
-  );
-}
 
 function formatPageSearchSummary(result: PageSearchResult) {
   const summaryParts: string[] = [];

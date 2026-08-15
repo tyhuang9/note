@@ -1,12 +1,43 @@
 use super::{assets, database, legacy_import, models::*};
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use serde_json::Value;
-use std::path::Path;
+use std::{io::Write, path::Path};
 
 /// These folders are real rows solely to satisfy the page foreign key. They
 /// are not user folders and are filtered from the workspace DTO.
 pub const ROOT_FOLDER_ID: &str = "";
 pub const TEMPLATE_FOLDER_ID: &str = "__note_page_templates__";
+const MAX_INK_POINTS: usize = 20_000;
+const MAX_INK_PAYLOAD_BYTES: usize = 8 * 1024 * 1024;
+const MAX_INK_LOCAL_COORDINATE: f64 = 1_000_000.0;
+const MAX_INK_BRUSH_SIZE: f64 = 512.0;
+const MAX_SCENE_BATCH_BYTES: usize = 32 * 1024 * 1024;
+const MAX_SCENE_BATCH_UPSERTS: usize = 5_000;
+const MAX_SCENE_BATCH_DELETES: usize = 20_000;
+
+struct PayloadLimitWriter {
+    bytes_written: usize,
+    exceeded: bool,
+    limit: usize,
+}
+
+impl Write for PayloadLimitWriter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        if buffer.len() > self.limit.saturating_sub(self.bytes_written) {
+            self.exceeded = true;
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "ink payload size limit exceeded",
+            ));
+        }
+        self.bytes_written += buffer.len();
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 
 fn required_string<'a>(value: &'a Value, key: &str) -> Result<&'a str, String> {
     value
@@ -24,6 +55,180 @@ fn finite(value: &Value, key: &str) -> Result<Option<f64>, String> {
             .map(Some)
             .ok_or_else(|| format!("element.{key} must be finite")),
     }
+}
+
+fn required_finite(value: &Value, key: &str, context: &str) -> Result<f64, String> {
+    value
+        .get(key)
+        .and_then(Value::as_f64)
+        .filter(|number| number.is_finite())
+        .ok_or_else(|| format!("{context}.{key} must be a finite number"))
+}
+
+fn required_finite_object(
+    value: &serde_json::Map<String, Value>,
+    key: &str,
+    context: &str,
+) -> Result<f64, String> {
+    value
+        .get(key)
+        .and_then(Value::as_f64)
+        .filter(|number| number.is_finite())
+        .ok_or_else(|| format!("{context}.{key} must be a finite number"))
+}
+
+fn validate_ink_color(color: &Value) -> Result<(), String> {
+    let color = color
+        .as_object()
+        .ok_or("ink brush.color must be an object")?;
+    match color.get("kind").and_then(Value::as_str) {
+        Some("theme") => match color.get("token").and_then(Value::as_str) {
+            Some("foreground" | "muted") => Ok(()),
+            _ => Err("ink theme color token must be foreground or muted".into()),
+        },
+        Some("fixed") => {
+            let value = color
+                .get("value")
+                .and_then(Value::as_str)
+                .ok_or("ink fixed color.value must be a string")?;
+            if matches!(value.len(), 7 | 9)
+                && value.starts_with('#')
+                && value[1..].bytes().all(|byte| byte.is_ascii_hexdigit())
+            {
+                Ok(())
+            } else {
+                Err("ink fixed color must use #RRGGBB or #RRGGBBAA".into())
+            }
+        }
+        _ => Err("ink brush.color kind must be theme or fixed".into()),
+    }
+}
+
+fn validate_ink_element(value: &Value) -> Result<(), String> {
+    let points = value
+        .get("points")
+        .and_then(Value::as_array)
+        .ok_or("ink element.points must be an array")?;
+    if points.is_empty() {
+        return Err("ink element.points must contain at least one point".into());
+    }
+    if points.len() > MAX_INK_POINTS {
+        return Err(format!(
+            "ink element.points exceeds the {MAX_INK_POINTS} point limit"
+        ));
+    }
+    let width = required_finite(value, "width", "ink element")?;
+    let height = required_finite(value, "height", "ink element")?;
+    for (index, point) in points.iter().enumerate() {
+        let tuple = point
+            .as_array()
+            .filter(|tuple| tuple.len() == 3)
+            .ok_or_else(|| format!("ink point {index} must be exactly [x, y, pressure]"))?;
+        let coordinate = |position: usize, name: &str| {
+            tuple[position]
+                .as_f64()
+                .filter(|number| number.is_finite())
+                .ok_or_else(|| format!("ink point {index} {name} must be finite"))
+        };
+        let x = coordinate(0, "x")?;
+        let y = coordinate(1, "y")?;
+        let pressure = coordinate(2, "pressure")?;
+        if !(0.0..=width.min(MAX_INK_LOCAL_COORDINATE)).contains(&x)
+            || !(0.0..=height.min(MAX_INK_LOCAL_COORDINATE)).contains(&y)
+        {
+            return Err(format!(
+                "ink point {index} coordinates must be local to the element and no greater than {MAX_INK_LOCAL_COORDINATE}"
+            ));
+        }
+        if !(0.0..=1.0).contains(&pressure) {
+            return Err(format!(
+                "ink point {index} pressure must be between 0 and 1"
+            ));
+        }
+    }
+
+    let brush = value
+        .get("brush")
+        .and_then(Value::as_object)
+        .ok_or("ink element.brush must be an object")?;
+    if !matches!(
+        brush.get("kind").and_then(Value::as_str),
+        Some("pen" | "highlighter")
+    ) {
+        return Err("ink brush.kind must be pen or highlighter".into());
+    }
+    validate_ink_color(brush.get("color").ok_or("ink brush.color is required")?)?;
+    let size = required_finite_object(brush, "size", "ink brush")?;
+    if !(0.0 < size && size <= MAX_INK_BRUSH_SIZE) {
+        return Err(format!(
+            "ink brush.size must be greater than 0 and at most {MAX_INK_BRUSH_SIZE}"
+        ));
+    }
+    for key in ["opacity", "smoothing", "streamline"] {
+        let setting = required_finite_object(brush, key, "ink brush")?;
+        if !(0.0..=1.0).contains(&setting) {
+            return Err(format!("ink brush.{key} must be between 0 and 1"));
+        }
+    }
+    let thinning = required_finite_object(brush, "thinning", "ink brush")?;
+    if !(-1.0..=1.0).contains(&thinning) {
+        return Err("ink brush.thinning must be between -1 and 1".into());
+    }
+    if brush
+        .get("simulatePressure")
+        .and_then(Value::as_bool)
+        .is_none()
+    {
+        return Err("ink brush.simulatePressure must be boolean".into());
+    }
+
+    let mut writer = PayloadLimitWriter {
+        bytes_written: 0,
+        exceeded: false,
+        limit: MAX_INK_PAYLOAD_BYTES,
+    };
+    if let Err(error) = serde_json::to_writer(&mut writer, value) {
+        if writer.exceeded {
+            return Err(format!(
+                "ink element payload exceeds the {MAX_INK_PAYLOAD_BYTES} byte limit"
+            ));
+        }
+        return Err(format!("ink element payload cannot be serialized: {error}"));
+    }
+    Ok(())
+}
+
+fn validate_scene_batch(batch: &SceneChangeBatch) -> Result<(), String> {
+    if batch.upserts.len() > MAX_SCENE_BATCH_UPSERTS {
+        return Err(format!(
+            "scene batch exceeds the {MAX_SCENE_BATCH_UPSERTS} upsert limit"
+        ));
+    }
+    if batch.deleted_element_ids.len() > MAX_SCENE_BATCH_DELETES {
+        return Err(format!(
+            "scene batch exceeds the {MAX_SCENE_BATCH_DELETES} delete limit"
+        ));
+    }
+    if batch.deleted_element_ids.iter().any(|id| id.is_empty()) {
+        return Err("deleted element IDs must be non-empty".into());
+    }
+    let mut writer = PayloadLimitWriter {
+        bytes_written: 0,
+        exceeded: false,
+        limit: MAX_SCENE_BATCH_BYTES,
+    };
+    for element in &batch.upserts {
+        validate_element(element, &batch.page_id)?;
+        if let Err(error) = serde_json::to_writer(&mut writer, element) {
+            if writer.exceeded {
+                return Err(format!(
+                    "scene batch payload exceeds the {MAX_SCENE_BATCH_BYTES} byte limit"
+                ));
+            }
+            return Err(format!("scene batch element cannot be serialized: {error}"));
+        }
+    }
+    Ok(())
 }
 fn validate_element(value: &Value, page_id: &str) -> Result<(), String> {
     if !value.is_object() {
@@ -81,9 +286,7 @@ fn validate_element(value: &Value, page_id: &str) -> Result<(), String> {
         {
             return Err("image element.assetId must be a non-empty string".into())
         }
-        "ink" if value.get("points").and_then(Value::as_array).is_none() => {
-            return Err("ink element.points must be an array".into())
-        }
+        "ink" => validate_ink_element(value)?,
         "shape" if value.get("shape").and_then(Value::as_str).is_none() => {
             return Err("shape element.shape must be a string".into())
         }
@@ -345,12 +548,7 @@ pub fn apply_scene_changes_at(
     if batch.page_id.is_empty() || batch.base_revision < 0 {
         return Err("invalid pageId or baseRevision".into());
     }
-    for e in &batch.upserts {
-        validate_element(e, &batch.page_id)?
-    }
-    if batch.deleted_element_ids.iter().any(|id| id.is_empty()) {
-        return Err("deleted element IDs must be non-empty".into());
-    }
+    validate_scene_batch(&batch)?;
     let mut c = database::open(&root.join("note.db"))?;
     database::migrate(&mut c)?;
     let tx = c
@@ -466,6 +664,36 @@ mod tests {
     fn image_element(id: &str, asset_id: &str) -> Value {
         json!({"id":id,"pageId":"p","type":"image","x":1.0,"y":2.0,"width":100.0,"height":40.0,"rotation":0.0,"zIndex":0,"opacity":1.0,"locked":false,"createdAt":1,"updatedAt":1,"assetId":asset_id,"naturalWidth":100,"naturalHeight":40,"fit":"contain"})
     }
+    fn ink_element() -> Value {
+        json!({
+            "id":"ink-1","pageId":"p","type":"ink","x":1.0,"y":2.0,
+            "width":100.0,"height":40.0,"rotation":0.0,"zIndex":0,
+            "opacity":1.0,"locked":false,"createdAt":1,"updatedAt":1,
+            "points":[[2.0,3.0,0.5],[98.0,38.0,1.0]],
+            "brush":{
+                "kind":"pen","color":{"kind":"theme","token":"foreground"},
+                "size":4.0,"opacity":1.0,"thinning":0.45,"smoothing":0.5,
+                "streamline":0.45,"simulatePressure":true
+            }
+        })
+    }
+    fn assert_ink_rejected_without_revision_change(root: &Path, ink: Value, message: &str) {
+        let error = apply_scene_changes_at(
+            root,
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![ink],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap_err();
+        assert!(
+            error.contains(message),
+            "unexpected validation error: {error}"
+        );
+        assert_eq!(load_workspace_data_at(root).unwrap().pages[0].revision, 0);
+    }
 
     #[test]
     fn empty_initialization_and_migration_are_idempotent() {
@@ -553,6 +781,149 @@ mod tests {
             load_workspace_data_at(directory.path()).unwrap().pages[0].revision,
             0
         );
+    }
+
+    #[test]
+    fn valid_phase_four_ink_is_persisted() {
+        let directory = root();
+        seed_page(directory.path());
+        let result = apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![ink_element()],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+        assert_eq!(result.new_revision, 1);
+        assert_eq!(
+            load_workspace_data_at(directory.path())
+                .unwrap()
+                .elements
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn ink_without_brush_is_rejected_atomically() {
+        let directory = root();
+        seed_page(directory.path());
+        let mut ink = ink_element();
+        ink.as_object_mut().unwrap().remove("brush");
+        assert_ink_rejected_without_revision_change(
+            directory.path(),
+            ink,
+            "brush must be an object",
+        );
+    }
+
+    #[test]
+    fn malformed_ink_tuple_and_pressure_are_rejected_atomically() {
+        let directory = root();
+        seed_page(directory.path());
+        let mut malformed = ink_element();
+        malformed["points"] = json!([[1.0, 2.0]]);
+        assert_ink_rejected_without_revision_change(
+            directory.path(),
+            malformed,
+            "exactly [x, y, pressure]",
+        );
+
+        let mut bad_pressure = ink_element();
+        bad_pressure["points"] = json!([[1.0, 2.0, 1.1]]);
+        assert_ink_rejected_without_revision_change(
+            directory.path(),
+            bad_pressure,
+            "pressure must be between 0 and 1",
+        );
+    }
+
+    #[test]
+    fn excessive_ink_points_and_payload_are_rejected_atomically() {
+        let directory = root();
+        seed_page(directory.path());
+        let mut too_many = ink_element();
+        too_many["points"] = Value::Array(
+            (0..=MAX_INK_POINTS)
+                .map(|_| json!([1.0, 1.0, 0.5]))
+                .collect(),
+        );
+        assert_ink_rejected_without_revision_change(directory.path(), too_many, "point limit");
+
+        let mut oversized = ink_element();
+        oversized["padding"] = Value::String("x".repeat(MAX_INK_PAYLOAD_BYTES));
+        assert_ink_rejected_without_revision_change(directory.path(), oversized, "payload exceeds");
+    }
+
+    #[test]
+    fn excessive_scene_batch_count_and_bytes_are_rejected_atomically() {
+        let directory = root();
+        seed_page(directory.path());
+        let too_many = vec![element("duplicate-is-not-reached", 1); MAX_SCENE_BATCH_UPSERTS + 1];
+        let count_error = apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: too_many,
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap_err();
+        assert!(count_error.contains("upsert limit"));
+        assert_eq!(
+            load_workspace_data_at(directory.path()).unwrap().pages[0].revision,
+            0
+        );
+
+        let mut first = element("large-1", 1);
+        first["content"] = Value::String("x".repeat(17 * 1024 * 1024));
+        let mut second = element("large-2", 1);
+        second["content"] = Value::String("x".repeat(17 * 1024 * 1024));
+        let byte_error = apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![first, second],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap_err();
+        assert!(byte_error.contains("batch payload exceeds"));
+        assert_eq!(
+            load_workspace_data_at(directory.path()).unwrap().pages[0].revision,
+            0
+        );
+    }
+
+    #[test]
+    fn invalid_ink_color_and_brush_ranges_are_rejected_atomically() {
+        let directory = root();
+        seed_page(directory.path());
+        let mut bad_color = ink_element();
+        bad_color["brush"]["color"] = json!({"kind":"fixed","value":"red"});
+        assert_ink_rejected_without_revision_change(directory.path(), bad_color, "#RRGGBB");
+
+        for (key, value, message) in [
+            ("size", json!(513.0), "size must be"),
+            ("opacity", json!(-0.1), "opacity must be between"),
+            ("thinning", json!(1.1), "thinning must be between"),
+            ("smoothing", json!(1.1), "smoothing must be between"),
+            ("streamline", json!(1.1), "streamline must be between"),
+            (
+                "simulatePressure",
+                json!("yes"),
+                "simulatePressure must be boolean",
+            ),
+        ] {
+            let mut invalid = ink_element();
+            invalid["brush"][key] = value;
+            assert_ink_rejected_without_revision_change(directory.path(), invalid, message);
+        }
     }
 
     #[test]

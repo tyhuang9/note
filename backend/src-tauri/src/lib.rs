@@ -108,6 +108,14 @@ fn apply_scene_changes(
 }
 
 #[tauri::command]
+fn reconcile_workspace_structure(
+    app_handle: tauri::AppHandle,
+    structure: storage::WorkspaceStructure,
+) -> Result<storage::WorkspaceStructureResult, String> {
+    storage::reconcile_workspace_structure_at(&storage_root(&app_handle)?, structure)
+}
+
+#[tauri::command]
 fn save_asset(
     app_handle: tauri::AppHandle,
     request: storage::SaveAssetRequest,
@@ -161,6 +169,7 @@ pub fn run() {
             initialize_storage,
             load_workspace_data,
             apply_scene_changes,
+            reconcile_workspace_structure,
             save_asset,
             load_asset,
             save_session_state

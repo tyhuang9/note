@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::assets;
+use super::repository::{ROOT_FOLDER_ID, TEMPLATE_FOLDER_ID};
 
 const IMPORT_MARKER: &str = "legacy_import_v1_completed";
 
@@ -121,7 +122,7 @@ pub fn import_if_needed(
     let result = (|| -> Result<Vec<String>, String> {
         let tx = connection.transaction().map_err(|e| e.to_string())?;
         let mut warnings = Vec::new();
-        let mut folder_ids = HashSet::new();
+        let mut folder_ids: HashSet<String> = HashSet::new();
         let mut page_ids = HashSet::new();
         let mut element_ids = HashSet::new();
         for block in &legacy.blocks {
@@ -133,7 +134,7 @@ pub fn import_if_needed(
             }
         }
         for f in &legacy.folders {
-            if f.id.is_empty() || !folder_ids.insert(&f.id) {
+            if f.id.is_empty() || !folder_ids.insert(f.id.clone()) {
                 return Err(format!("invalid or duplicate legacy folder id: {}", f.id));
             }
             tx.execute(
@@ -141,6 +142,34 @@ pub fn import_if_needed(
                 params![f.id, f.name],
             )
             .map_err(|e| format!("import folder {}: {e}", f.id))?;
+        }
+        // The UI represents its root and templates locations by folder IDs
+        // without visible folder records. Persist hidden rows so the existing
+        // page FK remains valid while preserving the legacy page shape.
+        let uses_root = legacy
+            .pages
+            .iter()
+            .any(|page| page.folder_id == ROOT_FOLDER_ID);
+        let uses_templates = legacy
+            .pages
+            .iter()
+            .any(|page| page.folder_id == TEMPLATE_FOLDER_ID)
+            && !folder_ids.contains(TEMPLATE_FOLDER_ID);
+        if uses_root {
+            folder_ids.insert(ROOT_FOLDER_ID.to_owned());
+            tx.execute(
+                "INSERT INTO folders(id,name) VALUES(?,?)",
+                params![ROOT_FOLDER_ID, "Root"],
+            )
+            .map_err(|e| format!("import root folder: {e}"))?;
+        }
+        if uses_templates {
+            folder_ids.insert(TEMPLATE_FOLDER_ID.to_owned());
+            tx.execute(
+                "INSERT INTO folders(id,name) VALUES(?,?)",
+                params![TEMPLATE_FOLDER_ID, "Templates"],
+            )
+            .map_err(|e| format!("import template folder: {e}"))?;
         }
         for p in &legacy.pages {
             if p.id.is_empty() || !page_ids.insert(&p.id) {
@@ -260,7 +289,7 @@ pub fn import_if_needed(
             tx.query_row("SELECT count(*) FROM pages", [], |r| r.get::<_, i64>(0))
                 .map_err(|e| e.to_string())?,
         );
-        if counts != (legacy.folders.len() as i64, legacy.pages.len() as i64) {
+        if counts != (folder_ids.len() as i64, legacy.pages.len() as i64) {
             return Err("legacy import count validation failed".into());
         }
         tx.execute(

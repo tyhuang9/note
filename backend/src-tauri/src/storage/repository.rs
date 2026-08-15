@@ -3,6 +3,11 @@ use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use serde_json::Value;
 use std::path::Path;
 
+/// These folders are real rows solely to satisfy the page foreign key. They
+/// are not user folders and are filtered from the workspace DTO.
+pub const ROOT_FOLDER_ID: &str = "";
+pub const TEMPLATE_FOLDER_ID: &str = "__note_page_templates__";
+
 fn required_string<'a>(value: &'a Value, key: &str) -> Result<&'a str, String> {
     value
         .get(key)
@@ -120,10 +125,10 @@ pub fn load_workspace_data_at(root: &Path) -> Result<WorkspaceData, String> {
     database::migrate(&mut c)?;
     let folders = {
         let mut s = c
-            .prepare("SELECT id,name FROM folders ORDER BY rowid")
+            .prepare("SELECT id,name FROM folders WHERE id NOT IN (?,?) ORDER BY rowid")
             .map_err(|e| e.to_string())?;
         let rows = s
-            .query_map([], |r| {
+            .query_map(params![ROOT_FOLDER_ID, TEMPLATE_FOLDER_ID], |r| {
                 Ok(FolderDto {
                     id: r.get(0)?,
                     name: r.get(1)?,
@@ -187,6 +192,151 @@ pub fn load_workspace_data_at(root: &Path) -> Result<WorkspaceData, String> {
             .transpose()?,
         warnings: Vec::new(),
     })
+}
+
+fn validate_workspace_structure(structure: &WorkspaceStructure) -> Result<(), String> {
+    let mut folder_ids = std::collections::HashSet::new();
+    for folder in &structure.folders {
+        if folder.id.trim().is_empty() {
+            return Err("folder.id must be a non-empty string".into());
+        }
+        if matches!(folder.id.as_str(), ROOT_FOLDER_ID | TEMPLATE_FOLDER_ID) {
+            return Err(format!("folder.id {} is reserved", folder.id));
+        }
+        if folder.name.trim().is_empty() {
+            return Err("folder.name must be a non-empty string".into());
+        }
+        if !folder_ids.insert(folder.id.as_str()) {
+            return Err(format!("duplicate folder id: {}", folder.id));
+        }
+    }
+
+    let mut page_ids = std::collections::HashSet::new();
+    for page in &structure.pages {
+        if page.id.trim().is_empty() {
+            return Err("page.id must be a non-empty string".into());
+        }
+        if page.title.trim().is_empty() {
+            return Err("page.title must be a non-empty string".into());
+        }
+        if !page_ids.insert(page.id.as_str()) {
+            return Err(format!("duplicate page id: {}", page.id));
+        }
+        if !matches!(page.folder_id.as_str(), ROOT_FOLDER_ID | TEMPLATE_FOLDER_ID)
+            && !folder_ids.contains(page.folder_id.as_str())
+        {
+            return Err(format!(
+                "page {} references missing folder {}",
+                page.id, page.folder_id
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Reconciles user-visible folders and pages in a single transaction. Scene
+/// rows are intentionally not accepted here: callers flush the corresponding
+/// page queues before issuing a potentially destructive structure update.
+pub fn reconcile_workspace_structure_at(
+    root: &Path,
+    structure: WorkspaceStructure,
+) -> Result<WorkspaceStructureResult, String> {
+    validate_workspace_structure(&structure)?;
+    let mut connection = database::open(&root.join("note.db"))?;
+    database::migrate(&mut connection)?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+
+    transaction
+        .execute(
+            "INSERT INTO folders(id,name) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name",
+            params![ROOT_FOLDER_ID, "Root"],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "INSERT INTO folders(id,name) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name",
+            params![TEMPLATE_FOLDER_ID, "Templates"],
+        )
+        .map_err(|error| error.to_string())?;
+    for folder in &structure.folders {
+        transaction
+            .execute(
+                "INSERT INTO folders(id,name) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name",
+                params![folder.id, folder.name.trim()],
+            )
+            .map_err(|error| format!("save folder {}: {error}", folder.id))?;
+    }
+
+    let desired_page_ids: std::collections::HashSet<&str> = structure
+        .pages
+        .iter()
+        .map(|page| page.id.as_str())
+        .collect();
+    let existing_page_ids = {
+        let mut statement = transaction
+            .prepare("SELECT id FROM pages")
+            .map_err(|error| error.to_string())?;
+        let page_ids = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        page_ids
+    };
+    for page_id in existing_page_ids {
+        if !desired_page_ids.contains(page_id.as_str()) {
+            transaction
+                .execute("DELETE FROM pages WHERE id=?", [page_id])
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    for page in &structure.pages {
+        transaction
+            .execute(
+                "INSERT INTO pages(id,folder_id,title,is_bookmarked) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET folder_id=excluded.folder_id,title=excluded.title,is_bookmarked=excluded.is_bookmarked",
+                params![page.id, page.folder_id, page.title.trim(), page.is_bookmarked as i64],
+            )
+            .map_err(|error| format!("save page {}: {error}", page.id))?;
+    }
+
+    let desired_folder_ids: std::collections::HashSet<&str> = structure
+        .folders
+        .iter()
+        .map(|folder| folder.id.as_str())
+        .chain([ROOT_FOLDER_ID, TEMPLATE_FOLDER_ID])
+        .collect();
+    let existing_folder_ids = {
+        let mut statement = transaction
+            .prepare("SELECT id FROM folders")
+            .map_err(|error| error.to_string())?;
+        let folder_ids = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        folder_ids
+    };
+    for folder_id in existing_folder_ids {
+        if !desired_folder_ids.contains(folder_id.as_str()) {
+            transaction
+                .execute("DELETE FROM folders WHERE id=?", [folder_id])
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    if let Some(is_dark_mode) = structure.is_dark_mode {
+        transaction
+            .execute(
+                "INSERT INTO app_settings(id,theme) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET theme=excluded.theme",
+                [if is_dark_mode { "dark" } else { "light" }],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    transaction.commit().map_err(|error| error.to_string())?;
+
+    let pages = load_workspace_data_at(root)?.pages;
+    Ok(WorkspaceStructureResult { pages })
 }
 pub fn apply_scene_changes_at(
     root: &Path,
@@ -592,5 +742,151 @@ mod tests {
         assert!(ids.contains("b"));
         assert!(ids.contains("b-image"));
         assert!(ids.contains("b-image-2"));
+    }
+
+    #[test]
+    fn workspace_structure_keeps_hidden_root_and_template_folders() {
+        let directory = root();
+        initialize_storage_at(directory.path()).unwrap();
+        let result = reconcile_workspace_structure_at(
+            directory.path(),
+            WorkspaceStructure {
+                folders: vec![FolderDto {
+                    id: "projects".into(),
+                    name: "Projects".into(),
+                }],
+                pages: vec![
+                    WorkspacePageDto {
+                        id: "root-page".into(),
+                        folder_id: ROOT_FOLDER_ID.into(),
+                        title: "Root".into(),
+                        is_bookmarked: false,
+                    },
+                    WorkspacePageDto {
+                        id: "template-page".into(),
+                        folder_id: TEMPLATE_FOLDER_ID.into(),
+                        title: "Template".into(),
+                        is_bookmarked: true,
+                    },
+                    WorkspacePageDto {
+                        id: "project-page".into(),
+                        folder_id: "projects".into(),
+                        title: "Project".into(),
+                        is_bookmarked: false,
+                    },
+                ],
+                is_dark_mode: Some(true),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.pages.len(), 3);
+        assert_eq!(
+            load_workspace_data_at(directory.path()).unwrap().folders,
+            vec![FolderDto {
+                id: "projects".into(),
+                name: "Projects".into()
+            }]
+        );
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM folders", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            3
+        );
+    }
+
+    #[test]
+    fn workspace_structure_rejects_bad_foreign_keys_and_preserves_revisions() {
+        let directory = root();
+        initialize_storage_at(directory.path()).unwrap();
+        let saved = reconcile_workspace_structure_at(
+            directory.path(),
+            WorkspaceStructure {
+                folders: vec![FolderDto {
+                    id: "folder".into(),
+                    name: "Folder".into(),
+                }],
+                pages: vec![WorkspacePageDto {
+                    id: "page".into(),
+                    folder_id: "folder".into(),
+                    title: "Original".into(),
+                    is_bookmarked: false,
+                }],
+                is_dark_mode: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(saved.pages[0].revision, 0);
+        let mut page_element = element("element", 1);
+        page_element["pageId"] = json!("page");
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "page".into(),
+                base_revision: 0,
+                upserts: vec![page_element],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+        let updated = reconcile_workspace_structure_at(
+            directory.path(),
+            WorkspaceStructure {
+                folders: vec![FolderDto {
+                    id: "folder".into(),
+                    name: "Folder renamed".into(),
+                }],
+                pages: vec![WorkspacePageDto {
+                    id: "page".into(),
+                    folder_id: "folder".into(),
+                    title: "Renamed".into(),
+                    is_bookmarked: true,
+                }],
+                is_dark_mode: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(updated.pages[0].revision, 1);
+        let rejected = reconcile_workspace_structure_at(
+            directory.path(),
+            WorkspaceStructure {
+                folders: vec![],
+                pages: vec![WorkspacePageDto {
+                    id: "bad".into(),
+                    folder_id: "missing".into(),
+                    title: "Bad".into(),
+                    is_bookmarked: false,
+                }],
+                is_dark_mode: None,
+            },
+        )
+        .unwrap_err();
+        assert!(rejected.contains("missing folder"));
+        let loaded = load_workspace_data_at(directory.path()).unwrap();
+        assert_eq!(loaded.pages.len(), 1);
+        assert_eq!(loaded.pages[0].title, "Renamed");
+        assert_eq!(loaded.pages[0].revision, 1);
+    }
+
+    #[test]
+    fn legacy_root_page_migrates_with_hidden_folder() {
+        let directory = root();
+        let legacy = json!({
+            "folders": [],
+            "pages": [{"id":"root-page","folderId":"","title":"Root"}],
+            "blocks": []
+        });
+        fs::write(
+            directory.path().join("note-data.json"),
+            serde_json::to_vec(&legacy).unwrap(),
+        )
+        .unwrap();
+        initialize_storage_at(directory.path()).unwrap();
+        let loaded = load_workspace_data_at(directory.path()).unwrap();
+        assert!(loaded.folders.is_empty());
+        assert_eq!(loaded.pages[0].folder_id, ROOT_FOLDER_ID);
     }
 }

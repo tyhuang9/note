@@ -30,6 +30,35 @@ pub struct WorkspaceData {
     pub warnings: Vec<String>,
 }
 
+/// Workspace metadata is deliberately kept separate from scene changes.  This
+/// lets the renderer save page elements with revision checks while folder/page
+/// operations remain one small, validated transaction.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceStructure {
+    #[serde(default)]
+    pub folders: Vec<FolderDto>,
+    #[serde(default)]
+    pub pages: Vec<WorkspacePageDto>,
+    pub is_dark_mode: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspacePageDto {
+    pub id: String,
+    pub folder_id: String,
+    pub title: String,
+    #[serde(default)]
+    pub is_bookmarked: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceStructureResult {
+    pub pages: Vec<PageDto>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SceneChangeBatch {

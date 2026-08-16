@@ -39,7 +39,7 @@ function brushColor(element: InkElement) {
   if (element.brush.color.kind === "fixed") return element.brush.color.value;
   return element.brush.color.token === "muted"
     ? "var(--workbench-text-secondary)"
-    : "var(--workbench-text)";
+    : "var(--canvas-tool-text)";
 }
 
 function resizeRatio(state: ResizeState, clientX: number, zoomLevel: number) {

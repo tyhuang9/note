@@ -74,13 +74,27 @@ test("keeps the toolbar keyboard navigable and reveals compact adjustments witho
   await adjustments.click();
   await expect(properties).toBeVisible();
   await expect(properties).toHaveCSS("width", "252px");
+  const compactPropertiesBounds = await properties.boundingBox();
+  const compactToolbarBounds = await toolbar.boundingBox();
+  expect(compactPropertiesBounds).not.toBeNull();
+  expect(compactToolbarBounds).not.toBeNull();
+  expect(compactPropertiesBounds!.x).toBeGreaterThanOrEqual(0);
+  expect(compactPropertiesBounds!.x + compactPropertiesBounds!.width).toBeLessThanOrEqual(320);
+  expect(compactToolbarBounds!.x).toBeGreaterThanOrEqual(0);
+  expect(compactToolbarBounds!.x + compactToolbarBounds!.width).toBeLessThanOrEqual(320);
+  expect(await page.getByRole("tabpanel").evaluate((element) => element.scrollLeft)).toBe(0);
   const darkBackground = await properties.evaluate((element) => getComputedStyle(element).backgroundColor);
+  await adjustments.click();
+  await expect(properties).toBeHidden();
   await page.getByRole("button", { name: "Dark mode" }).click();
+  await adjustments.click();
+  await expect(properties).toBeVisible();
   await expect.poll(async () => properties.evaluate((element) => getComputedStyle(element).backgroundColor)).not.toBe(darkBackground);
 
-  await page.evaluate(() => { document.body.style.zoom = "2"; });
   await expect(toolbar.locator("button").first()).toHaveCSS("width", "44px");
   expect(await toolbar.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+  await expect(toolbar).toBeInViewport({ ratio: 1 });
+  await expect(properties).toBeInViewport({ ratio: 1 });
 });
 
 test("shows text formatting only for selected or edited text", async ({ page }) => {

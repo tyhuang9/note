@@ -6571,7 +6571,7 @@ function App() {
       />
 
       <section
-        className={`workspace ${isTextFormattingVisible ? "has-text-formatting" : ""}`}
+        className={`workspace ${isTextFormattingVisible ? "has-text-formatting" : ""} ${isPropertiesPanelOpen ? "has-compact-properties" : ""}`}
         inert={
           isAssistantOverlayOpen || isExplorerOverlayOpen ? true : undefined
         }
@@ -6919,6 +6919,7 @@ function App() {
               const usesNativeSingleElementInteraction = Boolean(
                 selected && (selected.type === "text" || selected.type === "image"),
               );
+              const framePadding = 4;
               const resizeCorners: readonly SelectionCorner[] = selectionHasLockedElements
                 ? []
                 : selectedBlockIds.length > 1
@@ -6934,13 +6935,13 @@ function App() {
                     endpoint,
                     onKeyDown: moveConnectorEndpointByKeyboard(endpoint),
                     onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => startSelectionFrameInteraction(event, null, endpoint),
-                    x: (point.x - bounds.x) * zoomLevel,
-                    y: (point.y - bounds.y) * zoomLevel,
+                    x: (point.x - bounds.x) * zoomLevel + framePadding,
+                    y: (point.y - bounds.y) * zoomLevel + framePadding,
                   }))
                 : undefined;
               return {
                 connectorEndpointHandles,
-                height: bounds.height * zoomLevel,
+                height: bounds.height * zoomLevel + framePadding * 2,
                 onDoubleClick: () => {
                   const selected = visibleCanvasElements.find((block) => block.id === selectedBlockIds[0]);
                   if (selectedBlockIds.length === 1 && selected && isTextElement(selected)) editBlock(selected.id);
@@ -6956,9 +6957,9 @@ function App() {
                 preserveNativeSoutheastHandle: selected?.type === "ink",
                 resizeCorners,
                 showMoveSurface: !usesNativeSingleElementInteraction,
-                width: bounds.width * zoomLevel,
-                x: panOffset.x + bounds.x * zoomLevel,
-                y: panOffset.y + bounds.y * zoomLevel,
+                width: bounds.width * zoomLevel + framePadding * 2,
+                x: panOffset.x + bounds.x * zoomLevel - framePadding,
+                y: panOffset.y + bounds.y * zoomLevel - framePadding,
               };
             })()}
           />

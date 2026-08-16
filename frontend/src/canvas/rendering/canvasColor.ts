@@ -5,5 +5,5 @@ export function canvasColorToCss(color: CanvasColor): string {
   if (color.kind === "fixed") return color.value;
   return color.token === "muted"
     ? "var(--workbench-text-secondary)"
-    : "var(--workbench-text)";
+    : "var(--canvas-tool-text)";
 }

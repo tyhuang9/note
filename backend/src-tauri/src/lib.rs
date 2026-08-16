@@ -51,7 +51,9 @@ struct TextBlock {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AppSessionState {
+    drawing_preferences: Option<serde_json::Value>,
     is_assistant_open: Option<bool>,
+    is_drawing_tool_locked: Option<bool>,
     is_explorer_collapsed: Option<bool>,
     selected_folder_id: Option<String>,
     selected_page_id: Option<String>,

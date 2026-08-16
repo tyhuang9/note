@@ -50,8 +50,29 @@ test("SQLite bridge reconciles structure before scene changes and reloads text",
   await expect(page.locator('[data-canvas-element-type="ink"]')).toHaveCount(1);
   await expect(page.getByRole("button", { name: "Keep drawing tool active" })).toHaveAttribute("aria-pressed", "true");
   await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
-  await expect(page.getByRole("complementary", { name: "Drawing properties" }).getByRole("button", { name: "Stroke color #e03131" })).toHaveAttribute("aria-pressed", "true");
+  const restoredProperties = page.getByRole("complementary", { name: "Drawing properties" });
+  await expect(restoredProperties.getByRole("button", { name: "Stroke color #e03131" })).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".persistence-status")).toHaveText("Saved");
+
+  await page.evaluate(() => {
+    (window as unknown as { __notePersistenceCalls: string[] }).__notePersistenceCalls = [];
+  });
+  await page.mouse.click(bounds.x + 620, bounds.y + 280);
+  await expect.poll(async () => (await persistenceCommands(page)).filter((command) => command === "apply_scene_changes").length).toBe(1);
+  await page.evaluate(() => {
+    (window as unknown as { __notePersistenceCalls: string[] }).__notePersistenceCalls = [];
+  });
+
+  const opacity = restoredProperties.getByRole("slider", { name: "Opacity" });
+  const opacityBounds = await opacity.boundingBox();
+  if (!opacityBounds) throw new Error("Opacity slider was not visible.");
+  await page.mouse.move(opacityBounds.x + opacityBounds.width - 2, opacityBounds.y + opacityBounds.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(opacityBounds.x + opacityBounds.width * 0.45, opacityBounds.y + opacityBounds.height / 2, { steps: 10 });
+  await page.waitForTimeout(650);
+  expect((await persistenceCommands(page)).filter((command) => command === "apply_scene_changes")).toHaveLength(0);
+  await page.mouse.up();
+  await expect.poll(async () => (await persistenceCommands(page)).filter((command) => command === "apply_scene_changes").length).toBe(1);
 });
 
 async function persistenceCommands(page: Page): Promise<string[]> {

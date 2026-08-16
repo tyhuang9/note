@@ -1071,6 +1071,97 @@ mod tests {
     }
 
     #[test]
+    fn legacy_import_normalizes_optional_bookmarks_and_preserves_backup() {
+        for (bookmark, expected) in [
+            (None, false),
+            (Some(serde_json::Value::Null), false),
+            (Some(json!(false)), false),
+            (Some(json!(true)), true),
+        ] {
+            let directory = root();
+            let mut page = json!({"id":"p","folderId":"f","title":"P"});
+            if let Some(bookmark) = bookmark {
+                page["isBookmarked"] = bookmark;
+            }
+            let legacy = json!({
+                "folders":[{"id":"f","name":"F"}],
+                "pages":[page],
+                "blocks":[]
+            });
+            let path = directory.path().join("note-data.json");
+            let original = serde_json::to_vec(&legacy).unwrap();
+            fs::write(&path, &original).unwrap();
+
+            let first = initialize_storage_at(directory.path()).unwrap();
+            assert!(first.imported_legacy_data);
+            assert_eq!(
+                load_workspace_data_at(directory.path()).unwrap().pages[0].is_bookmarked,
+                expected
+            );
+            assert_eq!(fs::read(&path).unwrap(), original);
+            assert_eq!(fs::read(first.backup_path.unwrap()).unwrap(), original);
+
+            let second = initialize_storage_at(directory.path()).unwrap();
+            assert!(!second.imported_legacy_data);
+        }
+    }
+
+    #[test]
+    fn malformed_bookmarks_roll_back_preserve_backup_and_allow_retry() {
+        for invalid_bookmark in [json!("true"), json!(1), json!({}), json!([])] {
+            let directory = root();
+            let legacy = json!({
+                "folders":[{"id":"f","name":"F"}],
+                "pages":[{"id":"p","folderId":"f","title":"P","isBookmarked":invalid_bookmark}],
+                "blocks":[]
+            });
+            let path = directory.path().join("note-data.json");
+            let original = serde_json::to_vec(&legacy).unwrap();
+            fs::write(&path, &original).unwrap();
+
+            assert!(initialize_storage_at(directory.path()).is_err());
+            assert_eq!(fs::read(&path).unwrap(), original);
+            let backups = fs::read_dir(directory.path().join("backups"))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            assert_eq!(backups.len(), 1);
+            assert_eq!(fs::read(backups[0].path()).unwrap(), original);
+            let connection = database::open(&directory.path().join("note.db")).unwrap();
+            let count: i64 = connection
+                .query_row("SELECT count(*) FROM pages", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(count, 0);
+
+            fs::write(
+                &path,
+                br#"{"folders":[{"id":"f","name":"F"}],"pages":[{"id":"p","folderId":"f","title":"P","isBookmarked":true}],"blocks":[]}"#,
+            )
+            .unwrap();
+            let retry = initialize_storage_at(directory.path()).unwrap();
+            assert!(retry.imported_legacy_data);
+            assert!(load_workspace_data_at(directory.path()).unwrap().pages[0].is_bookmarked);
+        }
+    }
+
+    #[test]
+    fn malformed_legacy_json_preserves_source_and_backup() {
+        let directory = root();
+        let path = directory.path().join("note-data.json");
+        let original = br#"{"folders":["#;
+        fs::write(&path, original).unwrap();
+
+        assert!(initialize_storage_at(directory.path()).is_err());
+        assert_eq!(fs::read(&path).unwrap(), original);
+        let backups = fs::read_dir(directory.path().join("backups"))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(fs::read(backups[0].path()).unwrap(), original);
+    }
+
+    #[test]
     fn malformed_legacy_rolls_back_and_preserves_original() {
         let directory = root();
         let raw=br#"{"folders":[{"id":"f","name":"F"}],"pages":[{"id":"p","folderId":"missing","title":"P"}],"blocks":[]}"#;

@@ -31,6 +31,7 @@ import { CanvasToolPalette } from "./canvas/components/CanvasToolPalette";
 import { CanvasViewport } from "./canvas/components/CanvasViewport";
 import { CanvasWorldLayer } from "./canvas/components/CanvasWorldLayer";
 import { InkElementView } from "./canvas/components/InkElementView";
+import { ConnectorElementView, ShapeElementView } from "./canvas/components/PrimitiveElementView";
 import { useCanvasInteraction } from "./canvas/interaction/useCanvasInteraction";
 import { cleanupMarquee } from "./canvas/interaction/marqueeCleanup";
 import {
@@ -6334,6 +6335,7 @@ function App() {
               <CanvasElementRenderer
                 element={element}
                 key={element.id}
+                renderConnector={(connector) => <ConnectorElementView element={connector} />}
                 renderInk={(inkElement) => (
                   <InkElementView
                     element={inkElement}
@@ -6353,6 +6355,7 @@ function App() {
                     zoomLevel={zoomLevel}
                   />
                 )}
+                renderShape={(shape) => <ShapeElementView element={shape} />}
                 renderText={(block) => (
                   <TextBlockView
                 block={block}

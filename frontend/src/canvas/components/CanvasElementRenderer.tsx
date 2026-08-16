@@ -1,8 +1,10 @@
 import type { ReactNode } from "react";
 import type {
   CanvasElement,
+  ConnectorElement,
   ImageElement,
   InkElement,
+  ShapeElement,
   TextElement,
 } from "../model/elements";
 
@@ -10,6 +12,8 @@ type CanvasElementRendererProps = {
   element: CanvasElement;
   renderImage: (element: ImageElement) => ReactNode;
   renderInk?: (element: InkElement) => ReactNode;
+  renderConnector?: (element: ConnectorElement) => ReactNode;
+  renderShape?: (element: ShapeElement) => ReactNode;
   renderText: (element: TextElement) => ReactNode;
 };
 
@@ -18,6 +22,8 @@ export function CanvasElementRenderer({
   element,
   renderImage,
   renderInk,
+  renderConnector,
+  renderShape,
   renderText,
 }: CanvasElementRendererProps) {
   switch (element.type) {
@@ -34,15 +40,7 @@ export function CanvasElementRenderer({
           hidden
         />
       );
-    case "shape":
-    case "connector":
-      return (
-        <div
-          aria-hidden="true"
-          data-canvas-element-id={element.id}
-          data-canvas-element-type={element.type}
-          hidden
-        />
-      );
+    case "shape": return renderShape?.(element) ?? null;
+    case "connector": return renderConnector?.(element) ?? null;
   }
 }

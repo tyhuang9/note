@@ -7,8 +7,8 @@ test("draws, selects, resizes, erases, and restores native ink", async ({ page }
   const canvas = page.getByRole("tabpanel");
   const bounds = await canvas.boundingBox();
   if (!bounds) throw new Error("Canvas bounds were not available.");
-  const drawStart = { x: bounds.x + 210, y: bounds.y + 220 };
-  const drawEnd = { x: bounds.x + 350, y: bounds.y + 250 };
+  const drawStart = { x: bounds.x + 300, y: bounds.y + 220 };
+  const drawEnd = { x: bounds.x + 440, y: bounds.y + 250 };
 
   await page.getByRole("button", { name: "Pen (P / 7)" }).click();
   await page.mouse.move(drawStart.x, drawStart.y);

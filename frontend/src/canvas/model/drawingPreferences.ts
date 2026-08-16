@@ -80,12 +80,12 @@ function preference(overrides: Partial<DrawingToolPreference> = {}): DrawingTool
 export function createDefaultDrawingPreferences(): DrawingPreferences {
   return {
     arrow: preference(),
-    diamond: preference({ backgroundColor: fixed("#d0bfff") }),
-    ellipse: preference({ backgroundColor: fixed("#a5d8ff") }),
+    diamond: preference(),
+    ellipse: preference(),
     highlighter: preference({ opacity: 0.38, roughness: 0, strokeColor: fixed("#f4c542"), strokeWidth: 18 }),
     line: preference(),
     pen: preference({ roughness: 0, strokeWidth: 4 }),
-    rectangle: preference({ backgroundColor: fixed("#ffc9c9"), roundness: 0.08 }),
+    rectangle: preference({ roundness: 0.08 }),
   };
 }
 

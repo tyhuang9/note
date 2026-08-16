@@ -71,7 +71,7 @@ function isPrimitiveTool(tool: DrawingTool): tool is PrimitiveTool {
 
 function isCanvasChromeTarget(target: EventTarget | null) {
   return target instanceof Element &&
-    target.closest(".canvas-tool-palette, .offscreen-indicators, .search-panel, .selection-frame") !== null;
+    target.closest(".canvas-tool-palette, .drawing-properties-panel, .offscreen-indicators, .search-panel, .selection-frame") !== null;
 }
 
 function isCanvasBackgroundTarget(target: EventTarget | null) {

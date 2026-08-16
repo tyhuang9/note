@@ -28,6 +28,7 @@ import { ImageElementView } from "./components/ImageElementView";
 import { CanvasElementRenderer } from "./canvas/components/CanvasElementRenderer";
 import { CanvasInteractionOverlay } from "./canvas/components/CanvasInteractionOverlay";
 import { CanvasToolPalette } from "./canvas/components/CanvasToolPalette";
+import { DrawingPropertiesPanel } from "./canvas/components/DrawingPropertiesPanel";
 import { CanvasViewport } from "./canvas/components/CanvasViewport";
 import { CanvasWorldLayer } from "./canvas/components/CanvasWorldLayer";
 import { InkElementView } from "./canvas/components/InkElementView";
@@ -142,10 +143,19 @@ import {
   type RawInkPoint,
 } from "./canvas/model/ink";
 import {
+  applyDrawingPropertyUpdate,
   createDefaultDrawingPreferences,
+  drawingPropertiesFromPreference,
+  isDrawingPreferenceTool,
+  isPropertySupportedByTool,
   normalizeDrawingPreferences,
+  readDrawingProperties,
+  updateDrawingPreference,
+  type DrawingProperty,
+  type DrawingPropertyUpdate,
   type DrawingPreferences,
 } from "./canvas/model/drawingPreferences";
+import { reorderLayers, type LayerAction } from "./canvas/model/layerOrdering";
 import {
   getProportionalScale,
   getOppositeCorner,
@@ -227,6 +237,7 @@ type PageHeaderProps = {
   isAssistantOpen: boolean;
   isGridVisible: boolean;
   isDarkMode: boolean;
+  isTextFormattingVisible: boolean;
   isEditingHeaderTitle: boolean;
   isSnapToGridEnabled: boolean;
   openPages: OpenPageTab[];
@@ -1088,6 +1099,8 @@ function App() {
   const [drawingPreferences, setDrawingPreferences] = useState<DrawingPreferences>(
     createDefaultDrawingPreferences,
   );
+  const [isPropertiesPanelOpen, setIsPropertiesPanelOpen] = useState(false);
+  const [isDrawingPropertyPreviewing, setIsDrawingPropertyPreviewing] = useState(false);
   const [pendingImagePlacement, setPendingImagePlacement] =
     useState<PendingImagePlacement | null>(null);
   const [imageImportError, setImageImportError] = useState<string | null>(null);
@@ -1213,6 +1226,7 @@ function App() {
   const isTemporaryHandActiveRef = useRef(false);
   const pendingImagePlacementRef = useRef<PendingImagePlacement | null>(null);
   const imagePickerRequestRef = useRef(0);
+  const drawingPropertyPreviewBaselineRef = useRef<CanvasElement[] | null>(null);
 
   dataRef.current = data;
   activeToolRef.current = activeTool;
@@ -1300,6 +1314,32 @@ function App() {
       Object.fromEntries(visibleCanvasElements.map((element) => [element.id, element])),
     );
   }, [selectedBlockIds, visibleCanvasElements]);
+  const selectedDrawingElements = useMemo(() => {
+    const selectedIds = new Set(selectedBlockIds);
+    return data.elements.filter((element) => element.pageId === selectedPageId && selectedIds.has(element.id));
+  }, [data.elements, selectedBlockIds, selectedPageId]);
+  const drawingPropertiesContext = useMemo(() => {
+    if (selectedDrawingElements.length > 0) {
+      const values = readDrawingProperties(selectedDrawingElements);
+      return {
+        contextLabel: selectedDrawingElements.length === 1 ? selectedDrawingElements[0].type : `${selectedDrawingElements.length} selected`,
+        isSelection: true,
+        supports: (property: DrawingProperty) => values[property].kind !== "unavailable",
+        values,
+      };
+    }
+    if (!isDrawingPreferenceTool(activeTool)) return null;
+    const preference = drawingPreferences[activeTool];
+    return {
+      contextLabel: `${activeTool} defaults`,
+      isSelection: false,
+      supports: (property: DrawingProperty) => isPropertySupportedByTool(activeTool, property),
+      values: drawingPropertiesFromPreference(preference),
+    };
+  }, [activeTool, drawingPreferences, selectedDrawingElements]);
+  const isTextFormattingVisible = Boolean(
+    activeTextEditor && !activeTextEditor.isDestroyed
+  ) || selectedDrawingElements.some((element) => element.type === "text");
   const selectionHasLockedElements = useMemo(
     () => selectedBlockIds.some((id) => data.elements.some((element) => element.id === id && element.locked)),
     [data.elements, selectedBlockIds],
@@ -2103,7 +2143,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!isLoaded || !persistenceAvailable) {
+    if (!isLoaded || !persistenceAvailable || isDrawingPropertyPreviewing) {
       return;
     }
 
@@ -2121,6 +2161,7 @@ function App() {
     drawingPreferences,
     isAssistantOpen,
     isDarkMode,
+    isDrawingPropertyPreviewing,
     isLoaded,
     isToolLocked,
     isSidebarCollapsed,
@@ -2543,6 +2584,48 @@ function App() {
 
     dataRef.current = nextData;
     setData(nextData);
+  }
+
+  function previewDrawingProperty(update: DrawingPropertyUpdate) {
+    const selectedIds = new Set(selectedBlockIdsRef.current);
+    if (selectedIds.size === 0) return;
+    const baseline = drawingPropertyPreviewBaselineRef.current ?? dataRef.current.elements;
+    if (!drawingPropertyPreviewBaselineRef.current) {
+      drawingPropertyPreviewBaselineRef.current = baseline;
+      setIsDrawingPropertyPreviewing(true);
+    }
+    const nextElements = applyDrawingPropertyUpdate(baseline, selectedIds, update);
+    const nextData = { ...dataRef.current, elements: nextElements };
+    dataRef.current = nextData;
+    setData(nextData);
+  }
+
+  function updateDrawingProperty(update: DrawingPropertyUpdate) {
+    const selectedIds = new Set(selectedBlockIdsRef.current);
+    if (selectedIds.size > 0) {
+      const previewBaseline = drawingPropertyPreviewBaselineRef.current;
+      if (previewBaseline) {
+        const nextElements = applyDrawingPropertyUpdate(previewBaseline, selectedIds, update);
+        drawingPropertyPreviewBaselineRef.current = null;
+        setIsDrawingPropertyPreviewing(false);
+        if (!areBlocksEqual(previewBaseline, nextElements)) pushBlockUndoSnapshot(previewBaseline);
+        const nextData = { ...dataRef.current, elements: nextElements };
+        dataRef.current = nextData;
+        setData(nextData);
+        return;
+      }
+      setBlocksWithHistory((elements) => applyDrawingPropertyUpdate(elements, selectedIds, update));
+      return;
+    }
+    const tool = activeToolRef.current;
+    if (!isDrawingPreferenceTool(tool)) return;
+    setDrawingPreferences((current) => updateDrawingPreference(current, tool, update));
+  }
+
+  function updateSelectedLayer(action: LayerAction) {
+    const selectedIds = new Set(selectedBlockIdsRef.current);
+    if (selectedIds.size === 0) return;
+    setBlocksWithHistory((elements) => reorderLayers(elements, selectedIds, action));
   }
 
   function restoreBlockHistory(direction: "undo" | "redo") {
@@ -6488,7 +6571,7 @@ function App() {
       />
 
       <section
-        className="workspace"
+        className={`workspace ${isTextFormattingVisible ? "has-text-formatting" : ""}`}
         inert={
           isAssistantOverlayOpen || isExplorerOverlayOpen ? true : undefined
         }
@@ -6501,6 +6584,7 @@ function App() {
           isDarkMode={isDarkMode}
           isEditingHeaderTitle={isEditingHeaderTitle}
           isSnapToGridEnabled={isSnapToGridEnabled}
+          isTextFormattingVisible={isTextFormattingVisible}
           openPages={openPages}
           selectedPageId={selectedPageId}
           textFormatState={textFormatState}
@@ -6580,7 +6664,9 @@ function App() {
           <div onPointerDown={(event) => event.stopPropagation()}>
             <CanvasToolPalette
               activeTool={activeTool}
+              isPropertiesPanelOpen={isPropertiesPanelOpen}
               isToolLocked={isToolLocked}
+              onPropertiesPanelToggle={() => setIsPropertiesPanelOpen((open) => !open)}
               onToolLockChange={setIsToolLocked}
               onToolSelect={selectDrawingTool}
             />
@@ -6599,6 +6685,18 @@ function App() {
             />
           </div>
           {imageImportError ? <div className="canvas-image-import-error" role="alert">{imageImportError}</div> : null}
+          {drawingPropertiesContext ? (
+            <DrawingPropertiesPanel
+              contextLabel={drawingPropertiesContext.contextLabel}
+              isCompactOpen={isPropertiesPanelOpen}
+              isSelection={drawingPropertiesContext.isSelection}
+              onLayerAction={updateSelectedLayer}
+              onPreview={previewDrawingProperty}
+              onUpdate={updateDrawingProperty}
+              supports={drawingPropertiesContext.supports}
+              values={drawingPropertiesContext.values}
+            />
+          ) : null}
           {offscreenGroups.length > 0 ? (
             <div
               className={`offscreen-indicators ${
@@ -7871,6 +7969,7 @@ const PageHeader = memo(function PageHeader({
   isDarkMode,
   isEditingHeaderTitle,
   isSnapToGridEnabled,
+  isTextFormattingVisible,
   openPages,
   selectedPageId,
   textFormatState,
@@ -7919,13 +8018,15 @@ const PageHeader = memo(function PageHeader({
         tabs={openPages}
       />
       <div className="page-header-actions">
-        <GlobalTextToolbar
-          editor={activeTextEditor && !activeTextEditor.isDestroyed ? activeTextEditor : null}
-          formatState={textFormatState}
-          onSetFontFamily={onSetTextFontFamily}
-          onSetFontSize={onSetTextFontSize}
-          onToggleFormat={onToggleTextFormat}
-        />
+        {isTextFormattingVisible ? (
+          <GlobalTextToolbar
+            editor={activeTextEditor && !activeTextEditor.isDestroyed ? activeTextEditor : null}
+            formatState={textFormatState}
+            onSetFontFamily={onSetTextFontFamily}
+            onSetFontSize={onSetTextFontSize}
+            onToggleFormat={onToggleTextFormat}
+          />
+        ) : null}
         <div
           aria-label="Canvas controls"
           className="canvas-controls"
@@ -8200,6 +8301,7 @@ function arePageHeaderPropsEqual(previous: PageHeaderProps, next: PageHeaderProp
     previous.isDarkMode === next.isDarkMode &&
     previous.isEditingHeaderTitle === next.isEditingHeaderTitle &&
     previous.isSnapToGridEnabled === next.isSnapToGridEnabled &&
+    previous.isTextFormattingVisible === next.isTextFormattingVisible &&
     previous.openPages === next.openPages &&
     previous.selectedPageId === next.selectedPageId &&
     previous.textFormatState === next.textFormatState &&

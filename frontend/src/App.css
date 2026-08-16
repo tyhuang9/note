@@ -2123,6 +2123,11 @@ h2 {
   transform: translateX(-50%);
 }
 
+.workspace.has-text-formatting .drawing-properties-panel {
+  top: 126px;
+  max-height: calc(100% - 142px);
+}
+
 .canvas-tool-palette button {
   min-width: 44px;
   min-height: 36px;
@@ -3931,6 +3936,10 @@ h2 {
   }
 }
 
+.workspace.has-text-formatting .global-text-toolbar {
+  top: 112px;
+}
+
 /* Google Stitch: Balanced Workbench Refined */
 .workbench-shell,
 .app-shell {
@@ -4757,5 +4766,325 @@ h2 {
   .page-tab,
   .rail-button {
     transition: none;
+  }
+}
+
+/* Contextual drawing controls */
+.canvas-tool-palette {
+  top: 12px;
+  max-width: calc(100% - 24px);
+  height: 54px;
+  gap: 2px;
+  padding: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-color: #d6d6da;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.14);
+  scrollbar-width: none;
+  backdrop-filter: blur(12px);
+}
+
+.canvas-tool-palette::-webkit-scrollbar {
+  display: none;
+}
+
+.canvas-tool-palette button {
+  position: relative;
+  flex: 0 0 44px;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  border-radius: 7px;
+}
+
+.canvas-tool-palette button[aria-pressed="true"] {
+  border-color: transparent;
+  color: #5f3dc4;
+  background: #ece7ff;
+}
+
+.canvas-tool-palette button[data-tooltip]::after,
+.drawing-choice-group button[data-tooltip]::after {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  z-index: 90;
+  width: max-content;
+  max-width: 180px;
+  border-radius: 5px;
+  padding: 5px 7px;
+  color: #fff;
+  background: rgba(24, 24, 27, 0.96);
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.24);
+  content: attr(data-tooltip);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 14px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -2px);
+  transition: opacity 100ms ease, transform 100ms ease;
+  white-space: normal;
+}
+
+.canvas-tool-palette button[data-tooltip]:hover::after,
+.canvas-tool-palette button[data-tooltip]:focus-visible::after,
+.drawing-choice-group button[data-tooltip]:hover::after,
+.drawing-choice-group button[data-tooltip]:focus-visible::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.drawing-properties-panel {
+  position: absolute;
+  top: 78px;
+  left: 16px;
+  z-index: 19;
+  display: flex;
+  width: 252px;
+  max-height: calc(100% - 94px);
+  flex-direction: column;
+  gap: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 1px solid #d6d6da;
+  border-radius: 10px;
+  color: #303038;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 8px 28px rgba(15, 23, 42, 0.16);
+  pointer-events: auto;
+  scrollbar-width: thin;
+  backdrop-filter: blur(12px);
+}
+
+.drawing-properties-header {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid #ececef;
+  padding: 10px 12px;
+}
+
+.drawing-properties-header h2,
+.drawing-properties-header span,
+.drawing-property-section h3 {
+  margin: 0;
+}
+
+.drawing-properties-header h2 {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.drawing-properties-header span {
+  overflow: hidden;
+  color: #777782;
+  font-size: 11px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drawing-property-section {
+  padding: 10px 12px 11px;
+}
+
+.drawing-property-section + .drawing-property-section {
+  border-top: 1px solid #ececef;
+}
+
+.drawing-property-section h3 {
+  margin-bottom: 7px;
+  color: #5f5f69;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 16px;
+}
+
+.drawing-choice-group,
+.drawing-color-picker {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.drawing-choice-group button,
+.drawing-color-picker button,
+.drawing-custom-color {
+  position: relative;
+  display: inline-flex;
+  min-width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 0 7px;
+  color: #4b4b55;
+  background: #f1f1f4;
+  cursor: pointer;
+}
+
+.drawing-choice-group button {
+  flex: 1 1 0;
+}
+
+.drawing-choice-group button span {
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+}
+
+.drawing-choice-group button:hover,
+.drawing-color-picker button:hover,
+.drawing-custom-color:hover {
+  background: #e8e8ed;
+}
+
+.drawing-choice-group button[aria-pressed="true"],
+.drawing-color-picker button[aria-pressed="true"] {
+  border-color: #8064d9;
+  color: #5f3dc4;
+  background: #ece7ff;
+  box-shadow: inset 0 0 0 1px #8064d9;
+}
+
+.drawing-choice-group button.has-mixed-value:not([aria-pressed="true"]) {
+  border-style: dashed;
+  border-color: #9898a3;
+}
+
+.drawing-color-swatch {
+  width: 28px;
+  min-width: 28px !important;
+  height: 28px !important;
+  border-radius: 5px !important;
+  padding: 0 !important;
+  background: var(--swatch-color) !important;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.14);
+}
+
+.drawing-custom-color {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.drawing-custom-color input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.drawing-mixed-label {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  color: #777782;
+  font-size: 10px;
+}
+
+.drawing-opacity-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 48px;
+  align-items: center;
+  gap: 10px;
+}
+
+.drawing-opacity-row input {
+  width: 100%;
+  accent-color: #7950f2;
+}
+
+.drawing-opacity-row output {
+  color: #5f5f69;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.app-shell.is-dark .canvas-tool-palette,
+.app-shell.is-dark .drawing-properties-panel {
+  border-color: #45454d;
+  color: #ececf1;
+  background: rgba(36, 36, 40, 0.96);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.42);
+}
+
+.app-shell.is-dark .canvas-tool-palette button[aria-pressed="true"] {
+  color: #c4b5fd;
+  background: rgba(139, 92, 246, 0.22);
+}
+
+.app-shell.is-dark .drawing-properties-header,
+.app-shell.is-dark .drawing-property-section + .drawing-property-section {
+  border-color: #45454d;
+}
+
+.app-shell.is-dark .drawing-properties-header span,
+.app-shell.is-dark .drawing-property-section h3,
+.app-shell.is-dark .drawing-opacity-row output,
+.app-shell.is-dark .drawing-mixed-label {
+  color: #a8a8b3;
+}
+
+.app-shell.is-dark .drawing-choice-group button,
+.app-shell.is-dark .drawing-color-picker button,
+.app-shell.is-dark .drawing-custom-color {
+  color: #dedee5;
+  background: #34343a;
+}
+
+.app-shell.is-dark .drawing-choice-group button:hover,
+.app-shell.is-dark .drawing-color-picker button:hover,
+.app-shell.is-dark .drawing-custom-color:hover {
+  background: #414149;
+}
+
+.app-shell.is-dark .drawing-choice-group button[aria-pressed="true"],
+.app-shell.is-dark .drawing-color-picker button[aria-pressed="true"] {
+  border-color: #a78bfa;
+  color: #ddd6fe;
+  background: rgba(139, 92, 246, 0.24);
+  box-shadow: inset 0 0 0 1px #a78bfa;
+}
+
+@media (max-width: 899px) {
+  .drawing-properties-panel {
+    display: none;
+  }
+
+  .drawing-properties-panel.is-compact-open {
+    top: 78px;
+    left: 8px;
+    display: flex;
+    width: min(252px, calc(100% - 16px));
+    max-height: calc(100% - 94px);
+  }
+
+  .workspace.has-text-formatting .drawing-properties-panel.is-compact-open {
+    top: 126px;
+    max-height: calc(100% - 142px);
+  }
+
+  .canvas-tool-palette {
+    right: 8px;
+    left: 8px;
+    max-width: none;
+    transform: none;
   }
 }

@@ -1,11 +1,14 @@
 import type { CanvasTool } from "../interaction/types";
-import { ArrowRight, Circle, Diamond, Eraser, Hand, Highlighter, Image, LockKeyhole, MousePointer2, PenLine, RectangleHorizontal, Slash, Type } from "lucide-react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { ArrowRight, Circle, Diamond, Eraser, Hand, Highlighter, Image, LockKeyhole, MousePointer2, PenLine, RectangleHorizontal, Slash, SlidersHorizontal, Type } from "lucide-react";
 
 type DrawingTool = CanvasTool | "text" | "image";
 
 type CanvasToolPaletteProps = {
   activeTool: DrawingTool;
+  isPropertiesPanelOpen: boolean;
   isToolLocked: boolean;
+  onPropertiesPanelToggle: () => void;
   onToolLockChange: (locked: boolean) => void;
   onToolSelect: (tool: DrawingTool) => void;
 };
@@ -15,16 +18,54 @@ const TOOLS = [
 ] as const satisfies ReadonlyArray<Readonly<{ tool: DrawingTool; label: string; shortcut: string; Icon: typeof MousePointer2 }>>;
 
 /** Small, keyboard discoverable drawing-mode selector kept outside world transforms. */
-export function CanvasToolPalette({ activeTool, isToolLocked, onToolLockChange, onToolSelect }: CanvasToolPaletteProps) {
+export function CanvasToolPalette({ activeTool, isPropertiesPanelOpen, isToolLocked, onPropertiesPanelToggle, onToolLockChange, onToolSelect }: CanvasToolPaletteProps) {
+  const buttonRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const [tabStop, setTabStop] = useState(() => Math.max(0, TOOLS.findIndex(({ tool }) => tool === activeTool)));
+  const [isCompact, setIsCompact] = useState(() => typeof window !== "undefined" && window.matchMedia("(max-width: 899px)").matches);
+  const buttonCount = TOOLS.length + 1 + (isCompact ? 1 : 0);
+
+  useEffect(() => {
+    const activeIndex = TOOLS.findIndex(({ tool }) => tool === activeTool);
+    if (activeIndex >= 0) setTabStop(activeIndex);
+  }, [activeTool]);
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 899px)");
+    const update = () => {
+      setIsCompact(media.matches);
+      if (!media.matches) setTabStop((current) => Math.min(current, TOOLS.length));
+    };
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  function moveFocus(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") nextIndex = (index + 1) % buttonCount;
+    if (event.key === "ArrowLeft" || event.key === "ArrowUp") nextIndex = (index - 1 + buttonCount) % buttonCount;
+    if (event.key === "Home") nextIndex = 0;
+    if (event.key === "End") nextIndex = buttonCount - 1;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    setTabStop(nextIndex);
+    buttonRefs.current[nextIndex]?.focus();
+  }
+
   return (
-    <div aria-label="Drawing tools" className="canvas-tool-palette" role="toolbar">
-      {TOOLS.map(({ tool, label, shortcut, Icon }) => (
+    <div aria-label="Drawing tools" aria-orientation="horizontal" className="canvas-tool-palette" role="toolbar">
+      {TOOLS.map(({ tool, label, shortcut, Icon }, index) => (
         <button
           aria-label={`${label} (${shortcut})`}
           aria-pressed={activeTool === tool}
+          data-tooltip={`${label} · ${shortcut}`}
           data-tool={tool}
           key={tool}
-          onClick={() => onToolSelect(tool)}
+          onClick={() => { setTabStop(index); onToolSelect(tool); }}
+          onFocus={() => setTabStop(index)}
+          onKeyDown={(event) => moveFocus(event, index)}
+          ref={(button) => { buttonRefs.current[index] = button; }}
+          tabIndex={tabStop === index ? 0 : -1}
           title={`${label} (${shortcut})`}
           type="button"
         >
@@ -34,13 +75,35 @@ export function CanvasToolPalette({ activeTool, isToolLocked, onToolLockChange, 
       <button
         aria-label="Keep drawing tool active"
         aria-pressed={isToolLocked}
+        data-tooltip={isToolLocked ? "Unlock drawing tool" : "Keep drawing tool active"}
         data-tool-lock
-        onClick={() => onToolLockChange(!isToolLocked)}
+        onClick={() => { setTabStop(TOOLS.length); onToolLockChange(!isToolLocked); }}
+        onFocus={() => setTabStop(TOOLS.length)}
+        onKeyDown={(event) => moveFocus(event, TOOLS.length)}
+        ref={(button) => { buttonRefs.current[TOOLS.length] = button; }}
+        tabIndex={tabStop === TOOLS.length ? 0 : -1}
         title={isToolLocked ? "Unlock drawing tool" : "Keep drawing tool active"}
         type="button"
       >
         <LockKeyhole aria-hidden="true" size={20} />
       </button>
+      {isCompact ? <button
+        aria-controls="drawing-properties-panel"
+        aria-expanded={isPropertiesPanelOpen}
+        aria-label="Drawing properties"
+        aria-pressed={isPropertiesPanelOpen}
+        className="canvas-properties-toggle"
+        data-tooltip="Drawing properties"
+        onClick={() => { setTabStop(TOOLS.length + 1); onPropertiesPanelToggle(); }}
+        onFocus={() => setTabStop(TOOLS.length + 1)}
+        onKeyDown={(event) => moveFocus(event, TOOLS.length + 1)}
+        ref={(button) => { buttonRefs.current[TOOLS.length + 1] = button; }}
+        tabIndex={tabStop === TOOLS.length + 1 ? 0 : -1}
+        title="Drawing properties"
+        type="button"
+      >
+        <SlidersHorizontal aria-hidden="true" size={20} />
+      </button> : null}
     </div>
   );
 }

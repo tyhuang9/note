@@ -126,7 +126,7 @@ function isDrawingTool(tool: DrawingTool): tool is InkTool {
 }
 
 function isPaletteTarget(target: EventTarget | null) {
-  return target instanceof Element && target.closest(".canvas-tool-palette") !== null;
+  return target instanceof Element && target.closest(".canvas-tool-palette, .drawing-properties-panel") !== null;
 }
 
 function readViewportMetrics(content: HTMLDivElement): ViewportMetrics | null {

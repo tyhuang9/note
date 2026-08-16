@@ -37,9 +37,20 @@ test("SQLite bridge reconciles structure before scene changes and reloads text",
   await expect(page.locator('[data-canvas-element-type="ink"]')).toHaveCount(1);
   await expect(page.locator(".persistence-status")).toHaveText("Saved");
 
+  await page.getByRole("button", { name: "Select (V / 1)" }).click();
+  await page.mouse.click(bounds.x + 760, bounds.y + 520);
+  await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
+  const properties = page.getByRole("complementary", { name: "Drawing properties" });
+  await properties.getByRole("button", { name: "Stroke color #e03131" }).click();
+  await page.getByRole("button", { name: "Keep drawing tool active" }).click();
+  await expect(page.locator(".persistence-status")).toHaveText("Saved");
+
   await page.reload();
   await expect(page.locator(".text-block-display")).toContainText("Persisted text");
   await expect(page.locator('[data-canvas-element-type="ink"]')).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Keep drawing tool active" })).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
+  await expect(page.getByRole("complementary", { name: "Drawing properties" }).getByRole("button", { name: "Stroke color #e03131" })).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".persistence-status")).toHaveText("Saved");
 });
 

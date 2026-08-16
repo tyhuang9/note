@@ -2491,6 +2491,17 @@ h2 {
   outline-offset: 3px;
 }
 
+.selection-frame-move-surface.preserve-native-se-handle {
+  clip-path: polygon(
+    0 0,
+    100% 0,
+    100% calc(100% - 28px),
+    calc(100% - 28px) calc(100% - 28px),
+    calc(100% - 28px) 100%,
+    0 100%
+  );
+}
+
 .selection-frame-handle {
   position: absolute;
   z-index: 1;

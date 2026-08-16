@@ -15,6 +15,7 @@ type CanvasInteractionOverlayProps = {
     onPointerUp: PointerEventHandler<HTMLButtonElement>;
     onResizeKeyDown: (corner: SelectionCorner) => KeyboardEventHandler<HTMLButtonElement>;
     onResizePointerDown: (corner: SelectionCorner) => PointerEventHandler<HTMLButtonElement>;
+    preserveNativeSoutheastHandle?: boolean;
     resizeCorners: readonly SelectionCorner[];
     showMoveSurface: boolean;
     width: number;
@@ -40,7 +41,7 @@ export function CanvasInteractionOverlay({
           {selectionFrame.showMoveSurface ? (
             <button
               aria-label="Move selected elements"
-              className={`selection-frame-move-surface ${selectionFrame.resizeCorners.length === 0 ? "is-single-selection" : ""}`}
+              className={`selection-frame-move-surface ${selectionFrame.resizeCorners.length === 0 ? "is-single-selection" : ""} ${selectionFrame.preserveNativeSoutheastHandle ? "preserve-native-se-handle" : ""}`}
               onDoubleClick={selectionFrame.onDoubleClick}
               onKeyDown={selectionFrame.onMoveKeyDown}
               onLostPointerCapture={selectionFrame.onLostPointerCapture}

@@ -6207,7 +6207,6 @@ function App() {
                     isDragSourceHidden={dragSourceBlockIds.includes(inkElement.id)}
                     isMultiSelected={selectedBlockIds.length > 1}
                     isSelected={selectedBlockIds.includes(inkElement.id)}
-                    suppressResizeHandle={selectedBlockIds.length === 1 && selectedBlockIds[0] === inkElement.id}
                     onCanvasPanStart={canvasInteraction.startPan}
                     onElementChange={registerBlockElement}
                     onInteractionModeChange={setActiveMode}
@@ -6301,9 +6300,7 @@ function App() {
                 ? []
                 : selectedBlockIds.length > 1
                   ? ["nw", "ne", "se", "sw"]
-                  : selected?.type === "ink"
-                    ? ["se"]
-                    : [];
+                  : [];
               return {
                 height: bounds.height * zoomLevel,
                 onDoubleClick: () => {
@@ -6318,6 +6315,7 @@ function App() {
                 onPointerUp: finishSelectionFrameInteraction,
                 onResizeKeyDown: resizeSelectionByKeyboard,
                 onResizePointerDown: (corner: SelectionCorner) => (event: ReactPointerEvent<HTMLButtonElement>) => startSelectionFrameInteraction(event, corner),
+                preserveNativeSoutheastHandle: selected?.type === "ink",
                 resizeCorners,
                 showMoveSurface: !usesNativeSingleElementInteraction,
                 width: bounds.width * zoomLevel,

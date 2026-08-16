@@ -26,11 +26,10 @@ describe("layer ordering", () => {
     expect(updated.find((element) => element.id === "other")?.zIndex).toBe(0);
   });
 
-  it("does not move a locked selected element but still normalizes sparse z-indices", () => {
+  it("does not mutate a page when the selected element is locked", () => {
     const elements = [text("a", 5), text("locked", 9, "page", true), text("c", 22)];
     const updated = reorderLayers(elements, new Set(["locked"]), "bring-to-front", 10) as TextElement[];
     expect(order(updated)).toEqual(["a", "locked", "c"]);
-    expect(updated.map((element) => element.zIndex)).toEqual([0, 1, 2]);
+    expect(updated).toEqual(elements);
   });
 });
-

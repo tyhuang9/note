@@ -23,6 +23,7 @@ export function reorderLayers(
       first.zIndex - second.zIndex || (originalIndex.get(first.id) ?? 0) - (originalIndex.get(second.id) ?? 0),
     );
     const movable = new Set(ordered.filter((element) => selectedIds.has(element.id) && !element.locked).map((element) => element.id));
+    if (movable.size === 0) continue;
     reorder(ordered, movable, action);
     ordered.forEach((element, zIndex) => {
       nextById.set(element.id, element.zIndex === zIndex
@@ -56,4 +57,3 @@ function reorder(elements: CanvasElement[], selectedIds: ReadonlySet<string>, ac
     }
   }
 }
-

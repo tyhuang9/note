@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, type RefObject } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
-import { HIGHLIGHTER_BRUSH, MAX_INK_POINTS, normalizePressure, PEN_BRUSH, type RawInkPoint } from "../model/ink";
-import type { CanvasElement } from "../model/elements";
+import { MAX_INK_POINTS, normalizePressure, type RawInkPoint } from "../model/ink";
+import type { CanvasElement, InkElement } from "../model/elements";
 import { getEraserElementIds } from "../model/hitTesting";
 import { screenToleranceToWorld } from "../model/geometry";
 import { inkPath } from "../rendering/strokePath";
@@ -48,16 +48,13 @@ type InkInteractionSession = InkSession | EraserSession;
 type UseInkInteractionOptions = {
   activeToolRef: RefObject<DrawingTool>;
   canvasContentRef: RefObject<HTMLDivElement | null>;
+  getBrush: (tool: InkTool) => InkElement["brush"];
   liveDraftLayerRef: RefObject<SVGSVGElement | null>;
   onCompleteStroke: (tool: InkTool, points: readonly RawInkPoint[]) => void;
   onEraseElements: (elementIds: readonly string[]) => void;
   visibleElements: () => readonly CanvasElement[];
   zoomLevelRef: RefObject<number>;
 };
-
-function brushFor(tool: InkTool) {
-  return tool === "pen" ? PEN_BRUSH : HIGHLIGHTER_BRUSH;
-}
 
 /** Maps a client-space pointer into the transformed world's local coordinates. */
 export function screenSampleToWorld(
@@ -152,16 +149,17 @@ function readViewportMetrics(content: HTMLDivElement): ViewportMetrics | null {
 export function useInkInteraction({
   activeToolRef,
   canvasContentRef,
+  getBrush,
   liveDraftLayerRef,
   onCompleteStroke,
   onEraseElements,
   visibleElements,
   zoomLevelRef,
 }: UseInkInteractionOptions) {
-  const optionsRef = useRef({ activeToolRef, canvasContentRef, liveDraftLayerRef, onCompleteStroke, onEraseElements, visibleElements, zoomLevelRef });
+  const optionsRef = useRef({ activeToolRef, canvasContentRef, getBrush, liveDraftLayerRef, onCompleteStroke, onEraseElements, visibleElements, zoomLevelRef });
   const sessionRef = useRef<InkInteractionSession | null>(null);
   const previewPathRef = useRef<SVGPathElement | null>(null);
-  optionsRef.current = { activeToolRef, canvasContentRef, liveDraftLayerRef, onCompleteStroke, onEraseElements, visibleElements, zoomLevelRef };
+  optionsRef.current = { activeToolRef, canvasContentRef, getBrush, liveDraftLayerRef, onCompleteStroke, onEraseElements, visibleElements, zoomLevelRef };
 
   const clearPreview = useCallback(() => {
     previewPathRef.current?.remove();
@@ -171,7 +169,7 @@ export function useInkInteraction({
     const { liveDraftLayerRef } = optionsRef.current;
     const draftLayer = liveDraftLayerRef.current;
     if (!draftLayer) return;
-    const brush = brushFor(session.tool);
+    const brush = optionsRef.current.getBrush(session.tool);
     const path = previewPathRef.current ?? document.createElementNS("http://www.w3.org/2000/svg", "path");
     previewPathRef.current = path;
     path.setAttribute("d", inkPath({ points: session.points.map((point) => [point.x, point.y, point.pressure]), brush }));
@@ -191,7 +189,7 @@ export function useInkInteraction({
   }, [paintPreview]);
 
   const appendSamples = useCallback((event: ReactPointerEvent<HTMLElement>, session: InkSession) => {
-    const brush = brushFor(session.tool);
+    const brush = optionsRef.current.getBrush(session.tool);
     for (const sample of pointerSamples(event)) {
       const point = screenSampleToWorld(sample, session.viewport, brush.simulatePressure);
       const previous = session.points[session.points.length - 1];

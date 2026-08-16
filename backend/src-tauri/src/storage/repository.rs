@@ -734,10 +734,63 @@ pub fn apply_scene_changes_at(
         new_revision: next,
     })
 }
-pub fn save_session_state_at(root: &Path, state: Value) -> Result<(), String> {
-    if !state.is_object() {
-        return Err("session state must be an object".into());
+fn validate_session_state(state: &Value) -> Result<(), String> {
+    let session = state
+        .as_object()
+        .ok_or("session state must be an object")?;
+    if let Some(locked) = session.get("isDrawingToolLocked") {
+        if !locked.is_boolean() {
+            return Err("session state.isDrawingToolLocked must be boolean".into());
+        }
     }
+    let Some(preferences) = session.get("drawingPreferences") else {
+        return Ok(());
+    };
+    let preferences = preferences
+        .as_object()
+        .ok_or("session state.drawingPreferences must be an object")?;
+    for tool in ["pen", "highlighter", "rectangle", "ellipse", "diamond", "line", "arrow"] {
+        let context = format!("session state.drawingPreferences.{tool}");
+        let preference = preferences
+            .get(tool)
+            .and_then(Value::as_object)
+            .ok_or_else(|| format!("{context} must be an object"))?;
+        validate_ink_color(
+            preference
+                .get("strokeColor")
+                .ok_or_else(|| format!("{context}.strokeColor is required"))?,
+        )?;
+        if let Some(background) = preference.get("backgroundColor") {
+            if !background.is_null() {
+                validate_ink_color(background)?;
+            }
+        } else {
+            return Err(format!("{context}.backgroundColor is required"));
+        }
+        for (key, minimum, maximum, allow_zero) in [
+            ("opacity", 0.0, 1.0, true),
+            ("roughness", 0.0, 10.0, true),
+            ("roundness", 0.0, 1.0, true),
+            ("strokeWidth", 0.0, 512.0, false),
+        ] {
+            let number = preference
+                .get(key)
+                .and_then(Value::as_f64)
+                .filter(|number| number.is_finite())
+                .ok_or_else(|| format!("{context}.{key} must be finite"))?;
+            if !(minimum..=maximum).contains(&number) || (!allow_zero && number == 0.0) {
+                return Err(format!("{context}.{key} is out of range"));
+            }
+        }
+        if !matches!(preference.get("strokeStyle").and_then(Value::as_str), Some("solid" | "dashed" | "dotted")) {
+            return Err(format!("{context}.strokeStyle is invalid"));
+        }
+    }
+    Ok(())
+}
+
+pub fn save_session_state_at(root: &Path, state: Value) -> Result<(), String> {
+    validate_session_state(&state)?;
     let mut c = database::open(&root.join("note.db"))?;
     database::migrate(&mut c)?;
     c.execute("INSERT INTO session_state(id,state_json) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET state_json=excluded.state_json",[serde_json::to_string(&state).map_err(|e|e.to_string())?]).map_err(|e|e.to_string())?;
@@ -813,6 +866,43 @@ mod tests {
             "unexpected validation error: {error}"
         );
         assert_eq!(load_workspace_data_at(root).unwrap().pages[0].revision, 0);
+    }
+
+    fn drawing_preferences() -> Value {
+        let preference = json!({
+            "backgroundColor":null,
+            "opacity":1.0,
+            "roughness":1.2,
+            "roundness":0.0,
+            "strokeColor":{"kind":"theme","token":"foreground"},
+            "strokeStyle":"solid",
+            "strokeWidth":2.0
+        });
+        json!({
+            "pen":preference.clone(),
+            "highlighter":preference.clone(),
+            "rectangle":preference.clone(),
+            "ellipse":preference.clone(),
+            "diamond":preference.clone(),
+            "line":preference.clone(),
+            "arrow":preference
+        })
+    }
+
+    #[test]
+    fn session_drawing_preferences_require_valid_typed_values() {
+        assert!(validate_session_state(&json!({
+            "isDrawingToolLocked":true,
+            "drawingPreferences":drawing_preferences()
+        })).is_ok());
+
+        let mut invalid = drawing_preferences();
+        invalid["pen"]["strokeWidth"] = json!(0);
+        let error = validate_session_state(&json!({"drawingPreferences":invalid})).unwrap_err();
+        assert!(error.contains("pen.strokeWidth"));
+        assert!(validate_session_state(&json!({"isDrawingToolLocked":"yes"}))
+            .unwrap_err()
+            .contains("must be boolean"));
     }
 
     #[test]

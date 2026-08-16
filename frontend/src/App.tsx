@@ -142,6 +142,11 @@ import {
   type RawInkPoint,
 } from "./canvas/model/ink";
 import {
+  createDefaultDrawingPreferences,
+  normalizeDrawingPreferences,
+  type DrawingPreferences,
+} from "./canvas/model/drawingPreferences";
+import {
   getProportionalScale,
   getOppositeCorner,
   getSelectionElementBounds,
@@ -1080,6 +1085,9 @@ function App() {
   const [activeMode, setActiveMode] = useState<InteractionMode>("canvas");
   const [activeTool, setActiveTool] = useState<DrawingTool>("select");
   const [isToolLocked, setIsToolLocked] = useState(false);
+  const [drawingPreferences, setDrawingPreferences] = useState<DrawingPreferences>(
+    createDefaultDrawingPreferences,
+  );
   const [pendingImagePlacement, setPendingImagePlacement] =
     useState<PendingImagePlacement | null>(null);
   const [imageImportError, setImageImportError] = useState<string | null>(null);
@@ -1201,6 +1209,7 @@ function App() {
   const zoomLevelRef = useRef(zoomLevel);
   const activeToolRef = useRef<DrawingTool>(activeTool);
   const isToolLockedRef = useRef(isToolLocked);
+  const drawingPreferencesRef = useRef(drawingPreferences);
   const isTemporaryHandActiveRef = useRef(false);
   const pendingImagePlacementRef = useRef<PendingImagePlacement | null>(null);
   const imagePickerRequestRef = useRef(0);
@@ -1208,6 +1217,7 @@ function App() {
   dataRef.current = data;
   activeToolRef.current = activeTool;
   isToolLockedRef.current = isToolLocked;
+  drawingPreferencesRef.current = drawingPreferences;
   pendingImagePlacementRef.current = pendingImagePlacement;
   isSnapToGridEnabledRef.current = isGridVisible && isSnapToGridEnabled;
   editingBlockIdRef.current = editingBlockId;
@@ -1854,6 +1864,8 @@ function App() {
         setIsDarkMode(savedData.isDarkMode ?? true);
         setIsSidebarCollapsed(savedSessionState?.isExplorerCollapsed ?? false);
         setIsAssistantOpen(savedSessionState?.isAssistantOpen ?? false);
+        setIsToolLocked(savedSessionState?.isDrawingToolLocked ?? false);
+        setDrawingPreferences(normalizeDrawingPreferences(savedSessionState?.drawingPreferences));
         pageViewportsRef.current = normalizePageViewports(
           savedSessionState?.pageViewports,
           validPageIds,
@@ -1895,6 +1907,8 @@ function App() {
           imageSourcesByAssetIdRef.current = legacy.imageSourcesByAssetId;
           setData(legacy.data);
           setIsDarkMode(legacy.data.isDarkMode ?? true);
+          setIsToolLocked(legacy.data.sessionState?.isDrawingToolLocked ?? false);
+          setDrawingPreferences(normalizeDrawingPreferences(legacy.data.sessionState?.drawingPreferences));
           const legacyPageIds = new Set(
             legacy.data.pages
               .filter((page) => !isTemplatePage(page))
@@ -2104,9 +2118,11 @@ function App() {
     return () => window.clearTimeout(saveTimer);
   }, [
     data,
+    drawingPreferences,
     isAssistantOpen,
     isDarkMode,
     isLoaded,
+    isToolLocked,
     isSidebarCollapsed,
     openPageTabIds,
     panOffset.x,
@@ -2130,8 +2146,10 @@ function App() {
     return () => window.removeEventListener("beforeunload", flushBeforeClose);
   }, [
     isAssistantOpen,
+    drawingPreferences,
     isDarkMode,
     isSidebarCollapsed,
+    isToolLocked,
     openPageTabIds,
     panOffset.x,
     panOffset.y,
@@ -2231,7 +2249,9 @@ function App() {
     }
 
     return {
+      drawingPreferences: drawingPreferencesRef.current,
       isAssistantOpen,
+      isDrawingToolLocked: isToolLockedRef.current,
       isExplorerCollapsed: isSidebarCollapsed,
       selectedFolderId: selectedFolderIdRef.current || undefined,
       selectedPageId: selectedPageIdRef.current || undefined,
@@ -6126,14 +6146,15 @@ function App() {
       if (!pageId) return;
       const elementId = createId(tool === "line" || tool === "arrow" ? "connector" : "shape");
       const timestamp = Date.now();
+      const preference = drawingPreferencesRef.current[tool];
       const style = {
-        fillColor: null,
-        roughness: 1.2,
-        roundness: 0,
+        fillColor: tool === "line" || tool === "arrow" ? null : preference.backgroundColor,
+        roughness: preference.roughness,
+        roundness: tool === "rectangle" ? preference.roundness : 0,
         seed: deterministicSeed(elementId),
-        strokeColor: { kind: "theme" as const, token: "foreground" as const },
-        strokeStyle: "solid" as const,
-        strokeWidth: 2,
+        strokeColor: preference.strokeColor,
+        strokeStyle: preference.strokeStyle,
+        strokeWidth: preference.strokeWidth,
       };
 
       setBlocksWithHistory((currentElements) => {
@@ -6143,7 +6164,7 @@ function App() {
             end: { kind: "free", ...geometry.end },
             id: elementId,
             locked: false,
-            opacity: 1,
+            opacity: preference.opacity,
             pageId,
             routing: "straight",
             start: { kind: "free", ...geometry.start },
@@ -6164,7 +6185,7 @@ function App() {
           createdAt: timestamp,
           id: elementId,
           locked: false,
-          opacity: 1,
+          opacity: preference.opacity,
           pageId,
           rotation: 0,
           shape: tool as ShapeElement["shape"],
@@ -6239,7 +6260,13 @@ function App() {
       const pageId = selectedPageIdRef.current;
       if (!pageId) return;
 
-      const brush = tool === "pen" ? PEN_BRUSH : HIGHLIGHTER_BRUSH;
+      const preference = drawingPreferencesRef.current[tool];
+      const brush = {
+        ...(tool === "pen" ? PEN_BRUSH : HIGHLIGHTER_BRUSH),
+        color: preference.strokeColor,
+        opacity: preference.opacity,
+        size: preference.strokeWidth,
+      };
       const geometry = normalizeInkGeometry(
         points,
         brush.size,
@@ -6285,6 +6312,15 @@ function App() {
   const inkInteraction = useInkInteraction({
     activeToolRef,
     canvasContentRef,
+    getBrush: (tool) => {
+      const preference = drawingPreferencesRef.current[tool];
+      return {
+        ...(tool === "pen" ? PEN_BRUSH : HIGHLIGHTER_BRUSH),
+        color: preference.strokeColor,
+        opacity: preference.opacity,
+        size: preference.strokeWidth,
+      };
+    },
     liveDraftLayerRef,
     onCompleteStroke: completeInkStroke,
     onEraseElements: eraseCanvasElements,

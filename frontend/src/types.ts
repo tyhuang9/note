@@ -1,4 +1,5 @@
 import type { CanvasElement, TextElement } from "./canvas/model/elements";
+import type { DrawingPreferences } from "./canvas/model/drawingPreferences";
 
 /** @deprecated Use TextElement. Kept only while legacy helper names are migrated. */
 export type TextBlock = TextElement;
@@ -24,7 +25,9 @@ export type PersistedPageViewport = {
 };
 
 export type AppSessionState = {
+  drawingPreferences?: DrawingPreferences;
   isAssistantOpen?: boolean;
+  isDrawingToolLocked?: boolean;
   isExplorerCollapsed?: boolean;
   selectedFolderId?: string;
   selectedPageId?: string;

@@ -735,9 +735,7 @@ pub fn apply_scene_changes_at(
     })
 }
 fn validate_session_state(state: &Value) -> Result<(), String> {
-    let session = state
-        .as_object()
-        .ok_or("session state must be an object")?;
+    let session = state.as_object().ok_or("session state must be an object")?;
     if let Some(locked) = session.get("isDrawingToolLocked") {
         if !locked.is_boolean() {
             return Err("session state.isDrawingToolLocked must be boolean".into());
@@ -749,7 +747,15 @@ fn validate_session_state(state: &Value) -> Result<(), String> {
     let preferences = preferences
         .as_object()
         .ok_or("session state.drawingPreferences must be an object")?;
-    for tool in ["pen", "highlighter", "rectangle", "ellipse", "diamond", "line", "arrow"] {
+    for tool in [
+        "pen",
+        "highlighter",
+        "rectangle",
+        "ellipse",
+        "diamond",
+        "line",
+        "arrow",
+    ] {
         let context = format!("session state.drawingPreferences.{tool}");
         let preference = preferences
             .get(tool)
@@ -782,7 +788,10 @@ fn validate_session_state(state: &Value) -> Result<(), String> {
                 return Err(format!("{context}.{key} is out of range"));
             }
         }
-        if !matches!(preference.get("strokeStyle").and_then(Value::as_str), Some("solid" | "dashed" | "dotted")) {
+        if !matches!(
+            preference.get("strokeStyle").and_then(Value::as_str),
+            Some("solid" | "dashed" | "dotted")
+        ) {
             return Err(format!("{context}.strokeStyle is invalid"));
         }
     }
@@ -894,15 +903,18 @@ mod tests {
         assert!(validate_session_state(&json!({
             "isDrawingToolLocked":true,
             "drawingPreferences":drawing_preferences()
-        })).is_ok());
+        }))
+        .is_ok());
 
         let mut invalid = drawing_preferences();
         invalid["pen"]["strokeWidth"] = json!(0);
         let error = validate_session_state(&json!({"drawingPreferences":invalid})).unwrap_err();
         assert!(error.contains("pen.strokeWidth"));
-        assert!(validate_session_state(&json!({"isDrawingToolLocked":"yes"}))
-            .unwrap_err()
-            .contains("must be boolean"));
+        assert!(
+            validate_session_state(&json!({"isDrawingToolLocked":"yes"}))
+                .unwrap_err()
+                .contains("must be boolean")
+        );
     }
 
     #[test]

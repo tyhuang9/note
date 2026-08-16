@@ -130,4 +130,3 @@ describe("ink restyling bounds", () => {
     expect(updated[1]).toBe(text);
   });
 });
-

@@ -6,6 +6,13 @@ type CanvasInteractionOverlayProps = {
   marqueeRef: Ref<HTMLDivElement>;
   selectionFrameRef?: Ref<HTMLDivElement>;
   selectionFrame?: {
+    connectorEndpointHandles?: readonly {
+      endpoint: "start" | "end";
+      onKeyDown: KeyboardEventHandler<HTMLButtonElement>;
+      onPointerDown: PointerEventHandler<HTMLButtonElement>;
+      x: number;
+      y: number;
+    }[];
     height: number;
     onDoubleClick?: MouseEventHandler<HTMLButtonElement>;
     onMoveKeyDown: KeyboardEventHandler<HTMLButtonElement>;
@@ -69,6 +76,24 @@ export function CanvasInteractionOverlay({
               onLostPointerCapture={selectionFrame.onLostPointerCapture}
               onPointerMove={selectionFrame.onPointerMove}
               onPointerUp={selectionFrame.onPointerUp}
+              type="button"
+            />
+          ))}
+          {selectionFrame.connectorEndpointHandles?.map((handle) => (
+            <button
+              aria-label={`Move connector ${handle.endpoint} endpoint`}
+              className="selection-frame-endpoint-handle"
+              key={handle.endpoint}
+              onKeyDown={handle.onKeyDown}
+              onLostPointerCapture={selectionFrame.onLostPointerCapture}
+              onPointerCancel={selectionFrame.onPointerCancel}
+              onPointerDown={(event) => {
+                event.stopPropagation();
+                handle.onPointerDown(event);
+              }}
+              onPointerMove={selectionFrame.onPointerMove}
+              onPointerUp={selectionFrame.onPointerUp}
+              style={{ left: handle.x - 12, top: handle.y - 12 }}
               type="button"
             />
           ))}

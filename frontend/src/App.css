@@ -2208,6 +2208,10 @@ h2 {
   visibility: hidden;
 }
 
+.primitive-element.is-drag-source-hidden {
+  visibility: hidden;
+}
+
 .ink-resize-handle {
   right: -12px;
   bottom: -12px;
@@ -2557,6 +2561,36 @@ h2 {
   outline-offset: 2px;
 }
 
+.selection-frame-endpoint-handle {
+  position: absolute;
+  z-index: 2;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 999px;
+  padding: 0;
+  background: transparent;
+  cursor: move;
+  pointer-events: auto;
+}
+
+.selection-frame-endpoint-handle::after {
+  position: absolute;
+  top: 7px;
+  left: 7px;
+  width: 10px;
+  height: 10px;
+  border: 1px solid var(--canvas-selection, var(--accent-purple));
+  border-radius: 999px;
+  background: var(--canvas-tool-bg, #fff);
+  content: "";
+}
+
+.selection-frame-endpoint-handle:focus-visible {
+  outline: 2px solid var(--canvas-focus, var(--accent-purple));
+  outline-offset: 2px;
+}
+
 .app-shell button.selection-frame-move-surface {
   width: auto;
   height: auto;
@@ -2565,7 +2599,8 @@ h2 {
 }
 
 .app-shell.is-dark button.selection-frame-move-surface,
-.app-shell.is-dark button.selection-frame-handle {
+.app-shell.is-dark button.selection-frame-handle,
+.app-shell.is-dark button.selection-frame-endpoint-handle {
   border: 0;
   background: transparent;
 }

@@ -144,6 +144,7 @@ import {
 import {
   getProportionalScale,
   getOppositeCorner,
+  getSelectionElementBounds,
   getSelectionBounds,
   scaleSelection,
   translateSelection,
@@ -332,6 +333,7 @@ type ResizeLayerSession = {
 
 type SelectionTransformSession = {
   corner: SelectionCorner | null;
+  connectorEndpoint: "start" | "end" | null;
   didMove: boolean;
   pointerId: number;
   startBounds: SelectionRect;
@@ -1103,6 +1105,8 @@ function App() {
   const [isGridVisible, setIsGridVisible] = useState(false);
   const [isSnapToGridEnabled, setIsSnapToGridEnabled] = useState(false);
   const [dragSourceBlockIds, setDragSourceBlockIds] = useState<string[]>([]);
+  const [selectionFramePreview, setSelectionFramePreview] = useState<SelectionRect | null>(null);
+  const [connectorEndpointPreview, setConnectorEndpointPreview] = useState<ConnectorElement | null>(null);
   const [selectedSidebarPageIds, setSelectedSidebarPageIds] = useState<string[]>([]);
   const [draggedPageIds, setDraggedPageIds] = useState<string[]>([]);
   const [pageDropTargetFolderId, setPageDropTargetFolderId] = useState<string | null>(null);
@@ -1275,13 +1279,17 @@ function App() {
     () => data.elements.filter((block): block is CanvasElement & BoxCanvasElement => block.pageId === selectedPageId && isBoxCanvasElement(block)),
     [data.elements, selectedPageId],
   );
+  const visibleCanvasElements = useMemo(
+    () => data.elements.filter((element) => element.pageId === selectedPageId),
+    [data.elements, selectedPageId],
+  );
   const selectionWorldBounds = useMemo(() => {
     const selectedIds = new Set(selectedBlockIds);
     return getSelectionBounds(
-      visibleBlocks.filter((element) => selectedIds.has(element.id)),
-      Object.fromEntries(visibleBlocks.map((element) => [element.id, element])),
+      visibleCanvasElements.filter((element) => selectedIds.has(element.id)),
+      Object.fromEntries(visibleCanvasElements.map((element) => [element.id, element])),
     );
-  }, [selectedBlockIds, visibleBlocks]);
+  }, [selectedBlockIds, visibleCanvasElements]);
   const selectionHasLockedElements = useMemo(
     () => selectedBlockIds.some((id) => data.elements.some((element) => element.id === id && element.locked)),
     [data.elements, selectedBlockIds],
@@ -1506,10 +1514,13 @@ function App() {
   ]);
   canvasViewportRef.current = canvasViewport;
   const renderedCanvasElements = useMemo(() => {
-    if (!canvasViewport) return visibleBlocks;
+    const withConnectorPreview = connectorEndpointPreview
+      ? visibleCanvasElements.map((element) => element.id === connectorEndpointPreview.id ? connectorEndpointPreview : element)
+      : visibleCanvasElements;
+    if (!canvasViewport) return withConnectorPreview;
     const overscan = 160 / Math.max(zoomLevel, 0.01);
     const selectedIds = new Set(selectedBlockIds);
-    return visibleBlocks.filter((element) =>
+    return withConnectorPreview.filter((element) =>
       element.type !== "ink" ||
       selectedIds.has(element.id) ||
       (
@@ -1519,7 +1530,7 @@ function App() {
         element.y <= canvasViewport.y + canvasViewport.height + overscan
       ),
     );
-  }, [canvasViewport, selectedBlockIds, visibleBlocks, zoomLevel]);
+  }, [canvasViewport, connectorEndpointPreview, selectedBlockIds, visibleCanvasElements, zoomLevel]);
   const offscreenGroups = useMemo<OffscreenGroup[]>(() => {
     if (!canvasViewport || visibleBlocks.length === 0) {
       return [];
@@ -5431,7 +5442,7 @@ function App() {
       const requestedBlockIds = selectedBlockIds
         .filter((blockId) => {
           const block = dataRef.current.elements.find((element) => element.id === blockId);
-          return Boolean(block && !block.locked && isBoxCanvasElement(block));
+          return Boolean(block && !block.locked);
         });
       const sourceEntries = requestedBlockIds
         .map((blockId) => ({
@@ -5564,17 +5575,13 @@ function App() {
     setPanOffset(panOffsetRef.current);
 
     if (movedEnough) {
-      setBlocksWithHistory((currentBlocks) =>
-        currentBlocks.map((block) =>
-          blockIdsToMove.has(block.id) && !block.locked && isBoxCanvasElement(block)
-            ? snapBlockPosition({
-                ...block,
-                x: block.x + offset.x,
-                y: block.y + offset.y,
-              })
-            : block,
-        ),
-      );
+      setBlocksWithHistory((currentBlocks) => {
+        const translated = translateSelection(currentBlocks, blockIdsToMove, offset);
+        if (!isSnapToGridEnabledRef.current) return translated;
+        return translated.map((block) =>
+          blockIdsToMove.has(block.id) && isBoxCanvasElement(block) ? snapBlockPosition(block) : block,
+        );
+      });
     }
 
     selectDraggedBlocks(dragSession.selectedBlockIds);
@@ -5733,6 +5740,7 @@ function App() {
   function startSelectionFrameInteraction(
     event: ReactPointerEvent<HTMLElement>,
     corner: SelectionCorner | null,
+    connectorEndpoint: "start" | "end" | null = null,
   ) {
     const bounds = selectionWorldBounds;
     if (event.button !== 0 || !bounds) return;
@@ -5741,12 +5749,34 @@ function App() {
     event.currentTarget.setPointerCapture(event.pointerId);
     selectionTransformRef.current = {
       corner,
+      connectorEndpoint,
       didMove: false,
       pointerId: event.pointerId,
       startBounds: bounds,
       startClientX: event.clientX,
       startClientY: event.clientY,
     };
+  }
+
+  function getConnectorEndpointPreview(
+    endpoint: "start" | "end",
+    clientX: number,
+    clientY: number,
+  ): ConnectorElement | null {
+    const selectedId = selectedBlockIdsRef.current.length === 1 ? selectedBlockIdsRef.current[0] : null;
+    const connector = selectedId
+      ? dataRef.current.elements.find((element): element is ConnectorElement => element.id === selectedId && element.type === "connector")
+      : null;
+    const canvas = canvasRef.current;
+    if (!connector || !canvas || connector[endpoint].kind !== "free") return null;
+    const rect = canvas.getBoundingClientRect();
+    const point = {
+      x: (clientX - rect.left - panOffsetRef.current.x) / zoomLevelRef.current,
+      y: (clientY - rect.top - panOffsetRef.current.y) / zoomLevelRef.current,
+    };
+    return endpoint === "start"
+      ? { ...connector, start: { ...connector.start, ...point } }
+      : { ...connector, end: { ...connector.end, ...point } };
   }
 
   function moveSelectionFrameInteraction(event: ReactPointerEvent<HTMLElement>) {
@@ -5756,6 +5786,14 @@ function App() {
     if (!movedEnough) return;
     event.preventDefault();
     session.didMove = true;
+
+    if (session.connectorEndpoint) {
+      const preview = getConnectorEndpointPreview(session.connectorEndpoint, event.clientX, event.clientY);
+      if (!preview) return;
+      setConnectorEndpointPreview(preview);
+      setSelectionFramePreview(getSelectionElementBounds(preview));
+      return;
+    }
 
     if (session.corner) {
       const preview = selectionResizePreview(session.startBounds, session.corner, event.clientX, event.clientY, session);
@@ -5768,7 +5806,7 @@ function App() {
     if (!dragLayerSessionRef.current) {
       const movableId = selectedBlockIdsRef.current.find((id) => {
         const element = dataRef.current.elements.find((candidate) => candidate.id === id);
-        return Boolean(element && !element.locked && isBoxCanvasElement(element));
+        return Boolean(element && !element.locked);
       });
       if (!movableId || !startVisualDrag(movableId, session.startClientX, session.startClientY)) return;
     }
@@ -5785,13 +5823,22 @@ function App() {
       if (session.corner) {
         finishSelectionResizePreview();
         setSelectionFrameVisualBounds(session.startBounds);
-      } else {
+      } else if (!session.connectorEndpoint) {
         cancelVisualDrag();
       }
+      setConnectorEndpointPreview(null);
+      setSelectionFramePreview(null);
       return;
     }
 
-    if (session.corner && session.didMove) {
+    if (session.connectorEndpoint && session.didMove) {
+      const preview = getConnectorEndpointPreview(session.connectorEndpoint, event.clientX, event.clientY);
+      if (preview) {
+        setBlocksWithHistory((currentBlocks) => currentBlocks.map((element) =>
+          element.id === preview.id ? { ...preview, updatedAt: Date.now() } : element,
+        ));
+      }
+    } else if (session.corner && session.didMove) {
       const preview = selectionResizePreview(session.startBounds, session.corner, event.clientX, event.clientY, session);
       const selectedIds = new Set(selectedBlockIdsRef.current);
       finishSelectionResizePreview();
@@ -5802,6 +5849,8 @@ function App() {
       endVisualDrag(event.clientX, event.clientY);
     }
 
+    setConnectorEndpointPreview(null);
+    setSelectionFramePreview(null);
     setEditingBlockId(null);
     setInsertionPoint(null);
     setIsCanvasKeyboardActive(true);
@@ -5845,6 +5894,32 @@ function App() {
       const scale = getProportionalScale(bounds, corner, draggedCorner);
       const selectedIds = new Set(selectedBlockIdsRef.current);
       setBlocksWithHistory((currentBlocks) => scaleSelection(currentBlocks, selectedIds, bounds, corner, scale));
+      setActiveMode("selected");
+    };
+  }
+
+  function moveConnectorEndpointByKeyboard(endpoint: "start" | "end") {
+    return (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+      if (!event.key.startsWith("Arrow")) return;
+      const step = (event.shiftKey ? 10 : 1) / zoomLevelRef.current;
+      const delta = event.key === "ArrowLeft"
+        ? { x: -step, y: 0 }
+        : event.key === "ArrowRight"
+          ? { x: step, y: 0 }
+          : event.key === "ArrowUp"
+            ? { x: 0, y: -step }
+            : { x: 0, y: step };
+      event.preventDefault();
+      event.stopPropagation();
+      const selectedId = selectedBlockIdsRef.current.length === 1 ? selectedBlockIdsRef.current[0] : null;
+      if (!selectedId) return;
+      setBlocksWithHistory((currentBlocks) => currentBlocks.map((element) => {
+        if (element.id !== selectedId || element.type !== "connector" || element.locked || element[endpoint].kind !== "free") return element;
+        const moved = { ...element[endpoint], x: element[endpoint].x + delta.x, y: element[endpoint].y + delta.y };
+        return endpoint === "start"
+          ? { ...element, start: moved, updatedAt: Date.now() }
+          : { ...element, end: moved, updatedAt: Date.now() };
+      }));
       setActiveMode("selected");
     };
   }
@@ -6153,7 +6228,7 @@ function App() {
     selectedElementIdsRef: selectedBlockIdsRef,
     setSelectedElementIds: setSelectedBlockIds,
     setZoomLevel,
-    visibleElements: visibleBlocks,
+    visibleElements: visibleCanvasElements,
     zoomLevelRef,
     zoomStep: ZOOM_STEP,
   });
@@ -6586,7 +6661,13 @@ function App() {
               <CanvasElementRenderer
                 element={element}
                 key={element.id}
-                renderConnector={(connector) => <ConnectorElementView element={connector} />}
+                renderConnector={(connector) => (
+                  <ConnectorElementView
+                    element={connector}
+                    isDragSourceHidden={dragSourceBlockIds.includes(connector.id)}
+                    onElementChange={registerBlockElement}
+                  />
+                )}
                 renderInk={(inkElement) => (
                   <InkElementView
                     element={inkElement}
@@ -6606,7 +6687,13 @@ function App() {
                     zoomLevel={zoomLevel}
                   />
                 )}
-                renderShape={(shape) => <ShapeElementView element={shape} />}
+                renderShape={(shape) => (
+                  <ShapeElementView
+                    element={shape}
+                    isDragSourceHidden={dragSourceBlockIds.includes(shape.id)}
+                    onElementChange={registerBlockElement}
+                  />
+                )}
                 renderText={(block) => (
                   <TextBlockView
                 block={block}
@@ -6688,10 +6775,12 @@ function App() {
             marqueeRef={selectionRectRef}
             selectionFrameRef={selectionFrameRef}
             selectionFrame={(() => {
-              const bounds = selectionWorldBounds;
-              if (!bounds || selectedBlockIds.length === 0 || editingBlockId) return undefined;
+              const bounds = selectionFramePreview ?? selectionWorldBounds;
+              if (activeTool !== "select" || !bounds || selectedBlockIds.length === 0 || editingBlockId) return undefined;
               const selected = selectedBlockIds.length === 1
-                ? visibleBlocks.find((block) => block.id === selectedBlockIds[0])
+                ? connectorEndpointPreview?.id === selectedBlockIds[0]
+                  ? connectorEndpointPreview
+                  : visibleCanvasElements.find((block) => block.id === selectedBlockIds[0])
                 : undefined;
               const usesNativeSingleElementInteraction = Boolean(
                 selected && (selected.type === "text" || selected.type === "image"),
@@ -6700,11 +6789,26 @@ function App() {
                 ? []
                 : selectedBlockIds.length > 1
                   ? ["nw", "ne", "se", "sw"]
-                  : [];
+                  : selected?.type === "shape"
+                    ? ["nw", "ne", "se", "sw"]
+                    : [];
+              const connectorEndpointHandles = selected?.type === "connector" && !selected.locked && selected.start.kind === "free" && selected.end.kind === "free"
+                ? ([
+                    { endpoint: "start" as const, point: selected.start },
+                    { endpoint: "end" as const, point: selected.end },
+                  ]).map(({ endpoint, point }) => ({
+                    endpoint,
+                    onKeyDown: moveConnectorEndpointByKeyboard(endpoint),
+                    onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => startSelectionFrameInteraction(event, null, endpoint),
+                    x: (point.x - bounds.x) * zoomLevel,
+                    y: (point.y - bounds.y) * zoomLevel,
+                  }))
+                : undefined;
               return {
+                connectorEndpointHandles,
                 height: bounds.height * zoomLevel,
                 onDoubleClick: () => {
-                  const selected = visibleBlocks.find((block) => block.id === selectedBlockIds[0]);
+                  const selected = visibleCanvasElements.find((block) => block.id === selectedBlockIds[0]);
                   if (selectedBlockIds.length === 1 && selected && isTextElement(selected)) editBlock(selected.id);
                 },
                 onMoveKeyDown: moveSelectionByKeyboard,

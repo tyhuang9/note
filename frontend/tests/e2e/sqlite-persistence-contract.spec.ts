@@ -29,7 +29,7 @@ test("SQLite bridge reconciles structure before scene changes and reloads text",
     commands.lastIndexOf("apply_scene_changes"),
   );
 
-  await page.getByRole("button", { name: "Pen (P)" }).click();
+  await page.getByRole("button", { name: "Pen (P / 7)" }).click();
   await page.mouse.move(bounds.x + 320, bounds.y + 360);
   await page.mouse.down();
   await page.mouse.move(bounds.x + 470, bounds.y + 400, { steps: 8 });

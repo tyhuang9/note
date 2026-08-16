@@ -10,7 +10,7 @@ test("draws, selects, resizes, erases, and restores native ink", async ({ page }
   const drawStart = { x: bounds.x + 210, y: bounds.y + 220 };
   const drawEnd = { x: bounds.x + 350, y: bounds.y + 250 };
 
-  await page.getByRole("button", { name: "Pen (P)" }).click();
+  await page.getByRole("button", { name: "Pen (P / 7)" }).click();
   await page.mouse.move(drawStart.x, drawStart.y);
   await page.mouse.down();
   await page.mouse.move(drawEnd.x, drawEnd.y, { steps: 8 });
@@ -29,7 +29,7 @@ test("draws, selects, resizes, erases, and restores native ink", async ({ page }
   await expect(ink).toHaveCount(2);
   await expect(ink.nth(1)).toHaveCSS("color", "rgb(244, 197, 66)");
 
-  await page.getByRole("button", { name: "Select (V)" }).click();
+  await page.getByRole("button", { name: "Select (V / 1)" }).click();
   await page.mouse.move(drawStart.x + 45, drawStart.y + 10);
   await page.mouse.down();
   await page.mouse.move(drawStart.x + 85, drawStart.y + 45, { steps: 3 });
@@ -54,7 +54,7 @@ test("draws, selects, resizes, erases, and restores native ink", async ({ page }
   await page.keyboard.press("Control+y");
   await expect.poll(async () => (await ink.nth(0).boundingBox())?.width).toBeGreaterThan(beforeResize.width);
 
-  await page.getByRole("button", { name: "Eraser (E)" }).click();
+  await page.getByRole("button", { name: "Eraser (E / 0)" }).click();
   const eraseTarget = await ink.nth(0).boundingBox();
   if (!eraseTarget) throw new Error("Ink eraser target was not rendered.");
   await page.mouse.move(eraseTarget.x + eraseTarget.width / 2, eraseTarget.y + eraseTarget.height / 2);
@@ -79,7 +79,7 @@ test("samples pen points in world space after pan and cursor-anchored zoom", asy
   await page.keyboard.up("Control");
   await expect(page.getByLabel(/Zoom \d+%/)).not.toHaveText("Zoom 100%");
 
-  await page.getByRole("button", { name: "Pen (P)" }).click();
+  await page.getByRole("button", { name: "Pen (P / 7)" }).click();
   const start = { x: bounds.x + 250, y: bounds.y + 360 };
   const end = { x: bounds.x + 410, y: bounds.y + 420 };
   await page.mouse.move(start.x, start.y);
@@ -99,8 +99,8 @@ test("scopes drawing shortcuts to canvas and tool focus without stealing typed t
   await page.goto("/");
   await page.getByRole("button", { name: /create new note/i }).click();
 
-  const select = page.getByRole("button", { name: "Select (V)" });
-  const pen = page.getByRole("button", { name: "Pen (P)" });
+  const select = page.getByRole("button", { name: "Select (V / 1)" });
+  const pen = page.getByRole("button", { name: "Pen (P / 7)" });
   const highlighter = page.getByRole("button", { name: "Highlighter (H)" });
   const unrelatedControl = page.getByRole("button", { name: "Dark mode" });
   const canvas = page.getByRole("tabpanel");

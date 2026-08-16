@@ -5035,7 +5035,11 @@ function App() {
   function requestImagePicker() {
     activeToolRef.current = "image";
     setActiveTool("image");
-    imagePickerInputRef.current?.click();
+    const input = imagePickerInputRef.current;
+    if (input) {
+      input.value = "";
+      input.click();
+    }
   }
 
   function selectDrawingTool(tool: DrawingTool) {

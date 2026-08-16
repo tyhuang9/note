@@ -99,6 +99,21 @@ test("Escape cancels a pending picked image without creating an element", async 
   await expect(page.getByRole("button", { name: "Select (V / 1)" })).toHaveAttribute("aria-pressed", "true");
 });
 
+test("rejects an oversized picked image before creating a preview", async ({ page }) => {
+  const chooserPromise = page.waitForEvent("filechooser");
+  await page.getByRole("button", { name: "Image (I / 9)" }).click();
+  const chooser = await chooserPromise;
+  await chooser.setFiles({
+    buffer: Buffer.alloc(16 * 1024 * 1024 + 1),
+    mimeType: "image/png",
+    name: "too-large.png",
+  });
+
+  await expect(page.getByRole("alert")).toContainText("Image exceeds the 16 MiB size limit");
+  await expect(page.locator(".canvas-image-placement-preview")).toHaveCount(0);
+  await expect(page.locator(".text-block-image")).toHaveCount(0);
+});
+
 async function chooseImage(page: Page, name: string) {
   const chooserPromise = page.waitForEvent("filechooser");
   await page.getByRole("button", { name: "Image (I / 9)" }).click();

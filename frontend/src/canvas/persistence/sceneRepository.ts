@@ -1,6 +1,8 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type { AppData, AppSessionState, Folder, Page } from "../../types";
-import type { CanvasElement } from "../model/elements";
+import type { CanvasElement, ConnectorElement, RoughStyle, ShapeElement } from "../model/elements";
+
+export const MAX_ASSET_BYTES = 16 * 1024 * 1024;
 
 export type StoragePage = Page & { revision: number };
 
@@ -76,7 +78,10 @@ export type SceneRepository = {
 export function createSceneRepository(invoke: Invoke = tauriInvoke): SceneRepository {
   return {
     initializeStorage: () => invoke<StorageDiagnostics>("initialize_storage"),
-    loadWorkspace: () => invoke<WorkspaceData>("load_workspace_data"),
+    loadWorkspace: async () => {
+      const workspace = await invoke<WorkspaceData>("load_workspace_data");
+      return { ...workspace, elements: workspace.elements.map(normalizeLoadedCanvasElement) };
+    },
     reconcileWorkspaceStructure: (structure) =>
       invoke<WorkspaceStructureResult>("reconcile_workspace_structure", { structure }),
     applySceneChanges: (batch) =>
@@ -87,6 +92,53 @@ export function createSceneRepository(invoke: Invoke = tauriInvoke): SceneReposi
   };
 }
 
+/** Fills style fields that predate primitive styling without weakening write validation. */
+export function normalizeLoadedCanvasElement(element: CanvasElement): CanvasElement {
+  if (element.type === "shape") {
+    const style = (element as ShapeElement & { style?: Partial<RoughStyle> }).style;
+    return { ...element, style: normalizeRoughStyle(style, element.id) };
+  }
+  if (element.type === "connector") {
+    const style = (element as ConnectorElement & {
+      style?: Partial<ConnectorElement["style"]>;
+    }).style;
+    return {
+      ...element,
+      style: {
+        ...normalizeRoughStyle(style, element.id),
+        endArrowhead: style?.endArrowhead ?? "none",
+        startArrowhead: style?.startArrowhead ?? "none",
+      },
+    };
+  }
+  return element;
+}
+
+export function isAssetBlobWithinLimit(blob: Pick<Blob, "size">): boolean {
+  return blob.size <= MAX_ASSET_BYTES;
+}
+
+function normalizeRoughStyle(style: Partial<RoughStyle> | undefined, elementId: string): RoughStyle {
+  return {
+    fillColor: style?.fillColor ?? null,
+    roughness: style?.roughness ?? 1.2,
+    roundness: style?.roundness ?? 0,
+    seed: style?.seed ?? stableSeed(elementId),
+    strokeColor: style?.strokeColor ?? { kind: "theme", token: "foreground" },
+    strokeStyle: style?.strokeStyle ?? "solid",
+    strokeWidth: style?.strokeWidth ?? 2,
+  };
+}
+
+function stableSeed(value: string): number {
+  let hash = 2_166_136_261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return hash >>> 0;
+}
+
 /** Converts a browser data URL to the bytes-only contract accepted by Rust. */
 export function assetRequestFromDataUrl(
   dataUrl: string,
@@ -95,6 +147,11 @@ export function assetRequestFromDataUrl(
   const match = /^data:([^;,]+);base64,([A-Za-z0-9+/=]+)$/i.exec(dataUrl);
   if (!match) {
     throw new Error("Standalone image data must be a base64 data URL.");
+  }
+  const padding = match[2].endsWith("==") ? 2 : match[2].endsWith("=") ? 1 : 0;
+  const decodedSize = Math.floor((match[2].length * 3) / 4) - padding;
+  if (decodedSize > MAX_ASSET_BYTES) {
+    throw new Error(`Image exceeds the ${MAX_ASSET_BYTES / (1024 * 1024)} MiB size limit.`);
   }
   return { ...details, dataBase64: match[2], mediaType: match[1].toLowerCase() };
 }

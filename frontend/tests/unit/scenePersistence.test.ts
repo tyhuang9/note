@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { TextElement } from "../../src/canvas/model/elements";
+import type { ShapeElement, TextElement } from "../../src/canvas/model/elements";
 import { SceneChangeQueue } from "../../src/canvas/persistence/sceneChangeQueue";
 import {
   assetDataUrl,
   assetRequestFromDataUrl,
   createSceneRepository,
+  isAssetBlobWithinLimit,
+  MAX_ASSET_BYTES,
   type Invoke,
   type SceneChangeBatch,
 } from "../../src/canvas/persistence/sceneRepository";
@@ -71,6 +73,77 @@ describe("scene repository", () => {
     });
     expect(assetDataUrl({ id: "asset", fileName: "pixel.png", mediaType: "image/png", byteSize: 1, dataBase64: "AA==" })).toBe("data:image/png;base64,AA==");
     expect(() => assetRequestFromDataUrl("https://example.com/image.png")).toThrow("base64 data URL");
+  });
+
+  it("normalizes missing legacy primitive style fields at the load boundary", async () => {
+    const invoke: Invoke = async () => ({
+      elements: [
+        {
+          createdAt: 1,
+          height: 40,
+          id: "legacy-shape",
+          locked: false,
+          opacity: 1,
+          pageId: "page",
+          rotation: 0,
+          shape: "rectangle",
+          type: "shape",
+          updatedAt: 1,
+          width: 60,
+          x: 10,
+          y: 20,
+          zIndex: 0,
+        },
+        {
+          createdAt: 1,
+          end: { kind: "free", x: 80, y: 80 },
+          id: "legacy-connector",
+          locked: false,
+          opacity: 1,
+          pageId: "page",
+          routing: "straight",
+          start: { kind: "free", x: 20, y: 20 },
+          style: { strokeWidth: 4 },
+          type: "connector",
+          updatedAt: 1,
+          zIndex: 1,
+        },
+      ],
+      folders: [],
+      pages: [],
+      warnings: [],
+    }) as never;
+
+    const workspace = await createSceneRepository(invoke).loadWorkspace();
+    expect(workspace.elements[0]).toMatchObject({
+      style: {
+        fillColor: null,
+        roughness: 1.2,
+        roundness: 0,
+        strokeColor: { kind: "theme", token: "foreground" },
+        strokeStyle: "solid",
+        strokeWidth: 2,
+      },
+    });
+    expect(workspace.elements[1]).toMatchObject({
+      style: {
+        endArrowhead: "none",
+        startArrowhead: "none",
+        strokeStyle: "solid",
+        strokeWidth: 4,
+      },
+    });
+    const repeatedWorkspace = await createSceneRepository(invoke).loadWorkspace();
+    expect((repeatedWorkspace.elements[0] as ShapeElement).style.seed).toBe(
+      (workspace.elements[0] as ShapeElement).style.seed,
+    );
+  });
+
+  it("matches the backend asset-size limit before FileReader allocation", () => {
+    expect(isAssetBlobWithinLimit({ size: MAX_ASSET_BYTES })).toBe(true);
+    expect(isAssetBlobWithinLimit({ size: MAX_ASSET_BYTES + 1 })).toBe(false);
+    const oversizedBase64 = "A".repeat(Math.ceil((MAX_ASSET_BYTES + 1) / 3) * 4);
+    expect(() => assetRequestFromDataUrl(`data:image/png;base64,${oversizedBase64}`)).toThrow("16 MiB");
   });
 });
 

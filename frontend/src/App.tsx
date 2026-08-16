@@ -153,6 +153,8 @@ import {
   assetDataUrl,
   assetRequestFromDataUrl,
   createSceneRepository,
+  isAssetBlobWithinLimit,
+  MAX_ASSET_BYTES,
   type SceneRepository,
   type StoragePage,
 } from "./canvas/persistence/sceneRepository";
@@ -1078,6 +1080,7 @@ function App() {
   const [isToolLocked, setIsToolLocked] = useState(false);
   const [pendingImagePlacement, setPendingImagePlacement] =
     useState<PendingImagePlacement | null>(null);
+  const [imageImportError, setImageImportError] = useState<string | null>(null);
   const [panOffset, setPanOffset] = useState<PanOffset>({ x: 0, y: 0 });
   const [livePanOffset, setLivePanOffset] = useState<PanOffset>(panOffset);
   const [insertionPoint, setInsertionPoint] = useState<InsertionPoint | null>(null);
@@ -2760,6 +2763,7 @@ function App() {
     imageBlob: Blob,
     imageName: string,
   ) {
+    if (rejectOversizedImageBlob(imageBlob)) return;
     const reader = new FileReader();
 
     reader.onload = () => {
@@ -5033,6 +5037,7 @@ function App() {
   }
 
   function requestImagePicker() {
+    setImageImportError(null);
     activeToolRef.current = "image";
     setActiveTool("image");
     const input = imagePickerInputRef.current;
@@ -5055,6 +5060,8 @@ function App() {
 
   async function handleImageFileSelected(file: File | undefined) {
     if (!file || !file.type.startsWith("image/")) return;
+    if (rejectOversizedImageBlob(file)) return;
+    setImageImportError(null);
     const requestId = imagePickerRequestRef.current + 1;
     imagePickerRequestRef.current = requestId;
     let dataUrl: string;
@@ -5096,7 +5103,22 @@ function App() {
     if (!response.ok) {
       throw new Error(`Could not download pasted image (${response.status}).`);
     }
-    return readBlobAsDataUrl(await response.blob());
+    const blob = await response.blob();
+    if (!isAssetBlobWithinLimit(blob)) {
+      throw new Error(`Image exceeds the ${MAX_ASSET_BYTES / (1024 * 1024)} MiB size limit.`);
+    }
+    return readBlobAsDataUrl(blob);
+  }
+
+  function rejectOversizedImageBlob(blob: Pick<Blob, "size">): boolean {
+    if (isAssetBlobWithinLimit(blob)) return false;
+    const message = `Image exceeds the ${MAX_ASSET_BYTES / (1024 * 1024)} MiB size limit.`;
+    setImageImportError(message);
+    setPersistenceStatus({
+      kind: "failed",
+      error: new Error(message),
+    });
+    return true;
   }
 
   async function createImageBlock(
@@ -6465,6 +6487,7 @@ function App() {
               type="file"
             />
           </div>
+          {imageImportError ? <div className="canvas-image-import-error" role="alert">{imageImportError}</div> : null}
           {offscreenGroups.length > 0 ? (
             <div
               className={`offscreen-indicators ${

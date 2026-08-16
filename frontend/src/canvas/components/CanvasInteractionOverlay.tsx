@@ -8,6 +8,7 @@ type CanvasInteractionOverlayProps = {
     height: number;
     onDoubleClick?: PointerEventHandler<HTMLDivElement>;
     onPointerCancel: PointerEventHandler<HTMLDivElement>;
+    onLostPointerCapture: PointerEventHandler<HTMLDivElement>;
     onPointerDown: PointerEventHandler<HTMLDivElement>;
     onPointerMove: PointerEventHandler<HTMLDivElement>;
     onPointerUp: PointerEventHandler<HTMLDivElement>;
@@ -35,27 +36,23 @@ export function CanvasInteractionOverlay({
           style={{ height: selectionFrame.height, left: selectionFrame.x, top: selectionFrame.y, width: selectionFrame.width }}
         >
           <div
-            aria-label="Move selected elements"
             className={`selection-frame-move-surface ${selectionFrame.showResizeHandles ? "" : "is-single-selection"}`}
             onDoubleClick={selectionFrame.onDoubleClick}
+            onLostPointerCapture={selectionFrame.onLostPointerCapture}
             onPointerCancel={selectionFrame.onPointerCancel}
             onPointerDown={selectionFrame.onPointerDown}
             onPointerMove={selectionFrame.onPointerMove}
             onPointerUp={selectionFrame.onPointerUp}
-            role="button"
-            tabIndex={0}
           />
           {selectionFrame.showResizeHandles ? (["nw", "ne", "se", "sw"] as const).map((corner) => (
             <div
-              aria-label={`Resize selection from ${corner}`}
               className={`selection-frame-handle selection-frame-handle-${corner}`}
               key={corner}
               onPointerDown={(event) => {
                 event.stopPropagation();
                 selectionFrame.onResizePointerDown(corner)(event);
               }}
-              role="slider"
-              tabIndex={0}
+              onLostPointerCapture={selectionFrame.onLostPointerCapture}
             />
           )) : null}
         </div>

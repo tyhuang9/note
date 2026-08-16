@@ -229,7 +229,7 @@ export const InkElementView = memo(function InkElementView({
           <use className="ink-element-hit-target" fill="transparent" href={`#${pathId}`} stroke="transparent" strokeWidth={12 / Math.max(zoomLevel, 0.01)} />
         </svg>
       </div>
-      {isSelected && !element.locked ? (
+      {isSelected && !isMultiSelected && !element.locked ? (
         <div
           aria-label="Resize ink stroke"
           aria-valuemax={MAX_INK_SIZE}

@@ -1242,6 +1242,10 @@ function App() {
       Object.fromEntries(visibleBlocks.map((element) => [element.id, element])),
     );
   }, [selectedBlockIds, visibleBlocks]);
+  const selectionHasLockedElements = useMemo(
+    () => selectedBlockIds.some((id) => data.elements.some((element) => element.id === id && element.locked)),
+    [data.elements, selectedBlockIds],
+  );
   const openPages = useMemo<OpenPageTab[]>(() => {
     const pagesById = new Map(
       data.pages
@@ -6250,11 +6254,12 @@ function App() {
                   if (selectedBlockIds.length === 1 && selected && isTextElement(selected)) editBlock(selected.id);
                 },
                 onPointerCancel: (event: ReactPointerEvent<HTMLDivElement>) => finishSelectionFrameInteraction(event, true),
+                onLostPointerCapture: (event: ReactPointerEvent<HTMLDivElement>) => finishSelectionFrameInteraction(event, true),
                 onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => startSelectionFrameInteraction(event, null),
                 onPointerMove: moveSelectionFrameInteraction,
                 onPointerUp: finishSelectionFrameInteraction,
                 onResizePointerDown: (corner: SelectionCorner) => (event: ReactPointerEvent<HTMLDivElement>) => startSelectionFrameInteraction(event, corner),
-                showResizeHandles: selectedBlockIds.length > 1,
+                showResizeHandles: selectedBlockIds.length > 1 && !selectionHasLockedElements,
                 width: bounds.width * zoomLevel,
                 x: panOffset.x + bounds.x * zoomLevel,
                 y: panOffset.y + bounds.y * zoomLevel,

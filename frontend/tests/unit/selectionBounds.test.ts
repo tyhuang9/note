@@ -100,6 +100,19 @@ describe("composite transforms", () => {
     expect(result[2]).toMatchObject({ start: { kind: "free", x: 108, y: 55 }, end: { kind: "free", x: 228, y: 105 } });
   });
 
+  it("leaves locked items unchanged when a selection resize includes them", () => {
+    const locked = { ...text, id: "locked", locked: true, x: 300 };
+    const result = scaleSelection(
+      [text, locked],
+      new Set([text.id, locked.id]),
+      { x: 10, y: 20, width: 390, height: 40 },
+      "se",
+      2,
+    );
+    expect(result[0]).toMatchObject({ x: 10, y: 20, width: 200, height: 80 });
+    expect(result[1]).toBe(locked);
+  });
+
   it("scales positions, ink points and brush size uniformly about the opposing corner", () => {
     const result = scaleSelection([text, ink, connector], new Set([text.id, ink.id, connector.id]), { x: 10, y: 20, width: 200, height: 100 }, "se", 2);
     const scaledText = result[0] as TextElement;

@@ -58,18 +58,3 @@ test("captures drawing editor visual QA states", async ({ page }) => {
 
   expect(consoleErrors, consoleErrors.join("\n")).toEqual([]);
 });
-
-test("captures the official Excalidraw reference at the target viewport", async ({ page }) => {
-  await page.setViewportSize({ width: 1662, height: 839 });
-  await page.goto("https://excalidraw.com", { waitUntil: "networkidle" });
-  await expect(page.locator("body")).toBeVisible();
-  await page.screenshot({ path: `${evidenceRoot}/reference-excalidraw-live-1662x839.png` });
-
-  await page.keyboard.press("2");
-  await page.mouse.move(560, 310);
-  await page.mouse.down();
-  await page.mouse.move(790, 520, { steps: 5 });
-  await page.mouse.up();
-  await page.waitForTimeout(250);
-  await page.screenshot({ path: `${evidenceRoot}/reference-excalidraw-selected-1662x839.png` });
-});

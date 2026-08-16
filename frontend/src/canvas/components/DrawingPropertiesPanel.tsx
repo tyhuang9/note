@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Activity, ArrowDown, ArrowUp, Ban, ChevronsDown, ChevronsUp, Circle, Minus, Palette, Square, Waves } from "lucide-react";
 import type { CanvasColor, RoughStyle } from "../model/elements";
 import type {
@@ -35,12 +35,14 @@ export function DrawingPropertiesPanel({
 }: DrawingPropertiesPanelProps) {
   const [opacityDraft, setOpacityDraft] = useState(() => percent(values.opacity));
   const isAdjustingOpacity = useRef(false);
+  const hasOpacityPreviewChange = useRef(false);
 
   useEffect(() => {
     if (!isAdjustingOpacity.current) setOpacityDraft(percent(values.opacity));
   }, [values.opacity]);
 
   function previewOpacity(next: number) {
+    hasOpacityPreviewChange.current = true;
     setOpacityDraft(next);
     onPreview({ property: "opacity", value: next / 100 });
   }
@@ -48,8 +50,15 @@ export function DrawingPropertiesPanel({
   function commitOpacity(next = opacityDraft) {
     if (!isAdjustingOpacity.current) return;
     isAdjustingOpacity.current = false;
+    if (!hasOpacityPreviewChange.current) return;
+    hasOpacityPreviewChange.current = false;
     setOpacityDraft(next);
     onUpdate({ property: "opacity", value: next / 100 });
+  }
+
+  function beginOpacityAdjustment() {
+    isAdjustingOpacity.current = true;
+    hasOpacityPreviewChange.current = false;
   }
 
   return (
@@ -89,7 +98,7 @@ export function DrawingPropertiesPanel({
 
       {supports("strokeWidth") ? (
         <PropertySection label="Stroke width">
-          <ChoiceGroup label="Stroke width">
+          <ChoiceGroup label="Stroke width" mixed={values.strokeWidth.kind === "mixed"}>
             {([1, 2, 4] as const).map((width) => (
               <ChoiceButton
                 active={isValue(values.strokeWidth, width)}
@@ -107,7 +116,7 @@ export function DrawingPropertiesPanel({
 
       {supports("strokeStyle") ? (
         <PropertySection label="Stroke style">
-          <ChoiceGroup label="Stroke style">
+          <ChoiceGroup label="Stroke style" mixed={values.strokeStyle.kind === "mixed"}>
             {(["solid", "dashed", "dotted"] as const).map((style) => (
               <ChoiceButton
                 active={isValue(values.strokeStyle, style)}
@@ -124,7 +133,7 @@ export function DrawingPropertiesPanel({
 
       {supports("roughness") ? (
         <PropertySection label="Sloppiness">
-          <ChoiceGroup label="Sloppiness">
+          <ChoiceGroup label="Sloppiness" mixed={values.roughness.kind === "mixed"}>
             {([
               { value: 0, label: "Architect", Icon: Minus },
               { value: 1.2, label: "Artist", Icon: Waves },
@@ -146,7 +155,7 @@ export function DrawingPropertiesPanel({
 
       {supports("roundness") ? (
         <PropertySection label="Edges">
-          <ChoiceGroup label="Rectangle edges">
+          <ChoiceGroup label="Rectangle edges" mixed={values.roundness.kind === "mixed"}>
             <ChoiceButton active={isValue(values.roundness, 0)} label="Sharp corners" mixed={values.roundness.kind === "mixed"} onClick={() => onUpdate({ property: "roundness", value: 0 })}>
               <Square aria-hidden="true" size={19} />
             </ChoiceButton>
@@ -166,10 +175,10 @@ export function DrawingPropertiesPanel({
               min="0"
               onBlur={(event) => commitOpacity(Number(event.currentTarget.value))}
               onChange={(event) => previewOpacity(Number(event.currentTarget.value))}
-              onKeyDown={() => { isAdjustingOpacity.current = true; }}
+              onKeyDown={beginOpacityAdjustment}
               onKeyUp={(event) => commitOpacity(Number(event.currentTarget.value))}
               onPointerCancel={(event) => commitOpacity(Number(event.currentTarget.value))}
-              onPointerDown={() => { isAdjustingOpacity.current = true; }}
+              onPointerDown={beginOpacityAdjustment}
               onPointerUp={(event) => commitOpacity(Number(event.currentTarget.value))}
               step="1"
               type="range"
@@ -198,8 +207,19 @@ function PropertySection({ children, label }: { children: ReactNode; label: stri
   return <section className="drawing-property-section"><h3>{label}</h3>{children}</section>;
 }
 
-function ChoiceGroup({ children, label }: { children: ReactNode; label: string }) {
-  return <div aria-label={label} className="drawing-choice-group" role="group">{children}</div>;
+function ChoiceGroup({ children, label, mixed = false }: { children: ReactNode; label: string; mixed?: boolean }) {
+  const mixedLabelId = useId();
+  return (
+    <div
+      aria-describedby={mixed ? mixedLabelId : undefined}
+      aria-label={label}
+      className="drawing-choice-group"
+      role="group"
+    >
+      {children}
+      {mixed ? <span className="drawing-mixed-label" id={mixedLabelId}>Mixed</span> : null}
+    </div>
+  );
 }
 
 function ChoiceButton({ active = false, children, label, mixed = false, onClick, text }: {
@@ -235,7 +255,7 @@ function ColorPicker<T extends CanvasColor | null>({ allowNone = false, colors, 
 }) {
   const selectedColor = value.kind === "value" ? colorString(value.value) : null;
   return (
-    <div aria-label={label} className="drawing-color-picker" role="group">
+    <div aria-label={`${label}${value.kind === "mixed" ? ", mixed values" : ""}`} className="drawing-color-picker" role="group">
       {allowNone ? (
         <button aria-label="Transparent" aria-pressed={value.kind === "value" && value.value === null} onClick={() => onChange(null as T)} title="Transparent" type="button">
           <Ban aria-hidden="true" size={17} />

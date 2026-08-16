@@ -6,6 +6,7 @@ type DrawingTool = CanvasTool | "text" | "image";
 
 type CanvasToolPaletteProps = {
   activeTool: DrawingTool;
+  isPropertiesPanelAvailable: boolean;
   isPropertiesPanelOpen: boolean;
   isToolLocked: boolean;
   onPropertiesPanelToggle: () => void;
@@ -18,11 +19,11 @@ const TOOLS = [
 ] as const satisfies ReadonlyArray<Readonly<{ tool: DrawingTool; label: string; shortcut: string; Icon: typeof MousePointer2 }>>;
 
 /** Small, keyboard discoverable drawing-mode selector kept outside world transforms. */
-export function CanvasToolPalette({ activeTool, isPropertiesPanelOpen, isToolLocked, onPropertiesPanelToggle, onToolLockChange, onToolSelect }: CanvasToolPaletteProps) {
+export function CanvasToolPalette({ activeTool, isPropertiesPanelAvailable, isPropertiesPanelOpen, isToolLocked, onPropertiesPanelToggle, onToolLockChange, onToolSelect }: CanvasToolPaletteProps) {
   const buttonRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [tabStop, setTabStop] = useState(() => Math.max(0, TOOLS.findIndex(({ tool }) => tool === activeTool)));
   const [isCompact, setIsCompact] = useState(() => typeof window !== "undefined" && window.matchMedia("(max-width: 899px)").matches);
-  const buttonCount = TOOLS.length + 1 + (isCompact ? 1 : 0);
+  const buttonCount = TOOLS.length + 1 + (isCompact && isPropertiesPanelAvailable ? 1 : 0);
 
   useEffect(() => {
     const activeIndex = TOOLS.findIndex(({ tool }) => tool === activeTool);
@@ -39,6 +40,10 @@ export function CanvasToolPalette({ activeTool, isPropertiesPanelOpen, isToolLoc
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
   }, []);
+
+  useEffect(() => {
+    if (!isPropertiesPanelAvailable) setTabStop((current) => Math.min(current, TOOLS.length));
+  }, [isPropertiesPanelAvailable]);
 
   function moveFocus(event: KeyboardEvent<HTMLButtonElement>, index: number) {
     let nextIndex: number | null = null;
@@ -87,7 +92,7 @@ export function CanvasToolPalette({ activeTool, isPropertiesPanelOpen, isToolLoc
       >
         <LockKeyhole aria-hidden="true" size={20} />
       </button>
-      {isCompact ? <button
+      {isCompact && isPropertiesPanelAvailable ? <button
         aria-controls="drawing-properties-panel"
         aria-expanded={isPropertiesPanelOpen}
         aria-label="Drawing properties"

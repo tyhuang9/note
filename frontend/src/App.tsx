@@ -1337,6 +1337,9 @@ function App() {
       values: drawingPropertiesFromPreference(preference),
     };
   }, [activeTool, drawingPreferences, selectedDrawingElements]);
+  useEffect(() => {
+    if (!drawingPropertiesContext) setIsPropertiesPanelOpen(false);
+  }, [drawingPropertiesContext]);
   const isTextFormattingVisible = Boolean(
     activeTextEditor && !activeTextEditor.isDestroyed
   ) || selectedDrawingElements.some((element) => element.type === "text");
@@ -6571,7 +6574,7 @@ function App() {
       />
 
       <section
-        className={`workspace ${isTextFormattingVisible ? "has-text-formatting" : ""} ${isPropertiesPanelOpen ? "has-compact-properties" : ""}`}
+        className={`workspace ${isTextFormattingVisible ? "has-text-formatting" : ""} ${isPropertiesPanelOpen && drawingPropertiesContext ? "has-compact-properties" : ""}`}
         inert={
           isAssistantOverlayOpen || isExplorerOverlayOpen ? true : undefined
         }
@@ -6664,6 +6667,7 @@ function App() {
           <div onPointerDown={(event) => event.stopPropagation()}>
             <CanvasToolPalette
               activeTool={activeTool}
+              isPropertiesPanelAvailable={Boolean(drawingPropertiesContext)}
               isPropertiesPanelOpen={isPropertiesPanelOpen}
               isToolLocked={isToolLocked}
               onPropertiesPanelToggle={() => setIsPropertiesPanelOpen((open) => !open)}

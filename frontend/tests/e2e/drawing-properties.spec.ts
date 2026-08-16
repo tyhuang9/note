@@ -38,7 +38,14 @@ test("applies tool defaults, edits compatible selections, and commits opacity on
   expect(committedOpacity).toBeGreaterThan(0.25);
   expect(committedOpacity).toBeLessThan(0.6);
 
+  await opacity.focus();
+  await page.keyboard.press("Tab");
   await canvas.focus();
+  await page.keyboard.press("Control+z");
+  await expect.poll(async () => Number(await rectangle.evaluate((element) => (element as HTMLElement).style.opacity))).toBe(1);
+  await page.keyboard.press("Control+y");
+  await expect.poll(async () => Number(await rectangle.evaluate((element) => (element as HTMLElement).style.opacity))).toBeCloseTo(committedOpacity, 2);
+
   await page.keyboard.press("Control+z");
   await expect.poll(async () => Number(await rectangle.evaluate((element) => (element as HTMLElement).style.opacity))).toBe(1);
   await page.keyboard.press("Control+z");
@@ -60,7 +67,7 @@ test("keeps the toolbar keyboard navigable and reveals compact adjustments witho
 
   await page.setViewportSize({ width: 320, height: 640 });
   const adjustments = page.getByRole("button", { name: "Drawing properties" });
-  await expect(adjustments).toBeVisible();
+  await expect(adjustments).toHaveCount(0);
   const targetSizes = await toolbar.locator("button").evaluateAll((buttons) => buttons.map((button) => {
     const bounds = button.getBoundingClientRect();
     return { height: bounds.height, width: bounds.width };
@@ -69,6 +76,7 @@ test("keeps the toolbar keyboard navigable and reveals compact adjustments witho
   expect(await toolbar.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
 
   await page.getByRole("button", { name: "Pen (P / 7)" }).click();
+  await expect(adjustments).toBeVisible();
   const properties = page.getByRole("complementary", { name: "Drawing properties" });
   await expect(properties).toBeHidden();
   await adjustments.click();

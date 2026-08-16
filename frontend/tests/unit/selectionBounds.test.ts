@@ -53,7 +53,7 @@ const connector: ConnectorElement = {
   pageId: "page",
   routing: "straight",
   start: { kind: "free", x: 100, y: 60 },
-  style: { endArrowhead: "none", startArrowhead: "none", strokeColor: { kind: "fixed", value: "#000" }, strokeWidth: 4 },
+  style: { endArrowhead: "none", fillColor: null, roughness: 1, roundness: 0, seed: 1, startArrowhead: "none", strokeColor: { kind: "fixed", value: "#000" }, strokeStyle: "solid", strokeWidth: 4 },
   type: "connector",
   updatedAt: 1,
   zIndex: 3,

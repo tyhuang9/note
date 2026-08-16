@@ -7,7 +7,7 @@ import { screenToleranceToWorld } from "../model/geometry";
 import { inkPath } from "../rendering/strokePath";
 import type { CanvasTool } from "./types";
 
-export type DrawingTool = Extract<CanvasTool, "select" | "pen" | "highlighter" | "eraser">;
+export type DrawingTool = CanvasTool | "text" | "image";
 type InkTool = Extract<DrawingTool, "pen" | "highlighter">;
 
 type ViewportMetrics = Readonly<{
@@ -93,7 +93,17 @@ export function drawingToolForShortcut(
   if (event.key === "Escape") return "select";
   switch (event.key.toLowerCase()) {
     case "v": return "select";
+    case "1": return "select";
+    case "r": case "2": return "rectangle";
+    case "d": case "3": return "diamond";
+    case "o": case "4": return "ellipse";
+    case "a": case "5": return "arrow";
+    case "l": case "6": return "line";
     case "p": return "pen";
+    case "7": return "pen";
+    case "t": case "8": return "text";
+    case "i": case "9": return "image";
+    case "0": return "eraser";
     case "h": return "highlighter";
     case "e": return "eraser";
     default: return null;

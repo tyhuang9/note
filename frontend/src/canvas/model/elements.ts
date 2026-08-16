@@ -18,14 +18,23 @@ export type TextElement = ElementBase<"text"> & BoxGeometry & { content: string;
 export type ImageElement = ElementBase<"image"> & BoxGeometry & { assetId: string; fileName?: string; altText?: string; naturalWidth: number; naturalHeight: number; fit: "contain" };
 export type InkPoint = [x: number, y: number, pressure: number];
 export type InkElement = ElementBase<"ink"> & BoxGeometry & { points: InkPoint[]; brush: { kind: "pen" | "highlighter"; color: CanvasColor; size: number; opacity: number; thinning: number; smoothing: number; streamline: number; simulatePressure: boolean } };
-export type ShapeElement = ElementBase<"shape"> & BoxGeometry & { shape: "rectangle" | "ellipse" | "diamond"; style: { strokeColor: CanvasColor; fillColor: CanvasColor | null; strokeWidth: number } };
+export type RoughStyle = {
+  fillColor?: CanvasColor | null;
+  roughness: number;
+  roundness: number;
+  seed: number;
+  strokeColor: CanvasColor;
+  strokeStyle: "solid" | "dashed" | "dotted";
+  strokeWidth: number;
+};
+export type ShapeElement = ElementBase<"shape"> & BoxGeometry & { shape: "rectangle" | "ellipse" | "diamond"; style: RoughStyle };
 export type PerimeterAnchor = { t: number };
 export type ConnectorEndpoint =
   | { kind: "free"; x: number; y: number }
   | { kind: "element"; targetElementId: ElementId; anchor: PerimeterAnchor; gap: number }
   | { kind: "group"; targetGroupId: GroupId; anchor: PerimeterAnchor; gap: number }
   | { kind: "connector"; targetConnectorId: ElementId; pathT: number; gap: number };
-export type ConnectorElement = ElementBase<"connector"> & { start: ConnectorEndpoint; end: ConnectorEndpoint; routing: "straight"; style: { strokeColor: CanvasColor; strokeWidth: number; startArrowhead: "none" | "arrow"; endArrowhead: "none" | "arrow" }; semantic?: { relationshipType?: string; label?: string } };
+export type ConnectorElement = ElementBase<"connector"> & { start: ConnectorEndpoint; end: ConnectorEndpoint; routing: "straight"; style: RoughStyle & { startArrowhead: "none" | "arrow"; endArrowhead: "none" | "arrow" }; semantic?: { relationshipType?: string; label?: string } };
 export type CanvasElement = TextElement | ImageElement | InkElement | ShapeElement | ConnectorElement;
 
 export function isBoxCanvasElement(element: CanvasElement): element is CanvasElement & BoxCanvasElement {

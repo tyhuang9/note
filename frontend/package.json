@@ -18,7 +18,8 @@
     "@tiptap/starter-kit": "^3.26.0",
     "perfect-freehand": "1.2.3",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "roughjs": "^4.6.6"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",

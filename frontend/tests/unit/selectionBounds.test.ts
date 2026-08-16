@@ -1,0 +1,117 @@
+import { describe, expect, it } from "vitest";
+import type { CanvasElement, ConnectorElement, InkElement, TextElement } from "../../src/canvas/model/elements";
+import { PEN_BRUSH } from "../../src/canvas/model/ink";
+import {
+  getProportionalScale,
+  getSelectionBounds,
+  getSelectionElementBounds,
+  scaleSelection,
+  translateSelection,
+} from "../../src/canvas/model/selectionBounds";
+
+const text: TextElement = {
+  content: "One",
+  createdAt: 1,
+  height: 40,
+  id: "text",
+  locked: false,
+  opacity: 1,
+  pageId: "page",
+  rotation: 0,
+  type: "text",
+  updatedAt: 1,
+  width: 100,
+  x: 10,
+  y: 20,
+  zIndex: 1,
+};
+
+const ink: InkElement = {
+  brush: PEN_BRUSH,
+  createdAt: 1,
+  height: 20,
+  id: "ink",
+  locked: false,
+  opacity: 1,
+  pageId: "page",
+  points: [[0, 0, 0.5], [40, 20, 0.7]],
+  rotation: 0,
+  type: "ink",
+  updatedAt: 1,
+  width: 40,
+  x: 150,
+  y: 50,
+  zIndex: 2,
+};
+
+const connector: ConnectorElement = {
+  createdAt: 1,
+  end: { kind: "free", x: 220, y: 110 },
+  id: "connector",
+  locked: false,
+  opacity: 1,
+  pageId: "page",
+  routing: "straight",
+  start: { kind: "free", x: 100, y: 60 },
+  style: { endArrowhead: "none", startArrowhead: "none", strokeColor: { kind: "fixed", value: "#000" }, strokeWidth: 4 },
+  type: "connector",
+  updatedAt: 1,
+  zIndex: 3,
+};
+
+describe("selection bounds", () => {
+  it("uses the rotated box corners rather than its unrotated DOM rectangle", () => {
+    const bounds = getSelectionElementBounds({ ...text, rotation: 90 });
+    expect(bounds).toMatchObject({ x: 40, width: 40, height: 100 });
+    expect(bounds?.y).toBeCloseTo(-10);
+  });
+
+  it("unions box, ink, and connector endpoint bounds", () => {
+    const elements: CanvasElement[] = [text, ink, connector];
+    expect(getSelectionBounds(elements, Object.fromEntries(elements.map((element) => [element.id, element])))).toEqual({
+      x: 10,
+      y: 20,
+      width: 212,
+      height: 92,
+    });
+  });
+
+  it("resolves element connector endpoints from the target perimeter", () => {
+    const attached: ConnectorElement = {
+      ...connector,
+      start: { kind: "element", targetElementId: text.id, anchor: { t: 0.25 }, gap: 3 },
+      end: { kind: "free", x: 220, y: 50 },
+    };
+    expect(getSelectionElementBounds(attached, { [text.id]: text, [attached.id]: attached })).toEqual({
+      x: 78,
+      y: 15,
+      width: 144,
+      height: 37,
+    });
+  });
+});
+
+describe("composite transforms", () => {
+  it("keeps locked items fixed while translating boxes and free connector endpoints", () => {
+    const locked = { ...text, id: "locked", locked: true, x: 300 };
+    const result = translateSelection([text, locked, connector], new Set([text.id, locked.id, connector.id]), { x: 8, y: -5 });
+    expect(result[0]).toMatchObject({ x: 18, y: 15 });
+    expect(result[1]).toBe(locked);
+    expect(result[2]).toMatchObject({ start: { kind: "free", x: 108, y: 55 }, end: { kind: "free", x: 228, y: 105 } });
+  });
+
+  it("scales positions, ink points and brush size uniformly about the opposing corner", () => {
+    const result = scaleSelection([text, ink, connector], new Set([text.id, ink.id, connector.id]), { x: 10, y: 20, width: 200, height: 100 }, "se", 2);
+    const scaledText = result[0] as TextElement;
+    const scaledInk = result[1] as InkElement;
+    expect(scaledText).toMatchObject({ x: 10, y: 20, width: 200, height: 80, content: "One" });
+    expect(scaledInk).toMatchObject({ x: 290, y: 80, width: 80, height: 40 });
+    expect(scaledInk.points).toEqual([[0, 0, 0.5], [80, 40, 0.7]]);
+    expect(scaledInk.brush.size).toBe(8);
+    expect(result[2]).toMatchObject({ start: { kind: "free", x: 190, y: 100 }, end: { kind: "free", x: 430, y: 200 } });
+  });
+
+  it("uses a single dominant-axis proportional scale from a corner drag", () => {
+    expect(getProportionalScale({ x: 0, y: 0, width: 100, height: 50 }, "se", { x: 150, y: 60 })).toBe(1.5);
+  });
+});

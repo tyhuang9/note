@@ -198,6 +198,97 @@ fn validate_ink_element(value: &Value) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_primitive_style(value: &Value, context: &str) -> Result<(), String> {
+    let Some(style) = value.get("style") else {
+        return Ok(());
+    };
+    let style = style
+        .as_object()
+        .ok_or_else(|| format!("{context}.style must be an object"))?;
+    for key in ["fillColor", "strokeColor"] {
+        if let Some(color) = style.get(key) {
+            if !color.is_null() {
+                validate_ink_color(color)?;
+            }
+        }
+    }
+    for (key, min, max) in [
+        ("roughness", 0.0, 10.0),
+        ("roundness", 0.0, 1.0),
+        ("strokeWidth", 0.0, 512.0),
+    ] {
+        if let Some(number) = style.get(key) {
+            let number = number
+                .as_f64()
+                .filter(|number| number.is_finite())
+                .ok_or_else(|| format!("{context}.style.{key} must be finite"))?;
+            if !(min..=max).contains(&number) || (key == "strokeWidth" && number == 0.0) {
+                return Err(format!("{context}.style.{key} is out of range"));
+            }
+        }
+    }
+    if let Some(seed) = style.get("seed") {
+        if seed
+            .as_u64()
+            .filter(|seed| *seed <= u32::MAX as u64)
+            .is_none()
+        {
+            return Err(format!(
+                "{context}.style.seed must be an unsigned 32-bit integer"
+            ));
+        }
+    }
+    if let Some(stroke_style) = style.get("strokeStyle") {
+        if !matches!(stroke_style.as_str(), Some("solid" | "dashed" | "dotted")) {
+            return Err(format!("{context}.style.strokeStyle is invalid"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_connector_endpoint(value: &Value, context: &str) -> Result<(), String> {
+    let endpoint = value
+        .as_object()
+        .ok_or_else(|| format!("{context} must be an object"))?;
+    match endpoint.get("kind").and_then(Value::as_str) {
+        Some("free") => {
+            required_finite_object(endpoint, "x", context)?;
+            required_finite_object(endpoint, "y", context)?;
+        }
+        Some(kind @ ("element" | "group" | "connector")) => {
+            let (target, position) = match kind {
+                "element" => ("targetElementId", "anchor"),
+                "group" => ("targetGroupId", "anchor"),
+                _ => ("targetConnectorId", "pathT"),
+            };
+            endpoint
+                .get(target)
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .ok_or_else(|| format!("{context}.{target} must be a non-empty string"))?;
+            let t = if position == "anchor" {
+                endpoint
+                    .get("anchor")
+                    .and_then(Value::as_object)
+                    .and_then(|anchor| anchor.get("t"))
+            } else {
+                endpoint.get("pathT")
+            };
+            if t.and_then(Value::as_f64)
+                .filter(|t| t.is_finite() && (0.0..=1.0).contains(t))
+                .is_none()
+            {
+                return Err(format!("{context}.{position} must be within 0 and 1"));
+            }
+            if required_finite_object(endpoint, "gap", context)? < 0.0 {
+                return Err(format!("{context}.gap cannot be negative"));
+            }
+        }
+        _ => return Err(format!("{context}.kind is invalid")),
+    }
+    Ok(())
+}
+
 fn validate_scene_batch(batch: &SceneChangeBatch) -> Result<(), String> {
     if batch.upserts.len() > MAX_SCENE_BATCH_UPSERTS {
         return Err(format!(
@@ -287,11 +378,39 @@ fn validate_element(value: &Value, page_id: &str) -> Result<(), String> {
             return Err("image element.assetId must be a non-empty string".into())
         }
         "ink" => validate_ink_element(value)?,
-        "shape" if value.get("shape").and_then(Value::as_str).is_none() => {
-            return Err("shape element.shape must be a string".into())
+        "shape" => {
+            if !matches!(
+                value.get("shape").and_then(Value::as_str),
+                Some("rectangle" | "ellipse" | "diamond")
+            ) {
+                return Err("shape element.shape is invalid".into());
+            }
+            validate_primitive_style(value, "shape")?;
         }
-        "connector" if value.get("start").is_none() || value.get("end").is_none() => {
-            return Err("connector endpoints are required".into())
+        "connector" => {
+            validate_connector_endpoint(
+                value.get("start").ok_or("connector.start is required")?,
+                "connector.start",
+            )?;
+            validate_connector_endpoint(
+                value.get("end").ok_or("connector.end is required")?,
+                "connector.end",
+            )?;
+            if let Some(routing) = value.get("routing") {
+                if routing.as_str() != Some("straight") {
+                    return Err("connector.routing must be straight".into());
+                }
+            }
+            validate_primitive_style(value, "connector")?;
+            if let Some(style) = value.get("style").and_then(Value::as_object) {
+                for key in ["startArrowhead", "endArrowhead"] {
+                    if let Some(arrow) = style.get(key) {
+                        if !matches!(arrow.as_str(), Some("none" | "arrow")) {
+                            return Err(format!("connector.style.{key} is invalid"));
+                        }
+                    }
+                }
+            }
         }
         _ => {}
     }
@@ -693,6 +812,39 @@ mod tests {
             "unexpected validation error: {error}"
         );
         assert_eq!(load_workspace_data_at(root).unwrap().pages[0].revision, 0);
+    }
+
+    #[test]
+    fn primitive_payloads_validate_new_fields_and_preserve_legacy_payloads() {
+        let directory = root();
+        seed_page(directory.path());
+        let legacy_shape = json!({"id":"shape","pageId":"p","type":"shape","x":0.0,"y":0.0,"width":10.0,"height":10.0,"rotation":0.0,"zIndex":0,"opacity":1.0,"locked":false,"createdAt":1,"updatedAt":1,"shape":"rectangle"});
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![legacy_shape],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+        let invalid = json!({"id":"bad","pageId":"p","type":"shape","x":0.0,"y":0.0,"width":10.0,"height":10.0,"rotation":0.0,"zIndex":1,"opacity":1.0,"locked":false,"createdAt":1,"updatedAt":1,"shape":"rectangle","style":{"strokeStyle":"zigzag","seed":-1,"roughness":-1,"roundness":2,"strokeWidth":0}});
+        let error = apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 1,
+                upserts: vec![invalid],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("roughness"));
+        assert_eq!(
+            load_workspace_data_at(directory.path()).unwrap().pages[0].revision,
+            1
+        );
     }
 
     #[test]

@@ -1,4 +1,10 @@
-import type { CanvasElement, ElementId, InkElement } from "./elements";
+import type {
+  CanvasElement,
+  ConnectorEndpoint,
+  ElementId,
+  InkElement,
+  ShapeElement,
+} from "./elements";
 import { isBoxCanvasElement } from "./elements";
 import type { CanvasPoint, CanvasRect } from "./geometry";
 
@@ -13,9 +19,151 @@ export function normalizeBounds(bounds: Bounds): Bounds {
   };
 }
 
-export function getElementBounds(element: CanvasElement): Bounds | null {
+export function getElementBounds(
+  element: CanvasElement,
+  elementsById: Readonly<Record<ElementId, CanvasElement>> = {},
+): Bounds | null {
+  if (element.type === "connector") {
+    const start = connectorEndpointPoint(element.start, elementsById);
+    const end = connectorEndpointPoint(element.end, elementsById);
+    if (!start || !end) return null;
+    const padding = Math.max(0, element.style.strokeWidth / 2);
+    return {
+      x: Math.min(start.x, end.x) - padding,
+      y: Math.min(start.y, end.y) - padding,
+      width: Math.abs(start.x - end.x) + padding * 2,
+      height: Math.abs(start.y - end.y) + padding * 2,
+    };
+  }
   if (!isBoxCanvasElement(element)) return null;
   return normalizeBounds({ x: element.x, y: element.y, width: element.width, height: element.height });
+}
+
+function pointInPolygon(point: CanvasPoint, vertices: readonly CanvasPoint[]) {
+  let inside = false;
+  for (let index = 0, previous = vertices.length - 1; index < vertices.length; previous = index, index += 1) {
+    const first = vertices[index];
+    const second = vertices[previous];
+    if (
+      (first.y > point.y) !== (second.y > point.y) &&
+      point.x < ((second.x - first.x) * (point.y - first.y)) / (second.y - first.y) + first.x
+    ) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+function distanceToPolygon(point: CanvasPoint, vertices: readonly CanvasPoint[]) {
+  let distance = Number.POSITIVE_INFINITY;
+  for (let index = 0; index < vertices.length; index += 1) {
+    distance = Math.min(
+      distance,
+      pointToSegmentDistance(point, vertices[index], vertices[(index + 1) % vertices.length]),
+    );
+  }
+  return distance;
+}
+
+function unrotatePoint(
+  element: Readonly<{ x: number; y: number; width: number; height: number; rotation: number }>,
+  point: CanvasPoint,
+) {
+  const center = { x: element.x + element.width / 2, y: element.y + element.height / 2 };
+  const angle = (-element.rotation * Math.PI) / 180;
+  const dx = point.x - center.x;
+  const dy = point.y - center.y;
+  return {
+    x: center.x + dx * Math.cos(angle) - dy * Math.sin(angle),
+    y: center.y + dx * Math.sin(angle) + dy * Math.cos(angle),
+  };
+}
+
+function shapeContainsPoint(element: ShapeElement, worldPoint: CanvasPoint, tolerance: number) {
+  const point = unrotatePoint(element, worldPoint);
+  const radius = Math.max(0, tolerance) + element.style.strokeWidth / 2;
+  const rect = normalizeBounds(element);
+  const hasFill = Boolean(element.style.fillColor);
+
+  if (element.shape === "ellipse") {
+    const rx = rect.width / 2;
+    const ry = rect.height / 2;
+    if (rx <= 0 || ry <= 0) return false;
+    const normalizedDistance = Math.hypot(
+      (point.x - (rect.x + rx)) / rx,
+      (point.y - (rect.y + ry)) / ry,
+    );
+    return hasFill
+      ? normalizedDistance <= 1 + radius / Math.min(rx, ry)
+      : Math.abs(normalizedDistance - 1) * Math.min(rx, ry) <= radius;
+  }
+
+  const vertices = element.shape === "diamond"
+    ? [
+        { x: rect.x + rect.width / 2, y: rect.y },
+        { x: rect.x + rect.width, y: rect.y + rect.height / 2 },
+        { x: rect.x + rect.width / 2, y: rect.y + rect.height },
+        { x: rect.x, y: rect.y + rect.height / 2 },
+      ]
+    : [
+        { x: rect.x, y: rect.y },
+        { x: rect.x + rect.width, y: rect.y },
+        { x: rect.x + rect.width, y: rect.y + rect.height },
+        { x: rect.x, y: rect.y + rect.height },
+      ];
+  return (hasFill && pointInPolygon(point, vertices)) || distanceToPolygon(point, vertices) <= radius;
+}
+
+function connectorEndpointPoint(
+  endpoint: ConnectorEndpoint,
+  elementsById: Readonly<Record<ElementId, CanvasElement>>,
+): CanvasPoint | null {
+  if (endpoint.kind === "free") return endpoint;
+  if (endpoint.kind !== "element") return null;
+  const target = elementsById[endpoint.targetElementId];
+  if (!target || !isBoxCanvasElement(target)) return null;
+  const bounds = normalizeBounds(target);
+  const t = ((endpoint.anchor.t % 1) + 1) % 1;
+  const perimeter = 2 * (bounds.width + bounds.height);
+  const distance = t * perimeter;
+  if (distance <= bounds.width) return { x: bounds.x + distance, y: bounds.y - endpoint.gap };
+  if (distance <= bounds.width + bounds.height) return { x: bounds.x + bounds.width + endpoint.gap, y: bounds.y + distance - bounds.width };
+  if (distance <= bounds.width * 2 + bounds.height) return { x: bounds.x + bounds.width - (distance - bounds.width - bounds.height), y: bounds.y + bounds.height + endpoint.gap };
+  return { x: bounds.x - endpoint.gap, y: bounds.y + bounds.height - (distance - bounds.width * 2 - bounds.height) };
+}
+
+/** Geometry-aware hit test shared by selection and the eraser. */
+export function canvasElementContainsPoint(
+  element: CanvasElement,
+  point: CanvasPoint,
+  tolerance = 0,
+  elementsById: Readonly<Record<ElementId, CanvasElement>> = {},
+): boolean {
+  if (element.type === "ink") return inkContainsPoint(element, point, tolerance);
+  if (element.type === "connector") {
+    const start = connectorEndpointPoint(element.start, elementsById);
+    const end = connectorEndpointPoint(element.end, elementsById);
+    return Boolean(start && end && pointToSegmentDistance(point, start, end) <= Math.max(0, tolerance) + element.style.strokeWidth / 2);
+  }
+  if (element.type === "shape") return shapeContainsPoint(element, point, tolerance);
+  return boundsContainPoint(element, unrotatePoint(element, point), tolerance);
+}
+
+export function getEraserElementIds(
+  elements: readonly CanvasElement[],
+  points: readonly CanvasPoint[],
+  tolerance: number,
+): ElementId[] {
+  const elementsById = Object.fromEntries(elements.map((element) => [element.id, element]));
+  return elements
+    .filter(
+      (element) =>
+        !element.locked &&
+        points.some((point) =>
+          canvasElementContainsPoint(element, point, tolerance, elementsById),
+        ),
+    )
+    .map((element) => element.id);
 }
 
 export function boundsContainPoint(bounds: Bounds, point: CanvasPoint, tolerance = 0): boolean {
@@ -103,8 +251,7 @@ export function getTopmostElementAtPoint(
 ): CanvasElement | undefined {
   for (let index = orderedElementIds.length - 1; index >= 0; index -= 1) {
     const element = elementsById[orderedElementIds[index]];
-    const bounds = element && getElementBounds(element);
-    if (bounds && boundsContainPoint(bounds, point, tolerance)) return element;
+    if (element && canvasElementContainsPoint(element, point, tolerance, elementsById)) return element;
   }
   return undefined;
 }

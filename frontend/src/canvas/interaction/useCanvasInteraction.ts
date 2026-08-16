@@ -13,7 +13,9 @@ import type {
   SelectionState,
 } from "../../appTypes";
 import { getSelectionRect, rectsIntersect } from "../../editorUtils";
-import type { BoxCanvasElement } from "../model/elements";
+import type { CanvasElement } from "../model/elements";
+import { screenToleranceToWorld } from "../model/geometry";
+import { canvasElementContainsPoint, getElementBounds } from "../model/hitTesting";
 import {
   primitiveGeometryFromSession,
   type PrimitiveGeometry,
@@ -36,12 +38,17 @@ type CanvasInteractionOptions = {
   canvasContentRef: RefObject<HTMLDivElement | null>;
   canvasRef: RefObject<HTMLElement | null>;
   cleanupMarquee: () => void;
+  hasPendingImage: () => boolean;
   isTemporaryHandActiveRef: RefObject<boolean>;
   leaveTextEditing: () => void;
   liveDraftLayerRef: RefObject<SVGSVGElement | null>;
   maxZoom: number;
   minZoom: number;
   onCreatePrimitive: (tool: PrimitiveTool, geometry: PrimitiveGeometry) => void;
+  onCreateText: (point: CanvasPoint) => void;
+  onImagePreviewPointChange: (point: CanvasPoint | null) => void;
+  onPlaceImage: (point: CanvasPoint) => void;
+  onRequestImagePicker: () => void;
   panOffsetRef: RefObject<PanOffset>;
   scheduleCanvasContentTransform: (panOffset: PanOffset) => void;
   scheduleSelectionRectangle: (rect: SelectionRect) => void;
@@ -50,9 +57,10 @@ type CanvasInteractionOptions = {
   setIsCanvasKeyboardActive: (active: boolean) => void;
   setLivePanOffset: (panOffset: PanOffset) => void;
   setPanOffset: (panOffset: PanOffset) => void;
+  selectedElementIdsRef: RefObject<string[]>;
   setSelectedElementIds: (elementIds: string[]) => void;
   setZoomLevel: (zoom: number) => void;
-  visibleElements: readonly BoxCanvasElement[];
+  visibleElements: readonly CanvasElement[];
   zoomLevelRef: RefObject<number>;
   zoomStep: number;
 };
@@ -67,7 +75,7 @@ function isCanvasChromeTarget(target: EventTarget | null) {
 }
 
 function isCanvasBackgroundTarget(target: EventTarget | null) {
-  if (!(target instanceof HTMLElement)) {
+  if (!(target instanceof Element)) {
     return false;
   }
 
@@ -224,7 +232,26 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
         startPan(event);
         return;
       }
-      if (!isPrimitiveTool(tool) || primitiveSession.current) return;
+      if (!isPrimitiveTool(tool)) {
+        if (tool !== "text" && tool !== "image") return;
+        const point = getCanvasPoint(event.clientX, event.clientY);
+        if (!point) return;
+        event.preventDefault();
+        event.stopPropagation();
+        current.leaveTextEditing();
+        current.cleanupMarquee();
+        current.setInsertionPoint(null);
+        current.setIsCanvasKeyboardActive(true);
+        if (tool === "text") {
+          current.onCreateText(point);
+        } else if (current.hasPendingImage()) {
+          current.onPlaceImage(point);
+        } else {
+          current.onRequestImagePicker();
+        }
+        return;
+      }
+      if (primitiveSession.current) return;
 
       const point = getCanvasPoint(event.clientX, event.clientY);
       if (!point) return;
@@ -251,28 +278,71 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
     [getCanvasPoint, paintPrimitivePreview, startPan],
   );
 
+  const handlePointerMoveCapture = useCallback(
+    (event: ReactPointerEvent<HTMLElement>) => {
+      const current = optionsRef.current;
+      if (current.activeToolRef.current !== "image" || !current.hasPendingImage()) return;
+      const point = getCanvasPoint(event.clientX, event.clientY);
+      if (point) current.onImagePreviewPointChange(point);
+    },
+    [getCanvasPoint],
+  );
+
   const handlePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
       const current = optionsRef.current;
       if (!isCanvasBackgroundTarget(event.target)) {
         return;
       }
-
-      current.leaveTextEditing();
-      current.setSelectedElementIds([]);
-      current.cleanupMarquee();
-      current.setIsCanvasKeyboardActive(true);
-      current.setActiveMode("canvas");
-      event.preventDefault();
-
       if (event.button === 2) {
         startPan(event);
-      } else {
+        return;
+      }
+      if (current.activeToolRef.current !== "select") return;
+
+      current.leaveTextEditing();
+      current.cleanupMarquee();
+      current.setIsCanvasKeyboardActive(true);
+      event.preventDefault();
+
+      {
         const startPoint = getCanvasPoint(event.clientX, event.clientY);
 
         if (!startPoint) {
           return;
         }
+
+        const tolerance = screenToleranceToWorld(6, {
+          zoom: Math.max(0.01, current.zoomLevelRef.current),
+        });
+        const elementsById = Object.fromEntries(
+          current.visibleElements.map((element) => [element.id, element]),
+        );
+        let hitElement: CanvasElement | undefined;
+        for (let index = current.visibleElements.length - 1; index >= 0; index -= 1) {
+          const candidate = current.visibleElements[index];
+          if (canvasElementContainsPoint(candidate, startPoint, tolerance, elementsById)) {
+            hitElement = candidate;
+            break;
+          }
+        }
+        if (hitElement) {
+          const currentIds = current.selectedElementIdsRef.current;
+          const nextIds = event.shiftKey
+            ? currentIds.includes(hitElement.id)
+              ? currentIds.filter((id) => id !== hitElement.id)
+              : [...currentIds, hitElement.id]
+            : [hitElement.id];
+          current.selectedElementIdsRef.current = nextIds;
+          current.setSelectedElementIds(nextIds);
+          current.setInsertionPoint(null);
+          current.setActiveMode(nextIds.length > 0 ? "selected" : "canvas");
+          return;
+        }
+
+        current.selectedElementIdsRef.current = [];
+        current.setSelectedElementIds([]);
+        current.setActiveMode("canvas");
 
         selectionState.current = {
           startX: startPoint.x,
@@ -400,16 +470,16 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
 
       if (currentSelection?.didMove) {
         const nextSelectionRect = getSelectionRect(currentSelection);
+        const elementsById = Object.fromEntries(
+          current.visibleElements.map((element) => [element.id, element]),
+        );
         const nextSelectedElementIds = current.visibleElements
-          .filter((element) =>
-            rectsIntersect(nextSelectionRect, {
-              x: element.x,
-              y: element.y,
-              width: element.width,
-              height: element.height,
-            }),
-          )
+          .filter((element) => {
+            const bounds = getElementBounds(element, elementsById);
+            return Boolean(bounds && rectsIntersect(nextSelectionRect, bounds));
+          })
           .map((element) => element.id);
+        current.selectedElementIdsRef.current = nextSelectedElementIds;
         current.setSelectedElementIds(nextSelectedElementIds);
         current.setActiveMode(
           nextSelectedElementIds.length > 0 ? "selected" : "canvas",
@@ -518,6 +588,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
     handlePointerCancel,
     handlePointerEnd,
     handlePointerMove,
+    handlePointerMoveCapture,
     handleWheel,
     cancelMarquee,
     startPan,

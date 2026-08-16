@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  drawingToolAfterCreation,
   drawingToolForShortcut,
   screenSampleToWorld,
 } from "../../src/canvas/interaction/useInkInteraction";
@@ -57,9 +58,26 @@ describe("ink pointer normalization", () => {
 describe("drawing shortcuts", () => {
   it.each([
     ["v", "select"],
+    ["1", "select"],
+    ["r", "rectangle"],
+    ["2", "rectangle"],
+    ["d", "diamond"],
+    ["3", "diamond"],
+    ["o", "ellipse"],
+    ["4", "ellipse"],
+    ["a", "arrow"],
+    ["5", "arrow"],
+    ["l", "line"],
+    ["6", "line"],
     ["P", "pen"],
+    ["7", "pen"],
+    ["t", "text"],
+    ["8", "text"],
+    ["i", "image"],
+    ["9", "image"],
     ["h", "highlighter"],
     ["E", "eraser"],
+    ["0", "eraser"],
     ["Escape", "select"],
   ] as const)("maps %s to %s", (key, tool) => {
     expect(drawingToolForShortcut({ altKey: false, ctrlKey: false, key, metaKey: false })).toBe(tool);
@@ -69,6 +87,15 @@ describe("drawing shortcuts", () => {
     expect(drawingToolForShortcut({ altKey: false, ctrlKey: true, key: "p", metaKey: false })).toBeNull();
     expect(drawingToolForShortcut({ altKey: false, ctrlKey: false, key: "x", metaKey: false })).toBeNull();
     expect(drawingToolForShortcut({ altKey: false, ctrlKey: false, key: "p", metaKey: false }, false)).toBeNull();
+  });
+
+  it("returns creation tools to Select unless tool lock is active", () => {
+    expect(drawingToolAfterCreation("rectangle", false)).toBe("select");
+    expect(drawingToolAfterCreation("pen", false)).toBe("select");
+    expect(drawingToolAfterCreation("text", false)).toBe("select");
+    expect(drawingToolAfterCreation("image", false)).toBe("select");
+    expect(drawingToolAfterCreation("highlighter", true)).toBe("highlighter");
+    expect(drawingToolAfterCreation("arrow", true)).toBe("arrow");
   });
 });
 

@@ -27,5 +27,16 @@ export function ConnectorElementView({ element }: { element: ConnectorElement })
   const minX = Math.min(element.start.x, element.end.x);
   const minY = Math.min(element.start.y, element.end.y);
   const x1 = element.start.x - minX; const y1 = element.start.y - minY; const x2 = element.end.x - minX; const y2 = element.end.y - minY;
-  return <svg aria-label="Connector" className="primitive-connector" data-canvas-element-id={element.id} height={Math.max(1, Math.abs(y2 - y1) + 8)} style={{ left: minX - 4, overflow: "visible", position: "absolute", top: minY - 4, zIndex: element.zIndex }} width={Math.max(1, Math.abs(x2 - x1) + 8)}><line stroke={color(element.style.strokeColor)} strokeDasharray={element.style.strokeStyle === "dashed" ? "8 5" : element.style.strokeStyle === "dotted" ? "2 4" : undefined} strokeWidth={element.style.strokeWidth} x1={x1 + 4} x2={x2 + 4} y1={y1 + 4} y2={y2 + 4} /></svg>;
+  const markerId = `connector-arrow-${element.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+  const stroke = color(element.style.strokeColor);
+  return <svg aria-label="Connector" className="primitive-connector" data-canvas-element-id={element.id} height={Math.max(1, Math.abs(y2 - y1) + 8)} style={{ left: minX - 4, opacity: element.opacity, overflow: "visible", position: "absolute", top: minY - 4, zIndex: element.zIndex }} width={Math.max(1, Math.abs(x2 - x1) + 8)}>
+    {element.style.endArrowhead === "arrow" ? (
+      <defs>
+        <marker id={markerId} markerHeight="8" markerUnits="strokeWidth" markerWidth="8" orient="auto" refX="7" refY="4">
+          <path d="M 0 0 L 8 4 L 0 8 z" fill={stroke} />
+        </marker>
+      </defs>
+    ) : null}
+    <line markerEnd={element.style.endArrowhead === "arrow" ? `url(#${markerId})` : undefined} stroke={stroke} strokeDasharray={element.style.strokeStyle === "dashed" ? "8 5" : element.style.strokeStyle === "dotted" ? "2 4" : undefined} strokeWidth={element.style.strokeWidth} x1={x1 + 4} x2={x2 + 4} y1={y1 + 4} y2={y2 + 4} />
+  </svg>;
 }

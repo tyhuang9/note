@@ -40,6 +40,7 @@ import {
   type PrimitiveTool,
 } from "./canvas/interaction/primitiveGeometry";
 import {
+  drawingToolAfterCreation,
   drawingToolForShortcut,
   useInkInteraction,
   type DrawingTool,
@@ -277,7 +278,14 @@ type TextFormatState = Record<ToolbarActionId, boolean> & {
 };
 
 type CreateTextBlockOptions = {
+  fromTool?: boolean;
   placement?: "block-origin" | "text-caret";
+};
+
+type PendingImagePlacement = {
+  dataUrl: string;
+  fileName: string;
+  point: CanvasPoint | null;
 };
 
 type ClipboardImage =
@@ -1068,6 +1076,8 @@ function App() {
   const [activeMode, setActiveMode] = useState<InteractionMode>("canvas");
   const [activeTool, setActiveTool] = useState<DrawingTool>("select");
   const [isToolLocked, setIsToolLocked] = useState(false);
+  const [pendingImagePlacement, setPendingImagePlacement] =
+    useState<PendingImagePlacement | null>(null);
   const [panOffset, setPanOffset] = useState<PanOffset>({ x: 0, y: 0 });
   const [livePanOffset, setLivePanOffset] = useState<PanOffset>(panOffset);
   const [insertionPoint, setInsertionPoint] = useState<InsertionPoint | null>(null);
@@ -1132,6 +1142,7 @@ function App() {
   const canvasRef = useRef<HTMLElement | null>(null);
   const canvasContentRef = useRef<HTMLDivElement | null>(null);
   const liveDraftLayerRef = useRef<SVGSVGElement | null>(null);
+  const imagePickerInputRef = useRef<HTMLInputElement | null>(null);
   const selectionRectRef = useRef<HTMLDivElement | null>(null);
   const selectionFrameRef = useRef<HTMLDivElement | null>(null);
   const selectionTransformRef = useRef<SelectionTransformSession | null>(null);
@@ -1184,10 +1195,13 @@ function App() {
   const activeToolRef = useRef<DrawingTool>(activeTool);
   const isToolLockedRef = useRef(isToolLocked);
   const isTemporaryHandActiveRef = useRef(false);
+  const pendingImagePlacementRef = useRef<PendingImagePlacement | null>(null);
+  const imagePickerRequestRef = useRef(0);
 
   dataRef.current = data;
   activeToolRef.current = activeTool;
   isToolLockedRef.current = isToolLocked;
+  pendingImagePlacementRef.current = pendingImagePlacement;
   isSnapToGridEnabledRef.current = isGridVisible && isSnapToGridEnabled;
   editingBlockIdRef.current = editingBlockId;
   openPageTabIdsRef.current = openPageTabIds;
@@ -3003,6 +3017,7 @@ function App() {
       if (event.key === "Escape") {
         cancelCanvasSelectionSession();
         cancelSelectionFrameInteraction();
+        clearPendingImagePlacement();
       }
 
       const currentEditingBlockId = editingBlockIdRef.current;
@@ -3119,9 +3134,7 @@ function App() {
         shortcutTool
       ) {
         event.preventDefault();
-        activeToolRef.current = shortcutTool;
-        setActiveTool(shortcutTool);
-        setInsertionPoint(null);
+        selectDrawingTool(shortcutTool);
         return;
       }
 
@@ -4992,6 +5005,13 @@ function App() {
     setIsCanvasKeyboardActive(true);
     setActiveMode("editing");
     setInsertionPoint(null);
+    if (options.fromTool) {
+      const nextTool = drawingToolAfterCreation("text", isToolLockedRef.current);
+      if (nextTool !== "text") {
+        activeToolRef.current = nextTool;
+        setActiveTool(nextTool);
+      }
+    }
   }
 
   function readBlobAsDataUrl(blob: Blob): Promise<string> {
@@ -5004,6 +5024,64 @@ function App() {
           : reject(new Error("Could not read image data."));
       reader.readAsDataURL(blob);
     });
+  }
+
+  function clearPendingImagePlacement() {
+    imagePickerRequestRef.current += 1;
+    pendingImagePlacementRef.current = null;
+    setPendingImagePlacement(null);
+  }
+
+  function requestImagePicker() {
+    activeToolRef.current = "image";
+    setActiveTool("image");
+    imagePickerInputRef.current?.click();
+  }
+
+  function selectDrawingTool(tool: DrawingTool) {
+    if (tool === "image") {
+      requestImagePicker();
+      return;
+    }
+    clearPendingImagePlacement();
+    activeToolRef.current = tool;
+    setActiveTool(tool);
+    setInsertionPoint(null);
+  }
+
+  async function handleImageFileSelected(file: File | undefined) {
+    if (!file || !file.type.startsWith("image/")) return;
+    const requestId = imagePickerRequestRef.current + 1;
+    imagePickerRequestRef.current = requestId;
+    let dataUrl: string;
+    try {
+      dataUrl = await readBlobAsDataUrl(file);
+    } catch {
+      return;
+    }
+    if (imagePickerRequestRef.current !== requestId) return;
+    const pending = {
+      dataUrl,
+      fileName: file.name || "Canvas image",
+      point: null,
+    };
+    pendingImagePlacementRef.current = pending;
+    setPendingImagePlacement(pending);
+  }
+
+  function placePendingImage(point: CanvasPoint) {
+    const pending = pendingImagePlacementRef.current;
+    if (!pending) {
+      requestImagePicker();
+      return;
+    }
+    void createImageBlock(point.x, point.y, pending.dataUrl, pending.fileName);
+    const nextTool = drawingToolAfterCreation("image", isToolLockedRef.current);
+    if (nextTool !== "image") {
+      clearPendingImagePlacement();
+      activeToolRef.current = nextTool;
+      setActiveTool(nextTool);
+    }
   }
 
   async function managedImageDataUrl(source: string): Promise<string> {
@@ -5147,11 +5225,11 @@ function App() {
     ));
   }, []);
 
-  const eraseInkElements = useCallback((elementIds: readonly string[]) => {
+  const eraseCanvasElements = useCallback((elementIds: readonly string[]) => {
     const ids = new Set(elementIds);
     if (ids.size === 0) return;
     setBlocksWithHistory((currentElements) => currentElements.filter(
-      (element) => !(element.type === "ink" && !element.locked && ids.has(element.id)),
+      (element) => element.locked || !ids.has(element.id),
     ));
     const nextSelection = selectedBlockIdsRef.current.filter((id) => !ids.has(id));
     selectedBlockIdsRef.current = nextSelection;
@@ -6003,9 +6081,10 @@ function App() {
       setInsertionPoint(null);
       setIsCanvasKeyboardActive(true);
       setActiveMode("selected");
-      if (!isToolLockedRef.current) {
-        activeToolRef.current = "select";
-        setActiveTool("select");
+      const nextTool = drawingToolAfterCreation(tool, isToolLockedRef.current);
+      if (nextTool !== tool) {
+        activeToolRef.current = nextTool;
+        setActiveTool(nextTool);
       }
     },
     [],
@@ -6016,12 +6095,27 @@ function App() {
     canvasContentRef,
     canvasRef,
     cleanupMarquee: clearMarquee,
+    hasPendingImage: () => pendingImagePlacementRef.current !== null,
     isTemporaryHandActiveRef,
     leaveTextEditing,
     liveDraftLayerRef,
     maxZoom: MAX_ZOOM,
     minZoom: MIN_ZOOM,
     onCreatePrimitive: completePrimitiveCreation,
+    onCreateText: (point) =>
+      createTextBlock(point.x, point.y, "", {
+        fromTool: true,
+        placement: "block-origin",
+      }),
+    onImagePreviewPointChange: (point) => {
+      const current = pendingImagePlacementRef.current;
+      if (!current) return;
+      const next = { ...current, point };
+      pendingImagePlacementRef.current = next;
+      setPendingImagePlacement(next);
+    },
+    onPlaceImage: placePendingImage,
+    onRequestImagePicker: requestImagePicker,
     panOffsetRef,
     scheduleCanvasContentTransform,
     scheduleSelectionRectangle,
@@ -6030,6 +6124,7 @@ function App() {
     setIsCanvasKeyboardActive,
     setLivePanOffset,
     setPanOffset,
+    selectedElementIdsRef: selectedBlockIdsRef,
     setSelectedElementIds: setSelectedBlockIds,
     setZoomLevel,
     visibleElements: visibleBlocks,
@@ -6077,6 +6172,11 @@ function App() {
       setInsertionPoint(null);
       setIsCanvasKeyboardActive(true);
       setActiveMode("selected");
+      const nextTool = drawingToolAfterCreation(tool, isToolLockedRef.current);
+      if (nextTool !== tool) {
+        activeToolRef.current = nextTool;
+        setActiveTool(nextTool);
+      }
     },
     [],
   );
@@ -6086,9 +6186,9 @@ function App() {
     canvasContentRef,
     liveDraftLayerRef,
     onCompleteStroke: completeInkStroke,
-    onEraseStrokes: eraseInkElements,
-    visibleInkElements: () => dataRef.current.elements.filter(
-      (element): element is InkElement => element.pageId === selectedPageIdRef.current && element.type === "ink",
+    onEraseElements: eraseCanvasElements,
+    visibleElements: () => dataRef.current.elements.filter(
+      (element) => element.pageId === selectedPageIdRef.current,
     ),
     zoomLevelRef,
   });
@@ -6331,7 +6431,10 @@ function App() {
             if (!event.defaultPrevented) inkInteraction.handlePointerDownCapture(event);
           }}
           onPointerMove={canvasInteraction.handlePointerMove}
-          onPointerMoveCapture={inkInteraction.handlePointerMoveCapture}
+          onPointerMoveCapture={(event) => {
+            canvasInteraction.handlePointerMoveCapture(event);
+            inkInteraction.handlePointerMoveCapture(event);
+          }}
           onPointerUp={canvasInteraction.handlePointerEnd}
           onPointerUpCapture={inkInteraction.handlePointerUpCapture}
           onWheel={canvasInteraction.handleWheel}
@@ -6342,11 +6445,20 @@ function App() {
               activeTool={activeTool}
               isToolLocked={isToolLocked}
               onToolLockChange={setIsToolLocked}
-              onToolSelect={(tool) => {
-                activeToolRef.current = tool;
-                setActiveTool(tool);
-                setInsertionPoint(null);
+              onToolSelect={selectDrawingTool}
+            />
+            <input
+              accept="image/*"
+              aria-hidden="true"
+              hidden
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0];
+                event.currentTarget.value = "";
+                void handleImageFileSelected(file);
               }}
+              ref={imagePickerInputRef}
+              tabIndex={-1}
+              type="file"
             />
           </div>
           {offscreenGroups.length > 0 ? (
@@ -6523,6 +6635,18 @@ function App() {
                 )}
               />
             ))}
+            {pendingImagePlacement?.point ? (
+              <img
+                alt=""
+                aria-hidden="true"
+                className="canvas-image-placement-preview"
+                src={pendingImagePlacement.dataUrl}
+                style={{
+                  left: pendingImagePlacement.point.x,
+                  top: pendingImagePlacement.point.y,
+                }}
+              />
+            ) : null}
             {insertionPoint ? (
               <div
                 className="canvas-caret"

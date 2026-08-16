@@ -2080,6 +2080,18 @@ h2 {
   pointer-events: none;
 }
 
+.canvas-image-placement-preview {
+  position: absolute;
+  z-index: 7;
+  width: min(240px, 30vw);
+  max-height: 240px;
+  border: 1px dashed var(--canvas-tool-text);
+  border-radius: 6px;
+  opacity: 0.58;
+  object-fit: contain;
+  pointer-events: none;
+}
+
 .canvas-tool-palette {
   position: absolute;
   top: 58px;

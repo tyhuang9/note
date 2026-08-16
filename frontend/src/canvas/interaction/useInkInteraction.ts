@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, type RefObject } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { HIGHLIGHTER_BRUSH, MAX_INK_POINTS, normalizePressure, PEN_BRUSH, type RawInkPoint } from "../model/ink";
-import type { InkElement } from "../model/elements";
-import { inkContainsPoint } from "../model/hitTesting";
+import type { CanvasElement } from "../model/elements";
+import { getEraserElementIds } from "../model/hitTesting";
 import { screenToleranceToWorld } from "../model/geometry";
 import { inkPath } from "../rendering/strokePath";
 import type { CanvasTool } from "./types";
@@ -49,8 +49,8 @@ type UseInkInteractionOptions = {
   canvasContentRef: RefObject<HTMLDivElement | null>;
   liveDraftLayerRef: RefObject<SVGSVGElement | null>;
   onCompleteStroke: (tool: InkTool, points: readonly RawInkPoint[]) => void;
-  onEraseStrokes: (elementIds: readonly string[]) => void;
-  visibleInkElements: () => readonly InkElement[];
+  onEraseElements: (elementIds: readonly string[]) => void;
+  visibleElements: () => readonly CanvasElement[];
   zoomLevelRef: RefObject<number>;
 };
 
@@ -110,6 +110,13 @@ export function drawingToolForShortcut(
   }
 }
 
+export function drawingToolAfterCreation(
+  createdWith: DrawingTool,
+  isToolLocked: boolean,
+): DrawingTool {
+  return isToolLocked ? createdWith : "select";
+}
+
 function pointerSamples(event: ReactPointerEvent<HTMLElement>) {
   const nativeEvent = event.nativeEvent;
   const coalesced = nativeEvent.getCoalescedEvents?.();
@@ -146,14 +153,14 @@ export function useInkInteraction({
   canvasContentRef,
   liveDraftLayerRef,
   onCompleteStroke,
-  onEraseStrokes,
-  visibleInkElements,
+  onEraseElements,
+  visibleElements,
   zoomLevelRef,
 }: UseInkInteractionOptions) {
-  const optionsRef = useRef({ activeToolRef, canvasContentRef, liveDraftLayerRef, onCompleteStroke, onEraseStrokes, visibleInkElements, zoomLevelRef });
+  const optionsRef = useRef({ activeToolRef, canvasContentRef, liveDraftLayerRef, onCompleteStroke, onEraseElements, visibleElements, zoomLevelRef });
   const sessionRef = useRef<InkInteractionSession | null>(null);
   const previewPathRef = useRef<SVGPathElement | null>(null);
-  optionsRef.current = { activeToolRef, canvasContentRef, liveDraftLayerRef, onCompleteStroke, onEraseStrokes, visibleInkElements, zoomLevelRef };
+  optionsRef.current = { activeToolRef, canvasContentRef, liveDraftLayerRef, onCompleteStroke, onEraseElements, visibleElements, zoomLevelRef };
 
   const clearPreview = useCallback(() => {
     previewPathRef.current?.remove();
@@ -201,14 +208,14 @@ export function useInkInteraction({
   const collectEraserTargets = useCallback((event: ReactPointerEvent<HTMLElement>, session: EraserSession) => {
     const current = optionsRef.current;
     const tolerance = screenToleranceToWorld(12, { zoom: Math.max(0.01, current.zoomLevelRef.current) });
-    const candidates = current.visibleInkElements();
+    const candidates = current.visibleElements();
+    const points: RawInkPoint[] = [];
     for (const sample of pointerSamples(event)) {
       const point = screenSampleToWorld(sample, session.viewport, false);
-      if (!point) continue;
-      for (const element of candidates) {
-        if (session.elementIds.has(element.id) || element.locked) continue;
-        if (inkContainsPoint(element, point, tolerance)) session.elementIds.add(element.id);
-      }
+      if (point) points.push(point);
+    }
+    for (const elementId of getEraserElementIds(candidates, points, tolerance)) {
+      session.elementIds.add(elementId);
     }
   }, []);
 
@@ -260,7 +267,7 @@ export function useInkInteraction({
       optionsRef.current.onCompleteStroke(session.tool, session.points);
     }
     if (commit && session.kind === "erasing" && session.elementIds.size > 0) {
-      optionsRef.current.onEraseStrokes([...session.elementIds]);
+      optionsRef.current.onEraseElements([...session.elementIds]);
     }
     event.preventDefault();
     event.stopPropagation();

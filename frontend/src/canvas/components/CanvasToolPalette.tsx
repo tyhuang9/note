@@ -4,6 +4,8 @@ type DrawingTool = CanvasTool | "text" | "image";
 
 type CanvasToolPaletteProps = {
   activeTool: DrawingTool;
+  isToolLocked: boolean;
+  onToolLockChange: (locked: boolean) => void;
   onToolSelect: (tool: DrawingTool) => void;
 };
 
@@ -23,7 +25,7 @@ const TOOLS: ReadonlyArray<Readonly<{ tool: DrawingTool; label: string; shortcut
 ];
 
 /** Small, keyboard discoverable drawing-mode selector kept outside world transforms. */
-export function CanvasToolPalette({ activeTool, onToolSelect }: CanvasToolPaletteProps) {
+export function CanvasToolPalette({ activeTool, isToolLocked, onToolLockChange, onToolSelect }: CanvasToolPaletteProps) {
   return (
     <div aria-label="Drawing tools" className="canvas-tool-palette" role="toolbar">
       {TOOLS.map(({ tool, label, shortcut }) => (
@@ -39,6 +41,16 @@ export function CanvasToolPalette({ activeTool, onToolSelect }: CanvasToolPalett
           {label}
         </button>
       ))}
+      <button
+        aria-label="Keep drawing tool active"
+        aria-pressed={isToolLocked}
+        data-tool-lock
+        onClick={() => onToolLockChange(!isToolLocked)}
+        title={isToolLocked ? "Unlock drawing tool" : "Keep drawing tool active"}
+        type="button"
+      >
+        {isToolLocked ? "Locked" : "Lock"}
+      </button>
     </div>
   );
 }

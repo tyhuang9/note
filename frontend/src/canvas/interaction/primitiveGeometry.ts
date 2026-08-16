@@ -1,6 +1,19 @@
 import type { CanvasPoint, CanvasRect } from "../model/geometry";
 
 export type PrimitiveModifiers = Readonly<{ alt: boolean; shift: boolean }>;
+export type ShapeTool = "rectangle" | "ellipse" | "diamond";
+export type ConnectorTool = "line" | "arrow";
+export type PrimitiveTool = ShapeTool | ConnectorTool;
+export type PrimitiveGeometry =
+  | Readonly<{ kind: "shape"; rect: CanvasRect }>
+  | Readonly<{ kind: "connector"; start: CanvasPoint; end: CanvasPoint }>;
+
+const DEFAULT_SHAPE_SIZE: Readonly<Record<ShapeTool, Readonly<{ width: number; height: number }>>> = {
+  rectangle: { width: 160, height: 100 },
+  ellipse: { width: 140, height: 100 },
+  diamond: { width: 140, height: 100 },
+};
+const DEFAULT_CONNECTOR_LENGTH = 160;
 
 /** Normalizes a drag into a positive box; Shift locks aspect ratio, Alt expands from center. */
 export function shapeRectFromDrag(start: CanvasPoint, current: CanvasPoint, modifiers: PrimitiveModifiers): CanvasRect {
@@ -31,6 +44,35 @@ export function connectorFromDrag(start: CanvasPoint, current: CanvasPoint, modi
   return modifiers.alt
     ? { start: { x: start.x - dx, y: start.y - dy }, end: { x: start.x + dx, y: start.y + dy } }
     : { start, end: { x: start.x + dx, y: start.y + dy } };
+}
+
+/** Resolves a pointer session into either constrained drag geometry or a useful click default. */
+export function primitiveGeometryFromSession(
+  tool: PrimitiveTool,
+  start: CanvasPoint,
+  current: CanvasPoint,
+  modifiers: PrimitiveModifiers,
+  didMove: boolean,
+): PrimitiveGeometry {
+  if (tool === "line" || tool === "arrow") {
+    if (!didMove) {
+      return {
+        kind: "connector",
+        start,
+        end: { x: start.x + DEFAULT_CONNECTOR_LENGTH, y: start.y },
+      };
+    }
+    return { kind: "connector", ...connectorFromDrag(start, current, modifiers) };
+  }
+
+  if (!didMove) {
+    const size = DEFAULT_SHAPE_SIZE[tool];
+    return {
+      kind: "shape",
+      rect: { x: start.x, y: start.y, width: size.width, height: size.height },
+    };
+  }
+  return { kind: "shape", rect: shapeRectFromDrag(start, current, modifiers) };
 }
 
 export function deterministicSeed(id: string): number {

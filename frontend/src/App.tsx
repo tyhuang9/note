@@ -35,6 +35,11 @@ import { ConnectorElementView, ShapeElementView } from "./canvas/components/Prim
 import { useCanvasInteraction } from "./canvas/interaction/useCanvasInteraction";
 import { cleanupMarquee } from "./canvas/interaction/marqueeCleanup";
 import {
+  deterministicSeed,
+  type PrimitiveGeometry,
+  type PrimitiveTool,
+} from "./canvas/interaction/primitiveGeometry";
+import {
   drawingToolForShortcut,
   useInkInteraction,
   type DrawingTool,
@@ -124,6 +129,8 @@ import {
   type BoxCanvasElement,
   type CanvasElement,
   type InkElement,
+  type ConnectorElement,
+  type ShapeElement,
   type TextElement,
 } from "./canvas/model/elements";
 import {
@@ -1060,6 +1067,7 @@ function App() {
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
   const [activeMode, setActiveMode] = useState<InteractionMode>("canvas");
   const [activeTool, setActiveTool] = useState<DrawingTool>("select");
+  const [isToolLocked, setIsToolLocked] = useState(false);
   const [panOffset, setPanOffset] = useState<PanOffset>({ x: 0, y: 0 });
   const [livePanOffset, setLivePanOffset] = useState<PanOffset>(panOffset);
   const [insertionPoint, setInsertionPoint] = useState<InsertionPoint | null>(null);
@@ -1174,9 +1182,12 @@ function App() {
   const draggedPrimaryPageIdRef = useRef<string | null>(null);
   const zoomLevelRef = useRef(zoomLevel);
   const activeToolRef = useRef<DrawingTool>(activeTool);
+  const isToolLockedRef = useRef(isToolLocked);
+  const isTemporaryHandActiveRef = useRef(false);
 
   dataRef.current = data;
   activeToolRef.current = activeTool;
+  isToolLockedRef.current = isToolLocked;
   isSnapToGridEnabledRef.current = isGridVisible && isSnapToGridEnabled;
   editingBlockIdRef.current = editingBlockId;
   openPageTabIdsRef.current = openPageTabIds;
@@ -2997,6 +3008,17 @@ function App() {
       const currentEditingBlockId = editingBlockIdRef.current;
 
       if (
+        event.code === "Space" &&
+        !currentEditingBlockId &&
+        !isTextEntryTarget(event.target) &&
+        isCanvasKeyboardActive
+      ) {
+        event.preventDefault();
+        isTemporaryHandActiveRef.current = true;
+        return;
+      }
+
+      if (
         (event.metaKey || event.ctrlKey) &&
         event.key.toLowerCase() === "n" &&
         !currentEditingBlockId &&
@@ -3154,9 +3176,20 @@ function App() {
       }
     }
 
-    document.addEventListener("keydown", handleKeyboard);
+    function handleKeyUp(event: KeyboardEvent) {
+      if (event.code === "Space") {
+        isTemporaryHandActiveRef.current = false;
+      }
+    }
 
-    return () => document.removeEventListener("keydown", handleKeyboard);
+    document.addEventListener("keydown", handleKeyboard);
+    document.addEventListener("keyup", handleKeyUp);
+
+    return () => {
+      document.removeEventListener("keydown", handleKeyboard);
+      document.removeEventListener("keyup", handleKeyUp);
+      isTemporaryHandActiveRef.current = false;
+    };
   }, [
     activeWorkbenchOverlay,
     deleteBlocks,
@@ -5908,13 +5941,87 @@ function App() {
     setIsCanvasKeyboardActive(false);
   }
 
+  const completePrimitiveCreation = useCallback(
+    (tool: PrimitiveTool, geometry: PrimitiveGeometry) => {
+      const pageId = selectedPageIdRef.current;
+      if (!pageId) return;
+      const elementId = createId(tool === "line" || tool === "arrow" ? "connector" : "shape");
+      const timestamp = Date.now();
+      const style = {
+        fillColor: null,
+        roughness: 1.2,
+        roundness: tool === "rectangle" ? 0.08 : 0,
+        seed: deterministicSeed(elementId),
+        strokeColor: { kind: "theme" as const, token: "foreground" as const },
+        strokeStyle: "solid" as const,
+        strokeWidth: 2,
+      };
+
+      setBlocksWithHistory((currentElements) => {
+        if (geometry.kind === "connector") {
+          const connector: ConnectorElement = {
+            createdAt: timestamp,
+            end: { kind: "free", ...geometry.end },
+            id: elementId,
+            locked: false,
+            opacity: 1,
+            pageId,
+            routing: "straight",
+            start: { kind: "free", ...geometry.start },
+            style: {
+              ...style,
+              endArrowhead: tool === "arrow" ? "arrow" : "none",
+              startArrowhead: "none",
+            },
+            type: "connector",
+            updatedAt: timestamp,
+            zIndex: currentElements.length,
+          };
+          return [...currentElements, connector];
+        }
+
+        const shape: ShapeElement = {
+          ...geometry.rect,
+          createdAt: timestamp,
+          id: elementId,
+          locked: false,
+          opacity: 1,
+          pageId,
+          rotation: 0,
+          shape: tool as ShapeElement["shape"],
+          style,
+          type: "shape",
+          updatedAt: timestamp,
+          zIndex: currentElements.length,
+        };
+        return [...currentElements, shape];
+      });
+      selectedBlockIdsRef.current = [elementId];
+      setSelectedBlockIds([elementId]);
+      editingBlockIdRef.current = null;
+      setEditingBlockId(null);
+      setInsertionPoint(null);
+      setIsCanvasKeyboardActive(true);
+      setActiveMode("selected");
+      if (!isToolLockedRef.current) {
+        activeToolRef.current = "select";
+        setActiveTool("select");
+      }
+    },
+    [],
+  );
+
   const canvasInteraction = useCanvasInteraction({
+    activeToolRef,
     canvasContentRef,
     canvasRef,
     cleanupMarquee: clearMarquee,
+    isTemporaryHandActiveRef,
     leaveTextEditing,
+    liveDraftLayerRef,
     maxZoom: MAX_ZOOM,
     minZoom: MIN_ZOOM,
+    onCreatePrimitive: completePrimitiveCreation,
     panOffsetRef,
     scheduleCanvasContentTransform,
     scheduleSelectionRectangle,
@@ -6219,7 +6326,10 @@ function App() {
           onPointerCancel={canvasInteraction.handlePointerCancel}
           onPointerCancelCapture={inkInteraction.handlePointerCancelCapture}
           onPointerDown={canvasInteraction.handlePointerDown}
-          onPointerDownCapture={inkInteraction.handlePointerDownCapture}
+          onPointerDownCapture={(event) => {
+            canvasInteraction.handlePointerDownCapture(event);
+            if (!event.defaultPrevented) inkInteraction.handlePointerDownCapture(event);
+          }}
           onPointerMove={canvasInteraction.handlePointerMove}
           onPointerMoveCapture={inkInteraction.handlePointerMoveCapture}
           onPointerUp={canvasInteraction.handlePointerEnd}
@@ -6230,6 +6340,8 @@ function App() {
           <div onPointerDown={(event) => event.stopPropagation()}>
             <CanvasToolPalette
               activeTool={activeTool}
+              isToolLocked={isToolLocked}
+              onToolLockChange={setIsToolLocked}
               onToolSelect={(tool) => {
                 activeToolRef.current = tool;
                 setActiveTool(tool);

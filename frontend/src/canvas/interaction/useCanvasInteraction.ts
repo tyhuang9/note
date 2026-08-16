@@ -14,14 +14,34 @@ import type {
 } from "../../appTypes";
 import { getSelectionRect, rectsIntersect } from "../../editorUtils";
 import type { BoxCanvasElement } from "../model/elements";
+import {
+  primitiveGeometryFromSession,
+  type PrimitiveGeometry,
+  type PrimitiveModifiers,
+  type PrimitiveTool,
+} from "./primitiveGeometry";
+import type { DrawingTool } from "./useInkInteraction";
+
+type PrimitiveSession = {
+  current: CanvasPoint;
+  didMove: boolean;
+  modifiers: PrimitiveModifiers;
+  pointerId: number;
+  start: CanvasPoint;
+  tool: PrimitiveTool;
+};
 
 type CanvasInteractionOptions = {
+  activeToolRef: RefObject<DrawingTool>;
   canvasContentRef: RefObject<HTMLDivElement | null>;
   canvasRef: RefObject<HTMLElement | null>;
   cleanupMarquee: () => void;
+  isTemporaryHandActiveRef: RefObject<boolean>;
   leaveTextEditing: () => void;
+  liveDraftLayerRef: RefObject<SVGSVGElement | null>;
   maxZoom: number;
   minZoom: number;
+  onCreatePrimitive: (tool: PrimitiveTool, geometry: PrimitiveGeometry) => void;
   panOffsetRef: RefObject<PanOffset>;
   scheduleCanvasContentTransform: (panOffset: PanOffset) => void;
   scheduleSelectionRectangle: (rect: SelectionRect) => void;
@@ -36,6 +56,15 @@ type CanvasInteractionOptions = {
   zoomLevelRef: RefObject<number>;
   zoomStep: number;
 };
+
+function isPrimitiveTool(tool: DrawingTool): tool is PrimitiveTool {
+  return tool === "rectangle" || tool === "ellipse" || tool === "diamond" || tool === "line" || tool === "arrow";
+}
+
+function isCanvasChromeTarget(target: EventTarget | null) {
+  return target instanceof Element &&
+    target.closest(".canvas-tool-palette, .offscreen-indicators, .search-panel, .selection-frame") !== null;
+}
 
 function isCanvasBackgroundTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) {
@@ -58,6 +87,8 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
   const optionsRef = useRef(options);
   const panState = useRef<PanState | null>(null);
   const selectionState = useRef<SelectionState | null>(null);
+  const primitiveSession = useRef<PrimitiveSession | null>(null);
+  const primitivePreviewRef = useRef<SVGGElement | null>(null);
 
   optionsRef.current = options;
 
@@ -67,6 +98,67 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
   }, []);
 
   useEffect(() => cancelMarquee, [cancelMarquee]);
+
+  const clearPrimitivePreview = useCallback(() => {
+    primitivePreviewRef.current?.remove();
+    primitivePreviewRef.current = null;
+  }, []);
+
+  const paintPrimitivePreview = useCallback((session: PrimitiveSession) => {
+    const draftLayer = optionsRef.current.liveDraftLayerRef.current;
+    if (!draftLayer) return;
+    const geometry = primitiveGeometryFromSession(
+      session.tool,
+      session.start,
+      session.current,
+      session.modifiers,
+      session.didMove,
+    );
+    const group = primitivePreviewRef.current ?? document.createElementNS("http://www.w3.org/2000/svg", "g");
+    primitivePreviewRef.current = group;
+    group.replaceChildren();
+    group.setAttribute("fill", "none");
+    group.setAttribute("opacity", "0.7");
+    group.setAttribute("pointer-events", "none");
+    group.setAttribute("stroke", "currentColor");
+    group.setAttribute("stroke-dasharray", "6 4");
+    group.setAttribute("stroke-width", "2");
+
+    if (geometry.kind === "connector") {
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      line.setAttribute("x1", String(geometry.start.x));
+      line.setAttribute("y1", String(geometry.start.y));
+      line.setAttribute("x2", String(geometry.end.x));
+      line.setAttribute("y2", String(geometry.end.y));
+      group.append(line);
+    } else {
+      const { rect } = geometry;
+      const node = document.createElementNS(
+        "http://www.w3.org/2000/svg",
+        session.tool === "ellipse" ? "ellipse" : session.tool === "diamond" ? "polygon" : "rect",
+      );
+      if (session.tool === "ellipse") {
+        node.setAttribute("cx", String(rect.x + rect.width / 2));
+        node.setAttribute("cy", String(rect.y + rect.height / 2));
+        node.setAttribute("rx", String(rect.width / 2));
+        node.setAttribute("ry", String(rect.height / 2));
+      } else if (session.tool === "diamond") {
+        node.setAttribute("points", [
+          `${rect.x + rect.width / 2},${rect.y}`,
+          `${rect.x + rect.width},${rect.y + rect.height / 2}`,
+          `${rect.x + rect.width / 2},${rect.y + rect.height}`,
+          `${rect.x},${rect.y + rect.height / 2}`,
+        ].join(" "));
+      } else {
+        node.setAttribute("x", String(rect.x));
+        node.setAttribute("y", String(rect.y));
+        node.setAttribute("width", String(rect.width));
+        node.setAttribute("height", String(rect.height));
+      }
+      group.append(node);
+    }
+    if (group.parentNode !== draftLayer) draftLayer.append(group);
+  }, []);
 
   const getCanvasPoint = useCallback(
     (clientX: number, clientY: number): CanvasPoint | null => {
@@ -122,6 +214,43 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
     event.currentTarget.setPointerCapture(event.pointerId);
   }, []);
 
+  const handlePointerDownCapture = useCallback(
+    (event: ReactPointerEvent<HTMLElement>) => {
+      const current = optionsRef.current;
+      if (event.button !== 0 || isCanvasChromeTarget(event.target)) return;
+      const tool = current.activeToolRef.current;
+
+      if (current.isTemporaryHandActiveRef.current || tool === "hand") {
+        startPan(event);
+        return;
+      }
+      if (!isPrimitiveTool(tool) || primitiveSession.current) return;
+
+      const point = getCanvasPoint(event.clientX, event.clientY);
+      if (!point) return;
+      event.preventDefault();
+      event.stopPropagation();
+      current.leaveTextEditing();
+      current.cleanupMarquee();
+      current.setInsertionPoint(null);
+      current.setSelectedElementIds([]);
+      current.setIsCanvasKeyboardActive(true);
+      current.setActiveMode("canvas");
+      primitiveSession.current = {
+        current: point,
+        didMove: false,
+        modifiers: { alt: event.altKey, shift: event.shiftKey },
+        pointerId: event.pointerId,
+        start: point,
+        tool,
+      };
+      paintPrimitivePreview(primitiveSession.current);
+      event.currentTarget.setPointerCapture(event.pointerId);
+      event.currentTarget.focus({ preventScroll: true });
+    },
+    [getCanvasPoint, paintPrimitivePreview, startPan],
+  );
+
   const handlePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
       const current = optionsRef.current;
@@ -163,6 +292,21 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
 
   const handlePointerMove = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
+      const currentPrimitive = primitiveSession.current;
+      if (currentPrimitive?.pointerId === event.pointerId) {
+        const point = getCanvasPoint(event.clientX, event.clientY);
+        if (!point) return;
+        currentPrimitive.current = point;
+        currentPrimitive.modifiers = { alt: event.altKey, shift: event.shiftKey };
+        currentPrimitive.didMove ||= Math.hypot(
+          point.x - currentPrimitive.start.x,
+          point.y - currentPrimitive.start.y,
+        ) >= 2;
+        paintPrimitivePreview(currentPrimitive);
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       const currentPan = panState.current;
       const currentSelection = selectionState.current;
 
@@ -207,12 +351,35 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
         current.scheduleSelectionRectangle(getSelectionRect(currentSelection));
       }
     },
-    [getCanvasPoint],
+    [getCanvasPoint, paintPrimitivePreview],
   );
 
   const handlePointerEnd = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
-      void event;
+      const currentPrimitive = primitiveSession.current;
+      if (currentPrimitive?.pointerId === event.pointerId) {
+        const point = getCanvasPoint(event.clientX, event.clientY);
+        if (point) currentPrimitive.current = point;
+        currentPrimitive.modifiers = { alt: event.altKey, shift: event.shiftKey };
+        primitiveSession.current = null;
+        clearPrimitivePreview();
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        }
+        optionsRef.current.onCreatePrimitive(
+          currentPrimitive.tool,
+          primitiveGeometryFromSession(
+            currentPrimitive.tool,
+            currentPrimitive.start,
+            currentPrimitive.current,
+            currentPrimitive.modifiers,
+            currentPrimitive.didMove,
+          ),
+        );
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       const currentPan = panState.current;
       const currentSelection = selectionState.current;
 
@@ -254,7 +421,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       panState.current = null;
       cancelMarquee();
     },
-    [cancelMarquee],
+    [cancelMarquee, clearPrimitivePreview, getCanvasPoint],
   );
 
   const handlePointerCancel = useCallback(
@@ -264,7 +431,8 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       // Browsers dispatch lostpointercapture after a successful pointerup.
       // The completed session has already been cleared by then, so it must not
       // reset the selected mode or discard a completed marquee.
-      if (!currentPan && !currentSelection) return;
+      const currentPrimitive = primitiveSession.current;
+      if (!currentPan && !currentSelection && !currentPrimitive) return;
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);
       }
@@ -275,11 +443,18 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
         optionsRef.current.setPanOffset(startPan);
       }
       panState.current = null;
+      primitiveSession.current = null;
+      clearPrimitivePreview();
       cancelMarquee();
       optionsRef.current.setActiveMode("canvas");
     },
-    [cancelMarquee],
+    [cancelMarquee, clearPrimitivePreview],
   );
+
+  useEffect(() => () => {
+    primitiveSession.current = null;
+    clearPrimitivePreview();
+  }, [clearPrimitivePreview]);
 
   const handleWheel = useCallback((event: ReactWheelEvent<HTMLElement>) => {
     const current = optionsRef.current;
@@ -339,6 +514,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
 
   return {
     handlePointerDown,
+    handlePointerDownCapture,
     handlePointerCancel,
     handlePointerEnd,
     handlePointerMove,

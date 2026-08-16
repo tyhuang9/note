@@ -1,5 +1,5 @@
 import type { CanvasTool } from "../interaction/types";
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { ArrowRight, Circle, Diamond, Eraser, Hand, Highlighter, Image, LockKeyhole, MousePointer2, PenLine, RectangleHorizontal, Slash, SlidersHorizontal, Type } from "lucide-react";
 
 type DrawingTool = CanvasTool | "text" | "image";
@@ -60,22 +60,24 @@ export function CanvasToolPalette({ activeTool, isPropertiesPanelAvailable, isPr
   return (
     <div aria-label="Drawing tools" aria-orientation="horizontal" className="canvas-tool-palette" role="toolbar">
       {TOOLS.map(({ tool, label, shortcut, Icon }, index) => (
-        <button
-          aria-label={`${label} (${shortcut})`}
-          aria-pressed={activeTool === tool}
-          data-tooltip={`${label} · ${shortcut}`}
-          data-tool={tool}
-          key={tool}
-          onClick={() => { setTabStop(index); onToolSelect(tool); }}
-          onFocus={() => setTabStop(index)}
-          onKeyDown={(event) => moveFocus(event, index)}
-          ref={(button) => { buttonRefs.current[index] = button; }}
-          tabIndex={tabStop === index ? 0 : -1}
-          title={`${label} (${shortcut})`}
-          type="button"
-        >
-          <Icon aria-hidden="true" size={20} />
-        </button>
+        <Fragment key={tool}>
+          <button
+            aria-label={`${label} (${shortcut})`}
+            aria-pressed={activeTool === tool}
+            data-tooltip={`${label} · ${shortcut}`}
+            data-tool={tool}
+            onClick={() => { setTabStop(index); onToolSelect(tool); }}
+            onFocus={() => setTabStop(index)}
+            onKeyDown={(event) => moveFocus(event, index)}
+            ref={(button) => { buttonRefs.current[index] = button; }}
+            tabIndex={tabStop === index ? 0 : -1}
+            title={`${label} (${shortcut})`}
+            type="button"
+          >
+            <Icon aria-hidden="true" size={20} />
+          </button>
+          {index === 1 || index === TOOLS.length - 1 ? <span aria-hidden="true" className="canvas-tool-separator" /> : null}
+        </Fragment>
       ))}
       <button
         aria-label="Keep drawing tool active"

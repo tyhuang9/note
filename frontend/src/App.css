@@ -685,7 +685,7 @@ h2 {
 .file-tree {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   min-height: 0;
   padding-bottom: 16px;
 }
@@ -2293,6 +2293,23 @@ h2 {
   box-shadow: 0 12px 28px rgba(21, 28, 39, 0.16);
   transform: translateX(-50%);
   backdrop-filter: blur(12px);
+}
+
+.canvas-tool-separator {
+  position: relative;
+  flex: 0 0 12px;
+  width: 12px;
+  height: 44px;
+}
+
+.canvas-tool-separator::after {
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 50%;
+  width: 1px;
+  background: var(--canvas-tool-border);
+  content: "";
 }
 
 .search-panel input {

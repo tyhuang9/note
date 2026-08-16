@@ -18,7 +18,7 @@ import type { BoxCanvasElement } from "../model/elements";
 type CanvasInteractionOptions = {
   canvasContentRef: RefObject<HTMLDivElement | null>;
   canvasRef: RefObject<HTMLElement | null>;
-  hideSelectionRectangle: () => void;
+  cleanupMarquee: () => void;
   leaveTextEditing: () => void;
   maxZoom: number;
   minZoom: number;
@@ -60,6 +60,11 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
   const selectionState = useRef<SelectionState | null>(null);
 
   optionsRef.current = options;
+
+  const cancelMarquee = useCallback(() => {
+    selectionState.current = null;
+    optionsRef.current.cleanupMarquee();
+  }, []);
 
   const getCanvasPoint = useCallback(
     (clientX: number, clientY: number): CanvasPoint | null => {
@@ -124,7 +129,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
 
       current.leaveTextEditing();
       current.setSelectedElementIds([]);
-      current.hideSelectionRectangle();
+      current.cleanupMarquee();
       current.setIsCanvasKeyboardActive(true);
       current.setActiveMode("canvas");
       event.preventDefault();
@@ -146,7 +151,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
           didMove: false,
         };
         current.setInsertionPoint(startPoint);
-        current.hideSelectionRectangle();
+        current.cleanupMarquee();
       }
 
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -205,15 +210,12 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
 
   const handlePointerEnd = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
+      void event;
       const currentPan = panState.current;
       const currentSelection = selectionState.current;
 
       if (!currentPan && !currentSelection) {
         return;
-      }
-
-      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-        event.currentTarget.releasePointerCapture(event.pointerId);
       }
 
       const current = optionsRef.current;
@@ -248,10 +250,33 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       }
 
       panState.current = null;
-      selectionState.current = null;
-      current.hideSelectionRectangle();
+      cancelMarquee();
     },
-    [],
+    [cancelMarquee],
+  );
+
+  const handlePointerCancel = useCallback(
+    (event: ReactPointerEvent<HTMLElement>) => {
+      const currentPan = panState.current;
+      const currentSelection = selectionState.current;
+      // Browsers dispatch lostpointercapture after a successful pointerup.
+      // The completed session has already been cleared by then, so it must not
+      // reset the selected mode or discard a completed marquee.
+      if (!currentPan && !currentSelection) return;
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      if (currentPan) {
+        const startPan = { x: currentPan.startPanX, y: currentPan.startPanY };
+        optionsRef.current.panOffsetRef.current = startPan;
+        optionsRef.current.scheduleCanvasContentTransform(startPan);
+        optionsRef.current.setPanOffset(startPan);
+      }
+      panState.current = null;
+      cancelMarquee();
+      optionsRef.current.setActiveMode("canvas");
+    },
+    [cancelMarquee],
   );
 
   const handleWheel = useCallback((event: ReactWheelEvent<HTMLElement>) => {
@@ -312,9 +337,11 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
 
   return {
     handlePointerDown,
+    handlePointerCancel,
     handlePointerEnd,
     handlePointerMove,
     handleWheel,
+    cancelMarquee,
     startPan,
   };
 }

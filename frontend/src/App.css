@@ -2456,6 +2456,54 @@ h2 {
   pointer-events: none;
 }
 
+.selection-frame {
+  position: absolute;
+  z-index: 12;
+  box-sizing: border-box;
+  min-width: 1px;
+  min-height: 1px;
+  border: 1px solid var(--canvas-selection, var(--accent-purple));
+  box-shadow: 0 0 0 2px var(--canvas-selection-soft, rgba(139, 92, 246, 0.16));
+  pointer-events: none;
+}
+
+.selection-frame-move-surface {
+  position: absolute;
+  inset: 0;
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.selection-frame-move-surface.is-single-selection {
+  inset: 12px;
+}
+
+.selection-frame-move-surface:active {
+  cursor: grabbing;
+}
+
+.selection-frame-handle {
+  position: absolute;
+  z-index: 1;
+  width: 10px;
+  height: 10px;
+  border: 1px solid var(--canvas-selection, var(--accent-purple));
+  border-radius: 1px;
+  background: var(--canvas-tool-bg, #fff);
+  pointer-events: auto;
+}
+
+.selection-frame-handle-nw { top: -6px; left: -6px; cursor: nwse-resize; }
+.selection-frame-handle-ne { top: -6px; right: -6px; cursor: nesw-resize; }
+.selection-frame-handle-se { right: -6px; bottom: -6px; cursor: nwse-resize; }
+.selection-frame-handle-sw { bottom: -6px; left: -6px; cursor: nesw-resize; }
+
+.selection-frame-handle:focus-visible {
+  outline: 2px solid var(--canvas-focus, var(--accent-purple));
+  outline-offset: 2px;
+}
+
 .canvas-caret {
   position: absolute;
   z-index: 11;
@@ -2574,11 +2622,8 @@ h2 {
 }
 
 .text-block.is-multi-selected {
-  border-color: var(--accent-purple);
-  border-style: solid;
-  outline: 0;
-  background: #ffffff;
-  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.2);
+  border-color: transparent;
+  box-shadow: none;
 }
 
 .text-block.is-editing {
@@ -2893,6 +2938,10 @@ h2 {
   border: 1px solid var(--accent-purple);
   border-radius: 1px;
   background: #ffffff;
+}
+
+.ink-element.is-multi-selected::after {
+  display: none;
 }
 
 .app-shell.is-dark {

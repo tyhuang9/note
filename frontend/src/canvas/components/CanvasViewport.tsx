@@ -17,6 +17,7 @@ type CanvasViewportProps = {
   onPointerMoveCapture?: PointerEventHandler<HTMLElement>;
   onPointerUp: PointerEventHandler<HTMLElement>;
   onPointerUpCapture?: PointerEventHandler<HTMLElement>;
+  onLostPointerCapture?: PointerEventHandler<HTMLElement>;
   onWheel: WheelEventHandler<HTMLElement>;
 };
 
@@ -36,6 +37,7 @@ export const CanvasViewport = forwardRef<HTMLElement, CanvasViewportProps>(
       onPointerMoveCapture,
       onPointerUp,
       onPointerUpCapture,
+      onLostPointerCapture,
       onWheel,
     },
     ref,
@@ -56,6 +58,7 @@ export const CanvasViewport = forwardRef<HTMLElement, CanvasViewportProps>(
           onPointerDown(event);
         }}
         onPointerDownCapture={onPointerDownCapture}
+        onLostPointerCapture={onLostPointerCapture}
         onPointerMove={onPointerMove}
         onPointerMoveCapture={onPointerMoveCapture}
         onPointerUp={onPointerUp}

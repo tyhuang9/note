@@ -31,6 +31,7 @@ import { CanvasViewport } from "./canvas/components/CanvasViewport";
 import { CanvasWorldLayer } from "./canvas/components/CanvasWorldLayer";
 import { InkElementView } from "./canvas/components/InkElementView";
 import { useCanvasInteraction } from "./canvas/interaction/useCanvasInteraction";
+import { cleanupMarquee } from "./canvas/interaction/marqueeCleanup";
 import {
   drawingToolForShortcut,
   useInkInteraction,
@@ -130,6 +131,13 @@ import {
   scaleInkElement,
   type RawInkPoint,
 } from "./canvas/model/ink";
+import {
+  getProportionalScale,
+  getOppositeCorner,
+  getSelectionBounds,
+  scaleSelection,
+  type SelectionCorner,
+} from "./canvas/model/selectionBounds";
 import {
   assetDataUrl,
   assetRequestFromDataUrl,
@@ -293,6 +301,15 @@ type DragLayerSession = {
   startClientY: number;
   startPanOffset: PanOffset;
   zoomLevel: number;
+};
+
+type SelectionTransformSession = {
+  corner: SelectionCorner | null;
+  didMove: boolean;
+  pointerId: number;
+  startBounds: SelectionRect;
+  startClientX: number;
+  startClientY: number;
 };
 
 type CopyableElement = TextElement | ImageElement;
@@ -1055,6 +1072,7 @@ function App() {
   const [isGridVisible, setIsGridVisible] = useState(false);
   const [isSnapToGridEnabled, setIsSnapToGridEnabled] = useState(false);
   const [dragSourceBlockIds, setDragSourceBlockIds] = useState<string[]>([]);
+  const [selectionFramePreview, setSelectionFramePreview] = useState<SelectionRect | null>(null);
   const [selectedSidebarPageIds, setSelectedSidebarPageIds] = useState<string[]>([]);
   const [draggedPageIds, setDraggedPageIds] = useState<string[]>([]);
   const [pageDropTargetFolderId, setPageDropTargetFolderId] = useState<string | null>(null);
@@ -1098,6 +1116,7 @@ function App() {
   const canvasContentRef = useRef<HTMLDivElement | null>(null);
   const liveDraftLayerRef = useRef<SVGSVGElement | null>(null);
   const selectionRectRef = useRef<HTMLDivElement | null>(null);
+  const selectionTransformRef = useRef<SelectionTransformSession | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const explorerPanelRef = useRef<HTMLDivElement | null>(null);
   const explorerToggleButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -1216,6 +1235,13 @@ function App() {
     () => data.elements.filter((block): block is CanvasElement & BoxCanvasElement => block.pageId === selectedPageId && isBoxCanvasElement(block)),
     [data.elements, selectedPageId],
   );
+  const selectionWorldBounds = useMemo(() => {
+    const selectedIds = new Set(selectedBlockIds);
+    return getSelectionBounds(
+      visibleBlocks.filter((element) => selectedIds.has(element.id)),
+      Object.fromEntries(visibleBlocks.map((element) => [element.id, element])),
+    );
+  }, [selectedBlockIds, visibleBlocks]);
   const openPages = useMemo<OpenPageTab[]>(() => {
     const pagesById = new Map(
       data.pages
@@ -1624,9 +1650,7 @@ function App() {
         window.cancelAnimationFrame(panRafId.current);
       }
 
-      if (selectionRafId.current !== null) {
-        window.cancelAnimationFrame(selectionRafId.current);
-      }
+      clearMarquee();
 
       if (dragLayerSessionRef.current) {
         cleanupDragLayerSession(dragLayerSessionRef.current);
@@ -1639,6 +1663,7 @@ function App() {
 
   useEffect(() => {
     function handleWindowBlur() {
+      clearMarquee();
       if (!dragLayerSessionRef.current) {
         return;
       }
@@ -1652,6 +1677,10 @@ function App() {
 
     return () => window.removeEventListener("blur", handleWindowBlur);
   }, []);
+
+  useEffect(() => {
+    clearMarquee();
+  }, [activeTool, selectedPageId]);
 
   useEffect(() => {
     let isMounted = true;
@@ -2941,6 +2970,10 @@ function App() {
         return;
       }
 
+      if (event.key === "Escape") {
+        clearMarquee();
+      }
+
       const currentEditingBlockId = editingBlockIdRef.current;
 
       if (
@@ -3186,14 +3219,8 @@ function App() {
     });
   }
 
-  function hideSelectionRectangle() {
-    const selectionElement = selectionRectRef.current;
-
-    if (!selectionElement) {
-      return;
-    }
-
-    selectionElement.style.display = "none";
+  function clearMarquee() {
+    cleanupMarquee(selectionRafId, pendingSelectionRect, selectionRectRef);
   }
 
   function scheduleSelectionRectangle(rect: SelectionRect) {
@@ -3218,6 +3245,7 @@ function App() {
       }
 
       selectionRafId.current = null;
+      pendingSelectionRect.current = null;
     });
   }
 
@@ -5237,7 +5265,11 @@ function App() {
       const isGroupDrag =
         currentSelectedBlockIds.includes(originId) &&
         currentSelectedBlockIds.length > 1;
-      const requestedBlockIds = isGroupDrag ? currentSelectedBlockIds : [originId];
+      const requestedBlockIds = (isGroupDrag ? currentSelectedBlockIds : [originId])
+        .filter((blockId) => {
+          const block = dataRef.current.elements.find((element) => element.id === blockId);
+          return Boolean(block && !block.locked && isBoxCanvasElement(block));
+        });
       const sourceEntries = requestedBlockIds
         .map((blockId) => ({
           blockId,
@@ -5370,7 +5402,7 @@ function App() {
     if (movedEnough) {
       setBlocksWithHistory((currentBlocks) =>
         currentBlocks.map((block) =>
-          blockIdsToMove.has(block.id) && isBoxCanvasElement(block)
+          blockIdsToMove.has(block.id) && !block.locked && isBoxCanvasElement(block)
             ? snapBlockPosition({
                 ...block,
                 x: block.x + offset.x,
@@ -5400,6 +5432,105 @@ function App() {
     setDragSourceBlockIds([]);
     setActiveMode("selected");
   }, []);
+
+  function selectionResizePreview(
+    bounds: SelectionRect,
+    corner: SelectionCorner,
+    clientX: number,
+    clientY: number,
+    session: SelectionTransformSession,
+  ) {
+    const draggedCorner = {
+      x: (corner.includes("e") ? bounds.x + bounds.width : bounds.x) + (clientX - session.startClientX) / zoomLevelRef.current,
+      y: (corner.includes("s") ? bounds.y + bounds.height : bounds.y) + (clientY - session.startClientY) / zoomLevelRef.current,
+    };
+    const scale = getProportionalScale(bounds, corner, draggedCorner);
+    const anchor = getOppositeCorner(bounds, corner);
+    const width = bounds.width * scale;
+    const height = bounds.height * scale;
+    return {
+      scale,
+      bounds: {
+        x: corner.includes("e") ? anchor.x : anchor.x - width,
+        y: corner.includes("s") ? anchor.y : anchor.y - height,
+        width,
+        height,
+      },
+    };
+  }
+
+  function startSelectionFrameInteraction(
+    event: ReactPointerEvent<HTMLDivElement>,
+    corner: SelectionCorner | null,
+  ) {
+    const bounds = selectionWorldBounds;
+    if (event.button !== 0 || !bounds) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    selectionTransformRef.current = {
+      corner,
+      didMove: false,
+      pointerId: event.pointerId,
+      startBounds: bounds,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+    };
+  }
+
+  function moveSelectionFrameInteraction(event: ReactPointerEvent<HTMLDivElement>) {
+    const session = selectionTransformRef.current;
+    if (!session || session.pointerId !== event.pointerId) return;
+    const movedEnough = Math.hypot(event.clientX - session.startClientX, event.clientY - session.startClientY) >= 3;
+    if (!movedEnough) return;
+    event.preventDefault();
+    session.didMove = true;
+
+    if (session.corner) {
+      setSelectionFramePreview(
+        selectionResizePreview(session.startBounds, session.corner, event.clientX, event.clientY, session).bounds,
+      );
+      return;
+    }
+
+    if (!dragLayerSessionRef.current) {
+      const movableId = selectedBlockIdsRef.current.find((id) => {
+        const element = dataRef.current.elements.find((candidate) => candidate.id === id);
+        return Boolean(element && !element.locked && isBoxCanvasElement(element));
+      });
+      if (!movableId || !startVisualDrag(movableId, session.startClientX, session.startClientY)) return;
+    }
+    moveVisualDrag(event.clientX, event.clientY);
+  }
+
+  function finishSelectionFrameInteraction(event: ReactPointerEvent<HTMLDivElement>, cancelled = false) {
+    const session = selectionTransformRef.current;
+    if (!session || session.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    selectionTransformRef.current = null;
+
+    if (cancelled) {
+      if (!session.corner) cancelVisualDrag();
+      setSelectionFramePreview(null);
+      return;
+    }
+
+    if (session.corner && session.didMove) {
+      const preview = selectionResizePreview(session.startBounds, session.corner, event.clientX, event.clientY, session);
+      const selectedIds = new Set(selectedBlockIdsRef.current);
+      setBlocksWithHistory((currentBlocks) =>
+        scaleSelection(currentBlocks, selectedIds, session.startBounds, session.corner!, preview.scale),
+      );
+    } else if (!session.corner && session.didMove) {
+      endVisualDrag(event.clientX, event.clientY);
+    }
+
+    setSelectionFramePreview(null);
+    setEditingBlockId(null);
+    setInsertionPoint(null);
+    setIsCanvasKeyboardActive(true);
+    setActiveMode("selected");
+  }
 
   const selectBlock = useCallback((blockId: string, additive = false) => {
     const isDeselectingOnlyBlock =
@@ -5600,7 +5731,7 @@ function App() {
   const canvasInteraction = useCanvasInteraction({
     canvasContentRef,
     canvasRef,
-    hideSelectionRectangle,
+    cleanupMarquee: clearMarquee,
     leaveTextEditing,
     maxZoom: MAX_ZOOM,
     minZoom: MIN_ZOOM,
@@ -5903,7 +6034,8 @@ function App() {
           }
           activeMode={activeMode}
           id={WORKSPACE_PAGE_PANEL_ID}
-          onPointerCancel={canvasInteraction.handlePointerEnd}
+          onLostPointerCapture={canvasInteraction.handlePointerCancel}
+          onPointerCancel={canvasInteraction.handlePointerCancel}
           onPointerCancelCapture={inkInteraction.handlePointerCancelCapture}
           onPointerDown={canvasInteraction.handlePointerDown}
           onPointerDownCapture={inkInteraction.handlePointerDownCapture}
@@ -6106,7 +6238,29 @@ function App() {
               />
             ) : null}
           </CanvasWorldLayer>
-          <CanvasInteractionOverlay marqueeRef={selectionRectRef} />
+          <CanvasInteractionOverlay
+            marqueeRef={selectionRectRef}
+            selectionFrame={(() => {
+              const bounds = selectionFramePreview ?? selectionWorldBounds;
+              if (!bounds || selectedBlockIds.length === 0 || editingBlockId) return undefined;
+              return {
+                height: bounds.height * zoomLevel,
+                onDoubleClick: () => {
+                  const selected = visibleBlocks.find((block) => block.id === selectedBlockIds[0]);
+                  if (selectedBlockIds.length === 1 && selected && isTextElement(selected)) editBlock(selected.id);
+                },
+                onPointerCancel: (event: ReactPointerEvent<HTMLDivElement>) => finishSelectionFrameInteraction(event, true),
+                onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => startSelectionFrameInteraction(event, null),
+                onPointerMove: moveSelectionFrameInteraction,
+                onPointerUp: finishSelectionFrameInteraction,
+                onResizePointerDown: (corner: SelectionCorner) => (event: ReactPointerEvent<HTMLDivElement>) => startSelectionFrameInteraction(event, corner),
+                showResizeHandles: selectedBlockIds.length > 1,
+                width: bounds.width * zoomLevel,
+                x: panOffset.x + bounds.x * zoomLevel,
+                y: panOffset.y + bounds.y * zoomLevel,
+              };
+            })()}
+          />
           {shouldShowStarterShortcuts ? (
             <div
               className="canvas-starter"

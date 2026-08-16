@@ -10,6 +10,7 @@ import {
 import type { Editor, JSONContent } from "@tiptap/core";
 import type {
   DragEvent,
+  KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,
   Ref,
 } from "react";
@@ -136,6 +137,7 @@ import {
   getOppositeCorner,
   getSelectionBounds,
   scaleSelection,
+  translateSelection,
   type SelectionCorner,
 } from "./canvas/model/selectionBounds";
 import {
@@ -5464,7 +5466,7 @@ function App() {
   }
 
   function startSelectionFrameInteraction(
-    event: ReactPointerEvent<HTMLDivElement>,
+    event: ReactPointerEvent<HTMLElement>,
     corner: SelectionCorner | null,
   ) {
     const bounds = selectionWorldBounds;
@@ -5482,7 +5484,7 @@ function App() {
     };
   }
 
-  function moveSelectionFrameInteraction(event: ReactPointerEvent<HTMLDivElement>) {
+  function moveSelectionFrameInteraction(event: ReactPointerEvent<HTMLElement>) {
     const session = selectionTransformRef.current;
     if (!session || session.pointerId !== event.pointerId) return;
     const movedEnough = Math.hypot(event.clientX - session.startClientX, event.clientY - session.startClientY) >= 3;
@@ -5507,7 +5509,7 @@ function App() {
     moveVisualDrag(event.clientX, event.clientY);
   }
 
-  function finishSelectionFrameInteraction(event: ReactPointerEvent<HTMLDivElement>, cancelled = false) {
+  function finishSelectionFrameInteraction(event: ReactPointerEvent<HTMLElement>, cancelled = false) {
     const session = selectionTransformRef.current;
     if (!session || session.pointerId !== event.pointerId) return;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
@@ -5534,6 +5536,47 @@ function App() {
     setInsertionPoint(null);
     setIsCanvasKeyboardActive(true);
     setActiveMode("selected");
+  }
+
+  function moveSelectionByKeyboard(event: ReactKeyboardEvent<HTMLButtonElement>) {
+    const step = (event.shiftKey ? 10 : 1) / zoomLevelRef.current;
+    const delta = event.key === "ArrowLeft"
+      ? { x: -step, y: 0 }
+      : event.key === "ArrowRight"
+        ? { x: step, y: 0 }
+        : event.key === "ArrowUp"
+          ? { x: 0, y: -step }
+          : event.key === "ArrowDown"
+            ? { x: 0, y: step }
+            : null;
+    if (!delta) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const selectedIds = new Set(selectedBlockIdsRef.current);
+    setBlocksWithHistory((currentBlocks) => translateSelection(currentBlocks, selectedIds, delta));
+    setActiveMode("selected");
+  }
+
+  function resizeSelectionByKeyboard(corner: SelectionCorner) {
+    return (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+      const bounds = selectionWorldBounds;
+      if (!bounds || !event.key.startsWith("Arrow")) return;
+      const step = (event.shiftKey ? 10 : 1) / zoomLevelRef.current;
+      const draggedCorner = {
+        x: corner.includes("e") ? bounds.x + bounds.width : bounds.x,
+        y: corner.includes("s") ? bounds.y + bounds.height : bounds.y,
+      };
+      if (event.key === "ArrowLeft") draggedCorner.x -= step;
+      if (event.key === "ArrowRight") draggedCorner.x += step;
+      if (event.key === "ArrowUp") draggedCorner.y -= step;
+      if (event.key === "ArrowDown") draggedCorner.y += step;
+      event.preventDefault();
+      event.stopPropagation();
+      const scale = getProportionalScale(bounds, corner, draggedCorner);
+      const selectedIds = new Set(selectedBlockIdsRef.current);
+      setBlocksWithHistory((currentBlocks) => scaleSelection(currentBlocks, selectedIds, bounds, corner, scale));
+      setActiveMode("selected");
+    };
   }
 
   const selectBlock = useCallback((blockId: string, additive = false) => {
@@ -6164,6 +6207,7 @@ function App() {
                     isDragSourceHidden={dragSourceBlockIds.includes(inkElement.id)}
                     isMultiSelected={selectedBlockIds.length > 1}
                     isSelected={selectedBlockIds.includes(inkElement.id)}
+                    suppressResizeHandle={selectedBlockIds.length === 1 && selectedBlockIds[0] === inkElement.id}
                     onCanvasPanStart={canvasInteraction.startPan}
                     onElementChange={registerBlockElement}
                     onInteractionModeChange={setActiveMode}
@@ -6247,19 +6291,35 @@ function App() {
             selectionFrame={(() => {
               const bounds = selectionFramePreview ?? selectionWorldBounds;
               if (!bounds || selectedBlockIds.length === 0 || editingBlockId) return undefined;
+              const selected = selectedBlockIds.length === 1
+                ? visibleBlocks.find((block) => block.id === selectedBlockIds[0])
+                : undefined;
+              const usesNativeSingleElementInteraction = Boolean(
+                selected && (selected.type === "text" || selected.type === "image"),
+              );
+              const resizeCorners: readonly SelectionCorner[] = selectionHasLockedElements
+                ? []
+                : selectedBlockIds.length > 1
+                  ? ["nw", "ne", "se", "sw"]
+                  : selected?.type === "ink"
+                    ? ["se"]
+                    : [];
               return {
                 height: bounds.height * zoomLevel,
                 onDoubleClick: () => {
                   const selected = visibleBlocks.find((block) => block.id === selectedBlockIds[0]);
                   if (selectedBlockIds.length === 1 && selected && isTextElement(selected)) editBlock(selected.id);
                 },
-                onPointerCancel: (event: ReactPointerEvent<HTMLDivElement>) => finishSelectionFrameInteraction(event, true),
-                onLostPointerCapture: (event: ReactPointerEvent<HTMLDivElement>) => finishSelectionFrameInteraction(event, true),
-                onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => startSelectionFrameInteraction(event, null),
+                onMoveKeyDown: moveSelectionByKeyboard,
+                onPointerCancel: (event: ReactPointerEvent<HTMLButtonElement>) => finishSelectionFrameInteraction(event, true),
+                onLostPointerCapture: (event: ReactPointerEvent<HTMLButtonElement>) => finishSelectionFrameInteraction(event, true),
+                onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => startSelectionFrameInteraction(event, null),
                 onPointerMove: moveSelectionFrameInteraction,
                 onPointerUp: finishSelectionFrameInteraction,
-                onResizePointerDown: (corner: SelectionCorner) => (event: ReactPointerEvent<HTMLDivElement>) => startSelectionFrameInteraction(event, corner),
-                showResizeHandles: selectedBlockIds.length > 1 && !selectionHasLockedElements,
+                onResizeKeyDown: resizeSelectionByKeyboard,
+                onResizePointerDown: (corner: SelectionCorner) => (event: ReactPointerEvent<HTMLButtonElement>) => startSelectionFrameInteraction(event, corner),
+                resizeCorners,
+                showMoveSurface: !usesNativeSingleElementInteraction,
                 width: bounds.width * zoomLevel,
                 x: panOffset.x + bounds.x * zoomLevel,
                 y: panOffset.y + bounds.y * zoomLevel,

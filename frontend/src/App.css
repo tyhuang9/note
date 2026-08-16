@@ -2470,6 +2470,9 @@ h2 {
 .selection-frame-move-surface {
   position: absolute;
   inset: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
   cursor: grab;
   pointer-events: auto;
   touch-action: none;
@@ -2483,25 +2486,55 @@ h2 {
   cursor: grabbing;
 }
 
+.selection-frame-move-surface:focus-visible {
+  outline: 3px solid var(--canvas-focus, var(--accent-purple));
+  outline-offset: 3px;
+}
+
 .selection-frame-handle {
   position: absolute;
   z-index: 1;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  pointer-events: auto;
+}
+
+.selection-frame-handle::after {
+  position: absolute;
+  top: 7px;
+  left: 7px;
   width: 10px;
   height: 10px;
   border: 1px solid var(--canvas-selection, var(--accent-purple));
   border-radius: 1px;
   background: var(--canvas-tool-bg, #fff);
-  pointer-events: auto;
+  content: "";
 }
 
-.selection-frame-handle-nw { top: -6px; left: -6px; cursor: nwse-resize; }
-.selection-frame-handle-ne { top: -6px; right: -6px; cursor: nesw-resize; }
-.selection-frame-handle-se { right: -6px; bottom: -6px; cursor: nwse-resize; }
-.selection-frame-handle-sw { bottom: -6px; left: -6px; cursor: nesw-resize; }
+.selection-frame-handle-nw { top: -12px; left: -12px; cursor: nwse-resize; }
+.selection-frame-handle-ne { top: -12px; right: -12px; cursor: nesw-resize; }
+.selection-frame-handle-se { right: -12px; bottom: -12px; cursor: nwse-resize; }
+.selection-frame-handle-sw { bottom: -12px; left: -12px; cursor: nesw-resize; }
 
 .selection-frame-handle:focus-visible {
   outline: 2px solid var(--canvas-focus, var(--accent-purple));
   outline-offset: 2px;
+}
+
+.app-shell button.selection-frame-move-surface {
+  width: auto;
+  height: auto;
+  border: 0;
+  background: transparent;
+}
+
+.app-shell.is-dark button.selection-frame-move-surface,
+.app-shell.is-dark button.selection-frame-handle {
+  border: 0;
+  background: transparent;
 }
 
 .canvas-caret {

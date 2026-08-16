@@ -1,4 +1,4 @@
-import type { PointerEventHandler, ReactNode, Ref } from "react";
+import type { KeyboardEventHandler, MouseEventHandler, PointerEventHandler, ReactNode, Ref } from "react";
 import type { SelectionCorner } from "../model/selectionBounds";
 
 type CanvasInteractionOverlayProps = {
@@ -6,14 +6,17 @@ type CanvasInteractionOverlayProps = {
   marqueeRef: Ref<HTMLDivElement>;
   selectionFrame?: {
     height: number;
-    onDoubleClick?: PointerEventHandler<HTMLDivElement>;
-    onPointerCancel: PointerEventHandler<HTMLDivElement>;
-    onLostPointerCapture: PointerEventHandler<HTMLDivElement>;
-    onPointerDown: PointerEventHandler<HTMLDivElement>;
-    onPointerMove: PointerEventHandler<HTMLDivElement>;
-    onPointerUp: PointerEventHandler<HTMLDivElement>;
-    onResizePointerDown: (corner: SelectionCorner) => PointerEventHandler<HTMLDivElement>;
-    showResizeHandles: boolean;
+    onDoubleClick?: MouseEventHandler<HTMLButtonElement>;
+    onMoveKeyDown: KeyboardEventHandler<HTMLButtonElement>;
+    onPointerCancel: PointerEventHandler<HTMLButtonElement>;
+    onLostPointerCapture: PointerEventHandler<HTMLButtonElement>;
+    onPointerDown: PointerEventHandler<HTMLButtonElement>;
+    onPointerMove: PointerEventHandler<HTMLButtonElement>;
+    onPointerUp: PointerEventHandler<HTMLButtonElement>;
+    onResizeKeyDown: (corner: SelectionCorner) => KeyboardEventHandler<HTMLButtonElement>;
+    onResizePointerDown: (corner: SelectionCorner) => PointerEventHandler<HTMLButtonElement>;
+    resizeCorners: readonly SelectionCorner[];
+    showMoveSurface: boolean;
     width: number;
     x: number;
     y: number;
@@ -31,30 +34,40 @@ export function CanvasInteractionOverlay({
       <div className="selection-rectangle" ref={marqueeRef} />
       {selectionFrame ? (
         <div
-          aria-label="Move selected elements"
           className="selection-frame"
           style={{ height: selectionFrame.height, left: selectionFrame.x, top: selectionFrame.y, width: selectionFrame.width }}
         >
-          <div
-            className={`selection-frame-move-surface ${selectionFrame.showResizeHandles ? "" : "is-single-selection"}`}
-            onDoubleClick={selectionFrame.onDoubleClick}
-            onLostPointerCapture={selectionFrame.onLostPointerCapture}
-            onPointerCancel={selectionFrame.onPointerCancel}
-            onPointerDown={selectionFrame.onPointerDown}
-            onPointerMove={selectionFrame.onPointerMove}
-            onPointerUp={selectionFrame.onPointerUp}
-          />
-          {selectionFrame.showResizeHandles ? (["nw", "ne", "se", "sw"] as const).map((corner) => (
-            <div
+          {selectionFrame.showMoveSurface ? (
+            <button
+              aria-label="Move selected elements"
+              className={`selection-frame-move-surface ${selectionFrame.resizeCorners.length === 0 ? "is-single-selection" : ""}`}
+              onDoubleClick={selectionFrame.onDoubleClick}
+              onKeyDown={selectionFrame.onMoveKeyDown}
+              onLostPointerCapture={selectionFrame.onLostPointerCapture}
+              onPointerCancel={selectionFrame.onPointerCancel}
+              onPointerDown={selectionFrame.onPointerDown}
+              onPointerMove={selectionFrame.onPointerMove}
+              onPointerUp={selectionFrame.onPointerUp}
+              type="button"
+            />
+          ) : null}
+          {selectionFrame.resizeCorners.map((corner) => (
+            <button
+              aria-label={`Resize selected elements from ${corner}`}
               className={`selection-frame-handle selection-frame-handle-${corner}`}
               key={corner}
+              onKeyDown={selectionFrame.onResizeKeyDown(corner)}
+              onPointerCancel={selectionFrame.onPointerCancel}
               onPointerDown={(event) => {
                 event.stopPropagation();
                 selectionFrame.onResizePointerDown(corner)(event);
               }}
               onLostPointerCapture={selectionFrame.onLostPointerCapture}
+              onPointerMove={selectionFrame.onPointerMove}
+              onPointerUp={selectionFrame.onPointerUp}
+              type="button"
             />
-          )) : null}
+          ))}
         </div>
       ) : null}
       {children}

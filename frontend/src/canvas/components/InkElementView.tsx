@@ -11,6 +11,7 @@ type InkElementViewProps = {
   isDragSourceHidden: boolean;
   isMultiSelected: boolean;
   isSelected: boolean;
+  suppressResizeHandle?: boolean;
   onCanvasPanStart: (event: ReactPointerEvent<HTMLElement>) => void;
   onElementChange: (elementId: string, element: HTMLDivElement | null) => void;
   onInteractionModeChange: (mode: InteractionMode) => void;
@@ -55,6 +56,7 @@ export const InkElementView = memo(function InkElementView({
   isDragSourceHidden,
   isMultiSelected,
   isSelected,
+  suppressResizeHandle = false,
   onCanvasPanStart,
   onElementChange,
   onInteractionModeChange,
@@ -229,7 +231,7 @@ export const InkElementView = memo(function InkElementView({
           <use className="ink-element-hit-target" fill="transparent" href={`#${pathId}`} stroke="transparent" strokeWidth={12 / Math.max(zoomLevel, 0.01)} />
         </svg>
       </div>
-      {isSelected && !isMultiSelected && !element.locked ? (
+      {isSelected && !isMultiSelected && !element.locked && !suppressResizeHandle ? (
         <div
           aria-label="Resize ink stroke"
           aria-valuemax={MAX_INK_SIZE}

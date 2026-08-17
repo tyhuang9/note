@@ -2,7 +2,6 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type { AppData, AppSessionState, Folder, Page } from "../../types";
 import type { CanvasElement, ConnectorElement, RoughStyle, ShapeElement } from "../model/elements";
 import {
-  isBindableShape,
   isSafeCanvasCoordinate,
   isSafeCanvasDimension,
   isSafeCanvasRotation,
@@ -177,14 +176,11 @@ function normalizeLoadedConnectorEndpoint(
       kind: "element",
       targetElementId: endpoint.targetElementId,
     };
-    const target = elementsById[binding.targetElementId];
-    if (
-      connector.style.endArrowhead === "arrow"
-      && target?.pageId === connector.pageId
-      && isBindableShape(target)
-    ) return binding;
     const resolved = resolveConnectorEndpoint(binding, elementsById, connector.pageId);
-    return { kind: "free", ...(resolved ?? { x: 0, y: 0 }) };
+    if (!resolved) return { kind: "free", x: 0, y: 0 };
+    return connector.style.endArrowhead === "arrow"
+      ? binding
+      : { kind: "free", ...resolved };
   }
   return { kind: "free", x: 0, y: 0 };
 }

@@ -271,6 +271,12 @@ describe("scene repository", () => {
     const foreignRectangle = { ...rectangle, id: "foreign-rectangle", pageId: "other-page" };
     const unsafeRectangle = { ...rectangle, id: "unsafe-rectangle", x: MAX_CANVAS_VALUE + 1 };
     const unsafeRotationRectangle = { ...rectangle, id: "unsafe-rotation", rotation: 361 };
+    const overshootRectangle = {
+      ...rectangle,
+      id: "overshoot-rectangle",
+      width: 1,
+      x: MAX_CANVAS_VALUE - 1,
+    };
     const invoke: Invoke = async (command) => {
       if (command !== "load_workspace_data") return undefined as never;
       return {
@@ -279,6 +285,7 @@ describe("scene repository", () => {
           foreignRectangle,
           unsafeRectangle,
           unsafeRotationRectangle,
+          overshootRectangle,
           text("text-target"),
           arrow("missing", bound("missing")),
           arrow("nonshape", bound("text-target")),
@@ -288,6 +295,7 @@ describe("scene repository", () => {
           arrow("connector", { kind: "connector", targetConnectorId: "missing", pathT: 0.25, gap: 0 }),
           arrow("large-free", { kind: "free", x: MAX_CANVAS_VALUE + 1, y: 0 }),
           arrow("large-gap", bound("rectangle", MAX_CANVAS_VALUE + 1)),
+          arrow("resolved-overshoot", bound("overshoot-rectangle", MAX_CANVAS_VALUE)),
           arrow("line", bound("rectangle"), "none"),
           arrow("null", null as unknown as ConnectorElement["start"]),
           arrow("undefined", undefined as unknown as ConnectorElement["start"]),
@@ -308,11 +316,106 @@ describe("scene repository", () => {
     );
     expect(loaded.elements.some((element) => element.id === "unsafe-rectangle")).toBe(false);
     expect(loaded.elements.some((element) => element.id === "unsafe-rotation")).toBe(false);
-    for (const id of ["missing", "nonshape", "unsafe-shape", "group", "connector", "large-free", "large-gap", "null", "undefined", "string", "number"]) {
+    for (const id of ["missing", "nonshape", "unsafe-shape", "group", "connector", "large-free", "large-gap", "resolved-overshoot", "null", "undefined", "string", "number"]) {
       expect(connectorById[id].start).toEqual({ kind: "free", x: 0, y: 0 });
     }
     expect(connectorById["cross-page"].start).toEqual({ kind: "free", x: 0, y: 0 });
     expect(connectorById.line.start).toEqual({ kind: "free", x: 110, y: 50 });
+  });
+
+  it("persists a normalized overshooting legacy binding while deleting its target", async () => {
+    const target: ShapeElement = {
+      createdAt: 1,
+      height: 60,
+      id: "overshoot-target",
+      locked: false,
+      opacity: 1,
+      pageId: "page",
+      rotation: 0,
+      shape: "rectangle",
+      style: {
+        fillColor: null,
+        roughness: 1,
+        roundness: 0,
+        seed: 1,
+        strokeColor: { kind: "theme", token: "foreground" },
+        strokeStyle: "solid",
+        strokeWidth: 2,
+      },
+      type: "shape",
+      updatedAt: 1,
+      width: 1,
+      x: MAX_CANVAS_VALUE - 1,
+      y: 20,
+      zIndex: 0,
+    };
+    const connector: ConnectorElement = {
+      createdAt: 1,
+      end: { kind: "free", x: 0, y: 0 },
+      id: "legacy-arrow",
+      locked: false,
+      opacity: 1,
+      pageId: "page",
+      routing: "straight",
+      start: {
+        kind: "element",
+        targetElementId: target.id,
+        anchor: { t: 0.25 },
+        gap: MAX_CANVAS_VALUE,
+      },
+      style: {
+        endArrowhead: "arrow",
+        fillColor: null,
+        roughness: 1,
+        roundness: 0,
+        seed: 1,
+        startArrowhead: "none",
+        strokeColor: { kind: "theme", token: "foreground" },
+        strokeStyle: "solid",
+        strokeWidth: 2,
+      },
+      type: "connector",
+      updatedAt: 1,
+      zIndex: 1,
+    };
+    let savedBatch: SceneChangeBatch | undefined;
+    const invoke: Invoke = async (command, args) => {
+      if (command === "load_workspace_data") {
+        return {
+          elements: [target, connector],
+          folders: [],
+          pages: [{ id: "page", revision: 4 }],
+          warnings: [],
+        } as never;
+      }
+      if (command === "apply_scene_changes") {
+        savedBatch = args?.batch as SceneChangeBatch;
+        return { pageId: "page", newRevision: 5 } as never;
+      }
+      return undefined as never;
+    };
+    const repository = createSceneRepository(invoke);
+    const workspace = await repository.loadWorkspace();
+    const normalized = workspace.elements.find(
+      (element): element is ConnectorElement => element.id === connector.id,
+    );
+    expect(normalized?.start).toEqual({ kind: "free", x: 0, y: 0 });
+    if (!normalized) throw new Error("Expected normalized legacy connector");
+
+    await repository.applySceneChanges({
+      pageId: "page",
+      baseRevision: 4,
+      upserts: [normalized],
+      deletedElementIds: [target.id],
+    });
+
+    expect(savedBatch).toEqual(expect.objectContaining({
+      upserts: [expect.objectContaining({
+        id: connector.id,
+        start: { kind: "free", x: 0, y: 0 },
+      })],
+      deletedElementIds: [target.id],
+    }));
   });
 });
 

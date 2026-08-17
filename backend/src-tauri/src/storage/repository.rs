@@ -1493,6 +1493,45 @@ mod tests {
     }
 
     #[test]
+    fn boundary_free_endpoint_persists_while_deleting_bound_target() {
+        let directory = root();
+        seed_page(directory.path());
+        let bound = connector_element(
+            json!({"kind":"element","targetElementId":"shape-1","anchor":{"t":0.25},"gap":4.0}),
+            json!({"kind":"free","x":160.0,"y":60.0}),
+        );
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![shape_element("shape-1", "p"), bound.clone()],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+
+        let mut detached = bound;
+        detached["start"] = json!({"kind":"free","x":MAX_CANVAS_VALUE,"y":0.0});
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 1,
+                upserts: vec![detached],
+                deleted_element_ids: vec!["shape-1".into()],
+            },
+        )
+        .unwrap();
+
+        let workspace = load_workspace_data_at(directory.path()).unwrap();
+        assert_eq!(workspace.elements.len(), 1);
+        assert_eq!(workspace.elements[0]["start"]["kind"], "free");
+        assert_eq!(workspace.elements[0]["start"]["x"], MAX_CANVAS_VALUE);
+        assert_eq!(workspace.pages[0].revision, 2);
+    }
+
+    #[test]
     fn canvas_geometry_and_connector_endpoints_have_safe_magnitude_limits() {
         for (mut element, key, expected_error) in [
             (element("too-far", 1), "x", "element.x"),

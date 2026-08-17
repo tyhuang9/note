@@ -44,7 +44,7 @@ export const CanvasViewport = forwardRef<HTMLElement, CanvasViewportProps>(
   ) {
     return (
       <section
-        aria-label="Freeform note canvas"
+        aria-label={labelledBy ? undefined : "Canvas workspace"}
         aria-labelledby={labelledBy}
         className={`canvas ${activeMode === "canvas" ? "is-canvas-selected" : ""} ${activeMode === "panning" ? "is-panning" : ""} ${activeMode === "selecting" ? "is-selecting" : ""}`}
         id={id}

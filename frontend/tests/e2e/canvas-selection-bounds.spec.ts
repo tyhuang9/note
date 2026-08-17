@@ -57,6 +57,7 @@ test("marquee cleanup leaves one composite frame whose whitespace moves and resi
   await expect(selectionMoveSurface).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
   await page.keyboard.press("Tab");
   await selectionMoveSurface.focus();
+  await expect(selectionMoveSurface).toBeFocused();
   const focusStyle = await selectionMoveSurface.evaluate((element) => {
     const style = getComputedStyle(element);
     return {
@@ -87,8 +88,17 @@ test("marquee cleanup leaves one composite frame whose whitespace moves and resi
 
   const southeast = page.getByRole("button", { name: "Resize selected elements from se" });
   await expect(southeast).toHaveCSS("width", "24px");
-  const beforeWidth = await readWorldWidth(blocks.first);
+  await page.keyboard.press("Tab");
   await southeast.focus();
+  await expect(southeast).toBeFocused();
+  const resizeFocusStyle = await southeast.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { color: style.outlineColor, style: style.outlineStyle, width: style.outlineWidth };
+  });
+  expect(resizeFocusStyle.style).toBe("solid");
+  expect(Number.parseFloat(resizeFocusStyle.width)).toBeGreaterThan(0);
+  expect(resizeFocusStyle.color).not.toBe("rgba(0, 0, 0, 0)");
+  const beforeWidth = await readWorldWidth(blocks.first);
   await page.keyboard.press("Shift+ArrowRight");
   await expect.poll(() => readWorldWidth(blocks.first)).toBeGreaterThan(beforeWidth);
   await canvas.focus();

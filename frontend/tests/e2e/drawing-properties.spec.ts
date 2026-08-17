@@ -21,13 +21,14 @@ test("returns toolbar focus to the canvas when the last page closes", async ({ p
   const select = page.getByRole("button", { name: "Select (V / 1)" });
   await select.focus();
   await expect(select).toBeFocused();
-  await page.getByRole("button", { name: "Close New page" }).dispatchEvent("click");
+  await page.getByRole("button", { name: "Close New page" }).click();
 
   await expect(page.getByRole("toolbar", { name: "Drawing tools" })).toHaveCount(0);
+  await expect(canvas).toHaveAccessibleName("Canvas workspace");
   await expect(canvas).toBeFocused();
 });
 
-test("returns properties-panel focus to the canvas when the last page closes", async ({ page }) => {
+test("returns focus to the canvas when keyboard activation closes the last page", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: /create new note/i }).click();
 
@@ -36,9 +37,13 @@ test("returns properties-panel focus to the canvas when the last page closes", a
   const opacity = page.getByRole("slider", { name: "Opacity" });
   await opacity.focus();
   await expect(opacity).toBeFocused();
-  await page.getByRole("button", { name: "Close New page" }).dispatchEvent("click");
+  const closePage = page.getByRole("button", { name: "Close New page" });
+  await closePage.focus();
+  await expect(closePage).toBeFocused();
+  await closePage.press("Enter");
 
   await expect(page.getByRole("complementary", { name: "Drawing properties" })).toHaveCount(0);
+  await expect(canvas).toHaveAccessibleName("Canvas workspace");
   await expect(canvas).toBeFocused();
 });
 

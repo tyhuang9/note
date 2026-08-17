@@ -442,7 +442,9 @@ fn validate_final_connector_bindings(
 ) -> Result<(), String> {
     let connectors = {
         let mut statement = transaction
-            .prepare("SELECT id,payload_json FROM elements WHERE page_id=? AND element_type='connector'")
+            .prepare(
+                "SELECT id,payload_json FROM elements WHERE page_id=? AND element_type='connector'",
+            )
             .map_err(|error| error.to_string())?;
         let rows = statement
             .query_map([page_id], |row| {
@@ -455,8 +457,9 @@ fn validate_final_connector_bindings(
     };
 
     for (connector_id, payload) in connectors {
-        let connector: Value = serde_json::from_str(&payload)
-            .map_err(|error| format!("connector {connector_id} has invalid stored payload: {error}"))?;
+        let connector: Value = serde_json::from_str(&payload).map_err(|error| {
+            format!("connector {connector_id} has invalid stored payload: {error}")
+        })?;
         let is_arrow = connector
             .get("style")
             .and_then(Value::as_object)
@@ -517,8 +520,9 @@ fn validate_bound_connector_target(
             "{context}.targetElementId must reference a rectangle, ellipse, or diamond"
         ));
     }
-    let target: Value = serde_json::from_str(&target_payload)
-        .map_err(|error| format!("{context}.targetElementId has invalid stored payload: {error}"))?;
+    let target: Value = serde_json::from_str(&target_payload).map_err(|error| {
+        format!("{context}.targetElementId has invalid stored payload: {error}")
+    })?;
     if !matches!(
         target.get("shape").and_then(Value::as_str),
         Some("rectangle" | "ellipse" | "diamond")
@@ -1148,13 +1152,22 @@ mod tests {
                 SceneChangeBatch {
                     page_id: "p".into(),
                     base_revision: 1,
-                    upserts: vec![connector_element(start, json!({"kind":"free","x":1.0,"y":1.0}))],
+                    upserts: vec![connector_element(
+                        start,
+                        json!({"kind":"free","x":1.0,"y":1.0}),
+                    )],
                     deleted_element_ids: vec![],
                 },
             )
             .unwrap_err();
-            assert!(error.contains(message), "unexpected validation error: {error}");
-            assert_eq!(load_workspace_data_at(directory.path()).unwrap().pages[0].revision, 1);
+            assert!(
+                error.contains(message),
+                "unexpected validation error: {error}"
+            );
+            assert_eq!(
+                load_workspace_data_at(directory.path()).unwrap().pages[0].revision,
+                1
+            );
         }
     }
 
@@ -1163,7 +1176,8 @@ mod tests {
         let directory = root();
         seed_page(directory.path());
         let target = shape_element("shape-1", "p");
-        let bound_start = json!({"kind":"element","targetElementId":"shape-1","anchor":{"t":0.25},"gap":4.0});
+        let bound_start =
+            json!({"kind":"element","targetElementId":"shape-1","anchor":{"t":0.25},"gap":4.0});
         apply_scene_changes_at(
             directory.path(),
             SceneChangeBatch {
@@ -1171,7 +1185,10 @@ mod tests {
                 base_revision: 0,
                 upserts: vec![
                     target.clone(),
-                    connector_element(bound_start.clone(), json!({"kind":"free","x":160.0,"y":60.0})),
+                    connector_element(
+                        bound_start.clone(),
+                        json!({"kind":"free","x":160.0,"y":60.0}),
+                    ),
                 ],
                 deleted_element_ids: vec![],
             },
@@ -1280,7 +1297,10 @@ mod tests {
                 error.contains(expected_error),
                 "{name} produced unexpected validation error: {error}"
             );
-            assert_eq!(load_workspace_data_at(directory.path()).unwrap().pages[0].revision, 1);
+            assert_eq!(
+                load_workspace_data_at(directory.path()).unwrap().pages[0].revision,
+                1
+            );
         }
     }
 
@@ -1288,7 +1308,8 @@ mod tests {
     fn deleting_bound_shape_requires_same_batch_connector_detachment() {
         let directory = root();
         seed_page(directory.path());
-        let bound_start = json!({"kind":"element","targetElementId":"shape-1","anchor":{"t":0.25},"gap":4.0});
+        let bound_start =
+            json!({"kind":"element","targetElementId":"shape-1","anchor":{"t":0.25},"gap":4.0});
         let bound = connector_element(bound_start, json!({"kind":"free","x":160.0,"y":60.0}));
         apply_scene_changes_at(
             directory.path(),
@@ -1312,8 +1333,17 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("existing shape"));
-        assert_eq!(load_workspace_data_at(directory.path()).unwrap().elements.len(), 2);
-        assert_eq!(load_workspace_data_at(directory.path()).unwrap().pages[0].revision, 1);
+        assert_eq!(
+            load_workspace_data_at(directory.path())
+                .unwrap()
+                .elements
+                .len(),
+            2
+        );
+        assert_eq!(
+            load_workspace_data_at(directory.path()).unwrap().pages[0].revision,
+            1
+        );
 
         let mut detached = bound;
         detached["start"] = json!({"kind":"free","x":14.0,"y":24.0});
@@ -1352,8 +1382,14 @@ mod tests {
                 },
             )
             .unwrap_err();
-            assert!(error.contains(expected_error), "unexpected validation error: {error}");
-            assert_eq!(load_workspace_data_at(directory.path()).unwrap().pages[0].revision, 0);
+            assert!(
+                error.contains(expected_error),
+                "unexpected validation error: {error}"
+            );
+            assert_eq!(
+                load_workspace_data_at(directory.path()).unwrap().pages[0].revision,
+                0
+            );
         }
 
         for (endpoint, expected_error) in [
@@ -1381,8 +1417,14 @@ mod tests {
                 },
             )
             .unwrap_err();
-            assert!(error.contains(expected_error), "unexpected validation error: {error}");
-            assert_eq!(load_workspace_data_at(directory.path()).unwrap().pages[0].revision, 0);
+            assert!(
+                error.contains(expected_error),
+                "unexpected validation error: {error}"
+            );
+            assert_eq!(
+                load_workspace_data_at(directory.path()).unwrap().pages[0].revision,
+                0
+            );
         }
     }
 

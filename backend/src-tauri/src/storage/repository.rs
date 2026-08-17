@@ -846,6 +846,18 @@ mod tests {
     fn image_element(id: &str, asset_id: &str) -> Value {
         json!({"id":id,"pageId":"p","type":"image","x":1.0,"y":2.0,"width":100.0,"height":40.0,"rotation":0.0,"zIndex":0,"opacity":1.0,"locked":false,"createdAt":1,"updatedAt":1,"assetId":asset_id,"naturalWidth":100,"naturalHeight":40,"fit":"contain"})
     }
+    fn connector_element(start: Value, end: Value) -> Value {
+        json!({
+            "id":"connector-1","pageId":"p","type":"connector","zIndex":0,
+            "opacity":1.0,"locked":false,"createdAt":1,"updatedAt":1,
+            "routing":"straight","start":start,"end":end,
+            "style":{
+                "fillColor":null,"roughness":1.0,"roundness":0.0,"seed":1,
+                "strokeColor":{"kind":"theme","token":"foreground"},"strokeStyle":"solid",
+                "strokeWidth":2.0,"startArrowhead":"none","endArrowhead":"arrow"
+            }
+        })
+    }
     fn ink_element() -> Value {
         json!({
             "id":"ink-1","pageId":"p","type":"ink","x":1.0,"y":2.0,
@@ -948,6 +960,58 @@ mod tests {
             load_workspace_data_at(directory.path()).unwrap().pages[0].revision,
             1
         );
+    }
+
+    #[test]
+    fn connector_element_endpoints_preserve_valid_bindings_and_reject_malformed_values() {
+        let directory = root();
+        seed_page(directory.path());
+        let bound = connector_element(
+            json!({"kind":"element","targetElementId":"shape-1","anchor":{"t":0.25},"gap":4.0}),
+            json!({"kind":"free","x":160.0,"y":60.0}),
+        );
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![bound.clone()],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            load_workspace_data_at(directory.path()).unwrap().elements[0]["start"],
+            bound["start"]
+        );
+
+        for (start, message) in [
+            (
+                json!({"kind":"element","targetElementId":"","anchor":{"t":0.25},"gap":0.0}),
+                "targetElementId must be a non-empty string",
+            ),
+            (
+                json!({"kind":"element","targetElementId":"shape-1","anchor":{"t":1.1},"gap":0.0}),
+                "anchor must be within 0 and 1",
+            ),
+            (
+                json!({"kind":"element","targetElementId":"shape-1","anchor":{"t":0.25},"gap":-1.0}),
+                "gap cannot be negative",
+            ),
+        ] {
+            let error = apply_scene_changes_at(
+                directory.path(),
+                SceneChangeBatch {
+                    page_id: "p".into(),
+                    base_revision: 1,
+                    upserts: vec![connector_element(start, json!({"kind":"free","x":1.0,"y":1.0}))],
+                    deleted_element_ids: vec![],
+                },
+            )
+            .unwrap_err();
+            assert!(error.contains(message), "unexpected validation error: {error}");
+            assert_eq!(load_workspace_data_at(directory.path()).unwrap().pages[0].revision, 1);
+        }
     }
 
     #[test]

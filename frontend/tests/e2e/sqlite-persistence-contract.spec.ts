@@ -75,6 +75,43 @@ test("SQLite bridge reconciles structure before scene changes and reloads text",
   await expect.poll(async () => (await persistenceCommands(page)).filter((command) => command === "apply_scene_changes").length).toBe(1);
 });
 
+test("persists a bound arrow endpoint and resolves it from the current target after reload", async ({ page }) => {
+  await installTauriStorageMock(page);
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await page.goto("/");
+  await page.getByRole("button", { name: /create new note/i }).click();
+  const canvas = page.getByRole("tabpanel");
+  const canvasBounds = await canvas.boundingBox();
+  if (!canvasBounds) throw new Error("Canvas bounds were not available.");
+
+  await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
+  await page.mouse.click(canvasBounds.x + 360, canvasBounds.y + 300);
+  const rectangleControl = page.getByRole("button", { name: "Select and move rectangle element" });
+  const targetId = await rectangleControl.getAttribute("data-canvas-element-id");
+  if (!targetId) throw new Error("Rectangle target id was unavailable.");
+
+  await page.getByRole("button", { name: "Arrow (A / 5)" }).click();
+  const rightAnchor = page.locator(`[data-connector-target-id="${targetId}"][data-connector-anchor="right"]`);
+  const anchorBounds = await rightAnchor.boundingBox();
+  if (!anchorBounds) throw new Error("Connector anchor was not available.");
+  await page.mouse.move(anchorBounds.x + anchorBounds.width / 2, anchorBounds.y + anchorBounds.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(canvasBounds.x + 800, anchorBounds.y + anchorBounds.height / 2, { steps: 5 });
+  await page.mouse.up();
+  const arrow = page.getByRole("button", { name: "Select and move arrow connector" });
+  await expect(arrow).toBeVisible();
+  await expect(page.locator(".persistence-status")).toHaveText("Saved");
+
+  await page.reload();
+  await expect(rectangleControl).toBeVisible();
+  await expect(arrow).toBeVisible();
+  const beforeTargetMove = await arrow.boundingBox();
+  if (!beforeTargetMove) throw new Error("Arrow bounds were not available.");
+  await rectangleControl.focus();
+  await page.keyboard.press("Shift+ArrowRight");
+  await expect.poll(async () => (await arrow.boundingBox())?.width ?? 0).toBeLessThan(beforeTargetMove.width - 8);
+});
+
 async function persistenceCommands(page: Page): Promise<string[]> {
   return page.evaluate(
     () => (window as unknown as { __notePersistenceCalls: string[] }).__notePersistenceCalls,

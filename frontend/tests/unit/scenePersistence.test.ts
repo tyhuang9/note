@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ShapeElement, TextElement } from "../../src/canvas/model/elements";
+import type { ConnectorElement, ShapeElement, TextElement } from "../../src/canvas/model/elements";
 import { SceneChangeQueue } from "../../src/canvas/persistence/sceneChangeQueue";
 import {
   assetDataUrl,
@@ -144,6 +144,43 @@ describe("scene repository", () => {
     expect(isAssetBlobWithinLimit({ size: MAX_ASSET_BYTES + 1 })).toBe(false);
     const oversizedBase64 = "A".repeat(Math.ceil((MAX_ASSET_BYTES + 1) / 3) * 4);
     expect(() => assetRequestFromDataUrl(`data:image/png;base64,${oversizedBase64}`)).toThrow("16 MiB");
+  });
+
+  it("preserves bound connector endpoints through load normalization", async () => {
+    const boundConnector: ConnectorElement = {
+      createdAt: 1,
+      end: { kind: "free", x: 180, y: 60 },
+      id: "bound-arrow",
+      locked: false,
+      opacity: 1,
+      pageId: "page",
+      routing: "straight",
+      start: { kind: "element", targetElementId: "rectangle", anchor: { t: 0.25 }, gap: 6 },
+      style: {
+        endArrowhead: "arrow",
+        fillColor: null,
+        roughness: 1,
+        roundness: 0,
+        seed: 1,
+        startArrowhead: "none",
+        strokeColor: { kind: "theme", token: "foreground" },
+        strokeStyle: "solid",
+        strokeWidth: 2,
+      },
+      type: "connector",
+      updatedAt: 1,
+      zIndex: 1,
+    };
+    const invoke: Invoke = async (command) => {
+      if (command === "load_workspace_data") return { elements: [boundConnector], folders: [], pages: [], warnings: [] } as never;
+      return undefined as never;
+    };
+
+    const [loaded] = (await createSceneRepository(invoke).loadWorkspace()).elements;
+    expect(loaded).toMatchObject({
+      start: { kind: "element", targetElementId: "rectangle", anchor: { t: 0.25 }, gap: 6 },
+      style: { endArrowhead: "arrow" },
+    });
   });
 });
 

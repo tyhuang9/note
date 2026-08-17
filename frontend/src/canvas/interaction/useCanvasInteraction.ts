@@ -15,7 +15,7 @@ import type {
 import { getSelectionRect, rectsIntersect } from "../../editorUtils";
 import type { CanvasElement } from "../model/elements";
 import { screenToleranceToWorld } from "../model/geometry";
-import { canvasElementContainsPoint, getElementBounds } from "../model/hitTesting";
+import { getElementBounds, getTopmostElementAtPoint } from "../model/hitTesting";
 import {
   primitiveGeometryFromSession,
   type PrimitiveGeometry,
@@ -88,6 +88,14 @@ function isCanvasBackgroundTarget(target: EventTarget | null) {
   }
 
   return target.closest(".canvas, .canvas-content, .canvas-grid") !== null;
+}
+
+/** Orders the scene by visual stacking while preserving scene order for z-index ties. */
+export function elementIdsBackToFront(elements: readonly CanvasElement[]): string[] {
+  return elements
+    .map((element, index) => ({ element, index }))
+    .sort((first, second) => first.element.zIndex - second.element.zIndex || first.index - second.index)
+    .map(({ element }) => element.id);
 }
 
 /** Central DOM router for legacy canvas pan, marquee, insertion, and wheel behavior. */
@@ -318,14 +326,12 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
         const elementsById = Object.fromEntries(
           current.visibleElements.map((element) => [element.id, element]),
         );
-        let hitElement: CanvasElement | undefined;
-        for (let index = current.visibleElements.length - 1; index >= 0; index -= 1) {
-          const candidate = current.visibleElements[index];
-          if (canvasElementContainsPoint(candidate, startPoint, tolerance, elementsById)) {
-            hitElement = candidate;
-            break;
-          }
-        }
+        const hitElement = getTopmostElementAtPoint(
+          elementsById,
+          elementIdsBackToFront(current.visibleElements),
+          startPoint,
+          tolerance,
+        );
         if (hitElement) {
           const currentIds = current.selectedElementIdsRef.current;
           const nextIds = event.shiftKey

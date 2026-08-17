@@ -5,6 +5,7 @@ import type { CanvasElement } from "../model/elements";
 import { getEraserElementIds } from "../model/hitTesting";
 import { screenToleranceToWorld } from "../model/geometry";
 import { inkPath } from "../rendering/strokePath";
+import { canvasColorToCss } from "../rendering/canvasColor";
 import type { CanvasTool } from "./types";
 
 export type DrawingTool = CanvasTool | "text" | "image";
@@ -174,7 +175,7 @@ export function useInkInteraction({
     const path = previewPathRef.current ?? document.createElementNS("http://www.w3.org/2000/svg", "path");
     previewPathRef.current = path;
     path.setAttribute("d", inkPath({ points: session.points.map((point) => [point.x, point.y, point.pressure]), brush }));
-    path.setAttribute("fill", brush.color.kind === "fixed" ? brush.color.value : "var(--workbench-text)");
+    path.setAttribute("fill", canvasColorToCss(brush.color));
     path.setAttribute("fill-opacity", String(brush.opacity));
     path.setAttribute("stroke", session.tool === "highlighter" ? "var(--canvas-highlighter-edge)" : "none");
     path.setAttribute("stroke-width", session.tool === "highlighter" ? "1.5" : "0");

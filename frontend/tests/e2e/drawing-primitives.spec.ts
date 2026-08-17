@@ -101,7 +101,8 @@ test("renders every geometric primitive and moves connectors with a composite se
   await expect(page.getByLabel("ellipse shape")).toHaveCount(1);
   const connectors = page.locator("svg.primitive-connector");
   await expect(connectors).toHaveCount(2);
-  await expect(page.locator(".primitive-connector marker")).toHaveCount(1);
+  await expect(page.locator(".primitive-connector > g")).toHaveCount(3);
+  await expect(page.locator(".primitive-connector > line")).toHaveCount(0);
 
   const arrowConnector = connectors.last();
   const arrowBeforeEndpointMove = await arrowConnector.boundingBox();

@@ -6129,7 +6129,7 @@ function App() {
       const style = {
         fillColor: null,
         roughness: 1.2,
-        roundness: tool === "rectangle" ? 0.08 : 0,
+        roundness: 0,
         seed: deterministicSeed(elementId),
         strokeColor: { kind: "theme" as const, token: "foreground" as const },
         strokeStyle: "solid" as const,

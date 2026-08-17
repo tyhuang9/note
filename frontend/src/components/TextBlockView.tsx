@@ -16,8 +16,6 @@ import {
 } from "../constants";
 import type {
   BlockUpdates,
-  InteractionMode,
-  ResizeDirection,
   SearchMatch,
 } from "../appTypes";
 import { blurActiveTextEntry } from "../editorUtils";
@@ -25,21 +23,6 @@ import type { TextElement } from "../canvas/model/elements";
 
 type DragState = {
   pointerId: number;
-};
-
-type ResizeState = {
-  direction: ResizeDirection;
-  startClientX: number;
-  startClientY: number;
-  startX: number;
-  startY: number;
-  startWidth: number;
-  startHeight: number;
-  currentX: number;
-  currentY: number;
-  currentWidth: number;
-  currentHeight: number;
-  rafId: number | null;
 };
 
 type PointerLike = {
@@ -170,7 +153,6 @@ type TextBlockViewProps = {
   onCanvasPanMove: (event: ReactPointerEvent<HTMLElement>) => void;
   onCanvasPanStart: (event: ReactPointerEvent<HTMLElement>) => void;
   onFocusEndHandled: () => void;
-  onInteractionModeChange: (mode: InteractionMode) => void;
   onBlockElementChange: (
     blockId: string,
     element: HTMLDivElement | null,
@@ -211,7 +193,6 @@ export const TextBlockView = memo(function TextBlockView({
   onCanvasPanMove,
   onCanvasPanStart,
   onFocusEndHandled,
-  onInteractionModeChange,
   onBlockElementChange,
   onSelect,
   onSelectAllBlocks,
@@ -228,8 +209,6 @@ export const TextBlockView = memo(function TextBlockView({
   const widthMeasureRef = useRef<HTMLDivElement | null>(null);
   const heightMeasureRef = useRef<HTMLDivElement | null>(null);
   const dragState = useRef<DragState | null>(null);
-  const resizeState = useRef<ResizeState | null>(null);
-  const isResizingRef = useRef(false);
   const activePointerId = useRef<number | null>(null);
   const hasManualWidth = useRef(Boolean(block.isWidthManuallyResized));
   const pendingCaretOffset = useRef<number | null>(null);
@@ -264,7 +243,6 @@ export const TextBlockView = memo(function TextBlockView({
         return;
       }
 
-      element.classList.toggle("is-resizing", isResizingRef.current);
     },
     [block.id, onBlockElementChange],
   );
@@ -796,131 +774,25 @@ export const TextBlockView = memo(function TextBlockView({
     activePointerId.current = null;
   }
 
-  function startResize(
-    event: ReactPointerEvent<HTMLDivElement>,
-    direction: ResizeDirection,
-  ) {
-    event.stopPropagation();
-    event.preventDefault();
-
-    if (block.locked) {
-      return;
-    }
-
-    resizeState.current = {
-      direction,
-      startClientX: event.clientX,
-      startClientY: event.clientY,
-      startX: block.x,
-      startY: block.y,
-      startWidth: block.width,
-      startHeight: block.height,
-      currentX: block.x,
-      currentY: block.y,
-      currentWidth: block.width,
-      currentHeight: block.height,
-      rafId: null,
-    };
-    hasManualWidth.current = true;
-    isResizingRef.current = true;
-    blockRef.current?.classList.add("is-resizing");
-    onSelect(block.id);
-    onInteractionModeChange("resizing");
-    activePointerId.current = event.pointerId;
-    blockRef.current?.setPointerCapture(event.pointerId);
-  }
-
-  function resizeBlock(event: PointerLike) {
-    const currentResize = resizeState.current;
-    const blockElement = blockRef.current;
-
-    if (!currentResize || !blockElement) {
-      return;
-    }
-
-    const deltaX = (event.clientX - currentResize.startClientX) / zoomLevel;
-    let nextX = currentResize.startX;
-    let nextY = currentResize.startY;
-    let nextWidth = currentResize.startWidth;
-
-    if (currentResize.direction.includes("w")) {
-      const anchorRight = currentResize.startX + currentResize.startWidth;
-      nextX = Math.min(anchorRight - MIN_BLOCK_WIDTH, currentResize.startX + deltaX);
-      nextWidth = anchorRight - nextX;
-    } else if (currentResize.direction.includes("e")) {
-      nextWidth = Math.max(MIN_BLOCK_WIDTH, currentResize.startWidth + deltaX);
-    }
-
-    currentResize.currentX = nextX;
-    currentResize.currentY = nextY;
-    currentResize.currentWidth = nextWidth;
-
-    if (currentResize.rafId !== null) {
-      return;
-    }
-
-    currentResize.rafId = window.requestAnimationFrame(() => {
-      if (!resizeState.current || !blockRef.current) {
-        return;
-      }
-
-      const nextHeight = getAutoHeight(
-        resizeState.current.currentWidth,
-        true,
-      );
-
-      if (resizeState.current.direction.includes("w")) {
-        blockRef.current.style.left = `${resizeState.current.currentX}px`;
-        blockRef.current.style.top = `${resizeState.current.currentY}px`;
-      }
-
-      blockRef.current.style.width = `${resizeState.current.currentWidth}px`;
-      resizeState.current.currentHeight = nextHeight;
-      blockRef.current.style.height = `${resizeState.current.currentHeight}px`;
-      resizeState.current.rafId = null;
-    });
-  }
-
-  function endResize(pointerId?: number) {
-    const currentResize = resizeState.current;
-
-    if (!currentResize) {
-      return;
-    }
-
-    if (currentResize.rafId !== null) {
-      window.cancelAnimationFrame(currentResize.rafId);
-      currentResize.rafId = null;
-    }
-
-    currentResize.currentHeight = getAutoHeight(currentResize.currentWidth, true);
-
-    if (blockRef.current) {
-      blockRef.current.style.height = `${currentResize.currentHeight}px`;
-      blockRef.current.classList.remove("is-resizing");
-    }
-
-    if (
-      pointerId !== undefined &&
-      blockRef.current?.hasPointerCapture(pointerId)
-    ) {
-      blockRef.current.releasePointerCapture(pointerId);
-    }
-
-    onUpdate(block.id, {
-      x: currentResize.currentX,
-      y: currentResize.currentY,
-      width: currentResize.currentWidth,
-      height: currentResize.currentHeight,
-      isWidthManuallyResized: true,
-    });
-    resizeState.current = null;
-    isResizingRef.current = false;
-    activePointerId.current = null;
-    onInteractionModeChange("selected");
-  }
-
   function handleHeaderKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (
+      event.altKey &&
+      event.shiftKey &&
+      (event.key === "ArrowLeft" || event.key === "ArrowRight")
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (block.locked) return;
+      const direction = event.key === "ArrowLeft" ? -1 : 1;
+      const nextWidth = Math.max(MIN_BLOCK_WIDTH, block.width + direction * 10 / zoomLevel);
+      hasManualWidth.current = true;
+      onUpdate(block.id, {
+        height: getAutoHeight(nextWidth, true),
+        isWidthManuallyResized: true,
+        width: nextWidth,
+      });
+      return;
+    }
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       leaveEditorForBlockSelection(event.ctrlKey || event.metaKey);
@@ -943,29 +815,9 @@ export const TextBlockView = memo(function TextBlockView({
     onUpdate(block.id, { x: block.x + delta.x, y: block.y + delta.y });
   }
 
-  function resizeWidthFromKeyboard(event: ReactKeyboardEvent<HTMLDivElement>) {
-    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    if (block.locked) return;
-    const direction = event.key === "ArrowLeft" || event.key === "ArrowDown" ? -1 : 1;
-    const nextWidth = Math.max(MIN_BLOCK_WIDTH, block.width + direction * (event.shiftKey ? 10 : 1) / zoomLevel);
-    hasManualWidth.current = true;
-    onUpdate(block.id, {
-      height: getAutoHeight(nextWidth, true),
-      isWidthManuallyResized: true,
-      width: nextWidth,
-    });
-  }
-
   function handleRootPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
     if (dragState.current) {
       moveBlock(event);
-      return;
-    }
-
-    if (resizeState.current) {
-      resizeBlock(event);
       return;
     }
 
@@ -977,13 +829,6 @@ export const TextBlockView = memo(function TextBlockView({
       event.preventDefault();
       event.stopPropagation();
       endDrag(event.clientX, event.clientY, event.pointerId);
-      return;
-    }
-
-    if (resizeState.current) {
-      event.preventDefault();
-      event.stopPropagation();
-      endResize(event.pointerId);
       return;
     }
 
@@ -1057,7 +902,12 @@ export const TextBlockView = memo(function TextBlockView({
       }}
     >
       <div
-        aria-label={block.locked ? "Select locked text block" : "Select and move text block"}
+        aria-keyshortcuts={!block.locked && isSelected ? "Alt+Shift+ArrowLeft Alt+Shift+ArrowRight" : undefined}
+        aria-label={block.locked
+          ? "Select locked text block"
+          : isSelected
+            ? "Select and move text block; resize width with Alt+Shift+Left or Right Arrow"
+            : "Select and move text block"}
         aria-pressed={isSelected}
         className="text-block-header"
         onClick={(event) => {
@@ -1168,21 +1018,6 @@ export const TextBlockView = memo(function TextBlockView({
             : { children: renderRichBlockContent(block) })}
         />
       ) : null}
-      {isSelected && !block.locked ? (["e"] as ResizeDirection[]).map((direction) => (
-        <div
-          aria-label="Resize text block width"
-          aria-orientation="horizontal"
-          aria-valuemin={MIN_BLOCK_WIDTH}
-          aria-valuenow={Math.round(block.width)}
-          aria-valuetext={`${Math.round(block.width)} pixels wide`}
-          className={`resize-handle resize-${direction}`}
-          key={direction}
-          onKeyDown={resizeWidthFromKeyboard}
-          onPointerDown={(event) => startResize(event, direction)}
-          role="slider"
-          tabIndex={0}
-        />
-      )) : null}
       <>
         <div
           aria-hidden="true"

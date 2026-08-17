@@ -130,9 +130,9 @@ export function translateSelection(
 }
 
 /**
- * Uniformly scales a selection about its opposite frame corner. Text geometry
- * changes, but its document/font data is deliberately not scaled so the text
- * component can reflow at its normal font size.
+ * Uniformly scales a selection about its opposite frame corner. Text boxes
+ * move with the transform but retain their complete geometry and content so
+ * mixed selections never visually scale or reflow text.
  */
 export function scaleSelection(
   elements: readonly CanvasElement[],
@@ -149,6 +149,14 @@ export function scaleSelection(
     if (!isBoxCanvasElement(element)) return element;
 
     const position = scalePoint({ x: element.x, y: element.y }, anchor, factor);
+    if (element.type === "text") {
+      return {
+        ...element,
+        x: position.x,
+        y: position.y,
+        updatedAt: Date.now(),
+      };
+    }
     const box = {
       ...element,
       x: position.x,

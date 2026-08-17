@@ -1353,6 +1353,9 @@ function App() {
     const selectedIds = new Set(selectedBlockIds);
     return data.elements.filter((element) => element.pageId === selectedPageId && selectedIds.has(element.id));
   }, [data.elements, selectedBlockIds, selectedPageId]);
+  const selectionContainsOnlyText = selectedBlockIds.length > 0
+    && selectedDrawingElements.length === selectedBlockIds.length
+    && selectedDrawingElements.every(isTextElement);
   const drawingPropertiesContext = useMemo(() => {
     if (selectedDrawingElements.length > 0) {
       const values = readDrawingProperties(selectedDrawingElements);
@@ -7212,7 +7215,7 @@ function App() {
                 }
                 isEditing={block.id === editingBlockId}
                 isDragSourceHidden={dragSourceBlockIds.includes(block.id)}
-                isMultiSelected={selectedBlockIds.length > 1}
+                isMultiSelected={selectedBlockIds.length > 1 && !selectionContainsOnlyText}
                 isSelected={selectedBlockIds.includes(block.id)}
                 key={block.id}
                 onDelete={deleteBlock}
@@ -7224,7 +7227,6 @@ function App() {
                 onCanvasPanStart={canvasInteraction.startPan}
                 onFocusEndHandled={handleFocusEndHandled}
                 onActiveEditorChange={setActiveTextEditor}
-                onInteractionModeChange={setActiveMode}
                 onBlockElementChange={registerBlockElement}
                 onSelect={selectBlock}
                 onUpdate={updateBlock}
@@ -7291,7 +7293,13 @@ function App() {
             selectionFrameRef={selectionFrameRef}
             selectionFrame={(() => {
               const bounds = selectionFramePreview ?? selectionWorldBounds;
-              if (activeTool !== "select" || !bounds || selectedBlockIds.length === 0 || editingBlockId) return undefined;
+              if (
+                activeTool !== "select"
+                || !bounds
+                || selectedBlockIds.length === 0
+                || selectionContainsOnlyText
+                || editingBlockId
+              ) return undefined;
               const selected = selectedBlockIds.length === 1
                 ? connectorEndpointPreview?.id === selectedBlockIds[0]
                   ? connectorEndpointPreview

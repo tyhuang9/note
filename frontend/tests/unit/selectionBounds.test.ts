@@ -107,7 +107,7 @@ describe("composite transforms", () => {
     expect(result[2]).toMatchObject({ start: { kind: "free", x: 108, y: 55 }, end: { kind: "free", x: 228, y: 105 } });
   });
 
-  it("leaves locked items unchanged when a selection resize includes them", () => {
+  it("leaves locked items unchanged and preserves text geometry during selection resize", () => {
     const locked = { ...text, id: "locked", locked: true, x: 300 };
     const result = scaleSelection(
       [text, locked],
@@ -116,19 +116,51 @@ describe("composite transforms", () => {
       "se",
       2,
     );
-    expect(result[0]).toMatchObject({ x: 10, y: 20, width: 200, height: 80 });
+    expect(result[0]).toMatchObject({ x: 10, y: 20, width: 100, height: 40 });
     expect(result[1]).toBe(locked);
   });
 
-  it("scales positions, ink points and brush size uniformly about the opposing corner", () => {
+  it("scales non-text geometry while moving text without changing its size or content", () => {
     const result = scaleSelection([text, ink, connector], new Set([text.id, ink.id, connector.id]), { x: 10, y: 20, width: 200, height: 100 }, "se", 2);
     const scaledText = result[0] as TextElement;
     const scaledInk = result[1] as InkElement;
-    expect(scaledText).toMatchObject({ x: 10, y: 20, width: 200, height: 80, content: "One" });
+    expect(scaledText).toMatchObject({ x: 10, y: 20, width: 100, height: 40, content: "One" });
     expect(scaledInk).toMatchObject({ x: 290, y: 80, width: 80, height: 40 });
     expect(scaledInk.points).toEqual([[0, 0, 0.5], [80, 40, 0.7]]);
     expect(scaledInk.brush.size).toBe(8);
     expect(result[2]).toMatchObject({ start: { kind: "free", x: 190, y: 100 }, end: { kind: "free", x: 430, y: 200 } });
+  });
+
+  it("preserves every textbox sizing semantic while scaling its position", () => {
+    const richText: TextElement = {
+      ...text,
+      content: "Manual width",
+      height: 72,
+      isWidthManuallyResized: true,
+      richContent: { type: "doc", content: [{ type: "paragraph" }] },
+      rotation: 15,
+      width: 240,
+      x: 90,
+      y: 70,
+    };
+    const [result] = scaleSelection(
+      [richText],
+      new Set([richText.id]),
+      { x: 10, y: 20, width: 300, height: 180 },
+      "se",
+      1.5,
+    );
+
+    expect(result).toMatchObject({
+      content: richText.content,
+      height: richText.height,
+      isWidthManuallyResized: true,
+      richContent: richText.richContent,
+      rotation: richText.rotation,
+      width: richText.width,
+      x: 130,
+      y: 95,
+    });
   });
 
   it("uses a single dominant-axis proportional scale from a corner drag", () => {

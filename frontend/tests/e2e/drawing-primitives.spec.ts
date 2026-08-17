@@ -250,7 +250,7 @@ test("creates editable text and places a picked image only on the next canvas cl
   await expect(select).toHaveAttribute("aria-pressed", "true");
 });
 
-test("moves and resizes a selected text block with semantic keyboard controls", async ({ page }) => {
+test("moves and resizes a selected text block from its keyboard-accessible header", async ({ page }) => {
   const canvas = page.getByRole("tabpanel");
   const bounds = await canvas.boundingBox();
   if (!bounds) throw new Error("Canvas bounds were not available.");
@@ -271,12 +271,11 @@ test("moves and resizes a selected text block with semantic keyboard controls", 
   await moveControl.press("Shift+ArrowDown");
   await expect.poll(async () => (await textBlock.boundingBox())?.y ?? 0).toBeCloseTo((beforeMove?.y ?? 0) + 10, 0);
 
-  const widthControl = textBlock.getByRole("slider", { name: "Resize text block width" });
   const beforeWidth = await textBlock.boundingBox();
-  await widthControl.focus();
-  await widthControl.press("Shift+ArrowRight");
+  await expect(textBlock.locator(".resize-e")).toHaveCount(0);
+  await expect(moveControl).toHaveAttribute("aria-keyshortcuts", "Alt+Shift+ArrowLeft Alt+Shift+ArrowRight");
+  await moveControl.press("Alt+Shift+ArrowRight");
   await expect.poll(async () => (await textBlock.boundingBox())?.width ?? 0).toBeCloseTo((beforeWidth?.width ?? 0) + 10, 0);
-  await expect(widthControl).toHaveAttribute("aria-valuetext", /pixels wide/);
 });
 
 test("Escape cancels a pending picked image without creating an element", async ({ page }) => {

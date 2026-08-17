@@ -3179,19 +3179,6 @@ h2 {
   outline-offset: 2px;
 }
 
-.resize-e {
-  top: 0;
-  right: calc(
-    -1 * (var(--text-block-border-width) + var(--text-block-resize-margin))
-  );
-  width: calc(
-    var(--text-block-resize-padding) + var(--text-block-border-width) +
-      var(--text-block-resize-margin)
-  );
-  height: 100%;
-  cursor: ew-resize;
-}
-
 .resize-se {
   right: calc(-1 * (var(--text-block-border-width) + var(--text-block-resize-margin)));
   bottom: calc(-1 * (var(--text-block-border-width) + var(--text-block-resize-margin)));

@@ -94,20 +94,11 @@ async function createTextbox(page: Page, text: string) {
 }
 
 async function resizeBlockEast(page: Page, block: Locator, deltaX: number) {
-  const handle = block.locator(".resize-e");
-  const bounds = await handle.boundingBox();
-
-  if (!bounds) {
-    throw new Error("Textbox resize handle bounds were not available.");
-  }
-
-  const startX = bounds.x + bounds.width / 2;
-  const startY = bounds.y + bounds.height / 2;
-
-  await page.mouse.move(startX, startY);
-  await page.mouse.down();
-  await page.mouse.move(startX + deltaX, startY, { steps: 4 });
-  await page.mouse.up();
+  const header = block.locator(".text-block-header");
+  await expect(block.locator(".resize-e")).toHaveCount(0);
+  await header.focus();
+  const shortcut = deltaX < 0 ? "Alt+Shift+ArrowLeft" : "Alt+Shift+ArrowRight";
+  for (let offset = 0; offset < Math.abs(deltaX); offset += 10) await header.press(shortcut);
 }
 
 async function waitForBlockWidth(

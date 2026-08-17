@@ -79,6 +79,133 @@ for (const zoom of [50, 100, 200]) {
   });
 }
 
+for (const cancelPath of ["Escape", "tool change", "page change", "window blur", "pointer cancel", "lost pointer capture"] as const) {
+  test(`all-text header drag releases capture without committing on ${cancelPath}`, async ({ page }) => {
+    const canvas = page.getByRole("tabpanel");
+    const canvasBounds = await requiredBounds(canvas, "canvas");
+    let originalTab: Locator | null = null;
+    let alternateTab: Locator | null = null;
+    if (cancelPath === "page change") {
+      await page.getByRole("button", { name: "Create root page" }).click();
+      const tabs = page.getByRole("tablist", { name: "Open pages" }).getByRole("tab");
+      await expect(tabs).toHaveCount(2);
+      originalTab = tabs.first();
+      alternateTab = tabs.nth(1);
+      await originalTab.click();
+    }
+
+    const blocks = await createTwoTextBlocks(page, canvasBounds);
+    await marqueeSelect(page, canvasBounds, [blocks.first, blocks.second]);
+    await expect(page.locator(".selection-frame")).toHaveCount(0);
+    const firstBlockId = await blocks.first.getAttribute("data-block-id");
+    if (!firstBlockId) throw new Error("Selected text block id was unavailable.");
+    const sourceText = page.locator(`.text-block[data-block-id="${firstBlockId}"]:not(.drag-layer-clone)`);
+    const header = sourceText.locator(".text-block-header");
+
+    const historyBaseline = await Promise.all([
+      readWorldPosition(blocks.first),
+      readWorldPosition(blocks.second),
+    ]);
+    await header.focus();
+    await header.press("ArrowRight");
+    const positionsBeforeCancel = await Promise.all([
+      readWorldPosition(blocks.first),
+      readWorldPosition(blocks.second),
+    ]);
+
+    const headerBounds = await requiredBounds(header, "selected text header");
+    const start = {
+      x: headerBounds.x + headerBounds.width / 2,
+      y: headerBounds.y + headerBounds.height / 2,
+    };
+    await page.evaluate(() => {
+      document.addEventListener("pointerdown", (event) => {
+        document.body.dataset.testPointerId = String(event.pointerId);
+      }, { capture: true, once: true });
+    });
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(start.x + 54, start.y + 38, { steps: 5 });
+    await expect(page.locator(".drag-layer-clone")).toHaveCount(2);
+    await expect(page.locator("body")).toHaveClass(/is-interacting/);
+    const capturedPointerId = Number(await page.locator("body").getAttribute("data-test-pointer-id"));
+    await page.locator("body").evaluate((element) => delete (element as HTMLElement).dataset.testPointerId);
+    expect(Number.isFinite(capturedPointerId)).toBe(true);
+    expect(await page.evaluate((pointerId) =>
+      Array.from(document.querySelectorAll<HTMLElement>("*"))
+        .some((element) => element.hasPointerCapture(pointerId)), capturedPointerId)).toBe(true);
+
+    if (cancelPath === "Escape") {
+      await page.keyboard.press("Escape");
+    } else if (cancelPath === "tool change") {
+      await page.getByRole("button", { name: /Pen \(P/ }).dispatchEvent("click");
+    } else if (cancelPath === "page change") {
+      await alternateTab!.dispatchEvent("click");
+    } else if (cancelPath === "window blur") {
+      await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+    } else if (cancelPath === "pointer cancel") {
+      await page.evaluate(({ pointerId, x, y }) => {
+        const captureTarget = Array.from(document.querySelectorAll<HTMLElement>("*"))
+          .find((element) => element.hasPointerCapture(pointerId));
+        if (!captureTarget) throw new Error("Captured text drag target was unavailable.");
+        captureTarget.dispatchEvent(new PointerEvent("pointercancel", {
+          bubbles: true,
+          button: 0,
+          clientX: x,
+          clientY: y,
+          pointerId,
+        }));
+      }, { pointerId: capturedPointerId, x: start.x + 54, y: start.y + 38 });
+    } else {
+      await page.evaluate((pointerId) => {
+        const captureTarget = Array.from(document.querySelectorAll<HTMLElement>("*"))
+          .find((element) => element.hasPointerCapture(pointerId));
+        if (!captureTarget) throw new Error("Captured text drag target was unavailable.");
+        captureTarget.releasePointerCapture(pointerId);
+        captureTarget.dispatchEvent(new PointerEvent("lostpointercapture", {
+          bubbles: true,
+          pointerId,
+        }));
+      }, capturedPointerId);
+    }
+
+    await expect(page.locator(".drag-layer-clone")).toHaveCount(0);
+    await expect(page.locator("body")).not.toHaveClass(/is-interacting/);
+    await expect.poll(() => page.evaluate((pointerId) =>
+      Array.from(document.querySelectorAll<HTMLElement>("*"))
+        .some((element) => element.hasPointerCapture(pointerId)), capturedPointerId)).toBe(false);
+    const transformAfterCancel = await page.locator(".canvas-content").evaluate((element) =>
+      (element as HTMLElement).style.transform);
+    await page.mouse.move(
+      canvasBounds.x + canvasBounds.width - 4,
+      canvasBounds.y + canvasBounds.height / 2,
+      { steps: 3 },
+    );
+    await page.waitForTimeout(100);
+    await expect(page.locator(".drag-layer-clone")).toHaveCount(0);
+    await expect.poll(() => page.locator(".canvas-content").evaluate((element) =>
+      (element as HTMLElement).style.transform)).toBe(transformAfterCancel);
+    await page.mouse.up();
+
+    if (cancelPath === "tool change") {
+      await page.getByRole("button", { name: /Select \(V/ }).click();
+    } else if (cancelPath === "page change") {
+      await originalTab!.click();
+    }
+    await expect.poll(() => Promise.all([
+      readWorldPosition(blocks.first),
+      readWorldPosition(blocks.second),
+    ])).toEqual(positionsBeforeCancel);
+
+    await canvas.focus();
+    await page.keyboard.press("Control+z");
+    await expect.poll(() => Promise.all([
+      readWorldPosition(blocks.first),
+      readWorldPosition(blocks.second),
+    ])).toEqual(historyBaseline);
+  });
+}
+
 test("mixed resize handles describe and keyboard-apply non-text-only scaling", async ({ page }) => {
   const canvas = page.getByRole("tabpanel");
   const bounds = await requiredBounds(canvas, "canvas");

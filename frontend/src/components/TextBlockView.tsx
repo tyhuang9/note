@@ -798,19 +798,18 @@ export const TextBlockView = memo(function TextBlockView({
   }
 
   function cancelDrag(pointerId?: number) {
-    if (!dragState.current) {
+    const currentDrag = dragState.current;
+    if (!currentDrag) {
       return;
     }
 
-    const didStart = dragState.current.didStart;
+    const didStart = currentDrag.didStart;
+    const capturedPointerId = pointerId ?? currentDrag.pointerId;
     dragState.current = null;
     activePointerId.current = null;
 
-    if (
-      pointerId !== undefined &&
-      blockRef.current?.hasPointerCapture(pointerId)
-    ) {
-      blockRef.current.releasePointerCapture(pointerId);
+    if (blockRef.current?.hasPointerCapture(capturedPointerId)) {
+      blockRef.current.releasePointerCapture(capturedPointerId);
     }
 
     if (didStart) {

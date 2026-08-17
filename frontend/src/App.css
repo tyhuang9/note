@@ -3243,6 +3243,20 @@ h2 {
   background: #2b2b2b;
 }
 
+/* Keep frame controls hit-testable without dimming their selected area in dark mode. */
+.app-shell.is-dark button.selection-frame-move-surface:hover,
+.app-shell.is-dark button.selection-frame-move-surface:active,
+.app-shell.is-dark button.selection-frame-move-surface:focus-visible,
+.app-shell.is-dark button.selection-frame-handle:hover,
+.app-shell.is-dark button.selection-frame-handle:active,
+.app-shell.is-dark button.selection-frame-handle:focus-visible,
+.app-shell.is-dark button.selection-frame-endpoint-handle:hover,
+.app-shell.is-dark button.selection-frame-endpoint-handle:active,
+.app-shell.is-dark button.selection-frame-endpoint-handle:focus-visible {
+  border-color: transparent;
+  background: transparent;
+}
+
 .app-shell.is-dark .page-tab .page-tab-close,
 .app-shell.is-dark .page-tab .page-tab-main,
 .app-shell.is-dark .page-tab .page-tab-close:hover,

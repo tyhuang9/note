@@ -47,6 +47,9 @@ test("marquee cleanup leaves one composite frame whose whitespace moves and resi
   }, whitespace);
   expect(hitInfo.hitClass, JSON.stringify(hitInfo)).toContain("selection-frame-move-surface");
 
+  await page.mouse.move(whitespace.x, whitespace.y);
+  await expect(page.getByRole("button", { name: "Move selected elements" })).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+
   await page.mouse.click(whitespace.x, whitespace.y);
   await expect(frame).toHaveCount(1);
   await page.mouse.move(whitespace.x, whitespace.y);

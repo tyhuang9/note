@@ -107,6 +107,71 @@ test("lines stay free while arrows detach and rebind through real endpoint contr
   }
 });
 
+test("keyboard endpoint chooser binds, rebinds, and detaches with accessible status", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  const canvasBounds = await requiredBounds(canvas, "canvas");
+  await createRectangle(page, canvasBounds.x + 360, canvasBounds.y + 280);
+  await createRectangle(page, canvasBounds.x + 650, canvasBounds.y + 420);
+  const firstRectangle = page.getByRole("button", { name: "Select and move rectangle element" }).first();
+  const firstTargetId = await firstRectangle.getAttribute("data-canvas-element-id");
+  if (!firstTargetId) throw new Error("First rectangle target ID was unavailable.");
+
+  await page.getByRole("button", { name: "Arrow (A / 5)" }).click();
+  const firstRightAnchor = await requiredBounds(
+    page.locator(`[data-connector-target-id="${firstTargetId}"][data-connector-anchor="right"]`),
+    "first rectangle right anchor",
+  );
+  await draw(
+    page,
+    firstRightAnchor.x + 80,
+    firstRightAnchor.y + 100,
+    firstRightAnchor.x + 520,
+    firstRightAnchor.y + 100,
+  );
+  const arrow = page.getByRole("button", { name: "Select and move arrow connector" });
+  await arrow.focus();
+  await page.keyboard.press("Enter");
+  const startHandle = page.getByRole("button", { name: "Move connector start endpoint" });
+  const description = page.locator("#connector-start-endpoint-description");
+  const status = page.locator(".canvas-accessibility-status[role='status']");
+  await expect(startHandle).toHaveAttribute("aria-describedby", "connector-start-endpoint-description");
+  await expect(description).toContainText("Currently free");
+
+  await startHandle.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("dialog", { name: "Choose start endpoint target and anchor" })).toBeVisible();
+  const firstTarget = page.getByRole("button", { name: "rectangle shape 1" });
+  await firstTarget.focus();
+  await page.keyboard.press("Enter");
+  const rightAnchor = page.getByRole("button", { name: "Right anchor" });
+  await rightAnchor.focus();
+  await page.keyboard.press("Enter");
+  await expect(status).toHaveText("Bound start endpoint to rectangle shape at the right anchor.");
+  await expect(startHandle).toBeFocused();
+  await expect(description).toContainText("Currently bound to rectangle shape at the right anchor");
+
+  await startHandle.focus();
+  await page.keyboard.press("Enter");
+  const secondTarget = page.getByRole("button", { name: "rectangle shape 2" });
+  await secondTarget.focus();
+  await page.keyboard.press("Enter");
+  const topAnchor = page.getByRole("button", { name: "Top anchor" });
+  await topAnchor.focus();
+  await page.keyboard.press("Enter");
+  await expect(status).toHaveText("Rebound start endpoint to rectangle shape at the top anchor.");
+  await expect(startHandle).toBeFocused();
+  await expect(description).toContainText("Currently bound to rectangle shape at the top anchor");
+
+  await startHandle.focus();
+  await page.keyboard.press("Enter");
+  const detach = page.getByRole("button", { name: "Detach start endpoint" });
+  await detach.focus();
+  await page.keyboard.press("Enter");
+  await expect(status).toHaveText("Detached start endpoint. It is now free.");
+  await expect(startHandle).toBeFocused();
+  await expect(description).toContainText("Currently free");
+});
+
 async function createRectangle(page: Page, x: number, y: number): Promise<Locator> {
   await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
   await page.mouse.click(x, y);

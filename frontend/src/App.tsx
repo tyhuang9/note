@@ -26,6 +26,7 @@ import { InlineRename } from "./components/InlineRename";
 import { TextBlockView } from "./components/TextBlockView";
 import { ImageElementView } from "./components/ImageElementView";
 import { CanvasElementRenderer } from "./canvas/components/CanvasElementRenderer";
+import { ConnectorEndpointChooser } from "./canvas/components/ConnectorEndpointChooser";
 import { CanvasInteractionOverlay } from "./canvas/components/CanvasInteractionOverlay";
 import { CanvasToolPalette } from "./canvas/components/CanvasToolPalette";
 import { DrawingPropertiesPanel } from "./canvas/components/DrawingPropertiesPanel";
@@ -168,8 +169,10 @@ import {
 } from "./canvas/model/selectionBounds";
 import {
   detachConnectorEndpointsForDeletedTargets,
+  getShapeBindingAnchors,
   resolveConnectorEndpoint,
   snapConnectorEndpoint,
+  type ShapeAnchorName,
 } from "./canvas/model/connectorBinding";
 import {
   assetDataUrl,
@@ -361,6 +364,11 @@ type SelectionTransformSession = {
   startBounds: SelectionRect;
   startClientX: number;
   startClientY: number;
+};
+
+type ConnectorEndpointChooserState = {
+  endpoint: "start" | "end";
+  targetElementId: string | null;
 };
 
 type DrawingPropertyPreviewTransaction = {
@@ -1141,6 +1149,8 @@ function App() {
   const [selectionFramePreview, setSelectionFramePreview] = useState<SelectionRect | null>(null);
   const [connectorEndpointPreview, setConnectorEndpointPreview] = useState<ConnectorElement | null>(null);
   const [isConnectorEndpointRetargeting, setIsConnectorEndpointRetargeting] = useState(false);
+  const [connectorEndpointChooser, setConnectorEndpointChooser] = useState<ConnectorEndpointChooserState | null>(null);
+  const [connectorBindingAnnouncement, setConnectorBindingAnnouncement] = useState("");
   const [selectedSidebarPageIds, setSelectedSidebarPageIds] = useState<string[]>([]);
   const [draggedPageIds, setDraggedPageIds] = useState<string[]>([]);
   const [pageDropTargetFolderId, setPageDropTargetFolderId] = useState<string | null>(null);
@@ -5964,6 +5974,7 @@ function App() {
     if (updateMode) {
       setConnectorEndpointPreview(null);
       setSelectionFramePreview(null);
+      setConnectorEndpointChooser(null);
     }
     setIsConnectorEndpointRetargeting(false);
     if (updateMode && session) setActiveMode(selectedBlockIdsRef.current.length > 0 ? "selected" : "canvas");
@@ -6102,6 +6113,7 @@ function App() {
       }
       setConnectorEndpointPreview(null);
       setSelectionFramePreview(null);
+      setConnectorEndpointChooser(null);
       setIsConnectorEndpointRetargeting(false);
       return;
     }
@@ -6126,6 +6138,7 @@ function App() {
 
     setConnectorEndpointPreview(null);
     setSelectionFramePreview(null);
+    setConnectorEndpointChooser(null);
     setIsConnectorEndpointRetargeting(false);
     setEditingBlockId(null);
     setInsertionPoint(null);
@@ -6189,6 +6202,12 @@ function App() {
       event.stopPropagation();
       const selectedId = selectedBlockIdsRef.current.length === 1 ? selectedBlockIdsRef.current[0] : null;
       if (!selectedId) return;
+      const selectedConnector = dataRef.current.elements.find((element): element is ConnectorElement =>
+        element.id === selectedId && element.type === "connector",
+      );
+      if (selectedConnector?.[endpoint].kind === "element") {
+        setConnectorBindingAnnouncement(`Detached ${endpoint} endpoint and moved it with the keyboard.`);
+      }
       const elementsById = Object.fromEntries(dataRef.current.elements.map((element) => [element.id, element]));
       setBlocksWithHistory((currentBlocks) => currentBlocks.map((element) => {
         if (element.id !== selectedId || element.type !== "connector" || element.locked) return element;
@@ -6201,6 +6220,125 @@ function App() {
       }));
       setActiveMode("selected");
     };
+  }
+
+  function getSelectedArrowConnector(): ConnectorElement | null {
+    const selectedId = selectedBlockIdsRef.current.length === 1 ? selectedBlockIdsRef.current[0] : null;
+    const connector = selectedId
+      ? dataRef.current.elements.find((element): element is ConnectorElement =>
+        element.id === selectedId && element.type === "connector",
+      )
+      : null;
+    return connector?.style.endArrowhead === "arrow" ? connector : null;
+  }
+
+  function getShapeLabel(shape: ShapeElement): string {
+    return `${shape.shape} shape`;
+  }
+
+  function getAnchorLabel(anchor: { t: number }): string {
+    const anchorName = (["top", "right", "bottom", "left"] as const).find(
+      (_name, index) => Math.abs(anchor.t - index / 4) < 1e-8,
+    );
+    return anchorName ? `${anchorName} anchor` : "perimeter anchor";
+  }
+
+  function getConnectorEndpointDescription(
+    connector: ConnectorElement,
+    endpoint: "start" | "end",
+  ): string {
+    const current = connector[endpoint];
+    if (connector.style.endArrowhead !== "arrow") {
+      return `Currently free. This line endpoint cannot bind to shapes. Arrow keys move it.`;
+    }
+    if (current.kind !== "element") {
+      return `Currently free. Press Enter to choose a target shape and cardinal anchor. Arrow keys move the endpoint.`;
+    }
+    const target = dataRef.current.elements.find((element): element is ShapeElement =>
+      element.id === current.targetElementId && element.pageId === connector.pageId && element.type === "shape",
+    );
+    const targetLabel = target ? getShapeLabel(target) : "an unavailable target";
+    return `Currently bound to ${targetLabel} at the ${getAnchorLabel(current.anchor)}. Press Enter to rebind or detach. Arrow keys detach and move the endpoint.`;
+  }
+
+  function openConnectorEndpointChooser(endpoint: "start" | "end") {
+    const connector = getSelectedArrowConnector();
+    if (!connector || connector.locked) return;
+    const current = connector[endpoint];
+    setConnectorEndpointChooser({
+      endpoint,
+      targetElementId: current.kind === "element" ? current.targetElementId : null,
+    });
+  }
+
+  function closeConnectorEndpointChooser() {
+    const endpoint = connectorEndpointChooser?.endpoint;
+    setConnectorEndpointChooser(null);
+    if (!endpoint) return;
+    window.requestAnimationFrame(() => {
+      document
+        .querySelector<HTMLButtonElement>(`[data-connector-endpoint-handle="${endpoint}"]`)
+        ?.focus({ preventScroll: true });
+    });
+  }
+
+  function bindSelectedConnectorEndpoint(anchorName: ShapeAnchorName) {
+    const chooser = connectorEndpointChooser;
+    const connector = getSelectedArrowConnector();
+    if (!chooser || !connector || !chooser.targetElementId) return;
+    const target = dataRef.current.elements.find((element): element is ShapeElement =>
+      element.id === chooser.targetElementId
+        && element.pageId === connector.pageId
+        && element.type === "shape",
+    );
+    const anchor = target
+      ? getShapeBindingAnchors(target).find(({ name }) => name === anchorName)?.anchor
+      : undefined;
+    if (!target || !anchor) return;
+    const previous = connector[chooser.endpoint];
+    const next = {
+      kind: "element" as const,
+      targetElementId: target.id,
+      anchor,
+      gap: 0,
+    };
+    setBlocksWithHistory((currentBlocks) => currentBlocks.map((element) => {
+      if (element.id !== connector.id || element.type !== "connector") return element;
+      return chooser.endpoint === "start"
+        ? { ...element, start: next, updatedAt: Date.now() }
+        : { ...element, end: next, updatedAt: Date.now() };
+    }));
+    setConnectorBindingAnnouncement(
+      `${previous.kind === "element" ? "Rebound" : "Bound"} ${chooser.endpoint} endpoint to ${getShapeLabel(target)} at the ${getAnchorLabel(anchor)}.`,
+    );
+    closeConnectorEndpointChooser();
+  }
+
+  function detachSelectedConnectorEndpoint() {
+    const chooser = connectorEndpointChooser;
+    const connector = getSelectedArrowConnector();
+    if (!chooser || !connector) return;
+    const current = connector[chooser.endpoint];
+    if (current.kind !== "element") {
+      setConnectorBindingAnnouncement(`${chooser.endpoint} endpoint is already free.`);
+      closeConnectorEndpointChooser();
+      return;
+    }
+    const elementsById = Object.fromEntries(dataRef.current.elements.map((element) => [element.id, element]));
+    const resolved = resolveConnectorEndpoint(current, elementsById, connector.pageId);
+    if (!resolved) {
+      setConnectorBindingAnnouncement(`Could not detach ${chooser.endpoint} endpoint because its target is unavailable.`);
+      return;
+    }
+    const next = { kind: "free" as const, ...resolved };
+    setBlocksWithHistory((currentBlocks) => currentBlocks.map((element) => {
+      if (element.id !== connector.id || element.type !== "connector") return element;
+      return chooser.endpoint === "start"
+        ? { ...element, start: next, updatedAt: Date.now() }
+        : { ...element, end: next, updatedAt: Date.now() };
+    }));
+    setConnectorBindingAnnouncement(`Detached ${chooser.endpoint} endpoint. It is now free.`);
+    closeConnectorEndpointChooser();
   }
 
   const selectBlock = useCallback((blockId: string, additive = false) => {
@@ -6232,6 +6370,7 @@ function App() {
     });
     setEditingBlockId(null);
     setInsertionPoint(null);
+    setConnectorEndpointChooser(null);
     setIsCanvasKeyboardActive(true);
     setActiveMode(isDeselectingOnlyBlock ? "canvas" : "selected");
   }, []);
@@ -7130,11 +7269,20 @@ function App() {
                 : null;
               const connectorEndpointHandles = selected?.type === "connector" && !selected.locked && connectorEndpointPoints?.start && connectorEndpointPoints.end
                 ? ([
-                    { endpoint: "start" as const, point: connectorEndpointPoints.start },
-                    { endpoint: "end" as const, point: connectorEndpointPoints.end },
-                  ]).map(({ endpoint, point }) => ({
+                  { endpoint: "start" as const, point: connectorEndpointPoints.start },
+                  { endpoint: "end" as const, point: connectorEndpointPoints.end },
+                ]).map(({ endpoint, point }) => ({
+                    description: getConnectorEndpointDescription(selected, endpoint),
                     endpoint,
-                    onKeyDown: moveConnectorEndpointByKeyboard(endpoint),
+                    onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        openConnectorEndpointChooser(endpoint);
+                        return;
+                      }
+                      moveConnectorEndpointByKeyboard(endpoint)(event);
+                    },
                     onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => startSelectionFrameInteraction(event, null, endpoint),
                     x: (point.x - bounds.x) * zoomLevel + framePadding,
                     y: (point.y - bounds.y) * zoomLevel + framePadding,
@@ -7165,6 +7313,31 @@ function App() {
               };
             })()}
           />
+          {connectorEndpointChooser && (() => {
+            const connector = visibleCanvasElements.find((element): element is ConnectorElement =>
+              element.id === selectedBlockIds[0] && element.type === "connector" && element.style.endArrowhead === "arrow",
+            );
+            if (!connector) return null;
+            const shapes = visibleCanvasElements
+              .filter((element): element is ShapeElement => element.type === "shape" && element.pageId === connector.pageId)
+              .map((element, index) => ({ element, label: `${getShapeLabel(element)} ${index + 1}` }));
+            return (
+              <ConnectorEndpointChooser
+                endpoint={connectorEndpointChooser.endpoint}
+                onBind={bindSelectedConnectorEndpoint}
+                onClose={closeConnectorEndpointChooser}
+                onDetach={detachSelectedConnectorEndpoint}
+                onSelectTarget={(targetElementId) => setConnectorEndpointChooser((current) =>
+                  current ? { ...current, targetElementId } : current,
+                )}
+                shapes={shapes}
+                targetElementId={connectorEndpointChooser.targetElementId}
+              />
+            );
+          })()}
+          <div aria-live="polite" className="canvas-accessibility-status" role="status">
+            {connectorBindingAnnouncement}
+          </div>
           {shouldShowStarterShortcuts ? (
             <div
               className="canvas-starter"

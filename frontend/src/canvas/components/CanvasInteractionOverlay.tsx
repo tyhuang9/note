@@ -7,6 +7,7 @@ type CanvasInteractionOverlayProps = {
   selectionFrameRef?: Ref<HTMLDivElement>;
   selectionFrame?: {
     connectorEndpointHandles?: readonly {
+      description: string;
       endpoint: "start" | "end";
       onKeyDown: KeyboardEventHandler<HTMLButtonElement>;
       onPointerDown: PointerEventHandler<HTMLButtonElement>;
@@ -81,22 +82,28 @@ export function CanvasInteractionOverlay({
             />
           ))}
           {selectionFrame.connectorEndpointHandles?.map((handle) => (
-            <button
-              aria-label={`Move connector ${handle.endpoint} endpoint`}
-              className="selection-frame-endpoint-handle"
-              key={handle.endpoint}
-              onKeyDown={handle.onKeyDown}
-              onLostPointerCapture={selectionFrame.onLostPointerCapture}
-              onPointerCancel={selectionFrame.onPointerCancel}
-              onPointerDown={(event) => {
-                event.stopPropagation();
-                handle.onPointerDown(event);
-              }}
-              onPointerMove={selectionFrame.onPointerMove}
-              onPointerUp={selectionFrame.onPointerUp}
-              style={{ left: handle.x - 12, top: handle.y - 12 }}
-              type="button"
-            />
+            <span key={handle.endpoint}>
+              <span className="canvas-accessibility-status" id={`connector-${handle.endpoint}-endpoint-description`}>
+                {handle.description}
+              </span>
+              <button
+                aria-describedby={`connector-${handle.endpoint}-endpoint-description`}
+                aria-label={`Move connector ${handle.endpoint} endpoint`}
+                className="selection-frame-endpoint-handle"
+                data-connector-endpoint-handle={handle.endpoint}
+                onKeyDown={handle.onKeyDown}
+                onLostPointerCapture={selectionFrame.onLostPointerCapture}
+                onPointerCancel={selectionFrame.onPointerCancel}
+                onPointerDown={(event) => {
+                  event.stopPropagation();
+                  handle.onPointerDown(event);
+                }}
+                onPointerMove={selectionFrame.onPointerMove}
+                onPointerUp={selectionFrame.onPointerUp}
+                style={{ left: handle.x - 12, top: handle.y - 12 }}
+                type="button"
+              />
+            </span>
           ))}
         </div>
       ) : null}

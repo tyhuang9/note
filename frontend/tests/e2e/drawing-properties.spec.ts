@@ -1,5 +1,18 @@
 import { expect, test } from "@playwright/test";
 
+test("renders authoring chrome only after a live page canvas is available", async ({ page }) => {
+  await page.goto("/");
+
+  await expect(page.getByRole("toolbar", { name: "Drawing tools" })).toHaveCount(0);
+  await expect(page.locator('input[type="file"][accept="image/*"]')).toHaveCount(0);
+  await expect(page.getByRole("complementary", { name: "Drawing properties" })).toHaveCount(0);
+  await expect(page.getByRole("alert")).toHaveCount(0);
+
+  await page.getByRole("button", { name: /create new note/i }).click();
+  await expect(page.getByRole("toolbar", { name: "Drawing tools" })).toBeVisible();
+  await expect(page.locator('input[type="file"][accept="image/*"]')).toHaveCount(1);
+});
+
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: /create new note/i }).click();

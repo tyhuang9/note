@@ -1356,9 +1356,6 @@ function App() {
       values: drawingPropertiesFromPreference(preference),
     };
   }, [activeTool, drawingPreferences, selectedDrawingElements]);
-  useEffect(() => {
-    if (!drawingPropertiesContext) setIsPropertiesPanelOpen(false);
-  }, [drawingPropertiesContext]);
   const isTextFormattingVisible = Boolean(
     activeTextEditor && !activeTextEditor.isDestroyed
   ) || selectedDrawingElements.some((element) => element.type === "text");
@@ -1588,6 +1585,22 @@ function App() {
     livePanOffset.y,
     zoomLevel,
   ]);
+  const isCanvasAuthoringAvailable = Boolean(
+    selectedPage && !isTemplatePage(selectedPage) && canvasViewport,
+  );
+  const availableDrawingPropertiesContext = isCanvasAuthoringAvailable
+    ? drawingPropertiesContext
+    : null;
+  useEffect(() => {
+    if (!drawingPropertiesContext) setIsPropertiesPanelOpen(false);
+  }, [drawingPropertiesContext]);
+  useEffect(() => {
+    if (isCanvasAuthoringAvailable) return;
+    setIsPropertiesPanelOpen(false);
+    const activeElement = document.activeElement;
+    if (!(activeElement instanceof Element) || !activeElement.closest(".canvas-tool-palette, .drawing-properties-panel")) return;
+    window.requestAnimationFrame(() => canvasRef.current?.focus({ preventScroll: true }));
+  }, [isCanvasAuthoringAvailable]);
   canvasViewportRef.current = canvasViewport;
   const renderedCanvasElements = useMemo(() => {
     const withConnectorPreview = connectorEndpointPreview
@@ -6666,7 +6679,7 @@ function App() {
       />
 
       <section
-        className={`workspace ${isTextFormattingVisible ? "has-text-formatting" : ""} ${isPropertiesPanelOpen && drawingPropertiesContext ? "has-compact-properties" : ""}`}
+        className={`workspace ${isTextFormattingVisible ? "has-text-formatting" : ""} ${isPropertiesPanelOpen && availableDrawingPropertiesContext ? "has-compact-properties" : ""}`}
         inert={
           isAssistantOverlayOpen || isExplorerOverlayOpen ? true : undefined
         }
@@ -6756,43 +6769,45 @@ function App() {
           onWheel={canvasInteraction.handleWheel}
           ref={canvasRef}
         >
-          <div onPointerDown={(event) => event.stopPropagation()}>
-            <CanvasToolPalette
-              activeTool={activeTool}
-              isPropertiesPanelAvailable={Boolean(drawingPropertiesContext)}
-              isPropertiesPanelOpen={isPropertiesPanelOpen}
-              isToolLocked={isToolLocked}
-              onPropertiesPanelToggle={() => setIsPropertiesPanelOpen((open) => !open)}
-              onToolLockChange={setIsToolLocked}
-              onToolSelect={selectDrawingTool}
-            />
-            <input
-              accept="image/*"
-              aria-hidden="true"
-              hidden
-              onChange={(event) => {
-                const file = event.currentTarget.files?.[0];
-                event.currentTarget.value = "";
-                void handleImageFileSelected(file);
-              }}
-              ref={imagePickerInputRef}
-              tabIndex={-1}
-              type="file"
-            />
-          </div>
-          {imageImportError ? <div className="canvas-image-import-error" role="alert">{imageImportError}</div> : null}
-          {drawingPropertiesContext ? (
+          {isCanvasAuthoringAvailable ? <>
+            <div onPointerDown={(event) => event.stopPropagation()}>
+              <CanvasToolPalette
+                activeTool={activeTool}
+                isPropertiesPanelAvailable={Boolean(availableDrawingPropertiesContext)}
+                isPropertiesPanelOpen={isPropertiesPanelOpen}
+                isToolLocked={isToolLocked}
+                onPropertiesPanelToggle={() => setIsPropertiesPanelOpen((open) => !open)}
+                onToolLockChange={setIsToolLocked}
+                onToolSelect={selectDrawingTool}
+              />
+              <input
+                accept="image/*"
+                aria-hidden="true"
+                hidden
+                onChange={(event) => {
+                  const file = event.currentTarget.files?.[0];
+                  event.currentTarget.value = "";
+                  void handleImageFileSelected(file);
+                }}
+                ref={imagePickerInputRef}
+                tabIndex={-1}
+                type="file"
+              />
+            </div>
+            {imageImportError ? <div className="canvas-image-import-error" role="alert">{imageImportError}</div> : null}
+          </> : null}
+          {availableDrawingPropertiesContext ? (
             <DrawingPropertiesPanel
-              contextLabel={drawingPropertiesContext.contextLabel}
+              contextLabel={availableDrawingPropertiesContext.contextLabel}
               isCompactOpen={isPropertiesPanelOpen}
-              isSelection={drawingPropertiesContext.isSelection}
+              isSelection={availableDrawingPropertiesContext.isSelection}
               onCancelPreview={cancelDrawingPropertyPreview}
               onLayerAction={updateSelectedLayer}
               onPreview={previewDrawingProperty}
               onUpdate={updateDrawingProperty}
-              strokeWidthPresets={drawingPropertiesContext.strokeWidthPresets}
-              supports={drawingPropertiesContext.supports}
-              values={drawingPropertiesContext.values}
+              strokeWidthPresets={availableDrawingPropertiesContext.strokeWidthPresets}
+              supports={availableDrawingPropertiesContext.supports}
+              values={availableDrawingPropertiesContext.values}
             />
           ) : null}
           {offscreenGroups.length > 0 ? (

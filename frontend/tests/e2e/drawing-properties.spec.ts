@@ -20,11 +20,12 @@ test("applies tool defaults, edits compatible selections, and commits opacity on
   await properties.getByRole("button", { name: "Thick stroke" }).click();
   await page.mouse.click(canvasBounds.x + 390, canvasBounds.y + 310);
 
-  const rectangle = page.getByLabel("rectangle shape");
+  const rectangleShape = page.getByLabel("rectangle shape");
+  const rectangle = page.locator(".primitive-element").filter({ has: rectangleShape });
   await expect(rectangle).toHaveCount(1);
   await expect(properties).toContainText("shape");
-  await expect(rectangle.locator('path[stroke="#e03131"]')).not.toHaveCount(0);
-  await expect(rectangle.locator('path[stroke="#e03131"]').first()).toHaveAttribute("stroke-width", "4");
+  await expect(rectangleShape.locator('path[stroke="#e03131"]')).not.toHaveCount(0);
+  await expect(rectangleShape.locator('path[stroke="#e03131"]').first()).toHaveAttribute("stroke-width", "4");
 
   const opacity = properties.getByRole("slider", { name: "Opacity" });
   const opacityBounds = await opacity.boundingBox();

@@ -42,6 +42,10 @@ test("draws, selects, resizes, erases, and restores native ink", async ({ page }
   const beforeResize = await ink.nth(0).boundingBox();
   const resizeBounds = await resize.boundingBox();
   if (!beforeResize || !resizeBounds) throw new Error("Ink resize handle was not visible.");
+  const resizeHitLabel = await page.evaluate(({ x, y }) =>
+    document.elementFromPoint(x, y)?.closest("[aria-label]")?.getAttribute("aria-label"),
+  { x: resizeBounds.x + resizeBounds.width / 2, y: resizeBounds.y + resizeBounds.height / 2 });
+  expect(resizeHitLabel).toBe("Resize ink stroke");
   await page.mouse.move(resizeBounds.x + resizeBounds.width / 2, resizeBounds.y + resizeBounds.height / 2);
   await page.mouse.down();
   await page.mouse.move(resizeBounds.x + 50, resizeBounds.y + 50);

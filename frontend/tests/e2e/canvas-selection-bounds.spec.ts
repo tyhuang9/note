@@ -128,7 +128,7 @@ test("selection marquee is permanently hidden after Escape, blur, pointer cancel
   await expect(page.getByRole("tab")).toHaveCount(2);
   await page.getByRole("tab").first().click();
 
-  await page.mouse.move(bounds.x + 240, bounds.y + 220);
+  await page.mouse.move(bounds.x + 300, bounds.y + 220);
   await page.mouse.down();
   await page.mouse.move(bounds.x + 760, bounds.y + 520, { steps: 5 });
   await page.mouse.up();
@@ -286,7 +286,7 @@ async function marqueeSelect(page: Page, canvasBounds: { x: number; y: number },
 }
 
 async function beginMarquee(page: Page, bounds: { x: number; y: number }) {
-  await page.mouse.move(bounds.x + 220, bounds.y + 200);
+  await page.mouse.move(bounds.x + 300, bounds.y + 200);
   await page.mouse.down();
   await page.mouse.move(bounds.x + 640, bounds.y + 500, { steps: 4 });
 }

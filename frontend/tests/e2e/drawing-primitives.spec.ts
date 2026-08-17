@@ -118,7 +118,7 @@ test("renders every geometric primitive and moves connectors with a composite se
   await expect.poll(async () => (await arrowConnector.boundingBox())?.width ?? 0).toBeGreaterThan(arrowBeforeEndpointMove.width + 50);
 
   await page.getByRole("button", { name: "Select (V / 1)" }).click();
-  await page.mouse.move(bounds.x + 250, bounds.y + 230);
+  await page.mouse.move(bounds.x + 285, bounds.y + 230);
   await page.mouse.down();
   await page.mouse.move(bounds.x + 920, bounds.y + 680, { steps: 6 });
   await page.mouse.up();

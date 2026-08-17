@@ -88,24 +88,28 @@ test("selection marquee is permanently hidden after Escape, blur, pointer cancel
   await page.keyboard.press("Escape");
   await page.mouse.up();
   await expect(marquee).toBeHidden();
+  await expect(page.locator(".selection-frame")).toHaveCount(0);
 
   await beginMarquee(page, bounds);
   await expect(marquee).toBeVisible();
   await page.evaluate(() => window.dispatchEvent(new Event("blur")));
   await page.mouse.up();
   await expect(marquee).toBeHidden();
+  await expect(page.locator(".selection-frame")).toHaveCount(0);
 
   await beginMarquee(page, bounds);
   await expect(marquee).toBeVisible();
   await canvas.dispatchEvent("pointercancel", { button: 0, clientX: bounds.x + 600, clientY: bounds.y + 500, pointerId: 1 });
   await page.mouse.up();
   await expect(marquee).toBeHidden();
+  await expect(page.locator(".selection-frame")).toHaveCount(0);
 
   await beginMarquee(page, bounds);
   await expect(marquee).toBeVisible();
   await canvas.dispatchEvent("lostpointercapture", { pointerId: 1 });
   await page.mouse.up();
   await expect(marquee).toBeHidden();
+  await expect(page.locator(".selection-frame")).toHaveCount(0);
 
   await beginMarquee(page, bounds);
   await expect(marquee).toBeVisible();
@@ -113,6 +117,16 @@ test("selection marquee is permanently hidden after Escape, blur, pointer cancel
   await page.mouse.up();
   await expect(marquee).toBeHidden();
   await page.getByRole("button", { name: /Select \(V/ }).click();
+  await expect(page.locator(".selection-frame")).toHaveCount(0);
+
+  await beginMarquee(page, bounds);
+  await expect(marquee).toBeVisible();
+  await page.keyboard.press("Control+n");
+  await page.mouse.up();
+  await expect(marquee).toBeHidden();
+  await expect(page.locator(".selection-frame")).toHaveCount(0);
+  await expect(page.getByRole("tab")).toHaveCount(2);
+  await page.getByRole("tab").first().click();
 
   await page.mouse.move(bounds.x + 240, bounds.y + 220);
   await page.mouse.down();
@@ -120,6 +134,13 @@ test("selection marquee is permanently hidden after Escape, blur, pointer cancel
   await page.mouse.up();
   await expect(marquee).toBeHidden();
   await expect(page.locator(".selection-frame")).toHaveCount(1);
+
+  await beginMarquee(page, bounds);
+  await expect(marquee).toBeVisible();
+  await page.reload();
+  await page.mouse.up();
+  await expect(page.locator(".selection-rectangle")).toBeHidden();
+  await expect(page.locator(".selection-frame")).toHaveCount(0);
 });
 
 test("double-clicking a single selected text block enters editing", async ({ page }) => {
@@ -158,6 +179,14 @@ test("a selected loop-shaped ink stroke moves from its empty bounded center only
   await page.mouse.click(points[0].x, points[0].y);
   await expect(page.locator(".selection-frame")).toHaveCount(1);
 
+  const frameBounds = await requiredBounds(page.locator(".selection-frame"), "ink selection frame");
+  const nativeHandleBounds = await requiredBounds(page.getByRole("slider", { name: "Resize ink stroke" }), "ink resize handle");
+  const moveSurfacePoint = { x: frameBounds.x + frameBounds.width - 18, y: frameBounds.y + frameBounds.height - 18 };
+  const nativeHandlePoint = { x: nativeHandleBounds.x + nativeHandleBounds.width / 2, y: nativeHandleBounds.y + nativeHandleBounds.height / 2 };
+  await expect.poll(() => page.evaluate(({ x, y }) => (document.elementFromPoint(x, y) as HTMLElement | null)?.className ?? "", moveSurfacePoint)).toContain("selection-frame-move-surface");
+  const nativeHandleHit = await page.evaluate(({ x, y }) => (document.elementFromPoint(x, y) as HTMLElement | null)?.className ?? "", nativeHandlePoint);
+  expect(nativeHandleHit, JSON.stringify({ frameBounds, nativeHandleBounds, nativeHandlePoint })).toContain("ink-resize-handle");
+
   const before = await readWorldPosition(ink);
   await page.mouse.move(center.x, center.y);
   await page.mouse.down();
@@ -191,6 +220,34 @@ for (const zoom of [50, 100, 200]) {
     await expect.poll(() => readWorldWidth(blocks.first)).toBeCloseTo(resizedWidth, 1);
   });
 }
+
+test("group resize previews cloned elements without mutating scene state and discards cancellation", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  const bounds = await requiredBounds(canvas, "canvas");
+  const blocks = await createTwoTextBlocks(page, bounds);
+  await marqueeSelect(page, bounds, blocks);
+
+  const handle = page.getByRole("button", { name: "Resize selected elements from se" });
+  const handleBounds = await requiredBounds(handle, "selection resize handle");
+  const start = {
+    x: handleBounds.x + handleBounds.width / 2,
+    y: handleBounds.y + handleBounds.height / 2,
+  };
+  const beforeWidths = await Promise.all([readWorldWidth(blocks.first), readWorldWidth(blocks.second)]);
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x + 72, start.y + 48, { steps: 5 });
+
+  await expect(page.locator(".resize-layer-clone")).toHaveCount(2);
+  await expect(blocks.first).toHaveClass(/is-drag-source-hidden/);
+  expect(await Promise.all([readWorldWidth(blocks.first), readWorldWidth(blocks.second)])).toEqual(beforeWidths);
+
+  await handle.dispatchEvent("pointercancel", { button: 0, clientX: start.x + 72, clientY: start.y + 48, pointerId: 1 });
+  await page.mouse.up();
+  await expect(page.locator(".resize-layer-clone")).toHaveCount(0);
+  await expect(blocks.first).not.toHaveClass(/is-drag-source-hidden/);
+  await expect.poll(() => Promise.all([readWorldWidth(blocks.first), readWorldWidth(blocks.second)])).toEqual(beforeWidths);
+});
 
 async function createTwoTextBlocks(page: Page, bounds: { x: number; y: number }) {
   const first = await createTextBlock(page, bounds.x + 100, bounds.y + 220, "First selection");

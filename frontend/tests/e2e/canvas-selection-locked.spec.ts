@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-test("a mixed locked selection moves only unlocked elements and preserves the full selection", async ({ page }) => {
+test("a mixed text and locked-image selection moves only the unlocked element and keeps the full frame", async ({ page }) => {
   await installLockedSelectionWorkspace(page);
   await page.setViewportSize({ width: 1662, height: 900 });
   await page.goto("/");
@@ -9,17 +9,18 @@ test("a mixed locked selection moves only unlocked elements and preserves the fu
   await expect(canvas).toBeVisible();
   await page.getByRole("button", { name: /Select \(V/ }).click();
   const unlocked = page.locator('[data-block-id="unlocked"]');
-  const locked = page.locator('[data-block-id="locked"]');
+  const locked = page.locator('[data-block-id="locked-image"]');
+  const lockedControl = page.getByRole("button", { name: "Select locked image Locked image" });
   await unlocked.locator(".text-block-header").click();
-  await locked.locator(".text-block-header").click({ modifiers: ["Control"] });
+  await lockedControl.click({ modifiers: ["Control"] });
 
   await expect(unlocked).toHaveClass(/is-multi-selected/);
   await expect(locked).toHaveClass(/is-multi-selected/);
   const frame = page.locator(".selection-frame");
   await expect(frame).toHaveCount(1);
   await expect(page.getByRole("button", { name: "Move unlocked selected elements" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /Resize selected elements/ })).toHaveCount(0);
-  await expect(locked.getByRole("slider", { name: "Resize text block width" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Resize selected elements/ })).toHaveCount(4);
+  await expect(unlocked.locator(".resize-e")).toHaveCount(0);
 
   const beforeUnlocked = await readWorldPosition(unlocked);
   const beforeLocked = await readWorldPosition(locked);
@@ -31,6 +32,13 @@ test("a mixed locked selection moves only unlocked elements and preserves the fu
   await page.mouse.move(dragPoint.x, dragPoint.y);
   await page.mouse.down();
   await page.mouse.move(dragPoint.x + 72, dragPoint.y + 48, { steps: 6 });
+  const liveFrameBounds = await requiredBounds(frame, "live selection frame");
+  const lockedBounds = await requiredBounds(locked, "locked image");
+  expect(liveFrameBounds.x + liveFrameBounds.width).toBeGreaterThanOrEqual(
+    lockedBounds.x + lockedBounds.width,
+  );
+  expect(await readWorldPosition(unlocked)).toEqual(beforeUnlocked);
+  expect(await readWorldPosition(locked)).toEqual(beforeLocked);
   await page.mouse.up();
 
   await expect.poll(() => readWorldPosition(unlocked)).toEqual({
@@ -45,12 +53,12 @@ test("a mixed locked selection moves only unlocked elements and preserves the fu
   const unlockedControl = unlocked.getByRole("button", { name: "Select and move text block" });
   await unlockedControl.focus();
   await unlockedControl.press("Control+Enter");
-  await expect(locked.locator(".text-block-header")).toHaveAttribute("aria-pressed", "true");
+  await expect(lockedControl).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("button", { name: /Move .*selected elements/ })).toHaveCount(0);
   const lockedOnlyPosition = await readWorldPosition(locked);
-  await locked.getByRole("button", { name: "Select locked text block" }).press("Shift+ArrowRight");
+  await lockedControl.press("Shift+ArrowRight");
   await expect.poll(() => readWorldPosition(locked)).toEqual(lockedOnlyPosition);
-  await locked.getByRole("button", { name: "Select locked text block" }).press("Delete");
+  await lockedControl.press("Delete");
   await expect(locked).toHaveCount(1);
 });
 

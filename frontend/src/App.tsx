@@ -3,6 +3,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -339,8 +340,6 @@ type DragLayerSession = {
   currentClientX: number;
   currentClientY: number;
   groupElement: HTMLDivElement;
-  modeRafId: number | null;
-  originId: string;
   overlayElement: HTMLDivElement;
   sourceElements: HTMLElement[];
   selectedBlockIds: string[];
@@ -351,7 +350,11 @@ type DragLayerSession = {
 };
 
 type ResizeLayerSession = {
-  groupElement: HTMLDivElement;
+  blockIds: string[];
+  items: {
+    element: CanvasElement & BoxCanvasElement;
+    wrapperElement: HTMLDivElement;
+  }[];
   overlayElement: HTMLDivElement;
   sourceElements: HTMLElement[];
 };
@@ -405,6 +408,7 @@ type CanvasSearchMatch =
 
 const DRAG_AUTO_PAN_EDGE_PX = 56;
 const DRAG_AUTO_PAN_MAX_STEP_PX = 18;
+const SELECTION_FRAME_PADDING_PX = 4;
 const MAX_BLOCK_HISTORY_ENTRIES = 100;
 const PAGE_SEARCH_PREVIEW_CONTEXT = 44;
 const PAGE_TEMPLATE_FOLDER_ID = "__note_page_templates__";
@@ -1145,7 +1149,6 @@ function App() {
     useState<WorkbenchOverlay | null>(null);
   const [isGridVisible, setIsGridVisible] = useState(false);
   const [isSnapToGridEnabled, setIsSnapToGridEnabled] = useState(false);
-  const [dragSourceBlockIds, setDragSourceBlockIds] = useState<string[]>([]);
   const [selectionFramePreview, setSelectionFramePreview] = useState<SelectionRect | null>(null);
   const [connectorEndpointPreview, setConnectorEndpointPreview] = useState<ConnectorElement | null>(null);
   const [isConnectorEndpointRetargeting, setIsConnectorEndpointRetargeting] = useState(false);
@@ -1196,6 +1199,7 @@ function App() {
   const imagePickerInputRef = useRef<HTMLInputElement | null>(null);
   const selectionRectRef = useRef<HTMLDivElement | null>(null);
   const selectionFrameRef = useRef<HTMLDivElement | null>(null);
+  const selectionFrameVisualBoundsRef = useRef<SelectionRect | null>(null);
   const selectionTransformRef = useRef<SelectionTransformSession | null>(null);
   const resizeLayerSessionRef = useRef<ResizeLayerSession | null>(null);
   const cancelCanvasSelectionRef = useRef<() => void>(() => undefined);
@@ -1257,6 +1261,11 @@ function App() {
   const connectorEndpointChooserRef = useRef<ConnectorEndpointChooserState | null>(null);
   const connectorEndpointOriginFocusRef = useRef<HTMLButtonElement | null>(null);
   const connectorEndpointFocusReturnRafRef = useRef<number | null>(null);
+
+  useLayoutEffect(() => {
+    const bounds = selectionFrameVisualBoundsRef.current;
+    if (bounds) applySelectionFrameVisualBounds(bounds);
+  }, [livePanOffset.x, livePanOffset.y]);
 
   dataRef.current = data;
   activeToolRef.current = activeTool;
@@ -5558,15 +5567,22 @@ function App() {
         blockElementsRef.current.set(blockId, element);
 
         const dragSession = dragLayerSessionRef.current;
+        const resizeSession = resizeLayerSessionRef.current;
 
-        if (dragSession?.blockIds.includes(blockId)) {
+        if (dragSession?.blockIds.includes(blockId) || resizeSession?.blockIds.includes(blockId)) {
           element.classList.add("is-drag-source-hidden");
 
-          if (!dragSession.sourceElements.includes(element)) {
+          if (dragSession && !dragSession.sourceElements.includes(element)) {
             dragSession.sourceElements = [
               ...dragSession.sourceElements.filter(
                 (sourceElement) => sourceElement.isConnected,
               ),
+              element,
+            ];
+          }
+          if (resizeSession && !resizeSession.sourceElements.includes(element)) {
+            resizeSession.sourceElements = [
+              ...resizeSession.sourceElements.filter((sourceElement) => sourceElement.isConnected),
               element,
             ];
           }
@@ -5581,11 +5597,6 @@ function App() {
   );
 
   function cleanupDragLayerSession(session: DragLayerSession) {
-    if (session.modeRafId !== null) {
-      window.cancelAnimationFrame(session.modeRafId);
-      session.modeRafId = null;
-    }
-
     if (session.autoPanRafId !== null) {
       window.cancelAnimationFrame(session.autoPanRafId);
       session.autoPanRafId = null;
@@ -5596,6 +5607,7 @@ function App() {
     }
 
     session.overlayElement.remove();
+    document.body.classList.remove("is-interacting");
   }
 
   function selectDraggedBlocks(blockIds: string[]) {
@@ -5656,6 +5668,14 @@ function App() {
     }px, ${
       session.currentClientY - session.startClientY
     }px, 0)`;
+    const selectedIds = new Set(session.selectedBlockIds);
+    const previewElements = translateSelection(
+      dataRef.current.elements,
+      selectedIds,
+      getDragCommitOffset(session),
+    );
+    const previewBounds = getPreviewSelectionBounds(previewElements, selectedIds);
+    if (previewBounds) previewSelectionFrameVisualBounds(previewBounds);
   }
 
   function getDragCommitOffset(session: DragLayerSession): PanOffset {
@@ -5786,8 +5806,6 @@ function App() {
         currentClientX: clientX,
         currentClientY: clientY,
         groupElement,
-        modeRafId: null,
-        originId,
         overlayElement,
         sourceElements: sourceEntries.map((entry) => entry.element),
         selectedBlockIds,
@@ -5798,20 +5816,11 @@ function App() {
       };
 
       dragLayerSessionRef.current = dragSession;
-      setDragSourceBlockIds(dragSession.blockIds);
+      document.body.classList.add("is-interacting");
 
       for (const sourceElement of dragSession.sourceElements) {
         sourceElement.classList.add("is-drag-source-hidden");
       }
-
-      dragSession.modeRafId = window.requestAnimationFrame(() => {
-        if (dragLayerSessionRef.current !== dragSession) {
-          return;
-        }
-
-        dragSession.modeRafId = null;
-        setActiveMode("dragging");
-      });
 
       return true;
     },
@@ -5847,8 +5856,8 @@ function App() {
 
     cleanupDragLayerSession(dragSession);
     dragLayerSessionRef.current = null;
-    setDragSourceBlockIds([]);
     setPanOffset(panOffsetRef.current);
+    clearSelectionFrameVisualBounds();
 
     if (movedEnough) {
       setBlocksWithHistory((currentBlocks) => {
@@ -5876,8 +5885,11 @@ function App() {
 
     cleanupDragLayerSession(dragSession);
     dragLayerSessionRef.current = null;
+    const selectedIds = new Set(dragSession.selectedBlockIds);
+    const restoredBounds = getPreviewSelectionBounds(dataRef.current.elements, selectedIds);
+    clearSelectionFrameVisualBounds(restoredBounds ?? undefined);
     if (updateState) {
-      setDragSourceBlockIds([]);
+      setPanOffset(panOffsetRef.current);
       setActiveMode("selected");
     }
   }, []);
@@ -5887,6 +5899,7 @@ function App() {
       sourceElement.classList.remove("is-drag-source-hidden");
     }
     session.overlayElement.remove();
+    document.body.classList.remove("is-interacting");
   }
 
   function startSelectionResizePreview(bounds: SelectionRect, corner: SelectionCorner) {
@@ -5898,89 +5911,126 @@ function App() {
       .map((blockId) => ({
         blockId,
         element: blockElementsRef.current.get(blockId) ?? null,
+        model: dataRef.current.elements.find((candidate) => candidate.id === blockId),
       }))
       .filter(
-        (entry): entry is { blockId: string; element: HTMLElement } => {
-          const block = dataRef.current.elements.find((candidate) => candidate.id === entry.blockId);
-          return Boolean(entry.element && block && !block.locked && isBoxCanvasElement(block));
-        },
+        (entry): entry is {
+          blockId: string;
+          element: HTMLElement;
+          model: CanvasElement & BoxCanvasElement;
+        } =>
+          Boolean(entry.element && entry.model && !entry.model.locked && isBoxCanvasElement(entry.model)),
       );
     if (sourceEntries.length === 0) return false;
 
-    const canvasRect = canvasElement.getBoundingClientRect();
     const overlayElement = document.createElement("div");
     const groupElement = document.createElement("div");
-    const zoom = zoomLevelRef.current;
-    const anchor = getOppositeCorner(bounds, corner);
     overlayElement.className = "drag-layer resize-layer";
     groupElement.className = "drag-layer-group resize-layer-group";
-    groupElement.style.transformOrigin = `${panOffsetRef.current.x + anchor.x * zoom}px ${panOffsetRef.current.y + anchor.y * zoom}px`;
     overlayElement.append(groupElement);
 
-    for (const { element } of sourceEntries) {
-      const elementRect = element.getBoundingClientRect();
+    const items = sourceEntries.map(({ element, model }) => {
+      const wrapperElement = document.createElement("div");
       const cloneElement = element.cloneNode(true) as HTMLElement;
       cloneElement.removeAttribute("data-block-id");
       cloneElement.setAttribute("aria-hidden", "true");
       cloneElement.classList.remove("is-content-selected", "is-drag-source-hidden", "is-editing");
       cloneElement.classList.add("is-canvas-mode", "is-selected", "drag-layer-clone", "resize-layer-clone");
       cloneElement.style.position = "absolute";
-      cloneElement.style.left = `${elementRect.left - canvasRect.left}px`;
-      cloneElement.style.top = `${elementRect.top - canvasRect.top}px`;
-      cloneElement.style.width = `${element.offsetWidth}px`;
-      cloneElement.style.height = `${element.offsetHeight}px`;
+      cloneElement.style.left = "0";
+      cloneElement.style.top = "0";
+      cloneElement.style.width = `${model.width}px`;
+      cloneElement.style.height = `${model.height}px`;
       cloneElement.style.margin = "0";
       cloneElement.style.pointerEvents = "none";
-      cloneElement.style.transform = `scale(${zoom})`;
-      cloneElement.style.transformOrigin = "0 0";
-      groupElement.append(cloneElement);
-    }
+      wrapperElement.style.position = "absolute";
+      wrapperElement.style.left = "0";
+      wrapperElement.style.top = "0";
+      wrapperElement.style.transformOrigin = "0 0";
+      wrapperElement.append(cloneElement);
+      groupElement.append(wrapperElement);
+      return { element: model, wrapperElement };
+    });
 
     canvasElement.append(overlayElement);
     const session = {
-      groupElement,
+      blockIds: sourceEntries.map((entry) => entry.blockId),
+      items,
       overlayElement,
       sourceElements: sourceEntries.map((entry) => entry.element),
     };
     resizeLayerSessionRef.current = session;
-    setDragSourceBlockIds(sourceEntries.map((entry) => entry.blockId));
+    updateSelectionResizePreview(1, bounds, corner);
+    document.body.classList.add("is-interacting");
     for (const sourceElement of session.sourceElements) {
       sourceElement.classList.add("is-drag-source-hidden");
     }
-    setActiveMode("resizing");
     return true;
   }
 
-  function updateSelectionResizePreview(scale: number) {
+  function updateSelectionResizePreview(
+    scale: number,
+    bounds: SelectionRect,
+    corner: SelectionCorner,
+  ) {
     const session = resizeLayerSessionRef.current;
-    if (session) session.groupElement.style.transform = `scale(${scale})`;
+    if (!session) return;
+    const anchor = getOppositeCorner(bounds, corner);
+    const zoom = zoomLevelRef.current;
+    const pan = panOffsetRef.current;
+    for (const item of session.items) {
+      const x = anchor.x + (item.element.x - anchor.x) * scale;
+      const y = anchor.y + (item.element.y - anchor.y) * scale;
+      const visualScale = zoom * (item.element.type === "text" ? 1 : scale);
+      item.wrapperElement.style.transform = `translate3d(${pan.x + x * zoom}px, ${pan.y + y * zoom}px, 0) scale(${visualScale})`;
+    }
   }
 
-  function finishSelectionResizePreview(updateState = true) {
+  function finishSelectionResizePreview() {
     const session = resizeLayerSessionRef.current;
     if (!session) return;
     cleanupResizeLayerSession(session);
     resizeLayerSessionRef.current = null;
-    if (updateState) setDragSourceBlockIds([]);
   }
 
-  function setSelectionFrameVisualBounds(bounds: SelectionRect) {
+  function applySelectionFrameVisualBounds(bounds: SelectionRect) {
     const frame = selectionFrameRef.current;
     if (!frame) return;
     const zoom = zoomLevelRef.current;
     const pan = panOffsetRef.current;
-    frame.style.left = `${pan.x + bounds.x * zoom}px`;
-    frame.style.top = `${pan.y + bounds.y * zoom}px`;
-    frame.style.width = `${bounds.width * zoom}px`;
-    frame.style.height = `${bounds.height * zoom}px`;
+    frame.style.left = `${pan.x + bounds.x * zoom - SELECTION_FRAME_PADDING_PX}px`;
+    frame.style.top = `${pan.y + bounds.y * zoom - SELECTION_FRAME_PADDING_PX}px`;
+    frame.style.width = `${bounds.width * zoom + SELECTION_FRAME_PADDING_PX * 2}px`;
+    frame.style.height = `${bounds.height * zoom + SELECTION_FRAME_PADDING_PX * 2}px`;
+  }
+
+  function previewSelectionFrameVisualBounds(bounds: SelectionRect) {
+    selectionFrameVisualBoundsRef.current = bounds;
+    applySelectionFrameVisualBounds(bounds);
+  }
+
+  function clearSelectionFrameVisualBounds(restoredBounds?: SelectionRect) {
+    selectionFrameVisualBoundsRef.current = null;
+    if (restoredBounds) applySelectionFrameVisualBounds(restoredBounds);
+  }
+
+  function getPreviewSelectionBounds(
+    elements: readonly CanvasElement[],
+    selectedIds: ReadonlySet<string>,
+  ) {
+    const elementsById = Object.fromEntries(elements.map((element) => [element.id, element]));
+    return getSelectionBounds(
+      elements.filter((element) => selectedIds.has(element.id)),
+      elementsById,
+    );
   }
 
   function cancelSelectionFrameInteraction(updateMode = true) {
     const session = selectionTransformRef.current;
     selectionTransformRef.current = null;
     if (session?.corner) {
-      finishSelectionResizePreview(updateMode);
-      setSelectionFrameVisualBounds(session.startBounds);
+      finishSelectionResizePreview();
+      clearSelectionFrameVisualBounds(session.startBounds);
     } else if (session) {
       cancelVisualDrag(updateMode);
     }
@@ -6008,9 +6058,17 @@ function App() {
     const anchor = getOppositeCorner(bounds, corner);
     const width = bounds.width * scale;
     const height = bounds.height * scale;
+    const selectedIds = new Set(selectedBlockIdsRef.current);
+    const previewElements = scaleSelection(
+      dataRef.current.elements,
+      selectedIds,
+      bounds,
+      corner,
+      scale,
+    );
     return {
       scale,
-      bounds: {
+      bounds: getPreviewSelectionBounds(previewElements, selectedIds) ?? {
         x: corner.includes("e") ? anchor.x : anchor.x - width,
         y: corner.includes("s") ? anchor.y : anchor.y - height,
         width,
@@ -6096,8 +6154,8 @@ function App() {
     if (session.corner) {
       const preview = selectionResizePreview(session.startBounds, session.corner, event.clientX, event.clientY, session);
       if (!startSelectionResizePreview(session.startBounds, session.corner)) return;
-      updateSelectionResizePreview(preview.scale);
-      setSelectionFrameVisualBounds(preview.bounds);
+      updateSelectionResizePreview(preview.scale, session.startBounds, session.corner);
+      previewSelectionFrameVisualBounds(preview.bounds);
       return;
     }
 
@@ -6120,7 +6178,7 @@ function App() {
     if (cancelled) {
       if (session.corner) {
         finishSelectionResizePreview();
-        setSelectionFrameVisualBounds(session.startBounds);
+        clearSelectionFrameVisualBounds(session.startBounds);
       } else if (!session.connectorEndpoint) {
         cancelVisualDrag();
       }
@@ -6142,6 +6200,7 @@ function App() {
       const preview = selectionResizePreview(session.startBounds, session.corner, event.clientX, event.clientY, session);
       const selectedIds = new Set(selectedBlockIdsRef.current);
       finishSelectionResizePreview();
+      clearSelectionFrameVisualBounds();
       setBlocksWithHistory((currentBlocks) =>
         scaleSelection(currentBlocks, selectedIds, session.startBounds, session.corner!, preview.scale),
       );
@@ -7171,7 +7230,6 @@ function App() {
                   <ConnectorElementView
                     element={connector}
                     elementsById={renderedCanvasElementsById}
-                    isDragSourceHidden={dragSourceBlockIds.includes(connector.id)}
                     isSelected={selectedBlockIds.includes(connector.id)}
                     onElementChange={registerBlockElement}
                     onKeyboardMove={moveCanvasElementByKeyboard}
@@ -7181,7 +7239,7 @@ function App() {
                 renderInk={(inkElement) => (
                   <InkElementView
                     element={inkElement}
-                    isDragSourceHidden={dragSourceBlockIds.includes(inkElement.id)}
+                    isDragSourceHidden={false}
                     isMultiSelected={selectedBlockIds.length > 1}
                     isSelected={selectedBlockIds.includes(inkElement.id)}
                     onCanvasPanStart={canvasInteraction.startPan}
@@ -7200,7 +7258,6 @@ function App() {
                 renderShape={(shape) => (
                   <ShapeElementView
                     element={shape}
-                    isDragSourceHidden={dragSourceBlockIds.includes(shape.id)}
                     isSelected={selectedBlockIds.includes(shape.id)}
                     onElementChange={registerBlockElement}
                     onKeyboardMove={moveCanvasElementByKeyboard}
@@ -7214,7 +7271,7 @@ function App() {
                   activeSearchMatch?.blockId === block.id ? activeSearchMatch : null
                 }
                 isEditing={block.id === editingBlockId}
-                isDragSourceHidden={dragSourceBlockIds.includes(block.id)}
+                isDragSourceHidden={false}
                 isMultiSelected={selectedBlockIds.length > 1 && !selectionContainsOnlyText}
                 isSelected={selectedBlockIds.includes(block.id)}
                 key={block.id}
@@ -7243,7 +7300,7 @@ function App() {
                   <ImageElementView
                   element={block}
                   imageSource={imageSourcesByAssetIdRef.current.get(block.assetId)}
-                  isDragSourceHidden={dragSourceBlockIds.includes(block.id)}
+                  isDragSourceHidden={false}
                   isMultiSelected={selectedBlockIds.length > 1}
                   isSelected={selectedBlockIds.includes(block.id)}
                   key={block.id}
@@ -7308,8 +7365,8 @@ function App() {
               const usesNativeSingleElementInteraction = Boolean(
                 selected && (selected.type === "text" || selected.type === "image"),
               );
-              const framePadding = 4;
-              const resizeCorners: readonly SelectionCorner[] = selectionHasLockedElements
+              const framePadding = SELECTION_FRAME_PADDING_PX;
+              const resizeCorners: readonly SelectionCorner[] = !selectionHasUnlockedElements
                 ? []
                 : selectedBlockIds.length > 1
                   ? ["nw", "ne", "se", "sw"]

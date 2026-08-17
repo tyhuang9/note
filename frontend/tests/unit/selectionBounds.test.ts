@@ -163,6 +163,37 @@ describe("composite transforms", () => {
     });
   });
 
+  it("recomputes the mixed preview union around position-scaled, fixed-size text", () => {
+    const shape: ShapeElement = {
+      ...text,
+      height: 20,
+      id: "shape",
+      shape: "rectangle",
+      style: { fillColor: null, roughness: 1, roundness: 0, seed: 2, strokeColor: { kind: "fixed", value: "#000" }, strokeStyle: "solid", strokeWidth: 2 },
+      type: "shape",
+      width: 40,
+      x: 10,
+      y: 20,
+    };
+    const offsetText = { ...text, x: 150, y: 50 };
+    const selectedIds = new Set([shape.id, offsetText.id]);
+    const scaled = scaleSelection(
+      [shape, offsetText],
+      selectedIds,
+      { x: 10, y: 20, width: 240, height: 70 },
+      "se",
+      2,
+    );
+
+    expect(scaled[1]).toMatchObject({ x: 290, y: 80, width: 100, height: 40 });
+    expect(getSelectionBounds(scaled, Object.fromEntries(scaled.map((element) => [element.id, element])))).toEqual({
+      x: 10,
+      y: 20,
+      width: 380,
+      height: 100,
+    });
+  });
+
   it("uses a single dominant-axis proportional scale from a corner drag", () => {
     expect(getProportionalScale({ x: 0, y: 0, width: 100, height: 50 }, "se", { x: 150, y: 60 })).toBe(1.5);
   });

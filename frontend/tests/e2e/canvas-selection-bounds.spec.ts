@@ -7,105 +7,45 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByRole("tabpanel")).toBeVisible();
 });
 
-test("marquee cleanup leaves one composite frame whose whitespace moves and resizes the selection", async ({ page }) => {
+test("all-text selections keep native outlines, hide the composite frame, and move from either header", async ({ page }) => {
   const canvas = page.getByRole("tabpanel");
   const bounds = await requiredBounds(canvas, "canvas");
   const blocks = await createTwoTextBlocks(page, bounds);
 
-  await marqueeSelect(page, bounds, blocks);
-  const frame = page.locator(".selection-frame");
-  await expect(frame).toHaveCount(1);
+  await marqueeSelect(page, bounds, [blocks.first, blocks.second]);
+  await expect(page.locator(".selection-frame")).toHaveCount(0);
   await expect(page.locator(".selection-rectangle")).toBeHidden();
-  await expect(blocks.first).toHaveClass(/is-multi-selected/);
-  await expect(blocks.second).toHaveClass(/is-multi-selected/);
+  await expect(blocks.first).toHaveClass(/is-selected/);
+  await expect(blocks.first).not.toHaveClass(/is-multi-selected/);
+  await expect(blocks.second).toHaveClass(/is-selected/);
+  await expect(blocks.second).not.toHaveClass(/is-multi-selected/);
+  await expect(blocks.first.locator(".text-block-header")).toHaveCSS("opacity", "1");
+  await expect(blocks.second.locator(".text-block-header")).toHaveCSS("opacity", "1");
+  await expect(blocks.first.locator(".resize-e")).toHaveCount(0);
+  await expect(blocks.second.locator(".resize-e")).toHaveCount(0);
 
-  const firstBounds = await requiredBounds(blocks.first, "first text block");
-  const secondBounds = await requiredBounds(blocks.second, "second text block");
-  const whitespace = {
-    x: (firstBounds.x + firstBounds.width + secondBounds.x) / 2,
-    y: (Math.max(firstBounds.y, secondBounds.y) + Math.min(firstBounds.y + firstBounds.height, secondBounds.y + secondBounds.height)) / 2,
-  };
   const before = await Promise.all([readWorldPosition(blocks.first), readWorldPosition(blocks.second)]);
-  const frameBounds = await requiredBounds(frame, "selection frame");
-  expect(whitespace.x).toBeGreaterThan(frameBounds.x);
-  expect(whitespace.x).toBeLessThan(frameBounds.x + frameBounds.width);
-  expect(whitespace.y).toBeGreaterThan(frameBounds.y);
-  expect(whitespace.y).toBeLessThan(frameBounds.y + frameBounds.height);
-  const hitInfo = await page.evaluate(({ x, y }) => {
-    const moveSurface = document.querySelector<HTMLElement>(".selection-frame-move-surface");
-    const frameElement = document.querySelector<HTMLElement>(".selection-frame");
-    const overlay = document.querySelector<HTMLElement>(".canvas-interaction-overlay");
-    return {
-      framePointerEvents: frameElement ? getComputedStyle(frameElement).pointerEvents : null,
-      frameRect: frameElement?.getBoundingClientRect().toJSON(),
-      hitClass: (document.elementFromPoint(x, y) as HTMLElement | null)?.className ?? "",
-      moveClass: moveSurface?.className,
-      movePointerEvents: moveSurface ? getComputedStyle(moveSurface).pointerEvents : null,
-      moveRect: moveSurface?.getBoundingClientRect().toJSON(),
-      overlayPointerEvents: overlay ? getComputedStyle(overlay).pointerEvents : null,
-    };
-  }, whitespace);
-  expect(hitInfo.hitClass, JSON.stringify(hitInfo)).toContain("selection-frame-move-surface");
-
-  const darkMode = page.getByRole("button", { name: "Dark mode" });
-  await darkMode.click();
-  await expect(darkMode).toHaveAttribute("aria-pressed", "false");
-  await darkMode.click();
-  await expect(darkMode).toHaveAttribute("aria-pressed", "true");
-  await page.mouse.move(whitespace.x, whitespace.y);
-  const selectionMoveSurface = page.getByRole("button", { name: "Move selected elements" });
-  await expect(selectionMoveSurface).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-  await page.keyboard.press("Tab");
-  await selectionMoveSurface.focus();
-  await expect(selectionMoveSurface).toBeFocused();
-  const focusStyle = await selectionMoveSurface.evaluate((element) => {
-    const style = getComputedStyle(element);
-    return {
-      color: style.outlineColor,
-      style: style.outlineStyle,
-      width: style.outlineWidth,
-    };
-  });
-  expect(focusStyle.style).toBe("solid");
-  expect(Number.parseFloat(focusStyle.width)).toBeGreaterThan(0);
-  expect(focusStyle.color).not.toBe("rgba(0, 0, 0, 0)");
-
-  await page.mouse.click(whitespace.x, whitespace.y);
-  await expect(frame).toHaveCount(1);
-  await page.mouse.move(whitespace.x, whitespace.y);
+  const header = blocks.first.locator(".text-block-header");
+  const headerBounds = await requiredBounds(header, "first text header");
+  await page.mouse.move(headerBounds.x + headerBounds.width / 2, headerBounds.y + headerBounds.height / 2);
   await page.mouse.down();
-  await page.mouse.move(whitespace.x + 84, whitespace.y + 56, { steps: 7 });
+  await page.mouse.move(headerBounds.x + headerBounds.width / 2 + 84, headerBounds.y + headerBounds.height / 2 + 56, { steps: 7 });
   await page.mouse.up();
   await expect.poll(() => Promise.all([readWorldPosition(blocks.first), readWorldPosition(blocks.second)])).toEqual([
     { x: before[0].x + 84, y: before[0].y + 56 },
     { x: before[1].x + 84, y: before[1].y + 56 },
   ]);
 
-  const moveSurface = page.getByRole("button", { name: "Move selected elements" });
-  await moveSurface.focus();
-  await page.keyboard.press("Shift+ArrowRight");
-  await expect.poll(() => readWorldPosition(blocks.first)).toEqual({ x: before[0].x + 94, y: before[0].y + 56 });
-
-  const southeast = page.getByRole("button", { name: "Resize selected elements from se" });
-  await expect(southeast).toHaveCSS("width", "24px");
-  await page.keyboard.press("Tab");
-  await southeast.focus();
-  await expect(southeast).toBeFocused();
-  const resizeFocusStyle = await southeast.evaluate((element) => {
-    const style = getComputedStyle(element);
-    return { color: style.outlineColor, style: style.outlineStyle, width: style.outlineWidth };
-  });
-  expect(resizeFocusStyle.style).toBe("solid");
-  expect(Number.parseFloat(resizeFocusStyle.width)).toBeGreaterThan(0);
-  expect(resizeFocusStyle.color).not.toBe("rgba(0, 0, 0, 0)");
   const beforeWidth = await readWorldWidth(blocks.first);
-  await page.keyboard.press("Shift+ArrowRight");
-  await expect.poll(() => readWorldWidth(blocks.first)).toBeGreaterThan(beforeWidth);
+  const beforeSecondWidth = await readWorldWidth(blocks.second);
+  await header.focus();
+  await expect(header).toHaveAttribute("aria-keyshortcuts", "Alt+Shift+ArrowLeft Alt+Shift+ArrowRight");
+  await header.press("Alt+Shift+ArrowRight");
+  await expect.poll(() => readWorldWidth(blocks.first)).toBeCloseTo(beforeWidth + 10, 1);
+  await expect.poll(() => readWorldWidth(blocks.second)).toBeCloseTo(beforeSecondWidth, 1);
   await canvas.focus();
   await page.keyboard.press("Control+z");
   await expect.poll(() => readWorldWidth(blocks.first)).toBeCloseTo(beforeWidth, 2);
-  await page.keyboard.press("Control+y");
-  await expect.poll(() => readWorldWidth(blocks.first)).toBeGreaterThan(beforeWidth);
 });
 
 test("selection marquee is permanently hidden after Escape, blur, pointer cancel, and a successful selection", async ({ page }) => {
@@ -165,7 +105,8 @@ test("selection marquee is permanently hidden after Escape, blur, pointer cancel
   await page.mouse.move(bounds.x + 760, bounds.y + 520, { steps: 5 });
   await page.mouse.up();
   await expect(marquee).toBeHidden();
-  await expect(page.locator(".selection-frame")).toHaveCount(1);
+  await expect(page.locator(".selection-frame")).toHaveCount(0);
+  await expect(page.locator(".text-block.is-selected")).toHaveCount(1);
 
   await beginMarquee(page, bounds);
   await expect(marquee).toBeVisible();
@@ -257,63 +198,209 @@ test("a selected loop-shaped ink stroke moves from its empty bounded center only
 });
 
 for (const zoom of [50, 100, 200]) {
-  test(`group resize is zoom-correct and undoable at ${zoom}%`, async ({ page }) => {
+  test(`mixed selection frame follows its live drag and commits once at ${zoom}%`, async ({ page }) => {
     const canvas = page.getByRole("tabpanel");
     const bounds = await requiredBounds(canvas, "canvas");
-    const blocks = await createTwoTextBlocks(page, bounds);
-    await marqueeSelect(page, bounds, blocks);
+    const elements = await createMixedSelection(page, bounds);
+    await marqueeSelect(page, bounds, [elements.shape, elements.text]);
     await setZoom(page, canvas, zoom);
 
-    const handle = page.getByRole("button", { name: "Resize selected elements from se" });
-    const handleBounds = await requiredBounds(handle, "selection resize handle");
-    const beforeWidth = await readWorldWidth(blocks.first);
-    await page.mouse.move(handleBounds.x + handleBounds.width / 2, handleBounds.y + handleBounds.height / 2);
+    const frame = page.locator(".selection-frame");
+    const beforeFrame = await requiredBounds(frame, "selection frame");
+    const beforePositions = await Promise.all([
+      readWorldPosition(elements.shape),
+      readWorldPosition(elements.text),
+    ]);
+    const moveSurface = page.getByRole("button", { name: "Move selected elements" });
+    const moveBounds = await requiredBounds(moveSurface, "selection move surface");
+    const start = {
+      x: moveBounds.x + moveBounds.width / 2,
+      y: moveBounds.y + moveBounds.height / 2,
+    };
+    await page.mouse.move(start.x, start.y);
     await page.mouse.down();
-    await page.mouse.move(handleBounds.x + handleBounds.width / 2 + 60, handleBounds.y + handleBounds.height / 2 + 48, { steps: 6 });
+    await page.mouse.move(start.x + 48, start.y + 36, { steps: 6 });
+
+    await expect(page.locator(".drag-layer-clone")).toHaveCount(2);
+    expect(await Promise.all([
+      readWorldPosition(elements.shape),
+      readWorldPosition(elements.text),
+    ])).toEqual(beforePositions);
+    const liveFrame = await requiredBounds(frame, "live selection frame");
+    expect(liveFrame.x - beforeFrame.x).toBeCloseTo(48, 0);
+    expect(liveFrame.y - beforeFrame.y).toBeCloseTo(36, 0);
+
     await page.mouse.up();
-    const resizedWidth = await readWorldWidth(blocks.first);
-    expect(resizedWidth).toBeGreaterThan(beforeWidth);
+    const worldDelta = { x: 48 / (zoom / 100), y: 36 / (zoom / 100) };
+    await expect.poll(() => Promise.all([
+      readWorldPosition(elements.shape),
+      readWorldPosition(elements.text),
+    ])).toEqual(beforePositions.map((position) => ({
+      x: position.x + worldDelta.x,
+      y: position.y + worldDelta.y,
+    })));
 
     await canvas.focus();
     await page.keyboard.press("Control+z");
-    await expect.poll(() => readWorldWidth(blocks.first)).toBeCloseTo(beforeWidth, 1);
+    await expect.poll(() => Promise.all([
+      readWorldPosition(elements.shape),
+      readWorldPosition(elements.text),
+    ])).toEqual(beforePositions);
     await page.keyboard.press("Control+y");
-    await expect.poll(() => readWorldWidth(blocks.first)).toBeCloseTo(resizedWidth, 1);
+    await expect.poll(() => Promise.all([
+      readWorldPosition(elements.shape),
+      readWorldPosition(elements.text),
+    ])).toEqual(beforePositions.map((position) => ({
+      x: position.x + worldDelta.x,
+      y: position.y + worldDelta.y,
+    })));
+  });
+
+  test(`mixed resize keeps text size fixed in preview, commit, and undo at ${zoom}%`, async ({ page }) => {
+    const canvas = page.getByRole("tabpanel");
+    const bounds = await requiredBounds(canvas, "canvas");
+    const elements = await createMixedSelection(page, bounds);
+    await marqueeSelect(page, bounds, [elements.shape, elements.text]);
+    await setZoom(page, canvas, zoom);
+
+    const { bounds: handleBounds, corner, handle } = await interactiveResizeHandle(page);
+    const beforeTextWidth = await readWorldWidth(elements.text);
+    const beforeTextPosition = await readWorldPosition(elements.text);
+    const beforeShapeWidth = await readWorldWidth(elements.shape);
+    const beforeTextScreen = await requiredBounds(elements.text, "text block");
+    const start = {
+      x: handleBounds.x + handleBounds.width / 2,
+      y: handleBounds.y + handleBounds.height / 2,
+    };
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(
+      start.x + (corner.includes("e") ? 60 : -60),
+      start.y + (corner.includes("s") ? 48 : -48),
+      { steps: 6 },
+    );
+
+    const textClone = page.locator('.resize-layer-clone[data-canvas-element-type="text"]');
+    const shapeClone = page.locator('.resize-layer-clone[data-canvas-element-type="shape"]');
+    await expect(textClone).toHaveCount(1);
+    await expect(shapeClone).toHaveCount(1);
+    const textCloneBounds = await requiredBounds(textClone, "text resize preview");
+    const shapeCloneBounds = await requiredBounds(shapeClone, "shape resize preview");
+    const previewFrame = await requiredBounds(page.locator(".selection-frame"), "resize preview frame");
+    expect(textCloneBounds.width).toBeCloseTo(beforeTextScreen.width, 0);
+    expect(shapeCloneBounds.width).toBeGreaterThan(beforeShapeWidth * (zoom / 100));
+    expect(previewFrame.x).toBeLessThanOrEqual(Math.min(textCloneBounds.x, shapeCloneBounds.x));
+    expect(previewFrame.x + previewFrame.width).toBeGreaterThanOrEqual(
+      Math.max(textCloneBounds.x + textCloneBounds.width, shapeCloneBounds.x + shapeCloneBounds.width),
+    );
+    expect(await readWorldWidth(elements.text)).toBe(beforeTextWidth);
+    expect(await readWorldWidth(elements.shape)).toBe(beforeShapeWidth);
+
+    await page.mouse.up();
+    await expect.poll(() => readWorldWidth(elements.text)).toBeCloseTo(beforeTextWidth, 1);
+    await expect.poll(() => readWorldWidth(elements.shape)).toBeGreaterThan(beforeShapeWidth);
+    await expect.poll(() => readWorldPosition(elements.text)).not.toEqual(beforeTextPosition);
+
+    await canvas.focus();
+    await page.keyboard.press("Control+z");
+    await expect.poll(() => readWorldWidth(elements.text)).toBeCloseTo(beforeTextWidth, 1);
+    await expect.poll(() => readWorldWidth(elements.shape)).toBeCloseTo(beforeShapeWidth, 1);
+    await expect.poll(() => readWorldPosition(elements.text)).toEqual(beforeTextPosition);
   });
 }
 
-test("group resize previews cloned elements without mutating scene state and discards cancellation", async ({ page }) => {
+test("mixed resize preview and frame return to their original geometry on pointer cancel", async ({ page }) => {
   const canvas = page.getByRole("tabpanel");
   const bounds = await requiredBounds(canvas, "canvas");
-  const blocks = await createTwoTextBlocks(page, bounds);
-  await marqueeSelect(page, bounds, blocks);
-
+  const elements = await createMixedSelection(page, bounds);
+  await marqueeSelect(page, bounds, [elements.shape, elements.text]);
+  const frame = page.locator(".selection-frame");
+  const originalFrame = await roundedBounds(frame);
+  const originalWidths = await Promise.all([readWorldWidth(elements.shape), readWorldWidth(elements.text)]);
   const handle = page.getByRole("button", { name: "Resize selected elements from se" });
   const handleBounds = await requiredBounds(handle, "selection resize handle");
-  const start = {
-    x: handleBounds.x + handleBounds.width / 2,
-    y: handleBounds.y + handleBounds.height / 2,
-  };
-  const beforeWidths = await Promise.all([readWorldWidth(blocks.first), readWorldWidth(blocks.second)]);
+  const start = { x: handleBounds.x + handleBounds.width / 2, y: handleBounds.y + handleBounds.height / 2 };
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
   await page.mouse.move(start.x + 72, start.y + 48, { steps: 5 });
-
-  await expect(page.locator(".resize-layer-clone")).toHaveCount(2);
-  await expect(blocks.first).toHaveClass(/is-drag-source-hidden/);
-  expect(await Promise.all([readWorldWidth(blocks.first), readWorldWidth(blocks.second)])).toEqual(beforeWidths);
-
+  await expect.poll(() => roundedBounds(frame)).not.toEqual(originalFrame);
   await handle.dispatchEvent("pointercancel", { button: 0, clientX: start.x + 72, clientY: start.y + 48, pointerId: 1 });
   await page.mouse.up();
   await expect(page.locator(".resize-layer-clone")).toHaveCount(0);
-  await expect(blocks.first).not.toHaveClass(/is-drag-source-hidden/);
-  await expect.poll(() => Promise.all([readWorldWidth(blocks.first), readWorldWidth(blocks.second)])).toEqual(beforeWidths);
+  await expect.poll(() => roundedBounds(frame)).toEqual(originalFrame);
+  await expect.poll(() => Promise.all([readWorldWidth(elements.shape), readWorldWidth(elements.text)])).toEqual(originalWidths);
+});
+
+test("auto-pan keeps the live drag frame aligned and pointer cancel restores the selection", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  const bounds = await requiredBounds(canvas, "canvas");
+  const elements = await createMixedSelection(page, bounds);
+  await marqueeSelect(page, bounds, [elements.shape, elements.text]);
+  const frame = page.locator(".selection-frame");
+  const originalFrame = await roundedBounds(frame);
+  const originalPositions = await Promise.all([
+    readWorldPosition(elements.shape),
+    readWorldPosition(elements.text),
+  ]);
+  const originalTransform = await page.locator(".canvas-content").evaluate((element) =>
+    (element as HTMLElement).style.transform);
+  const moveSurface = page.getByRole("button", { name: "Move selected elements" });
+  const moveBounds = await requiredBounds(moveSurface, "selection move surface");
+  const start = { x: moveBounds.x + moveBounds.width / 2, y: moveBounds.y + moveBounds.height / 2 };
+  const edge = { x: bounds.x + bounds.width - 6, y: bounds.y + bounds.height / 2 };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(edge.x, edge.y, { steps: 6 });
+  await expect.poll(async () => page.locator(".canvas-content").evaluate((element) =>
+    (element as HTMLElement).style.transform)).not.toBe(originalTransform);
+  await expect.poll(() => roundedBounds(frame)).not.toEqual(originalFrame);
+  expect(await Promise.all([
+    readWorldPosition(elements.shape),
+    readWorldPosition(elements.text),
+  ])).toEqual(originalPositions);
+  await moveSurface.dispatchEvent("pointercancel", {
+    button: 0,
+    clientX: edge.x,
+    clientY: edge.y,
+    pointerId: 1,
+  });
+  await page.mouse.up();
+  await expect(page.locator(".drag-layer-clone")).toHaveCount(0);
+  await expect.poll(() => Promise.all([
+    readWorldPosition(elements.shape),
+    readWorldPosition(elements.text),
+  ])).toEqual(originalPositions);
+  const restoredElementBounds = await Promise.all([
+    requiredBounds(elements.shape, "restored shape"),
+    requiredBounds(elements.text, "restored text"),
+  ]);
+  const restoredFrame = await requiredBounds(frame, "restored selection frame");
+  expect(restoredFrame.x).toBeLessThanOrEqual(Math.min(...restoredElementBounds.map((item) => item.x)));
+  expect(restoredFrame.y).toBeLessThanOrEqual(Math.min(...restoredElementBounds.map((item) => item.y)));
+  expect(restoredFrame.x + restoredFrame.width).toBeGreaterThanOrEqual(
+    Math.max(...restoredElementBounds.map((item) => item.x + item.width)),
+  );
+  expect(restoredFrame.y + restoredFrame.height).toBeGreaterThanOrEqual(
+    Math.max(...restoredElementBounds.map((item) => item.y + item.height)),
+  );
 });
 
 async function createTwoTextBlocks(page: Page, bounds: { x: number; y: number }) {
-  const first = await createTextBlock(page, bounds.x + 100, bounds.y + 220, "First selection");
-  const second = await createTextBlock(page, bounds.x + 420, bounds.y + 280, "Second selection");
+  const first = await createTextBlock(page, bounds.x + 320, bounds.y + 220, "First selection");
+  const second = await createTextBlock(page, bounds.x + 680, bounds.y + 280, "Second selection");
   return { first, second };
+}
+
+async function createMixedSelection(page: Page, bounds: { x: number; y: number }) {
+  await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
+  await page.mouse.move(bounds.x + 330, bounds.y + 220);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + 480, bounds.y + 330, { steps: 4 });
+  await page.mouse.up();
+  const shape = page.locator('[data-canvas-element-type="shape"]:not(.drag-layer-clone)').last();
+  await expect(shape).toBeVisible();
+  const text = await createTextBlock(page, bounds.x + 560, bounds.y + 300, "Mixed selection text");
+  return { shape, text };
 }
 
 async function createTextBlock(page: Page, x: number, y: number, text: string) {
@@ -329,19 +416,20 @@ async function createTextBlock(page: Page, x: number, y: number, text: string) {
   return block;
 }
 
-async function marqueeSelect(page: Page, canvasBounds: { x: number; y: number }, blocks: { first: Locator; second: Locator }) {
+async function marqueeSelect(page: Page, canvasBounds: { x: number; y: number }, elements: readonly Locator[]) {
   await page.getByRole("button", { name: /Select \(V/ }).click();
-  const first = await requiredBounds(blocks.first, "first text block");
-  const second = await requiredBounds(blocks.second, "second text block");
-  await page.mouse.move(Math.min(first.x, second.x) - 24, Math.min(first.y, second.y) - 24);
+  const elementBounds = await Promise.all(elements.map((element, index) => requiredBounds(element, `selection element ${index + 1}`)));
+  await page.mouse.move(
+    Math.min(...elementBounds.map((bounds) => bounds.x)) - 24,
+    Math.min(...elementBounds.map((bounds) => bounds.y)) - 24,
+  );
   await page.mouse.down();
   await page.mouse.move(
-    Math.max(first.x + first.width, second.x + second.width) + 24,
-    Math.max(first.y + first.height, second.y + second.height) + 24,
+    Math.max(...elementBounds.map((bounds) => bounds.x + bounds.width)) + 24,
+    Math.max(...elementBounds.map((bounds) => bounds.y + bounds.height)) + 24,
     { steps: 7 },
   );
   await page.mouse.up();
-  await expect(page.locator(".selection-frame")).toHaveCount(1);
   await expect(page.locator(".selection-rectangle")).toBeHidden();
   expect(canvasBounds.x).toBeGreaterThanOrEqual(0);
 }
@@ -365,6 +453,23 @@ async function requiredBounds(locator: Locator, label: string) {
   const bounds = await locator.boundingBox();
   if (!bounds) throw new Error(`${label} bounds were unavailable.`);
   return bounds;
+}
+
+async function interactiveResizeHandle(page: Page) {
+  const handles = page.locator(".selection-frame-handle");
+  for (let index = 0; index < await handles.count(); index += 1) {
+    const handle = handles.nth(index);
+    const bounds = await requiredBounds(handle, `selection resize handle ${index + 1}`);
+    const point = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+    const hitClass = await page.evaluate(({ x, y }) =>
+      (document.elementFromPoint(x, y) as HTMLElement | null)?.className ?? "", point);
+    if (!hitClass.includes("selection-frame-handle")) continue;
+    const corner = (await handle.getAttribute("class"))?.match(/selection-frame-handle-(nw|ne|se|sw)/)?.[1];
+    if (corner === "nw" || corner === "ne" || corner === "se" || corner === "sw") {
+      return { bounds, corner, handle };
+    }
+  }
+  throw new Error("No selection resize handle was available at an interactive viewport point.");
 }
 
 async function roundedBounds(locator: Locator) {

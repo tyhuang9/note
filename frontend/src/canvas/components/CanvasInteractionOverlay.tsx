@@ -26,6 +26,7 @@ type CanvasInteractionOverlayProps = {
     onResizeKeyDown: (corner: SelectionCorner) => KeyboardEventHandler<HTMLButtonElement>;
     onResizePointerDown: (corner: SelectionCorner) => PointerEventHandler<HTMLButtonElement>;
     preserveNativeSoutheastHandle?: boolean;
+    resizeLabel: (corner: SelectionCorner) => string;
     resizeCorners: readonly SelectionCorner[];
     showMoveSurface: boolean;
     width: number;
@@ -66,7 +67,7 @@ export function CanvasInteractionOverlay({
           ) : null}
           {selectionFrame.resizeCorners.map((corner) => (
             <button
-              aria-label={`Resize selected elements from ${corner}`}
+              aria-label={selectionFrame.resizeLabel(corner)}
               className={`selection-frame-handle selection-frame-handle-${corner}`}
               key={corner}
               onKeyDown={selectionFrame.onResizeKeyDown(corner)}

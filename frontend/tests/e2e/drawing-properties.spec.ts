@@ -212,6 +212,7 @@ test("keeps the properties scrollbar compact and themed in light and dark modes"
     const fallbackTrack = getComputedStyle(element, "::-webkit-scrollbar-track");
     return {
       authoredWebkitWidth: authoredWebkitRule?.style.width ?? "",
+      panelBackground: style.backgroundColor,
       scrollbarColor: style.scrollbarColor,
       scrollbarWidth: style.scrollbarWidth,
       fallbackThumbBackground: fallbackThumb.backgroundColor,
@@ -226,22 +227,43 @@ test("keeps the properties scrollbar compact and themed in light and dark modes"
   }
   const dark = await readScrollbarStyles();
   expect(dark.scrollbarWidth).toBe("thin");
-  expect(dark.scrollbarColor).toContain("rgba(209, 209, 218, 0.42)");
+  expect(dark.scrollbarColor).toContain("rgb(153, 153, 163)");
   // Standardized scrollbar-width/color are the cross-browser contract.
   // The authored WebKit rule is only fallback evidence; it does not claim
   // that every browser renders an exact physical scrollbar width.
   expect(dark.authoredWebkitWidth).toBe("8px");
   expect(dark.fallbackThumbClip).toBe("padding-box");
-  expect(dark.fallbackTrackBackground).toBe("rgba(0, 0, 0, 0)");
+  expect(contrastRatio(dark.fallbackThumbBackground, dark.fallbackTrackBackground)).toBeGreaterThanOrEqual(3);
+  expect(contrastRatio(dark.fallbackThumbBackground, dark.panelBackground)).toBeGreaterThanOrEqual(3);
 
   await themeToggle.click();
   const light = await readScrollbarStyles();
-  expect(light.scrollbarColor).toContain("rgba(96, 98, 111, 0.46)");
+  expect(light.scrollbarColor).toContain("rgb(107, 109, 120)");
   expect(light.authoredWebkitWidth).toBe("8px");
   expect(light.fallbackThumbClip).toBe("padding-box");
-  expect(light.fallbackTrackBackground).toBe("rgba(0, 0, 0, 0)");
+  expect(contrastRatio(light.fallbackThumbBackground, light.fallbackTrackBackground)).toBeGreaterThanOrEqual(3);
+  expect(contrastRatio(light.fallbackThumbBackground, light.panelBackground)).toBeGreaterThanOrEqual(3);
   expect(light.fallbackThumbBackground).not.toBe(dark.fallbackThumbBackground);
 });
+
+function contrastRatio(foreground: string, background: string) {
+  const foregroundLuminance = relativeLuminance(foreground);
+  const backgroundLuminance = relativeLuminance(background);
+  return (Math.max(foregroundLuminance, backgroundLuminance) + 0.05)
+    / (Math.min(foregroundLuminance, backgroundLuminance) + 0.05);
+}
+
+function relativeLuminance(color: string) {
+  const channels = color.match(/[\d.]+/g)?.slice(0, 3).map(Number);
+  if (!channels || channels.length !== 3) throw new Error(`Unsupported computed color: ${color}`);
+  const [red, green, blue] = channels.map((channel) => {
+    const normalized = channel / 255;
+    return normalized <= 0.04045
+      ? normalized / 12.92
+      : ((normalized + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
 
 test("keeps compact properties reachable at narrow width and effective 200% zoom", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 640 });
@@ -284,13 +306,14 @@ test("keeps compact properties reachable at narrow width and effective 200% zoom
 
   const browser = page.context().browser();
   if (!browser) throw new Error("Browser context was unavailable for the 200% display-scale check.");
+  const appOrigin = new URL(page.url()).origin;
   const zoomContext = await browser.newContext({
     deviceScaleFactor: 2,
     viewport: { width: 320, height: 640 },
   });
   const zoomedPage = await zoomContext.newPage();
   try {
-    await zoomedPage.goto("http://127.0.0.1:4198/");
+    await zoomedPage.goto(appOrigin);
     await zoomedPage.getByRole("button", { name: /create new note/i }).click();
     await zoomedPage.getByRole("button", { name: "Rectangle (R / 2)" }).click();
     const zoomedCanvas = zoomedPage.getByRole("tabpanel");

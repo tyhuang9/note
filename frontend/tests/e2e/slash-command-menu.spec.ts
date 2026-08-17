@@ -106,6 +106,43 @@ test("slash triggers only at supported boundaries", async ({ page }) => {
   await expect(slashMenu(page)).toBeVisible();
 });
 
+test("canvas find does not steal focus from text editing or close slash commands", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openInitialNote(page);
+  await clickCanvas(page, 280, 150);
+  await page.keyboard.type("/");
+
+  const editor = page.locator(".text-block-editor-content").last();
+  await expect(editor).toBeFocused();
+  await expect(slashMenu(page)).toBeVisible();
+  await page.keyboard.press("Control+f");
+  await expect(editor).toBeFocused();
+  await expect(slashMenu(page)).toBeVisible();
+  await expect(page.locator(".search-panel")).toHaveCount(0);
+});
+
+test("canvas find shortcut remains available from non-text canvas controls", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openInitialNote(page);
+  const selectTool = page.getByRole("button", { name: /Select \(V/ });
+  await selectTool.focus();
+  await expect(selectTool).toBeFocused();
+  await page.keyboard.press("Control+f");
+  await expect(page.getByRole("textbox", { name: "Find in canvas" })).toBeFocused();
+});
+
+test("canvas find does not steal focus from a text input", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openInitialNote(page);
+  await page.getByRole("button", { name: "Search files" }).click();
+  const fileSearch = page.getByRole("searchbox", { name: "Search files and notes" });
+  await fileSearch.fill("draft");
+  await fileSearch.press("Control+f");
+  await expect(fileSearch).toBeFocused();
+  await expect(fileSearch).toHaveValue("draft");
+  await expect(page.locator(".search-panel")).toHaveCount(0);
+});
+
 test("slash stays literal in links, inline code, code blocks, lists, and quotes", async ({
   page,
 }) => {

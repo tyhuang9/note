@@ -19,7 +19,7 @@ test("a mixed text and locked-image selection moves only the unlocked element an
   const frame = page.locator(".selection-frame");
   await expect(frame).toHaveCount(1);
   await expect(page.getByRole("button", { name: "Move unlocked selected elements" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /Resize selected elements/ })).toHaveCount(4);
+  await expect(page.getByRole("button", { name: /Resize non-text geometry/ })).toHaveCount(4);
   await expect(unlocked.locator(".resize-e")).toHaveCount(0);
 
   const beforeUnlocked = await readWorldPosition(unlocked);
@@ -83,6 +83,37 @@ test("locked images remain selectable but expose no move or resize mutation", as
   await page.mouse.move(bounds.x + bounds.width / 2 + 60, bounds.y + bounds.height / 2 + 40, { steps: 4 });
   await page.mouse.up();
   await expect.poll(() => readWorldPosition(image)).toEqual(before);
+});
+
+test("all-text header Arrow movement moves unlocked selected text and preserves locked text", async ({ page }) => {
+  await installLockedSelectionWorkspace(page);
+  await page.setViewportSize({ width: 1662, height: 900 });
+  await page.goto("/");
+
+  const canvas = page.getByRole("tabpanel");
+  const unlocked = page.locator('[data-block-id="unlocked"]');
+  const locked = page.locator('[data-block-id="locked"]');
+  const unlockedHeader = unlocked.locator(".text-block-header");
+  const lockedHeader = locked.locator(".text-block-header");
+  await unlockedHeader.click();
+  await lockedHeader.click({ modifiers: ["Control"] });
+  await expect(page.locator(".selection-frame")).toHaveCount(0);
+
+  const beforeUnlocked = await readWorldPosition(unlocked);
+  const beforeLocked = await readWorldPosition(locked);
+  await unlockedHeader.focus();
+  await unlockedHeader.press("Shift+ArrowDown");
+  await expect.poll(() => readWorldPosition(unlocked)).toEqual({
+    x: beforeUnlocked.x,
+    y: beforeUnlocked.y + 10,
+  });
+  await expect.poll(() => readWorldPosition(locked)).toEqual(beforeLocked);
+  await expect(lockedHeader).toHaveAttribute("aria-pressed", "true");
+
+  await canvas.focus();
+  await page.keyboard.press("Control+z");
+  await expect.poll(() => readWorldPosition(unlocked)).toEqual(beforeUnlocked);
+  await expect.poll(() => readWorldPosition(locked)).toEqual(beforeLocked);
 });
 
 async function installLockedSelectionWorkspace(page: Page) {

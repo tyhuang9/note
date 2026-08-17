@@ -20,9 +20,9 @@
   --canvas-tool-active-text: #5b21b6;
   --canvas-focus: #005fcc;
   --canvas-highlighter-edge: #6b5200;
-  --drawing-properties-scrollbar-track: transparent;
-  --drawing-properties-scrollbar-thumb: rgba(96, 98, 111, 0.46);
-  --drawing-properties-scrollbar-thumb-hover: rgba(75, 76, 91, 0.72);
+  --drawing-properties-scrollbar-track: #f4f4f6;
+  --drawing-properties-scrollbar-thumb: #6b6d78;
+  --drawing-properties-scrollbar-thumb-hover: #555762;
   --dark-app: var(--workbench-app);
   --dark-canvas: var(--workbench-canvas);
   --dark-panel: var(--workbench-panel);
@@ -3161,7 +3161,7 @@ h2 {
 }
 
 .text-block.is-drag-source-hidden {
-  visibility: hidden;
+  opacity: 0;
 }
 
 .text-block.is-resizing {
@@ -5508,9 +5508,9 @@ h2 {
 }
 
 .app-shell.is-dark {
-  --drawing-properties-scrollbar-track: transparent;
-  --drawing-properties-scrollbar-thumb: rgba(209, 209, 218, 0.42);
-  --drawing-properties-scrollbar-thumb-hover: rgba(236, 236, 241, 0.72);
+  --drawing-properties-scrollbar-track: #303036;
+  --drawing-properties-scrollbar-thumb: #9999a3;
+  --drawing-properties-scrollbar-thumb-hover: #b7b7c0;
 }
 
 .app-shell.is-dark .canvas-tool-palette button[aria-pressed="true"] {

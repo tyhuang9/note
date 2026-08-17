@@ -23,7 +23,11 @@ import { createSlashCommandExtension } from "../editor/SlashCommandExtension";
 import type { TextElement } from "../canvas/model/elements";
 
 type DragState = {
+  didStart: boolean;
+  isStarting: boolean;
   pointerId: number;
+  startClientX: number;
+  startClientY: number;
 };
 
 type PointerLike = {
@@ -142,6 +146,7 @@ type TextBlockViewProps = {
   activeSearchRange: SearchMatch | null;
   isEditing: boolean;
   isDragSourceHidden: boolean;
+  interactionCancellationKey: string;
   isMultiSelected: boolean;
   isSelected: boolean;
   searchQuery: string;
@@ -158,6 +163,7 @@ type TextBlockViewProps = {
     blockId: string,
     element: HTMLDivElement | null,
   ) => void;
+  onKeyboardMove: (blockId: string, delta: Readonly<{ x: number; y: number }>) => void;
   onSelect: (blockId: string, additive?: boolean) => void;
   onSelectAllBlocks: () => void;
   onUpdate: (blockId: string, updates: BlockUpdates) => void;
@@ -182,6 +188,7 @@ export const TextBlockView = memo(function TextBlockView({
   activeSearchRange,
   isEditing,
   isDragSourceHidden,
+  interactionCancellationKey,
   isMultiSelected,
   isSelected,
   searchQuery,
@@ -195,6 +202,7 @@ export const TextBlockView = memo(function TextBlockView({
   onCanvasPanStart,
   onFocusEndHandled,
   onBlockElementChange,
+  onKeyboardMove,
   onSelect,
   onSelectAllBlocks,
   onUpdate,
@@ -713,18 +721,12 @@ export const TextBlockView = memo(function TextBlockView({
       return;
     }
 
-    const didStartDrag = onVisualDragStart(
-      block.id,
-      event.clientX,
-      event.clientY,
-    );
-
-    if (!didStartDrag) {
-      return;
-    }
-
     dragState.current = {
+      didStart: false,
+      isStarting: false,
       pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
     };
     activePointerId.current = event.pointerId;
     blockRef.current?.setPointerCapture(event.pointerId);
@@ -733,6 +735,39 @@ export const TextBlockView = memo(function TextBlockView({
   function moveBlock(event: PointerLike) {
     if (!dragState.current) {
       return;
+    }
+
+    const currentDrag = dragState.current;
+    if (
+      !currentDrag.didStart &&
+      Math.hypot(
+        event.clientX - currentDrag.startClientX,
+        event.clientY - currentDrag.startClientY,
+      ) < 3
+    ) {
+      return;
+    }
+    if (!currentDrag.didStart) {
+      currentDrag.didStart = true;
+      currentDrag.isStarting = true;
+      const didStartDrag = onVisualDragStart(
+        block.id,
+        currentDrag.startClientX,
+        currentDrag.startClientY,
+      );
+      currentDrag.isStarting = false;
+      if (!didStartDrag) {
+        dragState.current = null;
+        activePointerId.current = null;
+        if (blockRef.current?.hasPointerCapture(currentDrag.pointerId)) {
+          blockRef.current.releasePointerCapture(currentDrag.pointerId);
+        }
+        return;
+      }
+      if (dragState.current !== currentDrag) return;
+      if (!blockRef.current?.hasPointerCapture(currentDrag.pointerId)) {
+        blockRef.current?.setPointerCapture(currentDrag.pointerId);
+      }
     }
 
     event.preventDefault();
@@ -744,6 +779,10 @@ export const TextBlockView = memo(function TextBlockView({
       return;
     }
 
+    const didStart = dragState.current.didStart;
+    dragState.current = null;
+    activePointerId.current = null;
+
     if (blockRef.current) {
       if (
         pointerId !== undefined &&
@@ -753,15 +792,19 @@ export const TextBlockView = memo(function TextBlockView({
       }
     }
 
-    onVisualDragEnd(clientX, clientY);
-    dragState.current = null;
-    activePointerId.current = null;
+    if (didStart) {
+      onVisualDragEnd(clientX, clientY);
+    }
   }
 
   function cancelDrag(pointerId?: number) {
     if (!dragState.current) {
       return;
     }
+
+    const didStart = dragState.current.didStart;
+    dragState.current = null;
+    activePointerId.current = null;
 
     if (
       pointerId !== undefined &&
@@ -770,9 +813,9 @@ export const TextBlockView = memo(function TextBlockView({
       blockRef.current.releasePointerCapture(pointerId);
     }
 
-    onVisualDragCancel();
-    dragState.current = null;
-    activePointerId.current = null;
+    if (didStart) {
+      onVisualDragCancel();
+    }
   }
 
   function handleHeaderKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
@@ -809,12 +852,41 @@ export const TextBlockView = memo(function TextBlockView({
           : event.key === "ArrowDown"
             ? { x: 0, y: step }
             : null;
-    if (!delta || block.locked) return;
+    if (!delta) return;
     event.preventDefault();
     event.stopPropagation();
     leaveEditorForBlockSelection();
-    onUpdate(block.id, { x: block.x + delta.x, y: block.y + delta.y });
+    onKeyboardMove(block.id, delta);
   }
+
+  useEffect(() => {
+    function cancelPendingDrag() {
+      cancelDrag();
+    }
+
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") cancelPendingDrag();
+    }
+
+    function handleCapturedDragCancellation(event: PointerEvent) {
+      if (!dragState.current || dragState.current.isStarting) return;
+      event.preventDefault();
+      event.stopPropagation();
+      cancelDrag(event.pointerId);
+    }
+
+    window.addEventListener("lostpointercapture", handleCapturedDragCancellation, true);
+    window.addEventListener("pointercancel", handleCapturedDragCancellation, true);
+    window.addEventListener("blur", cancelPendingDrag);
+    window.addEventListener("keydown", handleEscape);
+    return () => {
+      window.removeEventListener("lostpointercapture", handleCapturedDragCancellation, true);
+      window.removeEventListener("pointercancel", handleCapturedDragCancellation, true);
+      window.removeEventListener("blur", cancelPendingDrag);
+      window.removeEventListener("keydown", handleEscape);
+      cancelPendingDrag();
+    };
+  }, [interactionCancellationKey]);
 
   function handleRootPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
     if (dragState.current) {
@@ -845,6 +917,13 @@ export const TextBlockView = memo(function TextBlockView({
     }
 
     handleRootPointerEnd(event);
+  }
+
+  function handleLostPointerCapture(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!dragState.current || dragState.current.isStarting) return;
+    event.preventDefault();
+    event.stopPropagation();
+    cancelDrag(event.pointerId);
   }
 
   return (
@@ -886,6 +965,7 @@ export const TextBlockView = memo(function TextBlockView({
       }}
       ref={setBlockElement}
       onContextMenu={(event) => event.preventDefault()}
+      onLostPointerCapture={handleLostPointerCapture}
       onPointerCancel={handleRootPointerCancel}
       onPointerMove={handleRootPointerMove}
       onPointerUp={handleRootPointerEnd}
@@ -1880,6 +1960,7 @@ function areTextBlockViewPropsEqual(
     previousProps.block === nextProps.block &&
     previousProps.isDragSourceHidden === nextProps.isDragSourceHidden &&
     previousProps.isEditing === nextProps.isEditing &&
+    previousProps.interactionCancellationKey === nextProps.interactionCancellationKey &&
     previousProps.isMultiSelected === nextProps.isMultiSelected &&
     previousProps.isSelected === nextProps.isSelected &&
     previousProps.searchQuery === nextProps.searchQuery &&

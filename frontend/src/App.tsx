@@ -1203,6 +1203,7 @@ function App() {
   const selectionTransformRef = useRef<SelectionTransformSession | null>(null);
   const resizeLayerSessionRef = useRef<ResizeLayerSession | null>(null);
   const cancelCanvasSelectionRef = useRef<() => void>(() => undefined);
+  const cancelVisualDragRef = useRef<(updateState?: boolean) => void>(() => undefined);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const explorerPanelRef = useRef<HTMLDivElement | null>(null);
   const explorerToggleButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -1871,11 +1872,7 @@ function App() {
 
       cancelCanvasSelectionSession();
       cancelSelectionFrameInteraction(false);
-
-      if (dragLayerSessionRef.current) {
-        cleanupDragLayerSession(dragLayerSessionRef.current);
-        dragLayerSessionRef.current = null;
-      }
+      cancelVisualDragRef.current(false);
 
       stopAssistantRecordingStream();
     };
@@ -1885,13 +1882,7 @@ function App() {
     function handleWindowBlur() {
       cancelCanvasSelectionSession();
       cancelSelectionFrameInteraction();
-      if (!dragLayerSessionRef.current) {
-        return;
-      }
-
-      cleanupDragLayerSession(dragLayerSessionRef.current);
-      dragLayerSessionRef.current = null;
-      setActiveMode("selected");
+      cancelVisualDragRef.current();
     }
 
     window.addEventListener("blur", handleWindowBlur);
@@ -1902,6 +1893,7 @@ function App() {
   useEffect(() => {
     cancelCanvasSelectionSession();
     cancelSelectionFrameInteraction();
+    cancelVisualDragRef.current();
   }, [activeTool, selectedPageId]);
 
   useEffect(() => {
@@ -3303,6 +3295,7 @@ function App() {
       if (event.key === "Escape") {
         cancelCanvasSelectionSession();
         cancelSelectionFrameInteraction();
+        cancelVisualDragRef.current();
         clearPendingImagePlacement();
       }
 
@@ -3347,7 +3340,13 @@ function App() {
         return;
       }
 
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.key.toLowerCase() === "f" &&
+        !currentEditingBlockId &&
+        !isTextEntryTarget(event.target) &&
+        !isTextEntryTarget(document.activeElement)
+      ) {
         event.preventDefault();
         focusCanvasSearch();
         return;
@@ -5540,8 +5539,18 @@ function App() {
   }, []);
 
   const moveCanvasElementByKeyboard = useCallback((elementId: string, delta: Readonly<{ x: number; y: number }>) => {
+    const currentSelectedIds = selectedBlockIdsRef.current;
+    const selectedElements = currentSelectedIds
+      .map((selectedId) => dataRef.current.elements.find((element) => element.id === selectedId))
+      .filter((element): element is CanvasElement => Boolean(element));
+    const shouldMoveAllSelectedText =
+      currentSelectedIds.includes(elementId) &&
+      selectedElements.length > 1 &&
+      selectedElements.length === currentSelectedIds.length &&
+      selectedElements.every((element) => element.type === "text");
+    const elementIds = new Set(shouldMoveAllSelectedText ? currentSelectedIds : [elementId]);
     setBlocksWithHistory((currentElements) =>
-      translateSelection(currentElements, new Set([elementId]), delta),
+      translateSelection(currentElements, elementIds, delta),
     );
     setActiveMode("selected");
   }, []);
@@ -5880,6 +5889,9 @@ function App() {
     const dragSession = dragLayerSessionRef.current;
 
     if (!dragSession) {
+      const selectedIds = new Set(selectedBlockIdsRef.current);
+      const restoredBounds = getPreviewSelectionBounds(dataRef.current.elements, selectedIds);
+      clearSelectionFrameVisualBounds(restoredBounds ?? undefined);
       return;
     }
 
@@ -5893,6 +5905,7 @@ function App() {
       setActiveMode("selected");
     }
   }, []);
+  cancelVisualDragRef.current = cancelVisualDrag;
 
   function cleanupResizeLayerSession(session: ResizeLayerSession) {
     for (const sourceElement of session.sourceElements) {
@@ -7272,6 +7285,7 @@ function App() {
                 }
                 isEditing={block.id === editingBlockId}
                 isDragSourceHidden={false}
+                interactionCancellationKey={`${activeTool}:${selectedPageId ?? ""}`}
                 isMultiSelected={selectedBlockIds.length > 1 && !selectionContainsOnlyText}
                 isSelected={selectedBlockIds.includes(block.id)}
                 key={block.id}
@@ -7285,6 +7299,7 @@ function App() {
                 onFocusEndHandled={handleFocusEndHandled}
                 onActiveEditorChange={setActiveTextEditor}
                 onBlockElementChange={registerBlockElement}
+                onKeyboardMove={moveCanvasElementByKeyboard}
                 onSelect={selectBlock}
                 onUpdate={updateBlock}
                 onVisualDragCancel={cancelVisualDrag}
@@ -7373,6 +7388,12 @@ function App() {
                   : selected?.type === "shape"
                     ? ["nw", "ne", "se", "sw"]
                     : [];
+              const selectionIncludesText = selectedBlockIds.some((blockId) =>
+                visibleCanvasElements.some((element) => element.id === blockId && element.type === "text"),
+              );
+              const selectionIncludesNonText = selectedBlockIds.some((blockId) =>
+                visibleCanvasElements.some((element) => element.id === blockId && element.type !== "text"),
+              );
               const connectorEndpointPoints = selected?.type === "connector"
                 ? {
                     start: resolveConnectorEndpoint(selected.start, renderedCanvasElementsById, selected.pageId),
@@ -7417,6 +7438,9 @@ function App() {
                 onResizeKeyDown: resizeSelectionByKeyboard,
                 onResizePointerDown: (corner: SelectionCorner) => (event: ReactPointerEvent<HTMLButtonElement>) => startSelectionFrameInteraction(event, corner),
                 preserveNativeSoutheastHandle: selected?.type === "ink",
+                resizeLabel: (corner: SelectionCorner) => selectionIncludesText && selectionIncludesNonText
+                  ? `Resize non-text geometry from ${corner}; text blocks reposition without resizing`
+                  : `Resize selected elements from ${corner}`,
                 resizeCorners,
                 showMoveSurface: selectionHasUnlockedElements && !usesNativeSingleElementInteraction,
                 width: bounds.width * zoomLevel + framePadding * 2,

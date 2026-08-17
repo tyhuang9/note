@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { CanvasElement, ConnectorElement, InkElement, TextElement } from "../../src/canvas/model/elements";
+import type { CanvasElement, ConnectorElement, InkElement, ShapeElement, TextElement } from "../../src/canvas/model/elements";
 import { PEN_BRUSH } from "../../src/canvas/model/ink";
 import {
   getProportionalScale,
@@ -76,17 +76,24 @@ describe("selection bounds", () => {
     });
   });
 
-  it("resolves element connector endpoints from the target perimeter", () => {
+  it("resolves element connector endpoints from compatible shape anchors", () => {
+    const rectangle: ShapeElement = {
+      ...text,
+      id: "rectangle",
+      shape: "rectangle",
+      style: { fillColor: null, roughness: 1, roundness: 0, seed: 1, strokeColor: { kind: "fixed", value: "#000" }, strokeStyle: "solid", strokeWidth: 2 },
+      type: "shape",
+    };
     const attached: ConnectorElement = {
       ...connector,
-      start: { kind: "element", targetElementId: text.id, anchor: { t: 0.25 }, gap: 3 },
+      start: { kind: "element", targetElementId: rectangle.id, anchor: { t: 0.25 }, gap: 3 },
       end: { kind: "free", x: 220, y: 50 },
     };
-    expect(getSelectionElementBounds(attached, { [text.id]: text, [attached.id]: attached })).toEqual({
-      x: 78,
-      y: 15,
-      width: 144,
-      height: 37,
+    expect(getSelectionElementBounds(attached, { [rectangle.id]: rectangle, [attached.id]: attached })).toEqual({
+      x: 111,
+      y: 38,
+      width: 111,
+      height: 14,
     });
   });
 });

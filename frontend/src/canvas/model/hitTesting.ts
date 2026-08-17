@@ -1,11 +1,11 @@
 import type {
   CanvasElement,
-  ConnectorEndpoint,
   ElementId,
   InkElement,
   ShapeElement,
 } from "./elements";
 import { isBoxCanvasElement } from "./elements";
+import { resolveConnectorEndpoint } from "./connectorBinding";
 import type { CanvasPoint, CanvasRect } from "./geometry";
 
 export type Bounds = CanvasRect;
@@ -24,8 +24,8 @@ export function getElementBounds(
   elementsById: Readonly<Record<ElementId, CanvasElement>> = {},
 ): Bounds | null {
   if (element.type === "connector") {
-    const start = connectorEndpointPoint(element.start, elementsById);
-    const end = connectorEndpointPoint(element.end, elementsById);
+    const start = resolveConnectorEndpoint(element.start, elementsById);
+    const end = resolveConnectorEndpoint(element.end, elementsById);
     if (!start || !end) return null;
     const padding = Math.max(0, element.style.strokeWidth / 2);
     return {
@@ -114,24 +114,6 @@ function shapeContainsPoint(element: ShapeElement, worldPoint: CanvasPoint, tole
   return (hasFill && pointInPolygon(point, vertices)) || distanceToPolygon(point, vertices) <= radius;
 }
 
-function connectorEndpointPoint(
-  endpoint: ConnectorEndpoint,
-  elementsById: Readonly<Record<ElementId, CanvasElement>>,
-): CanvasPoint | null {
-  if (endpoint.kind === "free") return endpoint;
-  if (endpoint.kind !== "element") return null;
-  const target = elementsById[endpoint.targetElementId];
-  if (!target || !isBoxCanvasElement(target)) return null;
-  const bounds = normalizeBounds(target);
-  const t = ((endpoint.anchor.t % 1) + 1) % 1;
-  const perimeter = 2 * (bounds.width + bounds.height);
-  const distance = t * perimeter;
-  if (distance <= bounds.width) return { x: bounds.x + distance, y: bounds.y - endpoint.gap };
-  if (distance <= bounds.width + bounds.height) return { x: bounds.x + bounds.width + endpoint.gap, y: bounds.y + distance - bounds.width };
-  if (distance <= bounds.width * 2 + bounds.height) return { x: bounds.x + bounds.width - (distance - bounds.width - bounds.height), y: bounds.y + bounds.height + endpoint.gap };
-  return { x: bounds.x - endpoint.gap, y: bounds.y + bounds.height - (distance - bounds.width * 2 - bounds.height) };
-}
-
 /** Geometry-aware hit test shared by selection and the eraser. */
 export function canvasElementContainsPoint(
   element: CanvasElement,
@@ -141,8 +123,8 @@ export function canvasElementContainsPoint(
 ): boolean {
   if (element.type === "ink") return inkContainsPoint(element, point, tolerance);
   if (element.type === "connector") {
-    const start = connectorEndpointPoint(element.start, elementsById);
-    const end = connectorEndpointPoint(element.end, elementsById);
+    const start = resolveConnectorEndpoint(element.start, elementsById);
+    const end = resolveConnectorEndpoint(element.end, elementsById);
     return Boolean(start && end && pointToSegmentDistance(point, start, end) <= Math.max(0, tolerance) + element.style.strokeWidth / 2);
   }
   if (element.type === "shape") return shapeContainsPoint(element, point, tolerance);
@@ -238,7 +220,7 @@ export function getMarqueeElementIds(
 ): ElementId[] {
   return orderedElementIds.filter((id) => {
     const element = elementsById[id];
-    const bounds = element && getElementBounds(element);
+    const bounds = element && getElementBounds(element, elementsById);
     return bounds ? (mode === "contain" ? boundsContainBounds(marquee, bounds) : boundsIntersect(marquee, bounds)) : false;
   });
 }

@@ -6,6 +6,7 @@ import type {
   InkElement,
 } from "./elements";
 import { isBoxCanvasElement } from "./elements";
+import { resolveConnectorEndpoint } from "./connectorBinding";
 import type { CanvasPoint } from "./geometry";
 import type { Bounds } from "./hitTesting";
 import { normalizeBounds } from "./hitTesting";
@@ -176,26 +177,6 @@ function getConnectorBounds(
     width: Math.abs(start.x - end.x) + padding * 2,
     height: Math.abs(start.y - end.y) + padding * 2,
   };
-}
-
-function resolveConnectorEndpoint(
-  endpoint: ConnectorEndpoint,
-  elementsById: Readonly<Record<ElementId, CanvasElement>>,
-): CanvasPoint | null {
-  if (endpoint.kind === "free") return endpoint;
-  if (endpoint.kind === "connector") return null;
-  if (endpoint.kind === "group") return null;
-  const target = elementsById[endpoint.targetElementId];
-  if (!target) return null;
-  const bounds = getSelectionElementBounds(target, elementsById);
-  if (!bounds) return null;
-  const t = ((endpoint.anchor.t % 1) + 1) % 1;
-  const perimeter = 2 * (bounds.width + bounds.height);
-  const distance = t * perimeter;
-  if (distance <= bounds.width) return { x: bounds.x + distance, y: bounds.y - endpoint.gap };
-  if (distance <= bounds.width + bounds.height) return { x: bounds.x + bounds.width + endpoint.gap, y: bounds.y + distance - bounds.width };
-  if (distance <= bounds.width * 2 + bounds.height) return { x: bounds.x + bounds.width - (distance - bounds.width - bounds.height), y: bounds.y + bounds.height + endpoint.gap };
-  return { x: bounds.x - endpoint.gap, y: bounds.y + bounds.height - (distance - bounds.width * 2 - bounds.height) };
 }
 
 function boundsFromPoints(points: readonly CanvasPoint[]): Bounds | null {

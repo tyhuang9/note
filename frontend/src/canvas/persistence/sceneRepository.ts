@@ -5,6 +5,7 @@ import {
   isBindableShape,
   isSafeCanvasCoordinate,
   isSafeCanvasDimension,
+  isSafeCanvasRotation,
   MAX_CANVAS_VALUE,
   resolveConnectorEndpoint,
 } from "../model/connectorBinding";
@@ -142,34 +143,54 @@ function hasSafeLoadedGeometry(element: CanvasElement): boolean {
     && isSafeCanvasCoordinate(element.y)
     && isSafeCanvasDimension(element.width)
     && isSafeCanvasDimension(element.height)
-    && Number.isFinite(element.rotation);
+    && isSafeCanvasRotation(element.rotation);
 }
 
 function normalizeLoadedConnectorEndpoint(
-  endpoint: ConnectorElement["start"],
+  endpoint: unknown,
   connector: ConnectorElement,
   elementsById: Readonly<Record<string, CanvasElement>>,
 ): ConnectorElement["start"] {
+  if (!isRecord(endpoint)) return { kind: "free", x: 0, y: 0 };
   if (endpoint.kind === "free") {
-    return isSafeCanvasCoordinate(endpoint.x) && isSafeCanvasCoordinate(endpoint.y)
-      ? endpoint
+    return typeof endpoint.x === "number"
+      && typeof endpoint.y === "number"
+      && isSafeCanvasCoordinate(endpoint.x)
+      && isSafeCanvasCoordinate(endpoint.y)
+      ? { kind: "free", x: endpoint.x, y: endpoint.y }
       : { kind: "free", x: 0, y: 0 };
   }
-  if (
-    endpoint.kind === "element"
-    && connector.style.endArrowhead === "arrow"
+  if (endpoint.kind === "element"
+    && typeof endpoint.targetElementId === "string"
+    && isRecord(endpoint.anchor)
+    && typeof endpoint.anchor.t === "number"
     && Number.isFinite(endpoint.anchor.t)
     && endpoint.anchor.t >= 0
     && endpoint.anchor.t <= 1
+    && typeof endpoint.gap === "number"
     && Number.isFinite(endpoint.gap)
     && endpoint.gap >= 0
-    && endpoint.gap <= MAX_CANVAS_VALUE
-  ) {
-    const target = elementsById[endpoint.targetElementId];
-    if (target?.pageId === connector.pageId && isBindableShape(target)) return endpoint;
+    && endpoint.gap <= MAX_CANVAS_VALUE) {
+    const binding: Extract<ConnectorElement["start"], { kind: "element" }> = {
+      anchor: { t: endpoint.anchor.t },
+      gap: endpoint.gap,
+      kind: "element",
+      targetElementId: endpoint.targetElementId,
+    };
+    const target = elementsById[binding.targetElementId];
+    if (
+      connector.style.endArrowhead === "arrow"
+      && target?.pageId === connector.pageId
+      && isBindableShape(target)
+    ) return binding;
+    const resolved = resolveConnectorEndpoint(binding, elementsById, connector.pageId);
+    return { kind: "free", ...(resolved ?? { x: 0, y: 0 }) };
   }
-  const resolved = resolveConnectorEndpoint(endpoint, elementsById, connector.pageId);
-  return { kind: "free", ...(resolved ?? { x: 0, y: 0 }) };
+  return { kind: "free", x: 0, y: 0 };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function isAssetBlobWithinLimit(blob: Pick<Blob, "size">): boolean {

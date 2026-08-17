@@ -130,7 +130,11 @@ describe("connector shape binding", () => {
     const rectangle = shape("rectangle");
     const unsafeShape = shape("rectangle", { x: MAX_CANVAS_VALUE + 1 });
     const foreignShape = shape("rectangle", { id: "foreign", pageId: "other-page" });
+    const overLimitResolution = shape("rectangle", { id: "edge", width: 1, x: MAX_CANVAS_VALUE - 1 });
+    const unsafeRotation = shape("rectangle", { rotation: 361 });
     expect(getShapeBindingAnchors(unsafeShape)).toEqual([]);
+    expect(getShapeBindingAnchors(unsafeRotation)).toEqual([]);
+    expect(getShapeAnchorPoint(unsafeRotation, { t: 0 })).toBeNull();
     expect(resolveConnectorEndpoint(
       { kind: "free", x: MAX_CANVAS_VALUE + 1, y: 0 },
       {},
@@ -148,5 +152,20 @@ describe("connector shape binding", () => {
       { [foreignShape.id]: foreignShape },
       "page",
     )).toBeNull();
+    expect(resolveConnectorEndpoint(
+      { kind: "element", targetElementId: overLimitResolution.id, anchor: { t: 0.25 }, gap: MAX_CANVAS_VALUE },
+      { [overLimitResolution.id]: overLimitResolution },
+      "page",
+    )).toBeNull();
+  });
+
+  it("detaches an endpoint at the persisted coordinate boundary without changing its point", () => {
+    const edge = shape("rectangle", { width: 1, x: MAX_CANVAS_VALUE - 1 });
+    const connector = arrow(
+      { kind: "element", targetElementId: edge.id, anchor: { t: 0.25 }, gap: 0 },
+      { kind: "free", x: 1, y: 1 },
+    );
+    const [, detached] = detachConnectorEndpointsForDeletedTargets([edge, connector], new Set([edge.id]));
+    expect(detached).toMatchObject({ start: { kind: "free", x: MAX_CANVAS_VALUE, y: 50 } });
   });
 });

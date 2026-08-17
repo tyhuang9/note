@@ -270,6 +270,7 @@ describe("scene repository", () => {
     );
     const foreignRectangle = { ...rectangle, id: "foreign-rectangle", pageId: "other-page" };
     const unsafeRectangle = { ...rectangle, id: "unsafe-rectangle", x: MAX_CANVAS_VALUE + 1 };
+    const unsafeRotationRectangle = { ...rectangle, id: "unsafe-rotation", rotation: 361 };
     const invoke: Invoke = async (command) => {
       if (command !== "load_workspace_data") return undefined as never;
       return {
@@ -277,6 +278,7 @@ describe("scene repository", () => {
           rectangle,
           foreignRectangle,
           unsafeRectangle,
+          unsafeRotationRectangle,
           text("text-target"),
           arrow("missing", bound("missing")),
           arrow("nonshape", bound("text-target")),
@@ -287,6 +289,10 @@ describe("scene repository", () => {
           arrow("large-free", { kind: "free", x: MAX_CANVAS_VALUE + 1, y: 0 }),
           arrow("large-gap", bound("rectangle", MAX_CANVAS_VALUE + 1)),
           arrow("line", bound("rectangle"), "none"),
+          arrow("null", null as unknown as ConnectorElement["start"]),
+          arrow("undefined", undefined as unknown as ConnectorElement["start"]),
+          arrow("string", "endpoint" as unknown as ConnectorElement["start"]),
+          arrow("number", 42 as unknown as ConnectorElement["start"]),
         ],
         folders: [],
         pages: [],
@@ -301,7 +307,8 @@ describe("scene repository", () => {
         .map((element) => [element.id, element]),
     );
     expect(loaded.elements.some((element) => element.id === "unsafe-rectangle")).toBe(false);
-    for (const id of ["missing", "nonshape", "unsafe-shape", "group", "connector", "large-free", "large-gap"]) {
+    expect(loaded.elements.some((element) => element.id === "unsafe-rotation")).toBe(false);
+    for (const id of ["missing", "nonshape", "unsafe-shape", "group", "connector", "large-free", "large-gap", "null", "undefined", "string", "number"]) {
       expect(connectorById[id].start).toEqual({ kind: "free", x: 0, y: 0 });
     }
     expect(connectorById["cross-page"].start).toEqual({ kind: "free", x: 0, y: 0 });

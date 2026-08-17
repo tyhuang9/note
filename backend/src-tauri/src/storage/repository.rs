@@ -10,8 +10,9 @@ pub const TEMPLATE_FOLDER_ID: &str = "__note_page_templates__";
 const MAX_INK_POINTS: usize = 20_000;
 const MAX_INK_PAYLOAD_BYTES: usize = 8 * 1024 * 1024;
 const MAX_INK_LOCAL_COORDINATE: f64 = 1_000_000.0;
-/// Shared with the frontend load guard to keep stored canvas geometry bounded.
+/// Shared with the frontend guard: every persisted or resolved world coordinate.
 const MAX_CANVAS_VALUE: f64 = 1_000_000.0;
+const MAX_CANVAS_ROTATION_DEGREES: f64 = 360.0;
 const MAX_INK_BRUSH_SIZE: f64 = 512.0;
 const MAX_SCENE_BATCH_BYTES: usize = 32 * 1024 * 1024;
 const MAX_SCENE_BATCH_UPSERTS: usize = 5_000;
@@ -299,6 +300,15 @@ fn validate_canvas_coordinate(value: f64, context: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_canvas_rotation(value: f64, context: &str) -> Result<(), String> {
+    if value.abs() > MAX_CANVAS_ROTATION_DEGREES {
+        return Err(format!(
+            "{context} must be between -{MAX_CANVAS_ROTATION_DEGREES} and {MAX_CANVAS_ROTATION_DEGREES}"
+        ));
+    }
+    Ok(())
+}
+
 fn validate_scene_batch(batch: &SceneChangeBatch) -> Result<(), String> {
     if batch.upserts.len() > MAX_SCENE_BATCH_UPSERTS {
         return Err(format!(
@@ -352,6 +362,11 @@ fn validate_element(value: &Value, page_id: &str) -> Result<(), String> {
         if matches!(key, "x" | "y") {
             if let Some(number) = v {
                 validate_canvas_coordinate(number, &format!("element.{key}"))?;
+            }
+        }
+        if key == "rotation" {
+            if let Some(number) = v {
+                validate_canvas_rotation(number, "element.rotation")?;
             }
         }
         if matches!(key, "width" | "height")
@@ -485,7 +500,13 @@ fn validate_final_connector_bindings(
                     "{context}.kind element is only supported for arrow connectors"
                 ));
             }
-            validate_bound_connector_target(transaction, page_id, target_element_id, &context)?;
+            validate_bound_connector_target(
+                transaction,
+                page_id,
+                target_element_id,
+                endpoint,
+                &context,
+            )?;
         }
     }
     Ok(())
@@ -495,6 +516,7 @@ fn validate_bound_connector_target(
     transaction: &Transaction<'_>,
     page_id: &str,
     target_element_id: &str,
+    endpoint: &Value,
     context: &str,
 ) -> Result<(), String> {
     let target: Option<(String, String, String)> = transaction
@@ -531,7 +553,114 @@ fn validate_bound_connector_target(
             "{context}.targetElementId must reference a rectangle, ellipse, or diamond"
         ));
     }
+    validate_bound_connector_resolution(&target, endpoint, context)?;
     Ok(())
+}
+
+fn validate_bound_connector_resolution(
+    target: &Value,
+    endpoint: &Value,
+    context: &str,
+) -> Result<(), String> {
+    let shape = target
+        .get("shape")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{context}.targetElementId has invalid shape payload"))?;
+    let x = required_finite(target, "x", context)?;
+    let y = required_finite(target, "y", context)?;
+    let width = required_finite(target, "width", context)?;
+    let height = required_finite(target, "height", context)?;
+    let rotation = required_finite(target, "rotation", context)?;
+    validate_canvas_coordinate(x, &format!("{context}.targetElementId.x"))?;
+    validate_canvas_coordinate(y, &format!("{context}.targetElementId.y"))?;
+    if !(0.0..=MAX_CANVAS_VALUE).contains(&width) || !(0.0..=MAX_CANVAS_VALUE).contains(&height) {
+        return Err(format!(
+            "{context}.targetElementId has invalid shape dimensions"
+        ));
+    }
+    validate_canvas_rotation(rotation, &format!("{context}.targetElementId.rotation"))?;
+
+    let endpoint = endpoint
+        .as_object()
+        .ok_or_else(|| format!("{context} must be an object"))?;
+    let t = endpoint
+        .get("anchor")
+        .and_then(Value::as_object)
+        .and_then(|anchor| anchor.get("t"))
+        .and_then(Value::as_f64)
+        .ok_or_else(|| format!("{context}.anchor must be within 0 and 1"))?;
+    let gap = required_finite_object(endpoint, "gap", context)?;
+    let resolved = resolve_shape_anchor(shape, x, y, width, height, rotation, t, gap)
+        .ok_or_else(|| format!("{context} resolves to an invalid point"))?;
+    validate_canvas_coordinate(resolved.0, &format!("{context}.resolved.x"))?;
+    validate_canvas_coordinate(resolved.1, &format!("{context}.resolved.y"))?;
+    Ok(())
+}
+
+fn resolve_shape_anchor(
+    shape: &str,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    rotation: f64,
+    t: f64,
+    gap: f64,
+) -> Option<(f64, f64)> {
+    let t = t.rem_euclid(1.0);
+    let radians = t * std::f64::consts::TAU;
+    let direction_x = zero_small(radians.sin());
+    let direction_y = zero_small(-radians.cos());
+    let radius_x = width / 2.0;
+    let radius_y = height / 2.0;
+    let perimeter_distance = match shape {
+        "ellipse" => 1.0,
+        "diamond" => {
+            1.0 / f64::EPSILON.max(
+                direction_x.abs() / radius_x.max(f64::EPSILON)
+                    + direction_y.abs() / radius_y.max(f64::EPSILON),
+            )
+        }
+        "rectangle" => {
+            let horizontal = if direction_x == 0.0 {
+                f64::INFINITY
+            } else {
+                radius_x / direction_x.abs()
+            };
+            let vertical = if direction_y == 0.0 {
+                f64::INFINITY
+            } else {
+                radius_y / direction_y.abs()
+            };
+            horizontal.min(vertical)
+        }
+        _ => return None,
+    };
+    let (local_x, local_y) = if shape == "ellipse" {
+        (direction_x * radius_x, direction_y * radius_y)
+    } else {
+        (
+            direction_x * perimeter_distance,
+            direction_y * perimeter_distance,
+        )
+    };
+    let rotation = rotation.to_radians();
+    let (sin, cos) = rotation.sin_cos();
+    let rotated_direction_x = zero_small(direction_x * cos - direction_y * sin);
+    let rotated_direction_y = zero_small(direction_x * sin + direction_y * cos);
+    let rotated_local_x = zero_small(local_x * cos - local_y * sin);
+    let rotated_local_y = zero_small(local_x * sin + local_y * cos);
+    let resolved_x = x + radius_x + rotated_local_x + rotated_direction_x * gap;
+    let resolved_y = y + radius_y + rotated_local_y + rotated_direction_y * gap;
+    (resolved_x.is_finite() && resolved_y.is_finite()).then_some((resolved_x, resolved_y))
+}
+
+fn zero_small(value: f64) -> f64 {
+    if value.abs() < 1e-12 {
+        0.0
+    } else {
+        value
+    }
 }
 fn number_i64(v: &Value, key: &str) -> i64 {
     v.get(key)
@@ -1368,6 +1497,7 @@ mod tests {
         for (mut element, key, expected_error) in [
             (element("too-far", 1), "x", "element.x"),
             (shape_element("too-wide", "p"), "width", "element.width"),
+            (element("too-rotated", 1), "rotation", "element.rotation"),
         ] {
             element[key] = json!(MAX_CANVAS_VALUE + 1.0);
             let directory = root();
@@ -1426,6 +1556,36 @@ mod tests {
                 0
             );
         }
+    }
+
+    #[test]
+    fn bound_endpoint_resolution_must_fit_the_free_coordinate_limit() {
+        let directory = root();
+        seed_page(directory.path());
+        let mut edge_shape = shape_element("shape-1", "p");
+        edge_shape["x"] = json!(MAX_CANVAS_VALUE - 1.0);
+        edge_shape["width"] = json!(1.0);
+        let error = apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![
+                    edge_shape,
+                    connector_element(
+                        json!({"kind":"element","targetElementId":"shape-1","anchor":{"t":0.25},"gap":MAX_CANVAS_VALUE}),
+                        json!({"kind":"free","x":1.0,"y":1.0}),
+                    ),
+                ],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("connector connector-1.start.resolved.x"));
+        assert_eq!(
+            load_workspace_data_at(directory.path()).unwrap().pages[0].revision,
+            0
+        );
     }
 
     #[test]

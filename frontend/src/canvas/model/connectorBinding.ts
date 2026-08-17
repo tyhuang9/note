@@ -12,7 +12,7 @@ import type { CanvasPoint } from "./geometry";
 export const CONNECTOR_BINDING_SNAP_RADIUS_PX = 18;
 /** Mirrors the persistence boundary limit in the Rust repository. */
 export const MAX_CANVAS_VALUE = 1_000_000;
-const MAX_RESOLVED_CANVAS_VALUE = MAX_CANVAS_VALUE * 4;
+export const MAX_CANVAS_ROTATION_DEGREES = 360;
 
 export type ShapeAnchorName = "top" | "right" | "bottom" | "left";
 
@@ -48,6 +48,10 @@ export function isSafeCanvasDimension(value: number): boolean {
   return Number.isFinite(value) && value >= 0 && value <= MAX_CANVAS_VALUE;
 }
 
+export function isSafeCanvasRotation(value: number): boolean {
+  return Number.isFinite(value) && Math.abs(value) <= MAX_CANVAS_ROTATION_DEGREES;
+}
+
 /** Resolves any compatible endpoint to its current world point. */
 export function resolveConnectorEndpoint(
   endpoint: ConnectorEndpoint,
@@ -64,7 +68,7 @@ export function resolveConnectorEndpoint(
   }
   if (sourcePageId && target.pageId !== sourcePageId) return null;
   const point = getShapeAnchorPoint(target, endpoint.anchor, endpoint.gap);
-  return isSafeResolvedPoint(point) ? point : null;
+  return point && isSafeResolvedPoint(point) ? point : null;
 }
 
 export function resolveConnectorPoints(
@@ -79,11 +83,10 @@ export function resolveConnectorPoints(
 /** Returns the four visible/persisted binding positions for a compatible shape. */
 export function getShapeBindingAnchors(shape: ShapeElement): readonly ShapeBindingAnchor[] {
   if (!hasSafeShapeGeometry(shape)) return [];
-  return CARDINAL_ANCHORS.map(({ name, t }) => ({
-    anchor: { t },
-    name,
-    point: getShapeAnchorPoint(shape, { t }),
-  }));
+  return CARDINAL_ANCHORS.flatMap(({ name, t }) => {
+    const point = getShapeAnchorPoint(shape, { t });
+    return point ? [{ anchor: { t }, name, point }] : [];
+  });
 }
 
 /**
@@ -94,8 +97,8 @@ export function getShapeAnchorPoint(
   shape: ShapeElement,
   anchor: PerimeterAnchor,
   gap = 0,
-): CanvasPoint {
-  if (!hasSafeShapeGeometry(shape) || !isSafeGap(gap)) return { x: 0, y: 0 };
+): CanvasPoint | null {
+  if (!hasSafeShapeGeometry(shape) || !isSafeGap(gap)) return null;
   const width = Math.max(0, shape.width);
   const height = Math.max(0, shape.height);
   const center = { x: shape.x + width / 2, y: shape.y + height / 2 };
@@ -125,7 +128,7 @@ export function getShapeAnchorPoint(
     x: center.x + rotatedLocal.x + rotatedDirection.x * safeGap,
     y: center.y + rotatedLocal.y + rotatedDirection.y * safeGap,
   };
-  return isSafeResolvedPoint(point) ? point : { x: 0, y: 0 };
+  return isSafeResolvedPoint(point) ? point : null;
 }
 
 /** Snaps only arrow endpoints; callers pass `allowBinding` false for lines. */
@@ -137,7 +140,7 @@ export function snapConnectorEndpoint(
   radiusPx = CONNECTOR_BINDING_SNAP_RADIUS_PX,
 ): ConnectorEndpoint {
   if (!isSafeResolvedPoint(point)) {
-    return { kind: "free", x: 0, y: 0 };
+    return { kind: "free", x: clampCanvasCoordinate(point.x), y: clampCanvasCoordinate(point.y) };
   }
   if (!allowBinding) {
     return { kind: "free", ...point };
@@ -171,7 +174,7 @@ export function detachConnectorEndpointsForDeletedTargets(
   const detach = (endpoint: ConnectorEndpoint, sourcePageId: string): ConnectorEndpoint => {
     if (endpoint.kind !== "element" || !deletedIds.has(endpoint.targetElementId)) return endpoint;
     const resolved = resolveConnectorEndpoint(endpoint, elementsById, sourcePageId);
-    return { kind: "free", ...(resolved ?? { x: 0, y: 0 }) };
+    return resolved ? { kind: "free", ...resolved } : endpoint;
   };
   return elements.map((element) => {
     if (element.type !== "connector" || deletedIds.has(element.id)) return element;
@@ -194,7 +197,7 @@ function hasSafeShapeGeometry(shape: ShapeElement): boolean {
     && isSafeCanvasCoordinate(shape.y)
     && isSafeCanvasDimension(shape.width)
     && isSafeCanvasDimension(shape.height)
-    && Number.isFinite(shape.rotation);
+    && isSafeCanvasRotation(shape.rotation);
 }
 
 function isValidPerimeterAnchor(anchor: PerimeterAnchor): boolean {
@@ -206,14 +209,16 @@ function isSafeGap(gap: number): boolean {
 }
 
 function isSafeResolvedPoint(point: CanvasPoint): boolean {
-  return Number.isFinite(point.x)
-    && Number.isFinite(point.y)
-    && Math.abs(point.x) <= MAX_RESOLVED_CANVAS_VALUE
-    && Math.abs(point.y) <= MAX_RESOLVED_CANVAS_VALUE;
+  return isSafeCanvasCoordinate(point.x) && isSafeCanvasCoordinate(point.y);
+}
+
+function clampCanvasCoordinate(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(-MAX_CANVAS_VALUE, Math.min(MAX_CANVAS_VALUE, value));
 }
 
 function rotateVector(vector: CanvasPoint, rotation: number): CanvasPoint {
-  const radians = (Number.isFinite(rotation) ? rotation : 0) * Math.PI / 180;
+  const radians = rotation * Math.PI / 180;
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
   return {

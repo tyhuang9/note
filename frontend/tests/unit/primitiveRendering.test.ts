@@ -42,7 +42,7 @@ describe("primitive rendering", () => {
     expect(roughOptions(style)).toMatchObject({
       roughness: 2.4,
       seed: 314159,
-      stroke: "var(--workbench-text)",
+      stroke: "var(--canvas-tool-text)",
       strokeLineDash: [8, 5],
       strokeWidth: 4,
     });
@@ -65,7 +65,7 @@ describe("primitive rendering", () => {
 
   it("resolves fixed and theme colors consistently for drafts and primitives", () => {
     expect(canvasColorToCss({ kind: "fixed", value: "#123456" })).toBe("#123456");
-    expect(canvasColorToCss({ kind: "theme", token: "foreground" })).toBe("var(--workbench-text)");
+    expect(canvasColorToCss({ kind: "theme", token: "foreground" })).toBe("var(--canvas-tool-text)");
     expect(canvasColorToCss({ kind: "theme", token: "muted" })).toBe("var(--workbench-text-secondary)");
   });
 });

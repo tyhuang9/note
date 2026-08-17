@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { Mark, Node as TiptapNode, mergeAttributes, type Editor, type JSONContent } from "@tiptap/core";
@@ -19,6 +19,7 @@ import type {
   SearchMatch,
 } from "../appTypes";
 import { blurActiveTextEntry } from "../editorUtils";
+import { createSlashCommandExtension } from "../editor/SlashCommandExtension";
 import type { TextElement } from "../canvas/model/elements";
 
 type DragState = {
@@ -1104,6 +1105,10 @@ function TiptapBlockEditor({
   const onSelectContentRef = useRef(onSelectContent);
   const onSelectAllBlocksRef = useRef(onSelectAllBlocks);
   const onSelectionResetRef = useRef(onSelectionReset);
+  const editorExtensions = useMemo(
+    () => [...tiptapExtensions, createSlashCommandExtension(block.id)],
+    [block.id],
+  );
 
   onSelectContentRef.current = onSelectContent;
   onSelectAllBlocksRef.current = onSelectAllBlocks;
@@ -1111,13 +1116,15 @@ function TiptapBlockEditor({
 
   const editor = useEditor(
     {
-      extensions: tiptapExtensions,
+      extensions: editorExtensions,
       content: getTipTapContent(block),
       shouldRerenderOnTransaction: false,
       editorProps: {
         attributes: {
+          "aria-multiline": "true",
           "aria-label": "Text block",
           class: "text-block-editor-content text-block-rich-content",
+          role: "textbox",
         },
         handleKeyDown: (view, event) => {
           const isCtrlA =
@@ -1674,6 +1681,10 @@ function hasTipTapRenderableContent(content: JSONContent): boolean {
   }
 
   if (content.type === "image" && typeof content.attrs?.src === "string") {
+    return true;
+  }
+
+  if (content.type === "horizontalRule") {
     return true;
   }
 

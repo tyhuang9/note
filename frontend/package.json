@@ -13,10 +13,12 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@floating-ui/dom": "^1.7.4",
     "@tauri-apps/api": "^2",
     "@tiptap/pm": "^3.26.0",
     "@tiptap/react": "^3.26.0",
     "@tiptap/starter-kit": "^3.26.0",
+    "@tiptap/suggestion": "3.26.0",
     "lucide-react": "^0.468.0",
     "perfect-freehand": "1.2.3",
     "react": "^19.1.0",

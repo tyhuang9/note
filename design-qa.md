@@ -84,3 +84,52 @@ No unresolved P0, P1, or P2 visual findings remain.
 
 - Native color-picker presentation can vary by operating system; the trigger is stable and accessible.
 - The properties sheet intentionally scrolls internally on short compact viewports so all controls remain reachable without reducing touch targets.
+
+---
+
+## Canvas Text and Compact-Properties Follow-up QA — 2026-08-17
+
+### Source and Same-state Evidence
+
+- Source visual truth 1: `C:\Users\huang\.codex\attachments\ff03dfbf-6956-4879-a530-5ec7860362c5\image-1.png`, 505x345 pixels; dark mixed primitive/text selection held mid-drag before pointer-up.
+- Implementation 1: `design-qa-evidence/implementation-mixed-live-drag-dark-505x345.png`, 505x345 pixels; CSS viewport 505x345, DPR 1.
+- Full-view comparison 1 (source left, implementation right): `design-qa-evidence/comparison-reference1-live-drag-505x345.png`, 1010x345 pixels.
+- Source visual truth 2: `C:\Users\huang\.codex\attachments\ff03dfbf-6956-4879-a530-5ec7860362c5\image-2.png`, 280x224 pixels; dark overflowed properties panel.
+- Implementation 2: `design-qa-evidence/implementation-properties-overflow-dark-280x224.png`, 280x224 pixels; CSS viewport 280x224, DPR 1.
+- Full-view comparison 2 (source left, implementation right): `design-qa-evidence/comparison-reference2-properties-dark-280x224.png`, 560x224 pixels.
+- Supplemental responsive states: `design-qa-evidence/implementation-properties-overflow-light-280x224.png` and `design-qa-evidence/implementation-properties-overflow-200pct-280x224.png`, each 280x224 pixels at DPR 1.
+- Density normalization: none required; every source and implementation pair was captured at identical CSS and pixel dimensions.
+
+### Environment and State
+
+- Fresh isolated Vite preview: `127.0.0.1:4175`; port 4173 was not started or used.
+- Browser: Playwright Chromium. Console and page-error listeners reported no errors in the 505x345 dark live-drag and 280x224 dark/light/200% capture flows.
+- Product chrome is intentionally retained. The comparisons assess the requested selection-frame and inset-scrollbar behavior rather than cloning Excalidraw's unrelated navigation/toolbar composition.
+
+### Findings and Iteration History
+
+| Pass | Severity | Finding | Resolution and post-fix evidence |
+| --- | --- | --- | --- |
+| 1 | P2 | At 280x224 with effective 200% text sizing, the compact properties panel had horizontal overflow: panel client width 214px vs scroll width 244px. Visible contributors were `.drawing-property-section` and `.drawing-color-picker`. | Resolved in product commit `aec68ec` by allowing the color-picker controls to wrap. Pass 2 confirms `scrollWidth <= clientWidth`; `implementation-properties-overflow-200pct-280x224.png`. |
+| 2 | None | No actionable P0/P1/P2 differences remain in the same-state reference comparisons. The live composite frame follows the moving clones with no stale origin frame; the compact dark panel uses the thin, themed, inset scrollbar contract. | `comparison-reference1-live-drag-505x345.png`; `comparison-reference2-properties-dark-280x224.png`. |
+
+### Required Fidelity Surfaces
+
+- Fonts and typography: Note's existing compact system UI and text controls remain internally consistent; no new font or hierarchy drift appeared in the reference-sized states.
+- Spacing and layout rhythm: the live frame encloses the moved mixed selection and tracks its pointer delta; the compact panel stays within the 280px viewport after the 200% reflow correction.
+- Colors and visual tokens: dark scrollbar is thin with the dark themed thumb/track; light mode receives its distinct themed token. Selection and active controls retain the existing purple state token.
+- Image quality and asset fidelity: these behavior references contain no application image asset that needs recreation. No image, icon, or placeholder substitution was introduced.
+- Copy and content: `Properties`, section labels, controls, and text-selection labels remain readable at the captured compact state.
+
+### Interaction and Supplemental Checks
+
+- Held the mixed-selection pointer gesture before pointer-up; asserted two live drag clones, one composite frame, and a 44px/26px frame delta matching the gesture.
+- Verified native all-text selection outlines without a composite frame and keyboard focus on a text header: `canvas-selection-bounds.spec.ts`.
+- Verified mixed resize scales non-text geometry while preserving text dimensions: `canvas-selection-bounds.spec.ts`.
+- Verified the default rounded rectangle preference and explicit sharp override persistence: `sqlite-persistence-contract.spec.ts`.
+- Verified an edited textbox activates the slash-command menu only at supported boundaries: `slash-command-menu.spec.ts`.
+- Verified compact dark, light, and effective-200% property-panel states for overflow, clipping, and themed scrollbars.
+
+### Result
+
+`final result: passed`

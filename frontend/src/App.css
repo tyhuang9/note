@@ -5258,6 +5258,24 @@ h2 {
   transform: translate(-50%, 0);
 }
 
+.drawing-choice-group button[data-tooltip]:first-of-type::after {
+  left: 0;
+  transform: translateY(-2px);
+}
+
+.drawing-choice-group button[data-tooltip]:last-of-type::after {
+  right: 0;
+  left: auto;
+  transform: translateY(-2px);
+}
+
+.drawing-choice-group button[data-tooltip]:first-of-type:hover::after,
+.drawing-choice-group button[data-tooltip]:first-of-type:focus-visible::after,
+.drawing-choice-group button[data-tooltip]:last-of-type:hover::after,
+.drawing-choice-group button[data-tooltip]:last-of-type:focus-visible::after {
+  transform: translateY(0);
+}
+
 .drawing-toolbar-tooltip {
   position: fixed;
   z-index: 100;
@@ -5376,6 +5394,11 @@ h2 {
   align-items: center;
   gap: 5px;
   min-width: 0;
+}
+
+.drawing-color-picker {
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 .drawing-choice-group button,

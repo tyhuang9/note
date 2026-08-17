@@ -346,6 +346,37 @@ test("keeps compact properties reachable at narrow width and effective 200% zoom
   }
 });
 
+test("reflows compact properties without horizontal overflow at 200% text size", async ({ page }) => {
+  await page.setViewportSize({ width: 280, height: 224 });
+  await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
+  await page.getByRole("button", { name: "Drawing properties" }).click();
+  const properties = page.getByRole("complementary", { name: "Drawing properties" });
+  await expect(properties).toBeVisible();
+  await page.addStyleTag({ content: ".drawing-properties-panel { font-size: 200% !important; }" });
+
+  const layout = await properties.evaluate((element) => {
+    const panel = element as HTMLElement;
+    return {
+      clientWidth: panel.clientWidth,
+      hasVerticalOverflow: panel.scrollHeight > panel.clientHeight,
+      overflowX: getComputedStyle(panel).overflowX,
+      scrollWidth: panel.scrollWidth,
+      visibleOverflow: Array.from(panel.querySelectorAll<HTMLElement>("*"))
+        .filter((child) => !child.classList.contains("sr-only") && child.offsetParent !== null)
+        .map((child) => ({
+          className: child.className,
+          clientWidth: child.clientWidth,
+          section: child.closest(".drawing-property-section")?.querySelector("h3")?.textContent ?? null,
+          scrollWidth: child.scrollWidth,
+        }))
+        .filter((child) => child.scrollWidth > panel.clientWidth),
+    };
+  });
+  expect(layout.hasVerticalOverflow).toBe(true);
+  expect(layout.overflowX).toBe("hidden");
+  expect(layout.scrollWidth, JSON.stringify(layout.visibleOverflow)).toBeLessThanOrEqual(layout.clientWidth);
+});
+
 test("cancels interrupted opacity previews and commits lost pointer capture once", async ({ page }) => {
   const canvas = page.getByRole("tabpanel");
   const bounds = await canvas.boundingBox();

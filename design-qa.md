@@ -40,6 +40,7 @@ No unresolved P0, P1, or P2 visual findings remain.
 | P1 | At 320px, the legacy workspace minimum width allowed focus scrolling to carry the toolbar and properties panel outside the viewport. | Corrected the collapsed-shell grid override, fixed compact overlays to viewport edges, and prevented canvas focus scrolling. Added viewport-bound assertions. | `implementation-compact-dark-320x640.png` |
 | P2 | The bottom canvas controls could overlap the open compact properties sheet. | Hide the canvas controls while the compact sheet is open; the sheet retains internal vertical scrolling. | `implementation-compact-dark-320x640.png` |
 | P2 | The selection frame sat directly on top of the selected object's rough stroke. | Added four screen-space pixels of selection-frame padding so both the object and selection affordance remain legible. | `implementation-selected-light-1662x839.png` |
+| P2 | The shared southeast resize class could leave the ink resize control at its static origin, beneath the selection move surface. | Anchored the ink control explicitly to the element's southeast corner and added a browser assertion that the resize target wins hit testing. | `implementation-selected-light-1662x839.png` |
 
 ## Comparison Review
 
@@ -57,6 +58,8 @@ No unresolved P0, P1, or P2 visual findings remain.
 - Toggled light/dark theme and observed panel/token updates.
 - Opened compact properties through Adjustments at 320px.
 - Verified toolbar roving focus, 44x44 targets, horizontal scrolling, in-viewport bounds, and zero canvas horizontal focus scroll.
+- Verified single-shape corner controls, connector endpoint controls, and one enclosing frame for mixed primitive selections.
+- Verified the selected-ink resize target wins pointer hit testing while the remaining bounded interior stays draggable.
 - Captured both implementation and official Excalidraw at the same 1662x839 viewport and compared the selected-object state together.
 
 ## Remaining P3 Notes

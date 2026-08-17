@@ -24,6 +24,7 @@ type Tooltip = Readonly<{ label: string; owner: string; x: number; y: number }>;
 /** Small, keyboard discoverable drawing-mode selector kept outside world transforms. */
 export function CanvasToolPalette({ activeTool, isPropertiesPanelAvailable, isPropertiesPanelOpen, isToolLocked, onPropertiesPanelToggle, onToolLockChange, onToolSelect }: CanvasToolPaletteProps) {
   const buttonRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const activeToolRef = useRef(activeTool);
   const propertiesToggleRef = useRef<HTMLButtonElement | null>(null);
   const previousPropertiesOpen = useRef(isPropertiesPanelOpen);
   const tooltipId = useId();
@@ -33,6 +34,13 @@ export function CanvasToolPalette({ activeTool, isPropertiesPanelAvailable, isPr
   const previousCompact = useRef(isCompact);
   const previousPropertiesAvailable = useRef(isPropertiesPanelAvailable);
   const buttonCount = TOOLS.length + 1 + (isCompact && isPropertiesPanelAvailable ? 1 : 0);
+  activeToolRef.current = activeTool;
+
+  function restoreActiveToolFocus() {
+    const activeIndex = Math.max(0, TOOLS.findIndex(({ tool }) => tool === activeToolRef.current));
+    setTabStop(activeIndex);
+    buttonRefs.current[activeIndex]?.focus();
+  }
 
   useEffect(() => {
     const activeIndex = TOOLS.findIndex(({ tool }) => tool === activeTool);
@@ -42,6 +50,11 @@ export function CanvasToolPalette({ activeTool, isPropertiesPanelAvailable, isPr
   useEffect(() => {
     const media = window.matchMedia("(max-width: 899px)");
     const update = () => {
+      const focusTarget = document.activeElement;
+      const propertiesHadFocus = focusTarget instanceof Element && (
+        focusTarget === propertiesToggleRef.current || focusTarget.closest("#drawing-properties-panel") !== null
+      );
+      if (!media.matches && propertiesHadFocus) restoreActiveToolFocus();
       setIsCompact(media.matches);
       if (!media.matches) setTabStop((current) => Math.min(current, TOOLS.length));
     };
@@ -60,9 +73,7 @@ export function CanvasToolPalette({ activeTool, isPropertiesPanelAvailable, isPr
     previousCompact.current = isCompact;
     previousPropertiesAvailable.current = isPropertiesPanelAvailable;
     if ((!compactToggleUnmounted && !propertiesUiUnmounted) || document.activeElement !== document.body) return;
-    const activeIndex = Math.max(0, TOOLS.findIndex(({ tool }) => tool === activeTool));
-    setTabStop(activeIndex);
-    buttonRefs.current[activeIndex]?.focus();
+    restoreActiveToolFocus();
   }, [activeTool, isCompact, isPropertiesPanelAvailable]);
 
   useEffect(() => {

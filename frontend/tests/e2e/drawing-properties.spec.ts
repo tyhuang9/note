@@ -109,12 +109,12 @@ test("keeps the toolbar keyboard navigable and reveals compact adjustments witho
   await expect(toolbar).toBeInViewport({ ratio: 1 });
   await expect(properties).toBeInViewport({ ratio: 1 });
 
-  const highlighter = page.getByRole("button", { name: "Highlighter (H)" });
+  const pen = page.getByRole("button", { name: "Pen (P / 7)" });
   await adjustments.click();
   await adjustments.focus();
   await page.setViewportSize({ width: 900, height: 640 });
   await expect(adjustments).toHaveCount(0);
-  await expect(highlighter).toBeFocused();
+  await expect(pen).toBeFocused();
 
   await page.setViewportSize({ width: 320, height: 640 });
   await expect(adjustments).toBeVisible();

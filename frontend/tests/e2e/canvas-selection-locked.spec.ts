@@ -42,7 +42,9 @@ test("a mixed locked selection moves only unlocked elements and preserves the fu
   await expect(locked).toHaveClass(/is-multi-selected/);
   await expect(frame).toHaveCount(1);
 
-  await unlocked.locator(".text-block-header").click({ modifiers: ["Control"] });
+  const unlockedControl = unlocked.getByRole("button", { name: "Select and move text block" });
+  await unlockedControl.focus();
+  await unlockedControl.press("Control+Enter");
   await expect(locked.locator(".text-block-header")).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("button", { name: /Move .*selected elements/ })).toHaveCount(0);
   const lockedOnlyPosition = await readWorldPosition(locked);
@@ -58,7 +60,7 @@ test("locked images remain selectable but expose no move or resize mutation", as
   await page.goto("/");
 
   const image = page.locator('[data-block-id="locked-image"]');
-  const imageControl = image.getByRole("button", { name: "Select locked image Locked image" });
+  const imageControl = page.getByRole("button", { name: "Select locked image Locked image" });
   await imageControl.focus();
   await imageControl.press("Enter");
   await expect(imageControl).toHaveAttribute("aria-pressed", "true");

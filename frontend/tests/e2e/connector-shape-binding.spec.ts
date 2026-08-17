@@ -107,26 +107,20 @@ test("lines stay free while arrows detach and rebind through real endpoint contr
   }
 });
 
-test("keyboard endpoint chooser binds, rebinds, and detaches with accessible status", async ({ page }) => {
+test("desktop dark endpoint chooser traps focus, stays below the toolbar, and binds with Space", async ({ page }) => {
+  await page.setViewportSize({ width: 1069, height: 598 });
   const canvas = page.getByRole("tabpanel");
   const canvasBounds = await requiredBounds(canvas, "canvas");
-  await createRectangle(page, canvasBounds.x + 360, canvasBounds.y + 280);
-  await createRectangle(page, canvasBounds.x + 650, canvasBounds.y + 420);
-  const firstRectangle = page.getByRole("button", { name: "Select and move rectangle element" }).first();
-  const firstTargetId = await firstRectangle.getAttribute("data-canvas-element-id");
-  if (!firstTargetId) throw new Error("First rectangle target ID was unavailable.");
+  await createRectangleWithTool(page, canvasBounds.x + 340, canvasBounds.y + 180);
+  await createRectangleWithTool(page, canvasBounds.x + 500, canvasBounds.y + 300);
 
-  await page.getByRole("button", { name: "Arrow (A / 5)" }).click();
-  const firstRightAnchor = await requiredBounds(
-    page.locator(`[data-connector-target-id="${firstTargetId}"][data-connector-anchor="right"]`),
-    "first rectangle right anchor",
-  );
+  await selectTool(page, "arrow");
   await draw(
     page,
-    firstRightAnchor.x + 80,
-    firstRightAnchor.y + 100,
-    firstRightAnchor.x + 520,
-    firstRightAnchor.y + 100,
+    canvasBounds.x + 300,
+    canvasBounds.y + 100,
+    canvasBounds.x + 630,
+    canvasBounds.y + 140,
   );
   const arrow = page.getByRole("button", { name: "Select and move arrow connector" });
   await arrow.focus();
@@ -138,38 +132,107 @@ test("keyboard endpoint chooser binds, rebinds, and detaches with accessible sta
   await expect(description).toContainText("Currently free");
 
   await startHandle.focus();
-  await page.keyboard.press("Enter");
-  await expect(page.getByRole("dialog", { name: "Choose start endpoint target and anchor" })).toBeVisible();
-  const firstTarget = page.getByRole("button", { name: "rectangle shape 1" });
+  await page.keyboard.press("Space");
+  const dialog = page.getByRole("dialog", { name: "Choose start endpoint target" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toHaveAttribute("aria-modal", "true");
+  await expect(page.locator("#root")).toHaveAttribute("inert", "");
+  await expect(page.locator(".connector-endpoint-chooser-layer")).toHaveAttribute("data-theme", "dark");
+  const toolbarBounds = await requiredBounds(page.locator(".canvas-tool-palette"), "drawing toolbar");
+  const dialogBounds = await requiredBounds(dialog, "endpoint chooser");
+  expect(dialogBounds.y).toBeGreaterThanOrEqual(toolbarBounds.y + toolbarBounds.height);
+  expect(dialogBounds.x + dialogBounds.width / 2).toBeCloseTo(toolbarBounds.x + toolbarBounds.width / 2, 0);
+  const firstTarget = dialog.getByRole("button", { name: /Rectangle 1 \(center \d+, \d+\)/ });
+  await expect(firstTarget).toHaveAttribute("aria-pressed", "true");
+  await expect(firstTarget).toBeFocused();
+
+  const close = dialog.getByRole("button", { name: "Close endpoint chooser" });
+  await close.focus();
+  await page.keyboard.press("Shift+Tab");
+  await expect(dialog.getByRole("button", { name: "Left anchor" })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(close).toBeFocused();
+  expect(await close.evaluate((element) => getComputedStyle(element).outlineColor)).toBe("rgb(221, 214, 254)");
+  await page.keyboard.press("Tab");
+  await expect(firstTarget).toBeFocused();
+
   await firstTarget.focus();
-  await page.keyboard.press("Enter");
+  await page.keyboard.press("Space");
   const rightAnchor = page.getByRole("button", { name: "Right anchor" });
   await rightAnchor.focus();
-  await page.keyboard.press("Enter");
-  await expect(status).toHaveText("Bound start endpoint to rectangle shape at the right anchor.");
+  await page.keyboard.press("Space");
+  await expect(status).toHaveText(/Bound start endpoint to Rectangle 1 \(center \d+, \d+\) at the right anchor\./);
   await expect(startHandle).toBeFocused();
-  await expect(description).toContainText("Currently bound to rectangle shape at the right anchor");
+  await expect(description).toContainText("Currently bound to Rectangle 1 (center");
 
   await startHandle.focus();
   await page.keyboard.press("Enter");
-  const secondTarget = page.getByRole("button", { name: "rectangle shape 2" });
+  const secondTarget = page.getByRole("button", { name: /Rectangle 2 \(center \d+, \d+\)/ });
   await secondTarget.focus();
-  await page.keyboard.press("Enter");
+  await page.keyboard.press("Space");
   const topAnchor = page.getByRole("button", { name: "Top anchor" });
   await topAnchor.focus();
-  await page.keyboard.press("Enter");
-  await expect(status).toHaveText("Rebound start endpoint to rectangle shape at the top anchor.");
+  await page.keyboard.press("Space");
+  await expect(status).toHaveText(/Rebound start endpoint to Rectangle 2 \(center \d+, \d+\) at the top anchor\./);
   await expect(startHandle).toBeFocused();
-  await expect(description).toContainText("Currently bound to rectangle shape at the top anchor");
+  await expect(description).toContainText("Currently bound to Rectangle 2 (center");
 
   await startHandle.focus();
   await page.keyboard.press("Enter");
   const detach = page.getByRole("button", { name: "Detach start endpoint" });
   await detach.focus();
-  await page.keyboard.press("Enter");
+  await page.keyboard.press("Space");
   await expect(status).toHaveText("Detached start endpoint. It is now free.");
   await expect(startHandle).toBeFocused();
   await expect(description).toContainText("Currently free");
+});
+
+test("compact light endpoint chooser is an in-viewport sheet and Escape restores focus", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 598 });
+  await page.getByRole("button", { name: "Dark mode" }).click();
+  const canvas = page.getByRole("tabpanel");
+  const canvasBounds = await requiredBounds(canvas, "canvas");
+  await createRectangleWithTool(page, canvasBounds.x + 36, canvasBounds.y + 150);
+  await selectTool(page, "arrow");
+  await draw(page, canvasBounds.x + 32, canvasBounds.y + 280, canvasBounds.x + 220, canvasBounds.y + 280);
+  const arrow = page.getByRole("button", { name: "Select and move arrow connector" });
+  await arrow.focus();
+  await page.keyboard.press("Enter");
+  const startHandle = page.getByRole("button", { name: "Move connector start endpoint" });
+  await startHandle.focus();
+  await page.keyboard.press("Space");
+  const dialog = page.getByRole("dialog", { name: "Choose start endpoint target" });
+  await expect(dialog).toBeVisible();
+  await expect(page.locator(".connector-endpoint-chooser-layer")).toHaveAttribute("data-theme", "light");
+  const dialogBounds = await requiredBounds(dialog, "compact endpoint chooser");
+  expect(dialogBounds.x).toBeGreaterThanOrEqual(0);
+  expect(dialogBounds.y).toBeGreaterThanOrEqual(0);
+  expect(dialogBounds.x + dialogBounds.width).toBeLessThanOrEqual(320);
+  expect(dialogBounds.y + dialogBounds.height).toBeLessThanOrEqual(598);
+  expect(await dialog.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe("rgb(255, 255, 255)");
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator("#root")).not.toHaveAttribute("inert", "");
+  await expect(startHandle).toBeFocused();
+});
+
+test("free arrow with no shapes announces that binding targets are unavailable", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  const canvasBounds = await requiredBounds(canvas, "canvas");
+  await selectTool(page, "arrow");
+  await draw(page, canvasBounds.x + 280, canvasBounds.y + 260, canvasBounds.x + 720, canvasBounds.y + 260);
+  const arrow = page.getByRole("button", { name: "Select and move arrow connector" });
+  await arrow.focus();
+  await page.keyboard.press("Enter");
+  const startHandle = page.getByRole("button", { name: "Move connector start endpoint" });
+  await startHandle.focus();
+  await page.keyboard.press("Space");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.locator(".canvas-accessibility-status[role='status']")).toHaveText(
+    "No compatible shapes are available to bind the start endpoint.",
+  );
+  await expect(startHandle).toBeFocused();
 });
 
 async function createRectangle(page: Page, x: number, y: number): Promise<Locator> {
@@ -178,6 +241,20 @@ async function createRectangle(page: Page, x: number, y: number): Promise<Locato
   const rectangle = page.getByLabel("rectangle shape").last();
   await expect(rectangle).toBeVisible();
   return rectangle;
+}
+
+async function createRectangleWithTool(page: Page, x: number, y: number): Promise<Locator> {
+  await selectTool(page, "rectangle");
+  await page.mouse.click(x, y);
+  const rectangle = page.getByLabel("rectangle shape").last();
+  await expect(rectangle).toBeVisible();
+  return rectangle;
+}
+
+async function selectTool(page: Page, tool: string) {
+  const button = page.locator(`.canvas-tool-palette [data-tool="${tool}"]`);
+  await button.scrollIntoViewIfNeeded();
+  await button.click();
 }
 
 async function draw(page: Page, startX: number, startY: number, endX: number, endY: number) {

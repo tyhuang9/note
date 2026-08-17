@@ -1254,6 +1254,9 @@ function App() {
   const previousCanvasAuthoringAvailableRef = useRef(false);
   const isCanvasAuthoringAvailableRef = useRef(false);
   const isWorkbenchOverlayOpenRef = useRef(false);
+  const connectorEndpointChooserRef = useRef<ConnectorEndpointChooserState | null>(null);
+  const connectorEndpointOriginFocusRef = useRef<HTMLButtonElement | null>(null);
+  const connectorEndpointFocusReturnRafRef = useRef<number | null>(null);
 
   dataRef.current = data;
   activeToolRef.current = activeTool;
@@ -1269,6 +1272,7 @@ function App() {
   selectedSidebarPageIdsRef.current = selectedSidebarPageIds;
   textFormatStateRef.current = textFormatState;
   zoomLevelRef.current = zoomLevel;
+  connectorEndpointChooserRef.current = connectorEndpointChooser;
 
   const isExplorerOverlayOpen =
     isNarrowWorkbench && activeNarrowOverlay === "explorer";
@@ -1848,6 +1852,9 @@ function App() {
     return () => {
       if (panRafId.current !== null) {
         window.cancelAnimationFrame(panRafId.current);
+      }
+      if (connectorEndpointFocusReturnRafRef.current !== null) {
+        window.cancelAnimationFrame(connectorEndpointFocusReturnRafRef.current);
       }
 
       cancelCanvasSelectionSession();
@@ -3274,6 +3281,9 @@ function App() {
 
   useEffect(() => {
     function handleKeyboard(event: KeyboardEvent) {
+      if (event.target instanceof Element && event.target.closest(".connector-endpoint-chooser")) {
+        return;
+      }
       if (activeWorkbenchOverlay) {
         return;
       }
@@ -6232,8 +6242,25 @@ function App() {
     return connector?.style.endArrowhead === "arrow" ? connector : null;
   }
 
-  function getShapeLabel(shape: ShapeElement): string {
-    return `${shape.shape} shape`;
+  function getConnectorBindingTargets(pageId: string): readonly Readonly<{ element: ShapeElement; label: string }>[] {
+    const shapeOrdinals = new Map<ShapeElement["shape"], number>();
+    return dataRef.current.elements
+      .filter((element): element is ShapeElement => element.pageId === pageId && element.type === "shape")
+      .map((element) => {
+        const ordinal = (shapeOrdinals.get(element.shape) ?? 0) + 1;
+        shapeOrdinals.set(element.shape, ordinal);
+        const centerX = Math.round(element.x + element.width / 2);
+        const centerY = Math.round(element.y + element.height / 2);
+        return {
+          element,
+          label: `${element.shape[0].toUpperCase()}${element.shape.slice(1)} ${ordinal} (center ${centerX}, ${centerY})`,
+        };
+      });
+  }
+
+  function getShapeTargetLabel(shape: ShapeElement): string {
+    return getConnectorBindingTargets(shape.pageId).find(({ element }) => element.id === shape.id)?.label
+      ?? `${shape.shape[0].toUpperCase()}${shape.shape.slice(1)} (center ${Math.round(shape.x + shape.width / 2)}, ${Math.round(shape.y + shape.height / 2)})`;
   }
 
   function getAnchorLabel(anchor: { t: number }): string {
@@ -6257,28 +6284,48 @@ function App() {
     const target = dataRef.current.elements.find((element): element is ShapeElement =>
       element.id === current.targetElementId && element.pageId === connector.pageId && element.type === "shape",
     );
-    const targetLabel = target ? getShapeLabel(target) : "an unavailable target";
+    const targetLabel = target ? getShapeTargetLabel(target) : "an unavailable target";
     return `Currently bound to ${targetLabel} at the ${getAnchorLabel(current.anchor)}. Press Enter to rebind or detach. Arrow keys detach and move the endpoint.`;
   }
 
-  function openConnectorEndpointChooser(endpoint: "start" | "end") {
+  function openConnectorEndpointChooser(endpoint: "start" | "end", origin: HTMLButtonElement) {
     const connector = getSelectedArrowConnector();
     if (!connector || connector.locked) return;
+    const targets = getConnectorBindingTargets(connector.pageId);
+    if (targets.length === 0) {
+      setConnectorBindingAnnouncement(`No compatible shapes are available to bind the ${endpoint} endpoint.`);
+      return;
+    }
     const current = connector[endpoint];
+    const currentTargetId = current.kind === "element" && targets.some(({ element }) => element.id === current.targetElementId)
+      ? current.targetElementId
+      : targets[0].element.id;
+    connectorEndpointOriginFocusRef.current = origin;
+    if (connectorEndpointFocusReturnRafRef.current !== null) {
+      window.cancelAnimationFrame(connectorEndpointFocusReturnRafRef.current);
+      connectorEndpointFocusReturnRafRef.current = null;
+    }
     setConnectorEndpointChooser({
       endpoint,
-      targetElementId: current.kind === "element" ? current.targetElementId : null,
+      targetElementId: currentTargetId,
     });
   }
 
   function closeConnectorEndpointChooser() {
     const endpoint = connectorEndpointChooser?.endpoint;
+    const origin = connectorEndpointOriginFocusRef.current;
+    connectorEndpointOriginFocusRef.current = null;
     setConnectorEndpointChooser(null);
     if (!endpoint) return;
-    window.requestAnimationFrame(() => {
-      document
-        .querySelector<HTMLButtonElement>(`[data-connector-endpoint-handle="${endpoint}"]`)
-        ?.focus({ preventScroll: true });
+    if (connectorEndpointFocusReturnRafRef.current !== null) {
+      window.cancelAnimationFrame(connectorEndpointFocusReturnRafRef.current);
+    }
+    connectorEndpointFocusReturnRafRef.current = window.requestAnimationFrame(() => {
+      connectorEndpointFocusReturnRafRef.current = null;
+      if (connectorEndpointChooserRef.current !== null) return;
+      if (document.activeElement !== null && document.activeElement !== document.body) return;
+      const fallback = document.querySelector<HTMLButtonElement>(`[data-connector-endpoint-handle="${endpoint}"]`);
+      (origin?.isConnected ? origin : fallback)?.focus({ preventScroll: true });
     });
   }
 
@@ -6309,7 +6356,7 @@ function App() {
         : { ...element, end: next, updatedAt: Date.now() };
     }));
     setConnectorBindingAnnouncement(
-      `${previous.kind === "element" ? "Rebound" : "Bound"} ${chooser.endpoint} endpoint to ${getShapeLabel(target)} at the ${getAnchorLabel(anchor)}.`,
+      `${previous.kind === "element" ? "Rebound" : "Bound"} ${chooser.endpoint} endpoint to ${getShapeTargetLabel(target)} at the ${getAnchorLabel(anchor)}.`,
     );
     closeConnectorEndpointChooser();
   }
@@ -7278,7 +7325,7 @@ function App() {
                       if (event.key === "Enter" || event.key === " ") {
                         event.preventDefault();
                         event.stopPropagation();
-                        openConnectorEndpointChooser(endpoint);
+                        openConnectorEndpointChooser(endpoint, event.currentTarget);
                         return;
                       }
                       moveConnectorEndpointByKeyboard(endpoint)(event);
@@ -7318,12 +7365,13 @@ function App() {
               element.id === selectedBlockIds[0] && element.type === "connector" && element.style.endArrowhead === "arrow",
             );
             if (!connector) return null;
-            const shapes = visibleCanvasElements
-              .filter((element): element is ShapeElement => element.type === "shape" && element.pageId === connector.pageId)
-              .map((element, index) => ({ element, label: `${getShapeLabel(element)} ${index + 1}` }));
+            const shapes = getConnectorBindingTargets(connector.pageId)
+              .map(({ element, label }) => ({ id: element.id, label }));
             return (
               <ConnectorEndpointChooser
                 endpoint={connectorEndpointChooser.endpoint}
+                isBound={connector[connectorEndpointChooser.endpoint].kind === "element"}
+                isDarkMode={isDarkMode}
                 onBind={bindSelectedConnectorEndpoint}
                 onClose={closeConnectorEndpointChooser}
                 onDetach={detachSelectedConnectorEndpoint}

@@ -198,15 +198,25 @@ test("keeps the properties scrollbar compact and themed in light and dark modes"
 
   const readScrollbarStyles = () => properties.evaluate((element) => {
     const style = getComputedStyle(element);
-    const thumb = getComputedStyle(element, "::-webkit-scrollbar-thumb");
-    const track = getComputedStyle(element, "::-webkit-scrollbar-track");
+    const authoredWebkitRule = Array.from(document.styleSheets)
+      .flatMap((sheet) => {
+        try {
+          return Array.from(sheet.cssRules);
+        } catch {
+          return [];
+        }
+      })
+      .map((rule) => rule as CSSStyleRule)
+      .find((rule) => rule.selectorText === ".drawing-properties-panel::-webkit-scrollbar");
+    const fallbackThumb = getComputedStyle(element, "::-webkit-scrollbar-thumb");
+    const fallbackTrack = getComputedStyle(element, "::-webkit-scrollbar-track");
     return {
+      authoredWebkitWidth: authoredWebkitRule?.style.width ?? "",
       scrollbarColor: style.scrollbarColor,
       scrollbarWidth: style.scrollbarWidth,
-      thumbBackground: thumb.backgroundColor,
-      thumbClip: thumb.backgroundClip,
-      thumbWidth: getComputedStyle(element, "::-webkit-scrollbar").width,
-      trackBackground: track.backgroundColor,
+      fallbackThumbBackground: fallbackThumb.backgroundColor,
+      fallbackThumbClip: fallbackThumb.backgroundClip,
+      fallbackTrackBackground: fallbackTrack.backgroundColor,
     };
   });
 
@@ -216,18 +226,101 @@ test("keeps the properties scrollbar compact and themed in light and dark modes"
   }
   const dark = await readScrollbarStyles();
   expect(dark.scrollbarWidth).toBe("thin");
-  expect(dark.thumbWidth).toBe("8px");
-  expect(dark.thumbClip).toBe("padding-box");
-  expect(dark.trackBackground).toBe("rgba(0, 0, 0, 0)");
   expect(dark.scrollbarColor).toContain("rgba(209, 209, 218, 0.42)");
+  // Standardized scrollbar-width/color are the cross-browser contract.
+  // The authored WebKit rule is only fallback evidence; it does not claim
+  // that every browser renders an exact physical scrollbar width.
+  expect(dark.authoredWebkitWidth).toBe("8px");
+  expect(dark.fallbackThumbClip).toBe("padding-box");
+  expect(dark.fallbackTrackBackground).toBe("rgba(0, 0, 0, 0)");
 
   await themeToggle.click();
   const light = await readScrollbarStyles();
-  expect(light.thumbWidth).toBe("8px");
-  expect(light.thumbClip).toBe("padding-box");
-  expect(light.trackBackground).toBe("rgba(0, 0, 0, 0)");
   expect(light.scrollbarColor).toContain("rgba(96, 98, 111, 0.46)");
-  expect(light.thumbBackground).not.toBe(dark.thumbBackground);
+  expect(light.authoredWebkitWidth).toBe("8px");
+  expect(light.fallbackThumbClip).toBe("padding-box");
+  expect(light.fallbackTrackBackground).toBe("rgba(0, 0, 0, 0)");
+  expect(light.fallbackThumbBackground).not.toBe(dark.fallbackThumbBackground);
+});
+
+test("keeps compact properties reachable at narrow width and effective 200% zoom", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 640 });
+  await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
+  const canvas = page.getByRole("tabpanel");
+  const canvasBounds = await canvas.boundingBox();
+  if (!canvasBounds) throw new Error("Canvas bounds were not available.");
+  await page.mouse.click(canvasBounds.x + 160, canvasBounds.y + 260);
+  const properties = page.getByRole("complementary", { name: "Drawing properties" });
+  const adjustments = page.getByRole("button", { name: "Drawing properties" });
+  await expect(adjustments).toBeVisible();
+  await adjustments.click();
+  await expect(properties).toBeVisible();
+
+  const compactLayout = await page.evaluate(() => {
+    const panel = document.querySelector<HTMLElement>(".drawing-properties-panel");
+    const rect = panel?.getBoundingClientRect();
+    return {
+      clientWidth: document.documentElement.clientWidth,
+      documentScrollWidth: document.documentElement.scrollWidth,
+      panelRight: rect?.right ?? 0,
+      panelWidth: rect?.width ?? 0,
+    };
+  });
+  expect(compactLayout.documentScrollWidth).toBeLessThanOrEqual(compactLayout.clientWidth);
+  expect(compactLayout.panelRight).toBeLessThanOrEqual(compactLayout.clientWidth);
+  expect(compactLayout.panelWidth).toBe(252);
+
+  const layers = properties.getByRole("button", { name: "Bring to front" });
+  const beforeScrollTop = await properties.evaluate((element) => element.scrollTop);
+  await layers.focus();
+  await expect.poll(() => properties.evaluate((element) => element.scrollTop)).toBeGreaterThan(beforeScrollTop);
+  await expect(layers).toBeFocused();
+  const layerBounds = await layers.boundingBox();
+  const propertiesBounds = await properties.boundingBox();
+  expect(layerBounds).not.toBeNull();
+  expect(propertiesBounds).not.toBeNull();
+  expect(layerBounds!.y).toBeGreaterThanOrEqual(propertiesBounds!.y);
+  expect(layerBounds!.y + layerBounds!.height).toBeLessThanOrEqual(propertiesBounds!.y + propertiesBounds!.height);
+
+  const browser = page.context().browser();
+  if (!browser) throw new Error("Browser context was unavailable for the 200% display-scale check.");
+  const zoomContext = await browser.newContext({
+    deviceScaleFactor: 2,
+    viewport: { width: 320, height: 640 },
+  });
+  const zoomedPage = await zoomContext.newPage();
+  try {
+    await zoomedPage.goto("http://127.0.0.1:4198/");
+    await zoomedPage.getByRole("button", { name: /create new note/i }).click();
+    await zoomedPage.getByRole("button", { name: "Rectangle (R / 2)" }).click();
+    const zoomedCanvas = zoomedPage.getByRole("tabpanel");
+    const zoomedCanvasBounds = await zoomedCanvas.boundingBox();
+    if (!zoomedCanvasBounds) throw new Error("Zoomed canvas bounds were not available.");
+    await zoomedPage.mouse.click(zoomedCanvasBounds.x + 160, zoomedCanvasBounds.y + 260);
+    const zoomedProperties = zoomedPage.getByRole("complementary", { name: "Drawing properties" });
+    await zoomedPage.getByRole("button", { name: "Drawing properties" }).click();
+    await expect(zoomedProperties).toBeVisible();
+    const zoomLayout = await zoomedPage.evaluate(() => {
+      const panel = document.querySelector<HTMLElement>(".drawing-properties-panel");
+      const rect = panel?.getBoundingClientRect();
+      return {
+        clientWidth: document.documentElement.clientWidth,
+        devicePixelRatio: window.devicePixelRatio,
+        documentScrollWidth: document.documentElement.scrollWidth,
+        panelRight: rect?.right ?? 0,
+      };
+    });
+    expect(zoomLayout.devicePixelRatio).toBe(2);
+    expect(zoomLayout.documentScrollWidth).toBeLessThanOrEqual(zoomLayout.clientWidth);
+    expect(zoomLayout.panelRight).toBeLessThanOrEqual(zoomLayout.clientWidth);
+    const zoomedLayers = zoomedProperties.getByRole("button", { name: "Bring to front" });
+    const zoomedBeforeScrollTop = await zoomedProperties.evaluate((element) => element.scrollTop);
+    await zoomedLayers.focus();
+    await expect.poll(() => zoomedProperties.evaluate((element) => element.scrollTop)).toBeGreaterThan(zoomedBeforeScrollTop);
+    await expect(zoomedLayers).toBeFocused();
+  } finally {
+    await zoomContext.close();
+  }
 });
 
 test("cancels interrupted opacity previews and commits lost pointer capture once", async ({ page }) => {

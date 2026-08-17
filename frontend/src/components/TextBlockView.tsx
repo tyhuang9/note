@@ -730,6 +730,10 @@ export const TextBlockView = memo(function TextBlockView({
     event.stopPropagation();
     leaveEditorForBlockSelection();
 
+    if (block.locked) {
+      return;
+    }
+
     const didStartDrag = onVisualDragStart(
       block.id,
       event.clientX,
@@ -798,6 +802,10 @@ export const TextBlockView = memo(function TextBlockView({
   ) {
     event.stopPropagation();
     event.preventDefault();
+
+    if (block.locked) {
+      return;
+    }
 
     resizeState.current = {
       direction,
@@ -1049,7 +1057,7 @@ export const TextBlockView = memo(function TextBlockView({
       }}
     >
       <div
-        aria-label={`${block.locked ? "Select locked" : "Select and move"} text block`}
+        aria-label={block.locked ? "Select locked text block" : "Select and move text block"}
         aria-pressed={isSelected}
         className="text-block-header"
         onClick={(event) => {
@@ -1160,9 +1168,9 @@ export const TextBlockView = memo(function TextBlockView({
             : { children: renderRichBlockContent(block) })}
         />
       ) : null}
-      {(["e"] as ResizeDirection[]).map((direction) => (
+      {isSelected && !block.locked ? (["e"] as ResizeDirection[]).map((direction) => (
         <div
-          aria-label={`Resize text block ${direction}`}
+          aria-label="Resize text block width"
           aria-orientation="horizontal"
           aria-valuemin={MIN_BLOCK_WIDTH}
           aria-valuenow={Math.round(block.width)}
@@ -1174,7 +1182,7 @@ export const TextBlockView = memo(function TextBlockView({
           role="slider"
           tabIndex={0}
         />
-      ))}
+      )) : null}
       <>
         <div
           aria-hidden="true"

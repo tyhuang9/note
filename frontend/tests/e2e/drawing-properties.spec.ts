@@ -108,6 +108,23 @@ test("keeps the toolbar keyboard navigable and reveals compact adjustments witho
   expect(await toolbar.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
   await expect(toolbar).toBeInViewport({ ratio: 1 });
   await expect(properties).toBeInViewport({ ratio: 1 });
+
+  const highlighter = page.getByRole("button", { name: "Highlighter (H)" });
+  await adjustments.click();
+  await adjustments.focus();
+  await page.setViewportSize({ width: 900, height: 640 });
+  await expect(adjustments).toHaveCount(0);
+  await expect(highlighter).toBeFocused();
+
+  await page.setViewportSize({ width: 320, height: 640 });
+  await expect(adjustments).toBeVisible();
+  await adjustments.click();
+  await properties.getByRole("slider", { name: "Opacity" }).focus();
+  const select = page.getByRole("button", { name: "Select (V / 1)" });
+  await select.dispatchEvent("click");
+  await expect(adjustments).toHaveCount(0);
+  await expect(properties).toHaveCount(0);
+  await expect(select).toBeFocused();
 });
 
 test("uses context-specific width presets and five curated stroke swatches", async ({ page }) => {

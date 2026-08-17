@@ -1366,6 +1366,10 @@ function App() {
     () => selectedBlockIds.some((id) => data.elements.some((element) => element.id === id && element.locked)),
     [data.elements, selectedBlockIds],
   );
+  const selectionHasUnlockedElements = useMemo(
+    () => selectedBlockIds.some((id) => data.elements.some((element) => element.id === id && !element.locked)),
+    [data.elements, selectedBlockIds],
+  );
   const openPages = useMemo<OpenPageTab[]>(() => {
     const pagesById = new Map(
       data.pages
@@ -5898,6 +5902,10 @@ function App() {
     } else if (session) {
       cancelVisualDrag(updateMode);
     }
+    if (updateMode) {
+      setConnectorEndpointPreview(null);
+      setSelectionFramePreview(null);
+    }
     if (updateMode && session) setActiveMode(selectedBlockIdsRef.current.length > 0 ? "selected" : "canvas");
   }
 
@@ -7038,6 +7046,7 @@ function App() {
               return {
                 connectorEndpointHandles,
                 height: bounds.height * zoomLevel + framePadding * 2,
+                moveLabel: selectionHasLockedElements ? "Move unlocked selected elements" : "Move selected elements",
                 onDoubleClick: () => {
                   const selected = visibleCanvasElements.find((block) => block.id === selectedBlockIds[0]);
                   if (selectedBlockIds.length === 1 && selected && isTextElement(selected)) editBlock(selected.id);
@@ -7052,7 +7061,7 @@ function App() {
                 onResizePointerDown: (corner: SelectionCorner) => (event: ReactPointerEvent<HTMLButtonElement>) => startSelectionFrameInteraction(event, corner),
                 preserveNativeSoutheastHandle: selected?.type === "ink",
                 resizeCorners,
-                showMoveSurface: !usesNativeSingleElementInteraction,
+                showMoveSurface: selectionHasUnlockedElements && !usesNativeSingleElementInteraction,
                 width: bounds.width * zoomLevel + framePadding * 2,
                 x: panOffset.x + bounds.x * zoomLevel - framePadding,
                 y: panOffset.y + bounds.y * zoomLevel - framePadding,

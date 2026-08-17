@@ -14,6 +14,7 @@ type CanvasInteractionOverlayProps = {
       y: number;
     }[];
     height: number;
+    moveLabel: string;
     onDoubleClick?: MouseEventHandler<HTMLButtonElement>;
     onMoveKeyDown: KeyboardEventHandler<HTMLButtonElement>;
     onPointerCancel: PointerEventHandler<HTMLButtonElement>;
@@ -50,7 +51,7 @@ export function CanvasInteractionOverlay({
         >
           {selectionFrame.showMoveSurface ? (
             <button
-              aria-label="Move selected elements"
+              aria-label={selectionFrame.moveLabel}
               className={`selection-frame-move-surface ${selectionFrame.preserveNativeSoutheastHandle ? "preserve-native-se-handle" : ""}`}
               onDoubleClick={selectionFrame.onDoubleClick}
               onKeyDown={selectionFrame.onMoveKeyDown}

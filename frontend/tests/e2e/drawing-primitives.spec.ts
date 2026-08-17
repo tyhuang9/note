@@ -222,7 +222,7 @@ test("moves and resizes a selected text block with semantic keyboard controls", 
   await moveControl.press("Shift+ArrowDown");
   await expect.poll(async () => (await textBlock.boundingBox())?.y ?? 0).toBeCloseTo((beforeMove?.y ?? 0) + 10, 0);
 
-  const widthControl = textBlock.getByRole("slider", { name: "Resize text block e" });
+  const widthControl = textBlock.getByRole("slider", { name: "Resize text block width" });
   const beforeWidth = await textBlock.boundingBox();
   await widthControl.focus();
   await widthControl.press("Shift+ArrowRight");

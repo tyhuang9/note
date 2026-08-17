@@ -17,7 +17,9 @@ test("a mixed locked selection moves only unlocked elements and preserves the fu
   await expect(locked).toHaveClass(/is-multi-selected/);
   const frame = page.locator(".selection-frame");
   await expect(frame).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Move unlocked selected elements" })).toBeVisible();
   await expect(page.getByRole("button", { name: /Resize selected elements/ })).toHaveCount(0);
+  await expect(locked.getByRole("slider", { name: "Resize text block width" })).toHaveCount(0);
 
   const beforeUnlocked = await readWorldPosition(unlocked);
   const beforeLocked = await readWorldPosition(locked);
@@ -39,6 +41,38 @@ test("a mixed locked selection moves only unlocked elements and preserves the fu
   await expect(unlocked).toHaveClass(/is-multi-selected/);
   await expect(locked).toHaveClass(/is-multi-selected/);
   await expect(frame).toHaveCount(1);
+
+  await unlocked.locator(".text-block-header").click({ modifiers: ["Control"] });
+  await expect(locked.locator(".text-block-header")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: /Move .*selected elements/ })).toHaveCount(0);
+  const lockedOnlyPosition = await readWorldPosition(locked);
+  await locked.getByRole("button", { name: "Select locked text block" }).press("Shift+ArrowRight");
+  await expect.poll(() => readWorldPosition(locked)).toEqual(lockedOnlyPosition);
+  await locked.getByRole("button", { name: "Select locked text block" }).press("Delete");
+  await expect(locked).toHaveCount(1);
+});
+
+test("locked images remain selectable but expose no move or resize mutation", async ({ page }) => {
+  await installLockedSelectionWorkspace(page);
+  await page.setViewportSize({ width: 1662, height: 900 });
+  await page.goto("/");
+
+  const image = page.locator('[data-block-id="locked-image"]');
+  const imageControl = image.getByRole("button", { name: "Select locked image Locked image" });
+  await imageControl.focus();
+  await imageControl.press("Enter");
+  await expect(imageControl).toHaveAttribute("aria-pressed", "true");
+  await expect(image.getByRole("slider", { name: "Resize image" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Move .*selected elements/ })).toHaveCount(0);
+  const before = await readWorldPosition(image);
+  await imageControl.press("Shift+ArrowDown");
+  await expect.poll(() => readWorldPosition(image)).toEqual(before);
+  const bounds = await requiredBounds(image, "locked image");
+  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + bounds.width / 2 + 60, bounds.y + bounds.height / 2 + 40, { steps: 4 });
+  await page.mouse.up();
+  await expect.poll(() => readWorldPosition(image)).toEqual(before);
 });
 
 async function installLockedSelectionWorkspace(page: Page) {
@@ -61,6 +95,26 @@ async function installLockedSelectionWorkspace(page: Page) {
           x: 180,
           y: 220,
           zIndex: 1,
+        },
+        {
+          assetId: "locked-image-asset",
+          createdAt: 1,
+          fileName: "Locked image",
+          fit: "contain",
+          height: 120,
+          id: "locked-image",
+          locked: true,
+          naturalHeight: 120,
+          naturalWidth: 180,
+          opacity: 1,
+          pageId: "page",
+          rotation: 0,
+          type: "image",
+          updatedAt: 1,
+          width: 180,
+          x: 860,
+          y: 260,
+          zIndex: 3,
         },
         {
           content: "Locked",
@@ -96,6 +150,15 @@ async function installLockedSelectionWorkspace(page: Page) {
           return { databasePath: "locked-selection.db", importedLegacyData: false, schemaVersion: 1, warnings: [] };
         }
         if (command === "load_workspace_data") return workspace;
+        if (command === "load_asset") return {
+          byteSize: 0,
+          dataBase64: "",
+          fileName: "Locked image",
+          id: "locked-image-asset",
+          mediaType: "image/png",
+          naturalHeight: 120,
+          naturalWidth: 180,
+        };
         if (command === "reconcile_workspace_structure") return { pages: workspace.pages };
         if (command === "apply_scene_changes") {
           const batch = args.batch as { deletedElementIds: string[]; pageId: string; upserts: ElementRecord[] };

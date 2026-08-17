@@ -153,6 +153,35 @@ test("double-clicking a single selected text block enters editing", async ({ pag
   await expect(block.locator(".text-block-editor-content")).toBeVisible();
 });
 
+test("connector endpoint previews revert on Escape and window blur", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  const bounds = await requiredBounds(canvas, "canvas");
+  await page.getByRole("button", { name: "Line (L / 6)" }).click();
+  await page.mouse.move(bounds.x + 360, bounds.y + 300);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + 560, bounds.y + 380, { steps: 4 });
+  await page.mouse.up();
+
+  const connector = page.getByRole("button", { name: "Select and move line connector" });
+  const frame = page.locator(".selection-frame");
+  const originalConnectorBounds = await roundedBounds(connector);
+  const originalFrameBounds = await roundedBounds(frame);
+
+  for (const cancel of ["escape", "blur"] as const) {
+    const endpoint = page.getByRole("button", { name: "Move connector end endpoint" });
+    const endpointBounds = await requiredBounds(endpoint, "connector endpoint");
+    await page.mouse.move(endpointBounds.x + endpointBounds.width / 2, endpointBounds.y + endpointBounds.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(endpointBounds.x + endpointBounds.width / 2 + 80, endpointBounds.y + endpointBounds.height / 2 + 55, { steps: 5 });
+    await expect.poll(() => roundedBounds(connector)).not.toEqual(originalConnectorBounds);
+    if (cancel === "escape") await page.keyboard.press("Escape");
+    else await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+    await page.mouse.up();
+    await expect.poll(() => roundedBounds(connector)).toEqual(originalConnectorBounds);
+    await expect.poll(() => roundedBounds(frame)).toEqual(originalFrameBounds);
+  }
+});
+
 test("a selected loop-shaped ink stroke moves from its empty bounded center only after painted-path selection", async ({ page }) => {
   const canvas = page.getByRole("tabpanel");
   const bounds = await requiredBounds(canvas, "canvas");
@@ -304,6 +333,16 @@ async function requiredBounds(locator: Locator, label: string) {
   const bounds = await locator.boundingBox();
   if (!bounds) throw new Error(`${label} bounds were unavailable.`);
   return bounds;
+}
+
+async function roundedBounds(locator: Locator) {
+  const bounds = await requiredBounds(locator, "element");
+  return {
+    height: Math.round(bounds.height),
+    width: Math.round(bounds.width),
+    x: Math.round(bounds.x),
+    y: Math.round(bounds.y),
+  };
 }
 
 async function readWorldPosition(locator: Locator) {

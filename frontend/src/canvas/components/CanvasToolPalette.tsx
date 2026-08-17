@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { ArrowRight, Circle, Diamond, Eraser, Hand, Highlighter, Image, LockKeyhole, MousePointer2, PenLine, RectangleHorizontal, Slash, SlidersHorizontal, Type } from "lucide-react";
 import type { CanvasTool } from "../interaction/types";
@@ -30,6 +30,8 @@ export function CanvasToolPalette({ activeTool, isPropertiesPanelAvailable, isPr
   const [tooltip, setTooltip] = useState<Tooltip | null>(null);
   const [tabStop, setTabStop] = useState(() => Math.max(0, TOOLS.findIndex(({ tool }) => tool === activeTool)));
   const [isCompact, setIsCompact] = useState(() => typeof window !== "undefined" && window.matchMedia("(max-width: 899px)").matches);
+  const previousCompact = useRef(isCompact);
+  const previousPropertiesAvailable = useRef(isPropertiesPanelAvailable);
   const buttonCount = TOOLS.length + 1 + (isCompact && isPropertiesPanelAvailable ? 1 : 0);
 
   useEffect(() => {
@@ -51,6 +53,17 @@ export function CanvasToolPalette({ activeTool, isPropertiesPanelAvailable, isPr
   useEffect(() => {
     if (!isPropertiesPanelAvailable) setTabStop((current) => Math.min(current, TOOLS.length));
   }, [isPropertiesPanelAvailable]);
+
+  useLayoutEffect(() => {
+    const compactToggleUnmounted = previousCompact.current && !isCompact && previousPropertiesAvailable.current;
+    const propertiesUiUnmounted = previousPropertiesAvailable.current && !isPropertiesPanelAvailable;
+    previousCompact.current = isCompact;
+    previousPropertiesAvailable.current = isPropertiesPanelAvailable;
+    if ((!compactToggleUnmounted && !propertiesUiUnmounted) || document.activeElement !== document.body) return;
+    const activeIndex = Math.max(0, TOOLS.findIndex(({ tool }) => tool === activeTool));
+    setTabStop(activeIndex);
+    buttonRefs.current[activeIndex]?.focus();
+  }, [activeTool, isCompact, isPropertiesPanelAvailable]);
 
   useEffect(() => {
     const wasOpen = previousPropertiesOpen.current;

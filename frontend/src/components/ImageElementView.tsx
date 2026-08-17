@@ -67,6 +67,7 @@ export const ImageElementView = memo(function ImageElementView({
   function startResize(event: ReactPointerEvent<HTMLDivElement>) {
     event.preventDefault();
     event.stopPropagation();
+    if (element.locked) return;
     resizeRef.current = {
       pointerId: event.pointerId,
       handle: event.currentTarget,
@@ -122,6 +123,7 @@ export const ImageElementView = memo(function ImageElementView({
 
     event.preventDefault();
     event.stopPropagation();
+    if (element.locked) return;
     const step = Math.max(1, Math.round(element.width * (event.shiftKey ? 0.1 : 0.05)));
     const width = Math.max(
       MIN_IMAGE_WIDTH,
@@ -154,6 +156,7 @@ export const ImageElementView = memo(function ImageElementView({
     if (!axis) return;
 
     event.preventDefault();
+    if (element.locked) return;
     const delta = event.shiftKey ? 10 : 1;
     const direction = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
     onUpdate(element.id, { [axis]: element[axis] + direction * delta });
@@ -164,7 +167,7 @@ export const ImageElementView = memo(function ImageElementView({
   return (
     <div
       className={`text-block ${isSelected ? "is-selected is-canvas-mode" : ""} ${isSelected && isMultiSelected ? "is-multi-selected" : ""} ${isDragSourceHidden ? "is-drag-source-hidden" : ""}`}
-      aria-label={`Select and move image${element.fileName ? ` ${element.fileName}` : ""}`}
+      aria-label={`${element.locked ? "Select locked image" : "Select and move image"}${element.fileName ? ` ${element.fileName}` : ""}`}
       aria-pressed={isSelected}
       data-block-id={element.id}
       data-canvas-element-id={element.id}
@@ -191,6 +194,7 @@ export const ImageElementView = memo(function ImageElementView({
         event.stopPropagation();
         onSelect(element.id, event.ctrlKey || event.metaKey);
         event.currentTarget.focus();
+        if (element.locked) return;
         pointerIdRef.current = event.pointerId;
         event.currentTarget.setPointerCapture(event.pointerId);
         if (onVisualDragStart(element.id, event.clientX, event.clientY)) {
@@ -226,7 +230,7 @@ export const ImageElementView = memo(function ImageElementView({
           style={{ opacity: element.opacity }}
         />
       )}
-      {isSelected ? (
+      {isSelected && !element.locked ? (
         <div
           aria-label="Resize image"
           aria-valuemax={MAX_IMAGE_WIDTH}

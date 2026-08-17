@@ -6419,15 +6419,16 @@ function App() {
       setBlocksWithHistory((currentElements) => {
         if (geometry.kind === "connector") {
           const canBind = tool === "arrow";
+          const pageElements = currentElements.filter((element) => element.pageId === pageId);
           const connector: ConnectorElement = {
             createdAt: timestamp,
-            end: snapConnectorEndpoint(geometry.end, currentElements, zoomLevelRef.current, canBind),
+            end: snapConnectorEndpoint(geometry.end, pageElements, zoomLevelRef.current, canBind),
             id: elementId,
             locked: false,
             opacity: preference.opacity,
             pageId,
             routing: "straight",
-            start: snapConnectorEndpoint(geometry.start, currentElements, zoomLevelRef.current, canBind),
+            start: snapConnectorEndpoint(geometry.start, pageElements, zoomLevelRef.current, canBind),
             style: {
               ...style,
               endArrowhead: tool === "arrow" ? "arrow" : "none",

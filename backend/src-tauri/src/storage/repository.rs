@@ -205,12 +205,13 @@ fn validate_primitive_style(value: &Value, context: &str) -> Result<(), String> 
     let style = style
         .as_object()
         .ok_or_else(|| format!("{context}.style must be an object"))?;
-    for key in ["fillColor", "strokeColor"] {
-        if let Some(color) = style.get(key) {
-            if !color.is_null() {
-                validate_ink_color(color)?;
-            }
+    if let Some(fill_color) = style.get("fillColor") {
+        if !fill_color.is_null() {
+            validate_ink_color(fill_color)?;
         }
+    }
+    if let Some(stroke_color) = style.get("strokeColor") {
+        validate_ink_color(stroke_color)?;
     }
     for (key, min, max) in [
         ("roughness", 0.0, 10.0),
@@ -841,6 +842,41 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("roughness"));
+        assert_eq!(
+            load_workspace_data_at(directory.path()).unwrap().pages[0].revision,
+            1
+        );
+    }
+
+    #[test]
+    fn primitive_colors_allow_legacy_omission_and_nullable_fill_but_reject_null_stroke() {
+        let directory = root();
+        seed_page(directory.path());
+        let legacy_shape = json!({"id":"legacy","pageId":"p","type":"shape","x":0.0,"y":0.0,"width":10.0,"height":10.0,"rotation":0.0,"zIndex":0,"opacity":1.0,"locked":false,"createdAt":1,"updatedAt":1,"shape":"rectangle"});
+        let transparent_shape = json!({"id":"transparent","pageId":"p","type":"shape","x":20.0,"y":0.0,"width":10.0,"height":10.0,"rotation":0.0,"zIndex":1,"opacity":1.0,"locked":false,"createdAt":1,"updatedAt":1,"shape":"rectangle","style":{"fillColor":null,"strokeColor":{"kind":"theme","token":"foreground"}}});
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![legacy_shape, transparent_shape],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+
+        let null_stroke = json!({"id":"null-stroke","pageId":"p","type":"shape","x":40.0,"y":0.0,"width":10.0,"height":10.0,"rotation":0.0,"zIndex":2,"opacity":1.0,"locked":false,"createdAt":1,"updatedAt":1,"shape":"rectangle","style":{"strokeColor":null}});
+        let error = apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 1,
+                upserts: vec![null_stroke],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("ink brush.color must be an object"));
         assert_eq!(
             load_workspace_data_at(directory.path()).unwrap().pages[0].revision,
             1

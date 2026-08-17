@@ -1,5 +1,5 @@
 use super::{assets, database, legacy_import, models::*};
-use rusqlite::{params, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 use serde_json::Value;
 use std::{io::Write, path::Path};
 
@@ -10,6 +10,8 @@ pub const TEMPLATE_FOLDER_ID: &str = "__note_page_templates__";
 const MAX_INK_POINTS: usize = 20_000;
 const MAX_INK_PAYLOAD_BYTES: usize = 8 * 1024 * 1024;
 const MAX_INK_LOCAL_COORDINATE: f64 = 1_000_000.0;
+/// Shared with the frontend load guard to keep stored canvas geometry bounded.
+const MAX_CANVAS_VALUE: f64 = 1_000_000.0;
 const MAX_INK_BRUSH_SIZE: f64 = 512.0;
 const MAX_SCENE_BATCH_BYTES: usize = 32 * 1024 * 1024;
 const MAX_SCENE_BATCH_UPSERTS: usize = 5_000;
@@ -253,39 +255,46 @@ fn validate_connector_endpoint(value: &Value, context: &str) -> Result<(), Strin
         .ok_or_else(|| format!("{context} must be an object"))?;
     match endpoint.get("kind").and_then(Value::as_str) {
         Some("free") => {
-            required_finite_object(endpoint, "x", context)?;
-            required_finite_object(endpoint, "y", context)?;
+            let x = required_finite_object(endpoint, "x", context)?;
+            let y = required_finite_object(endpoint, "y", context)?;
+            validate_canvas_coordinate(x, &format!("{context}.x"))?;
+            validate_canvas_coordinate(y, &format!("{context}.y"))?;
         }
-        Some(kind @ ("element" | "group" | "connector")) => {
-            let (target, position) = match kind {
-                "element" => ("targetElementId", "anchor"),
-                "group" => ("targetGroupId", "anchor"),
-                _ => ("targetConnectorId", "pathT"),
-            };
+        Some("element") => {
+            let target = "targetElementId";
+            let position = "anchor";
             endpoint
                 .get(target)
                 .and_then(Value::as_str)
                 .filter(|id| !id.is_empty())
                 .ok_or_else(|| format!("{context}.{target} must be a non-empty string"))?;
-            let t = if position == "anchor" {
-                endpoint
-                    .get("anchor")
-                    .and_then(Value::as_object)
-                    .and_then(|anchor| anchor.get("t"))
-            } else {
-                endpoint.get("pathT")
-            };
+            let t = endpoint
+                .get("anchor")
+                .and_then(Value::as_object)
+                .and_then(|anchor| anchor.get("t"));
             if t.and_then(Value::as_f64)
                 .filter(|t| t.is_finite() && (0.0..=1.0).contains(t))
                 .is_none()
             {
                 return Err(format!("{context}.{position} must be within 0 and 1"));
             }
-            if required_finite_object(endpoint, "gap", context)? < 0.0 {
-                return Err(format!("{context}.gap cannot be negative"));
+            let gap = required_finite_object(endpoint, "gap", context)?;
+            if !(0.0..=MAX_CANVAS_VALUE).contains(&gap) {
+                return Err(format!(
+                    "{context}.gap must be between 0 and {MAX_CANVAS_VALUE}"
+                ));
             }
         }
         _ => return Err(format!("{context}.kind is invalid")),
+    }
+    Ok(())
+}
+
+fn validate_canvas_coordinate(value: f64, context: &str) -> Result<(), String> {
+    if value.abs() > MAX_CANVAS_VALUE {
+        return Err(format!(
+            "{context} must be between -{MAX_CANVAS_VALUE} and {MAX_CANVAS_VALUE}"
+        ));
     }
     Ok(())
 }
@@ -340,8 +349,17 @@ fn validate_element(value: &Value, page_id: &str) -> Result<(), String> {
     }
     for key in ["x", "y", "width", "height", "rotation"] {
         let v = finite(value, key)?;
-        if matches!(key, "width" | "height") && v.is_some_and(|n| n < 0.0) {
-            return Err(format!("element.{key} cannot be negative"));
+        if matches!(key, "x" | "y") {
+            if let Some(number) = v {
+                validate_canvas_coordinate(number, &format!("element.{key}"))?;
+            }
+        }
+        if matches!(key, "width" | "height")
+            && v.is_some_and(|number| !(0.0..=MAX_CANVAS_VALUE).contains(&number))
+        {
+            return Err(format!(
+                "element.{key} must be between 0 and {MAX_CANVAS_VALUE}"
+            ));
         }
     }
     for key in ["zIndex", "createdAt", "updatedAt"] {
@@ -414,6 +432,100 @@ fn validate_element(value: &Value, page_id: &str) -> Result<(), String> {
             }
         }
         _ => {}
+    }
+    Ok(())
+}
+
+fn validate_final_connector_bindings(
+    transaction: &Transaction<'_>,
+    page_id: &str,
+) -> Result<(), String> {
+    let connectors = {
+        let mut statement = transaction
+            .prepare("SELECT id,payload_json FROM elements WHERE page_id=? AND element_type='connector'")
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([page_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        rows
+    };
+
+    for (connector_id, payload) in connectors {
+        let connector: Value = serde_json::from_str(&payload)
+            .map_err(|error| format!("connector {connector_id} has invalid stored payload: {error}"))?;
+        let is_arrow = connector
+            .get("style")
+            .and_then(Value::as_object)
+            .and_then(|style| style.get("endArrowhead"))
+            .and_then(Value::as_str)
+            == Some("arrow");
+        for endpoint_name in ["start", "end"] {
+            let context = format!("connector {connector_id}.{endpoint_name}");
+            let endpoint = connector
+                .get(endpoint_name)
+                .ok_or_else(|| format!("{context} is required"))?;
+            validate_connector_endpoint(endpoint, &context)?;
+            let Some(target_element_id) = endpoint
+                .as_object()
+                .filter(|endpoint| endpoint.get("kind").and_then(Value::as_str) == Some("element"))
+                .and_then(|endpoint| endpoint.get("targetElementId"))
+                .and_then(Value::as_str)
+            else {
+                continue;
+            };
+            if !is_arrow {
+                return Err(format!(
+                    "{context}.kind element is only supported for arrow connectors"
+                ));
+            }
+            validate_bound_connector_target(transaction, page_id, target_element_id, &context)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_bound_connector_target(
+    transaction: &Transaction<'_>,
+    page_id: &str,
+    target_element_id: &str,
+    context: &str,
+) -> Result<(), String> {
+    let target: Option<(String, String, String)> = transaction
+        .query_row(
+            "SELECT page_id,element_type,payload_json FROM elements WHERE id=?",
+            [target_element_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    let Some((target_page_id, target_type, target_payload)) = target else {
+        return Err(format!(
+            "{context}.targetElementId must reference an existing shape on this page"
+        ));
+    };
+    if target_page_id != page_id {
+        return Err(format!(
+            "{context}.targetElementId must reference a shape on the same page"
+        ));
+    }
+    if target_type != "shape" {
+        return Err(format!(
+            "{context}.targetElementId must reference a rectangle, ellipse, or diamond"
+        ));
+    }
+    let target: Value = serde_json::from_str(&target_payload)
+        .map_err(|error| format!("{context}.targetElementId has invalid stored payload: {error}"))?;
+    if !matches!(
+        target.get("shape").and_then(Value::as_str),
+        Some("rectangle" | "ellipse" | "diamond")
+    ) {
+        return Err(format!(
+            "{context}.targetElementId must reference a rectangle, ellipse, or diamond"
+        ));
     }
     Ok(())
 }
@@ -722,6 +834,7 @@ pub fn apply_scene_changes_at(
         }
         tx.execute("INSERT INTO elements(id,page_id,element_type,x,y,width,height,rotation,z_index,opacity,locked,group_id,created_at,updated_at,payload_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET page_id=excluded.page_id,element_type=excluded.element_type,x=excluded.x,y=excluded.y,width=excluded.width,height=excluded.height,rotation=excluded.rotation,z_index=excluded.z_index,opacity=excluded.opacity,locked=excluded.locked,group_id=excluded.group_id,updated_at=excluded.updated_at,payload_json=excluded.payload_json",params![required_string(e,"id")?,batch.page_id,kind,finite(e,"x")?,finite(e,"y")?,finite(e,"width")?,finite(e,"height")?,finite(e,"rotation")?,number_i64(e,"zIndex"),e["opacity"].as_f64(),locked,e.get("groupId").and_then(Value::as_str),number_i64(e,"createdAt"),number_i64(e,"updatedAt"),json]).map_err(|er|format!("upsert element: {er}"))?;
     }
+    validate_final_connector_bindings(&tx, &batch.page_id)?;
     let next = revision + 1;
     tx.execute(
         "UPDATE pages SET revision=? WHERE id=?",
@@ -840,6 +953,15 @@ mod tests {
             )
             .unwrap();
     }
+    fn seed_additional_page(root: &Path, page_id: &str) {
+        let connection = database::open(&root.join("note.db")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO pages(id,folder_id,title) VALUES(?,'f','Page')",
+                [page_id],
+            )
+            .unwrap();
+    }
     fn element(id: &str, updated_at: i64) -> Value {
         json!({"id":id,"pageId":"p","type":"text","x":1.0,"y":2.0,"width":100.0,"height":40.0,"rotation":0.0,"zIndex":0,"opacity":1.0,"locked":false,"createdAt":1,"updatedAt":updated_at,"content":"hello"})
     }
@@ -847,15 +969,32 @@ mod tests {
         json!({"id":id,"pageId":"p","type":"image","x":1.0,"y":2.0,"width":100.0,"height":40.0,"rotation":0.0,"zIndex":0,"opacity":1.0,"locked":false,"createdAt":1,"updatedAt":1,"assetId":asset_id,"naturalWidth":100,"naturalHeight":40,"fit":"contain"})
     }
     fn connector_element(start: Value, end: Value) -> Value {
+        connector_element_on_page("connector-1", "p", start, end, true)
+    }
+    fn connector_element_on_page(
+        id: &str,
+        page_id: &str,
+        start: Value,
+        end: Value,
+        is_arrow: bool,
+    ) -> Value {
         json!({
-            "id":"connector-1","pageId":"p","type":"connector","zIndex":0,
+            "id":id,"pageId":page_id,"type":"connector","zIndex":0,
             "opacity":1.0,"locked":false,"createdAt":1,"updatedAt":1,
             "routing":"straight","start":start,"end":end,
             "style":{
                 "fillColor":null,"roughness":1.0,"roundness":0.0,"seed":1,
                 "strokeColor":{"kind":"theme","token":"foreground"},"strokeStyle":"solid",
-                "strokeWidth":2.0,"startArrowhead":"none","endArrowhead":"arrow"
+                "strokeWidth":2.0,"startArrowhead":"none","endArrowhead":if is_arrow { "arrow" } else { "none" }
             }
+        })
+    }
+    fn shape_element(id: &str, page_id: &str) -> Value {
+        json!({
+            "id":id,"pageId":page_id,"type":"shape","x":10.0,"y":20.0,
+            "width":100.0,"height":60.0,"rotation":0.0,"zIndex":0,
+            "opacity":1.0,"locked":false,"createdAt":1,"updatedAt":1,
+            "shape":"rectangle"
         })
     }
     fn ink_element() -> Value {
@@ -975,13 +1114,18 @@ mod tests {
             SceneChangeBatch {
                 page_id: "p".into(),
                 base_revision: 0,
-                upserts: vec![bound.clone()],
+                upserts: vec![shape_element("shape-1", "p"), bound.clone()],
                 deleted_element_ids: vec![],
             },
         )
         .unwrap();
         assert_eq!(
-            load_workspace_data_at(directory.path()).unwrap().elements[0]["start"],
+            load_workspace_data_at(directory.path())
+                .unwrap()
+                .elements
+                .into_iter()
+                .find(|element| element["id"] == "connector-1")
+                .unwrap()["start"],
             bound["start"]
         );
 
@@ -996,7 +1140,7 @@ mod tests {
             ),
             (
                 json!({"kind":"element","targetElementId":"shape-1","anchor":{"t":0.25},"gap":-1.0}),
-                "gap cannot be negative",
+                "gap must be between",
             ),
         ] {
             let error = apply_scene_changes_at(
@@ -1011,6 +1155,234 @@ mod tests {
             .unwrap_err();
             assert!(error.contains(message), "unexpected validation error: {error}");
             assert_eq!(load_workspace_data_at(directory.path()).unwrap().pages[0].revision, 1);
+        }
+    }
+
+    #[test]
+    fn bound_connector_endpoints_require_final_same_page_arrow_shapes() {
+        let directory = root();
+        seed_page(directory.path());
+        let target = shape_element("shape-1", "p");
+        let bound_start = json!({"kind":"element","targetElementId":"shape-1","anchor":{"t":0.25},"gap":4.0});
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![
+                    target.clone(),
+                    connector_element(bound_start.clone(), json!({"kind":"free","x":160.0,"y":60.0})),
+                ],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+        seed_additional_page(directory.path(), "other-page");
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "other-page".into(),
+                base_revision: 0,
+                upserts: vec![shape_element("other-shape", "other-page")],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+
+        let invalid_cases = [
+            (
+                "missing",
+                connector_element_on_page(
+                    "missing-connector",
+                    "p",
+                    json!({"kind":"element","targetElementId":"missing","anchor":{"t":0.25},"gap":4.0}),
+                    json!({"kind":"free","x":160.0,"y":60.0}),
+                    true,
+                ),
+                vec![],
+                "existing shape",
+            ),
+            (
+                "nonshape",
+                connector_element_on_page(
+                    "text-connector",
+                    "p",
+                    json!({"kind":"element","targetElementId":"text-1","anchor":{"t":0.25},"gap":4.0}),
+                    json!({"kind":"free","x":160.0,"y":60.0}),
+                    true,
+                ),
+                vec![element("text-1", 1)],
+                "rectangle, ellipse, or diamond",
+            ),
+            (
+                "cross-page",
+                connector_element_on_page(
+                    "cross-page-connector",
+                    "p",
+                    json!({"kind":"element","targetElementId":"other-shape","anchor":{"t":0.25},"gap":4.0}),
+                    json!({"kind":"free","x":160.0,"y":60.0}),
+                    true,
+                ),
+                vec![],
+                "same page",
+            ),
+            (
+                "line",
+                connector_element_on_page(
+                    "line-connector",
+                    "p",
+                    bound_start.clone(),
+                    json!({"kind":"free","x":160.0,"y":60.0}),
+                    false,
+                ),
+                vec![],
+                "only supported for arrow connectors",
+            ),
+            (
+                "group",
+                connector_element_on_page(
+                    "group-connector",
+                    "p",
+                    json!({"kind":"group","targetGroupId":"group-1","anchor":{"t":0.25},"gap":4.0}),
+                    json!({"kind":"free","x":160.0,"y":60.0}),
+                    true,
+                ),
+                vec![],
+                "kind is invalid",
+            ),
+            (
+                "connector",
+                connector_element_on_page(
+                    "connector-target-connector",
+                    "p",
+                    json!({"kind":"connector","targetConnectorId":"connector-1","pathT":0.25,"gap":4.0}),
+                    json!({"kind":"free","x":160.0,"y":60.0}),
+                    true,
+                ),
+                vec![],
+                "kind is invalid",
+            ),
+        ];
+
+        for (name, connector, mut upserts, expected_error) in invalid_cases {
+            upserts.push(connector);
+            let error = apply_scene_changes_at(
+                directory.path(),
+                SceneChangeBatch {
+                    page_id: "p".into(),
+                    base_revision: 1,
+                    upserts,
+                    deleted_element_ids: vec![],
+                },
+            )
+            .unwrap_err();
+            assert!(
+                error.contains(expected_error),
+                "{name} produced unexpected validation error: {error}"
+            );
+            assert_eq!(load_workspace_data_at(directory.path()).unwrap().pages[0].revision, 1);
+        }
+    }
+
+    #[test]
+    fn deleting_bound_shape_requires_same_batch_connector_detachment() {
+        let directory = root();
+        seed_page(directory.path());
+        let bound_start = json!({"kind":"element","targetElementId":"shape-1","anchor":{"t":0.25},"gap":4.0});
+        let bound = connector_element(bound_start, json!({"kind":"free","x":160.0,"y":60.0}));
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![shape_element("shape-1", "p"), bound.clone()],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+
+        let error = apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 1,
+                upserts: vec![],
+                deleted_element_ids: vec!["shape-1".into()],
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("existing shape"));
+        assert_eq!(load_workspace_data_at(directory.path()).unwrap().elements.len(), 2);
+        assert_eq!(load_workspace_data_at(directory.path()).unwrap().pages[0].revision, 1);
+
+        let mut detached = bound;
+        detached["start"] = json!({"kind":"free","x":14.0,"y":24.0});
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 1,
+                upserts: vec![detached],
+                deleted_element_ids: vec!["shape-1".into()],
+            },
+        )
+        .unwrap();
+        let workspace = load_workspace_data_at(directory.path()).unwrap();
+        assert_eq!(workspace.elements.len(), 1);
+        assert_eq!(workspace.elements[0]["start"]["kind"], "free");
+        assert_eq!(workspace.pages[0].revision, 2);
+    }
+
+    #[test]
+    fn canvas_geometry_and_connector_endpoints_have_safe_magnitude_limits() {
+        for (mut element, key, expected_error) in [
+            (element("too-far", 1), "x", "element.x"),
+            (shape_element("too-wide", "p"), "width", "element.width"),
+        ] {
+            element[key] = json!(MAX_CANVAS_VALUE + 1.0);
+            let directory = root();
+            seed_page(directory.path());
+            let error = apply_scene_changes_at(
+                directory.path(),
+                SceneChangeBatch {
+                    page_id: "p".into(),
+                    base_revision: 0,
+                    upserts: vec![element],
+                    deleted_element_ids: vec![],
+                },
+            )
+            .unwrap_err();
+            assert!(error.contains(expected_error), "unexpected validation error: {error}");
+            assert_eq!(load_workspace_data_at(directory.path()).unwrap().pages[0].revision, 0);
+        }
+
+        for (endpoint, expected_error) in [
+            (
+                json!({"kind":"free","x":MAX_CANVAS_VALUE + 1.0,"y":1.0}),
+                "connector.start.x",
+            ),
+            (
+                json!({"kind":"element","targetElementId":"shape-1","anchor":{"t":0.25},"gap":MAX_CANVAS_VALUE + 1.0}),
+                "connector.start.gap",
+            ),
+        ] {
+            let directory = root();
+            seed_page(directory.path());
+            let error = apply_scene_changes_at(
+                directory.path(),
+                SceneChangeBatch {
+                    page_id: "p".into(),
+                    base_revision: 0,
+                    upserts: vec![
+                        shape_element("shape-1", "p"),
+                        connector_element(endpoint, json!({"kind":"free","x":1.0,"y":1.0})),
+                    ],
+                    deleted_element_ids: vec![],
+                },
+            )
+            .unwrap_err();
+            assert!(error.contains(expected_error), "unexpected validation error: {error}");
+            assert_eq!(load_workspace_data_at(directory.path()).unwrap().pages[0].revision, 0);
         }
     }
 

@@ -2217,6 +2217,13 @@ h2 {
   visibility: hidden;
 }
 
+.primitive-element[role="button"]:focus-visible,
+.text-block[role="button"]:focus-visible,
+.text-block-header:focus-visible {
+  outline: 3px solid var(--canvas-focus);
+  outline-offset: 3px;
+}
+
 .ink-resize-handle {
   right: -12px;
   bottom: -12px;
@@ -3026,8 +3033,8 @@ h2 {
 }
 
 .resize-handle:focus-visible {
-  outline: 2px solid rgba(65, 86, 111, 0.38);
-  outline-offset: -2px;
+  outline: 3px solid var(--canvas-focus);
+  outline-offset: 2px;
 }
 
 .resize-e {
@@ -4791,9 +4798,9 @@ h2 {
 .canvas-tool-palette {
   top: 12px;
   max-width: calc(100% - 24px);
-  height: 54px;
-  gap: 2px;
-  padding: 4px;
+  height: 60px;
+  gap: 4px;
+  padding: 8px;
   overflow-x: auto;
   overflow-y: hidden;
   border-color: #d6d6da;
@@ -4825,7 +4832,6 @@ h2 {
   background: #ece7ff;
 }
 
-.canvas-tool-palette button[data-tooltip]::after,
 .drawing-choice-group button[data-tooltip]::after {
   position: absolute;
   top: calc(100% + 8px);
@@ -4849,12 +4855,27 @@ h2 {
   white-space: normal;
 }
 
-.canvas-tool-palette button[data-tooltip]:hover::after,
-.canvas-tool-palette button[data-tooltip]:focus-visible::after,
 .drawing-choice-group button[data-tooltip]:hover::after,
 .drawing-choice-group button[data-tooltip]:focus-visible::after {
   opacity: 1;
   transform: translate(-50%, 0);
+}
+
+.drawing-toolbar-tooltip {
+  position: fixed;
+  z-index: 100;
+  width: max-content;
+  max-width: 180px;
+  border-radius: 5px;
+  padding: 5px 7px;
+  color: #ffffff;
+  background: rgba(24, 24, 27, 0.96);
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.24);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 14px;
+  pointer-events: none;
+  transform: translateX(-50%);
 }
 
 .drawing-properties-panel {
@@ -4902,7 +4923,7 @@ h2 {
 
 .drawing-properties-header span {
   overflow: hidden;
-  color: #777782;
+  color: #575762;
   font-size: 11px;
   line-height: 16px;
   text-overflow: ellipsis;
@@ -4919,7 +4940,7 @@ h2 {
 
 .drawing-property-section h3 {
   margin-bottom: 7px;
-  color: #5f5f69;
+  color: #4f4f59;
   font-size: 11px;
   font-weight: 650;
   line-height: 16px;
@@ -4998,7 +5019,7 @@ h2 {
   overflow: hidden;
 }
 
-.drawing-custom-color .sr-only {
+.drawing-properties-panel .sr-only {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -5020,11 +5041,19 @@ h2 {
   cursor: pointer;
 }
 
+.drawing-custom-color:has(input:focus-visible),
+.drawing-choice-group button:focus-visible,
+.drawing-color-picker button:focus-visible,
+.drawing-opacity-row input:focus-visible {
+  outline: 3px solid var(--canvas-focus);
+  outline-offset: 2px;
+}
+
 .drawing-mixed-label {
   position: absolute;
   right: 0;
   bottom: calc(100% + 8px);
-  color: #777782;
+  color: #575762;
   font-size: 10px;
 }
 
@@ -5069,7 +5098,7 @@ h2 {
 .app-shell.is-dark .drawing-property-section h3,
 .app-shell.is-dark .drawing-opacity-row output,
 .app-shell.is-dark .drawing-mixed-label {
-  color: #a8a8b3;
+  color: #c0c0ca;
 }
 
 .app-shell.is-dark .drawing-choice-group button,

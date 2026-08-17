@@ -144,6 +144,43 @@ test("renders every geometric primitive and moves connectors with a composite se
   expect(connectorAfter.y - connectorBefore.y).toBeCloseTo(48, 0);
 });
 
+test("selects, moves, and deletes shapes and connectors from the keyboard", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  const bounds = await canvas.boundingBox();
+  if (!bounds) throw new Error("Canvas bounds were not available.");
+
+  await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
+  await page.mouse.click(bounds.x + 420, bounds.y + 320);
+  const shape = page.getByRole("button", { name: "Select and move rectangle element" });
+  await page.mouse.click(bounds.x + 850, bounds.y + 650);
+  await shape.focus();
+  await page.keyboard.press("Enter");
+  await expect(shape).toHaveAttribute("aria-pressed", "true");
+  const shapeBefore = await shape.boundingBox();
+  await page.keyboard.press("Shift+ArrowRight");
+  const shapeAfter = await shape.boundingBox();
+  expect((shapeAfter?.x ?? 0) - (shapeBefore?.x ?? 0)).toBeCloseTo(10, 0);
+  await page.keyboard.press("Delete");
+  await expect(shape).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Line (L / 6)" }).click();
+  await page.mouse.move(bounds.x + 420, bounds.y + 480);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + 600, bounds.y + 540, { steps: 4 });
+  await page.mouse.up();
+  const connector = page.getByRole("button", { name: "Select and move line connector" });
+  await page.mouse.click(bounds.x + 850, bounds.y + 650);
+  await connector.focus();
+  await page.keyboard.press(" ");
+  await expect(connector).toHaveAttribute("aria-pressed", "true");
+  const connectorBefore = await connector.boundingBox();
+  await page.keyboard.press("ArrowDown");
+  const connectorAfter = await connector.boundingBox();
+  expect((connectorAfter?.y ?? 0) - (connectorBefore?.y ?? 0)).toBeCloseTo(1, 0);
+  await page.keyboard.press("Backspace");
+  await expect(connector).toHaveCount(0);
+});
+
 test("creates editable text and places a picked image only on the next canvas click", async ({ page }) => {
   const canvas = page.getByRole("tabpanel");
   const bounds = await canvas.boundingBox();
@@ -162,6 +199,35 @@ test("creates editable text and places a picked image only on the next canvas cl
   await expect(page.locator(".text-block-image")).toHaveCount(1);
   await expect(page.locator(".canvas-image-placement-preview")).toHaveCount(0);
   await expect(select).toHaveAttribute("aria-pressed", "true");
+});
+
+test("moves and resizes a selected text block with semantic keyboard controls", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  const bounds = await canvas.boundingBox();
+  if (!bounds) throw new Error("Canvas bounds were not available.");
+
+  await page.getByRole("button", { name: "Text (T / 8)" }).click();
+  await page.mouse.click(bounds.x + 360, bounds.y + 300);
+  const editor = page.locator(".text-block-editor-content");
+  await expect(editor).toBeVisible();
+  await editor.click();
+  await editor.pressSequentially("Keyboard text");
+  await expect(editor).toContainText("Keyboard text");
+  await page.keyboard.press("Escape");
+  const textBlock = page.locator(".text-block").filter({ hasText: "Keyboard text" });
+  const moveControl = textBlock.getByRole("button", { name: "Select and move text block" });
+  await moveControl.focus();
+  await expect(moveControl).toHaveAttribute("aria-pressed", "true");
+  const beforeMove = await textBlock.boundingBox();
+  await moveControl.press("Shift+ArrowDown");
+  await expect.poll(async () => (await textBlock.boundingBox())?.y ?? 0).toBeCloseTo((beforeMove?.y ?? 0) + 10, 0);
+
+  const widthControl = textBlock.getByRole("slider", { name: "Resize text block e" });
+  const beforeWidth = await textBlock.boundingBox();
+  await widthControl.focus();
+  await widthControl.press("Shift+ArrowRight");
+  await expect.poll(async () => (await textBlock.boundingBox())?.width ?? 0).toBeCloseTo((beforeWidth?.width ?? 0) + 10, 0);
+  await expect(widthControl).toHaveAttribute("aria-valuetext", /pixels wide/);
 });
 
 test("Escape cancels a pending picked image without creating an element", async ({ page }) => {

@@ -85,7 +85,7 @@ export function createDefaultDrawingPreferences(): DrawingPreferences {
     highlighter: preference({ opacity: 0.38, roughness: 0, strokeColor: fixed("#f4c542"), strokeWidth: 18 }),
     line: preference(),
     pen: preference({ roughness: 0, strokeWidth: 4 }),
-    rectangle: preference({ roundness: 0.08 }),
+    rectangle: preference({ roundness: 0 }),
   };
 }
 

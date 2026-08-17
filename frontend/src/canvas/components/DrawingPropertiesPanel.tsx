@@ -13,29 +13,35 @@ type DrawingPropertiesPanelProps = {
   contextLabel: string;
   isCompactOpen: boolean;
   isSelection: boolean;
+  onCancelPreview: () => void;
   onLayerAction: (action: LayerAction) => void;
   onPreview: (update: DrawingPropertyUpdate) => void;
   onUpdate: (update: DrawingPropertyUpdate) => void;
+  strokeWidthPresets: readonly number[];
   supports: (property: DrawingProperty) => boolean;
   values: DrawingPropertyValues;
 };
 
-const strokeColors = ["#1b1b1f", "#e03131", "#f08c00", "#2f9e44", "#1971c2", "#9c36b5"];
+const strokeColors = ["#1b1b1f", "#e03131", "#2f9e44", "#1971c2", "#f08c00"];
 const backgroundColors = ["#ffc9c9", "#ffec99", "#b2f2bb", "#a5d8ff", "#d0bfff"];
 
 export function DrawingPropertiesPanel({
   contextLabel,
   isCompactOpen,
   isSelection,
+  onCancelPreview,
   onLayerAction,
   onPreview,
   onUpdate,
+  strokeWidthPresets,
   supports,
   values,
 }: DrawingPropertiesPanelProps) {
   const [opacityDraft, setOpacityDraft] = useState(() => percent(values.opacity));
   const isAdjustingOpacity = useRef(false);
   const hasOpacityPreviewChange = useRef(false);
+  const opacityDescriptionId = useId();
+  const cancelOpacityRef = useRef<() => void>(() => undefined);
 
   useEffect(() => {
     if (!isAdjustingOpacity.current) setOpacityDraft(percent(values.opacity));
@@ -60,6 +66,24 @@ export function DrawingPropertiesPanel({
     isAdjustingOpacity.current = true;
     hasOpacityPreviewChange.current = false;
   }
+
+  function cancelOpacity() {
+    isAdjustingOpacity.current = false;
+    hasOpacityPreviewChange.current = false;
+    setOpacityDraft(percent(values.opacity));
+    onCancelPreview();
+  }
+
+  cancelOpacityRef.current = cancelOpacity;
+
+  useEffect(() => {
+    const cancelForWindowBlur = () => cancelOpacityRef.current();
+    window.addEventListener("blur", cancelForWindowBlur);
+    return () => {
+      window.removeEventListener("blur", cancelForWindowBlur);
+      cancelOpacityRef.current();
+    };
+  }, []);
 
   return (
     <aside
@@ -99,11 +123,11 @@ export function DrawingPropertiesPanel({
       {supports("strokeWidth") ? (
         <PropertySection label="Stroke width">
           <ChoiceGroup label="Stroke width" mixed={values.strokeWidth.kind === "mixed"}>
-            {([1, 2, 4] as const).map((width) => (
+            {strokeWidthPresets.map((width, index) => (
               <ChoiceButton
                 active={isValue(values.strokeWidth, width)}
                 key={width}
-                label={`${width === 1 ? "Thin" : width === 2 ? "Medium" : "Thick"} stroke`}
+                label={`${index === 0 ? "Thin" : index === 1 ? "Medium" : "Thick"} stroke (${width}px)`}
                 mixed={values.strokeWidth.kind === "mixed"}
                 onClick={() => onUpdate({ property: "strokeWidth", value: width })}
               >
@@ -170,14 +194,19 @@ export function DrawingPropertiesPanel({
         <PropertySection label="Opacity">
           <div className="drawing-opacity-row">
             <input
+              aria-describedby={values.opacity.kind === "mixed" ? opacityDescriptionId : undefined}
               aria-label="Opacity"
+              aria-valuetext={values.opacity.kind === "mixed" && !isAdjustingOpacity.current
+                ? "Mixed opacity values"
+                : `${opacityDraft} percent`}
               max="100"
               min="0"
               onBlur={(event) => commitOpacity(Number(event.currentTarget.value))}
               onChange={(event) => previewOpacity(Number(event.currentTarget.value))}
               onKeyDown={beginOpacityAdjustment}
               onKeyUp={(event) => commitOpacity(Number(event.currentTarget.value))}
-              onPointerCancel={(event) => commitOpacity(Number(event.currentTarget.value))}
+              onLostPointerCapture={(event) => commitOpacity(Number(event.currentTarget.value))}
+              onPointerCancel={cancelOpacity}
               onPointerDown={beginOpacityAdjustment}
               onPointerUp={(event) => commitOpacity(Number(event.currentTarget.value))}
               step="1"
@@ -185,6 +214,11 @@ export function DrawingPropertiesPanel({
               value={opacityDraft}
             />
             <output aria-live="polite">{values.opacity.kind === "mixed" && !isAdjustingOpacity.current ? "Mixed" : `${opacityDraft}%`}</output>
+            {values.opacity.kind === "mixed" ? (
+              <span className="sr-only" id={opacityDescriptionId}>
+                Selected elements have different opacity values. Adjusting this slider applies one value to every unlocked compatible element.
+              </span>
+            ) : null}
           </div>
         </PropertySection>
       ) : null}

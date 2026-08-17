@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, type RefCallback } from "react";
+import { useLayoutEffect, useRef, type KeyboardEvent, type RefCallback } from "react";
 import { RoughSVG } from "roughjs/bin/svg";
 import type { Options } from "roughjs/bin/core";
 import type { ConnectorElement, ShapeElement } from "../model/elements";
@@ -7,7 +7,10 @@ import { canvasColorToCss } from "../rendering/canvasColor";
 type PrimitiveElementViewProps<T extends ShapeElement | ConnectorElement> = {
   element: T;
   isDragSourceHidden?: boolean;
+  isSelected: boolean;
   onElementChange?: (elementId: string, element: HTMLDivElement | null) => void;
+  onKeyboardMove: (elementId: string, delta: Readonly<{ x: number; y: number }>) => void;
+  onSelect: (elementId: string, additive?: boolean) => void;
 };
 
 function createPrimitiveRootRef(elementId: string, onElementChange?: PrimitiveElementViewProps<ShapeElement>["onElementChange"]): RefCallback<HTMLDivElement> {
@@ -69,7 +72,35 @@ export function arrowheadPoints(
   ];
 }
 
-export function ShapeElementView({ element, isDragSourceHidden = false, onElementChange }: PrimitiveElementViewProps<ShapeElement>) {
+function keyboardDelta(event: KeyboardEvent<HTMLDivElement>) {
+  const step = event.shiftKey ? 10 : 1;
+  if (event.key === "ArrowLeft") return { x: -step, y: 0 };
+  if (event.key === "ArrowRight") return { x: step, y: 0 };
+  if (event.key === "ArrowUp") return { x: 0, y: -step };
+  if (event.key === "ArrowDown") return { x: 0, y: step };
+  return null;
+}
+
+function primitiveKeyDown(
+  event: KeyboardEvent<HTMLDivElement>,
+  element: ShapeElement | ConnectorElement,
+  onKeyboardMove: PrimitiveElementViewProps<ShapeElement>["onKeyboardMove"],
+  onSelect: PrimitiveElementViewProps<ShapeElement>["onSelect"],
+) {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    onSelect(element.id, event.ctrlKey || event.metaKey);
+    return;
+  }
+  const delta = keyboardDelta(event);
+  if (!delta || element.locked) return;
+  event.preventDefault();
+  event.stopPropagation();
+  onSelect(element.id);
+  onKeyboardMove(element.id, delta);
+}
+
+export function ShapeElementView({ element, isDragSourceHidden = false, isSelected, onElementChange, onKeyboardMove, onSelect }: PrimitiveElementViewProps<ShapeElement>) {
   const ref = useRef<SVGSVGElement | null>(null);
   const rootRef = createPrimitiveRootRef(element.id, onElementChange);
   useLayoutEffect(() => {
@@ -91,19 +122,34 @@ export function ShapeElementView({ element, isDragSourceHidden = false, onElemen
   }, [element]);
   return (
     <div
+      aria-label={`${element.locked ? "Select locked" : "Select and move"} ${element.shape} element`}
+      aria-pressed={isSelected}
       className={`primitive-element ${isDragSourceHidden ? "is-drag-source-hidden" : ""}`}
       data-canvas-element-id={element.id}
+      data-canvas-element-type="shape"
+      onKeyDown={(event) => primitiveKeyDown(event, element, onKeyboardMove, onSelect)}
       ref={rootRef}
+      role="button"
       style={{ height: element.height, left: element.x, opacity: element.opacity, position: "absolute", top: element.y, transform: `rotate(${element.rotation}deg)`, width: element.width, zIndex: element.zIndex }}
+      tabIndex={0}
     >
       <svg aria-label={`${element.shape} shape`} className="primitive-shape" height="100%" ref={ref} width="100%" />
     </div>
   );
 }
 
-export function ConnectorElementView({ element, isDragSourceHidden = false, onElementChange }: PrimitiveElementViewProps<ConnectorElement>) {
+export function ConnectorElementView({ element, isDragSourceHidden = false, isSelected, onElementChange, onKeyboardMove, onSelect }: PrimitiveElementViewProps<ConnectorElement>) {
   if (element.start.kind !== "free" || element.end.kind !== "free") return null;
-  return <FreeConnectorElementView element={element as FreeConnectorElement} isDragSourceHidden={isDragSourceHidden} onElementChange={onElementChange} />;
+  return (
+    <FreeConnectorElementView
+      element={element as FreeConnectorElement}
+      isDragSourceHidden={isDragSourceHidden}
+      isSelected={isSelected}
+      onElementChange={onElementChange}
+      onKeyboardMove={onKeyboardMove}
+      onSelect={onSelect}
+    />
+  );
 }
 
 type FreeConnectorElement = Omit<ConnectorElement, "start" | "end"> & {
@@ -111,7 +157,7 @@ type FreeConnectorElement = Omit<ConnectorElement, "start" | "end"> & {
   end: Extract<ConnectorElement["end"], { kind: "free" }>;
 };
 
-function FreeConnectorElementView({ element, isDragSourceHidden = false, onElementChange }: PrimitiveElementViewProps<FreeConnectorElement>) {
+function FreeConnectorElementView({ element, isDragSourceHidden = false, isSelected, onElementChange, onKeyboardMove, onSelect }: PrimitiveElementViewProps<FreeConnectorElement>) {
   const ref = useRef<SVGSVGElement | null>(null);
   const minX = Math.min(element.start.x, element.end.x);
   const minY = Math.min(element.start.y, element.end.y);
@@ -144,10 +190,16 @@ function FreeConnectorElementView({ element, isDragSourceHidden = false, onEleme
   }, [element, height, padding, width, x1, x2, y1, y2]);
   return (
     <div
+      aria-label={`${element.locked ? "Select locked" : "Select and move"} ${element.style.endArrowhead === "arrow" ? "arrow" : "line"} connector`}
+      aria-pressed={isSelected}
       className={`primitive-element ${isDragSourceHidden ? "is-drag-source-hidden" : ""}`}
       data-canvas-element-id={element.id}
+      data-canvas-element-type="connector"
+      onKeyDown={(event) => primitiveKeyDown(event, element, onKeyboardMove, onSelect)}
       ref={rootRef}
+      role="button"
       style={{ height, left: minX - padding, opacity: element.opacity, position: "absolute", top: minY - padding, width, zIndex: element.zIndex }}
+      tabIndex={0}
     >
       <svg aria-label="Connector" className="primitive-connector" height="100%" overflow="visible" ref={ref} width="100%" />
     </div>

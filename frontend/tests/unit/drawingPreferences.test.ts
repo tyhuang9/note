@@ -88,6 +88,7 @@ describe("drawing preferences", () => {
 
   it("keeps unsupported defaults unchanged", () => {
     const preferences = createDefaultDrawingPreferences();
+    expect(preferences.rectangle.roundness).toBe(0);
     expect(updateDrawingPreference(preferences, "pen", { property: "roughness", value: 2 })).toBe(preferences);
   });
 

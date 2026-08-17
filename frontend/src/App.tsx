@@ -357,6 +357,12 @@ type SelectionTransformSession = {
   startClientY: number;
 };
 
+type DrawingPropertyPreviewTransaction = {
+  baseline: CanvasElement[];
+  ownerKey: string;
+  selectedIds: string[];
+};
+
 type CopyableElement = TextElement | ImageElement;
 type CopiedBlock = Omit<CopyableElement, "id" | "pageId" | "x" | "y"> & {
   offsetX: number;
@@ -1226,7 +1232,7 @@ function App() {
   const isTemporaryHandActiveRef = useRef(false);
   const pendingImagePlacementRef = useRef<PendingImagePlacement | null>(null);
   const imagePickerRequestRef = useRef(0);
-  const drawingPropertyPreviewBaselineRef = useRef<CanvasElement[] | null>(null);
+  const drawingPropertyPreviewRef = useRef<DrawingPropertyPreviewTransaction | null>(null);
 
   dataRef.current = data;
   activeToolRef.current = activeTool;
@@ -1321,9 +1327,17 @@ function App() {
   const drawingPropertiesContext = useMemo(() => {
     if (selectedDrawingElements.length > 0) {
       const values = readDrawingProperties(selectedDrawingElements);
+      const selectedInkKinds = new Set(selectedDrawingElements.flatMap((element) =>
+        element.type === "ink" ? [element.brush.kind] : [],
+      ));
       return {
         contextLabel: selectedDrawingElements.length === 1 ? selectedDrawingElements[0].type : `${selectedDrawingElements.length} selected`,
         isSelection: true,
+        strokeWidthPresets: selectedInkKinds.has("highlighter")
+          ? [8, 18, 32] as const
+          : selectedInkKinds.has("pen")
+            ? [2, 4, 8] as const
+            : [1, 2, 4] as const,
         supports: (property: DrawingProperty) => values[property].kind !== "unavailable",
         values,
       };
@@ -1333,6 +1347,11 @@ function App() {
     return {
       contextLabel: `${activeTool} defaults`,
       isSelection: false,
+      strokeWidthPresets: activeTool === "highlighter"
+        ? [8, 18, 32] as const
+        : activeTool === "pen"
+          ? [2, 4, 8] as const
+          : [1, 2, 4] as const,
       supports: (property: DrawingProperty) => isPropertySupportedByTool(activeTool, property),
       values: drawingPropertiesFromPreference(preference),
     };
@@ -2589,15 +2608,39 @@ function App() {
     setData(nextData);
   }
 
+  function drawingPropertyPreviewOwnerKey() {
+    return `${selectedPageIdRef.current}\u0000${[...selectedBlockIdsRef.current].sort().join("\u0000")}`;
+  }
+
+  const cancelDrawingPropertyPreview = useCallback(() => {
+    const transaction = drawingPropertyPreviewRef.current;
+    if (!transaction) return;
+    drawingPropertyPreviewRef.current = null;
+    const nextData = { ...dataRef.current, elements: transaction.baseline };
+    dataRef.current = nextData;
+    setData(nextData);
+    setIsDrawingPropertyPreviewing(false);
+  }, []);
+
   function previewDrawingProperty(update: DrawingPropertyUpdate) {
     const selectedIds = new Set(selectedBlockIdsRef.current);
     if (selectedIds.size === 0) return;
-    const baseline = drawingPropertyPreviewBaselineRef.current ?? dataRef.current.elements;
-    if (!drawingPropertyPreviewBaselineRef.current) {
-      drawingPropertyPreviewBaselineRef.current = baseline;
+    const ownerKey = drawingPropertyPreviewOwnerKey();
+    let transaction = drawingPropertyPreviewRef.current;
+    if (transaction && transaction.ownerKey !== ownerKey) {
+      cancelDrawingPropertyPreview();
+      transaction = null;
+    }
+    if (!transaction) {
+      transaction = {
+        baseline: dataRef.current.elements,
+        ownerKey,
+        selectedIds: [...selectedIds],
+      };
+      drawingPropertyPreviewRef.current = transaction;
       setIsDrawingPropertyPreviewing(true);
     }
-    const nextElements = applyDrawingPropertyUpdate(baseline, selectedIds, update);
+    const nextElements = applyDrawingPropertyUpdate(transaction.baseline, new Set(transaction.selectedIds), update);
     const nextData = { ...dataRef.current, elements: nextElements };
     dataRef.current = nextData;
     setData(nextData);
@@ -2606,12 +2649,17 @@ function App() {
   function updateDrawingProperty(update: DrawingPropertyUpdate) {
     const selectedIds = new Set(selectedBlockIdsRef.current);
     if (selectedIds.size > 0) {
-      const previewBaseline = drawingPropertyPreviewBaselineRef.current;
-      if (previewBaseline) {
-        const nextElements = applyDrawingPropertyUpdate(previewBaseline, selectedIds, update);
-        drawingPropertyPreviewBaselineRef.current = null;
+      const transaction = drawingPropertyPreviewRef.current;
+      if (transaction) {
+        if (transaction.ownerKey !== drawingPropertyPreviewOwnerKey()) {
+          cancelDrawingPropertyPreview();
+          return;
+        }
+        const ownedIds = new Set(transaction.selectedIds);
+        const nextElements = applyDrawingPropertyUpdate(transaction.baseline, ownedIds, update);
+        drawingPropertyPreviewRef.current = null;
         setIsDrawingPropertyPreviewing(false);
-        if (!areBlocksEqual(previewBaseline, nextElements)) pushBlockUndoSnapshot(previewBaseline);
+        if (!areBlocksEqual(transaction.baseline, nextElements)) pushBlockUndoSnapshot(transaction.baseline);
         const nextData = { ...dataRef.current, elements: nextElements };
         dataRef.current = nextData;
         setData(nextData);
@@ -2624,6 +2672,22 @@ function App() {
     if (!isDrawingPreferenceTool(tool)) return;
     setDrawingPreferences((current) => updateDrawingPreference(current, tool, update));
   }
+
+  const drawingPropertyPreviewOwner = `${selectedPageId}\u0000${[...selectedBlockIds].sort().join("\u0000")}`;
+  useEffect(() => {
+    const transaction = drawingPropertyPreviewRef.current;
+    if (transaction && transaction.ownerKey !== drawingPropertyPreviewOwner) {
+      cancelDrawingPropertyPreview();
+    }
+  }, [cancelDrawingPropertyPreview, drawingPropertyPreviewOwner]);
+
+  useEffect(() => {
+    window.addEventListener("blur", cancelDrawingPropertyPreview);
+    return () => {
+      window.removeEventListener("blur", cancelDrawingPropertyPreview);
+      cancelDrawingPropertyPreview();
+    };
+  }, [cancelDrawingPropertyPreview]);
 
   function updateSelectedLayer(action: LayerAction) {
     const selectedIds = new Set(selectedBlockIdsRef.current);
@@ -3088,7 +3152,13 @@ function App() {
   }
 
   const deleteBlocks = useCallback((blockIds: string[]) => {
-    const blockIdsToDelete = new Set(blockIds);
+    const requestedIds = new Set(blockIds);
+    const blockIdsToDelete = new Set(
+      dataRef.current.elements
+        .filter((block) => requestedIds.has(block.id) && !block.locked)
+        .map((block) => block.id),
+    );
+    if (blockIdsToDelete.size === 0) return false;
 
     setBlocksWithHistory((currentBlocks) =>
       currentBlocks.filter(
@@ -3103,6 +3173,7 @@ function App() {
         ? null
         : currentBlockId,
     );
+    return true;
   }, []);
 
   const selectAllVisibleBlocks = useCallback(() => {
@@ -3304,8 +3375,14 @@ function App() {
         selectedBlockIds.length > 0
       ) {
         event.preventDefault();
-        deleteBlocks(selectedBlockIds);
-        setActiveMode("canvas");
+        const lockedIds = new Set(
+          dataRef.current.elements
+            .filter((element) => element.locked && selectedBlockIds.includes(element.id))
+            .map((element) => element.id),
+        );
+        if (deleteBlocks(selectedBlockIds)) {
+          setActiveMode(lockedIds.size > 0 ? "selected" : "canvas");
+        }
         return;
       }
     }
@@ -5368,6 +5445,13 @@ function App() {
     ));
   }, []);
 
+  const moveCanvasElementByKeyboard = useCallback((elementId: string, delta: Readonly<{ x: number; y: number }>) => {
+    setBlocksWithHistory((currentElements) =>
+      translateSelection(currentElements, new Set([elementId]), delta),
+    );
+    setActiveMode("selected");
+  }, []);
+
   const eraseCanvasElements = useCallback((elementIds: readonly string[]) => {
     const ids = new Set(elementIds);
     if (ids.size === 0) return;
@@ -6694,9 +6778,11 @@ function App() {
               contextLabel={drawingPropertiesContext.contextLabel}
               isCompactOpen={isPropertiesPanelOpen}
               isSelection={drawingPropertiesContext.isSelection}
+              onCancelPreview={cancelDrawingPropertyPreview}
               onLayerAction={updateSelectedLayer}
               onPreview={previewDrawingProperty}
               onUpdate={updateDrawingProperty}
+              strokeWidthPresets={drawingPropertiesContext.strokeWidthPresets}
               supports={drawingPropertiesContext.supports}
               values={drawingPropertiesContext.values}
             />
@@ -6803,7 +6889,10 @@ function App() {
                   <ConnectorElementView
                     element={connector}
                     isDragSourceHidden={dragSourceBlockIds.includes(connector.id)}
+                    isSelected={selectedBlockIds.includes(connector.id)}
                     onElementChange={registerBlockElement}
+                    onKeyboardMove={moveCanvasElementByKeyboard}
+                    onSelect={selectBlock}
                   />
                 )}
                 renderInk={(inkElement) => (
@@ -6829,7 +6918,10 @@ function App() {
                   <ShapeElementView
                     element={shape}
                     isDragSourceHidden={dragSourceBlockIds.includes(shape.id)}
+                    isSelected={selectedBlockIds.includes(shape.id)}
                     onElementChange={registerBlockElement}
+                    onKeyboardMove={moveCanvasElementByKeyboard}
+                    onSelect={selectBlock}
                   />
                 )}
                 renderText={(block) => (

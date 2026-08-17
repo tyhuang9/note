@@ -62,6 +62,9 @@ test("keeps the toolbar keyboard navigable and reveals compact adjustments witho
   const rectangle = page.getByRole("button", { name: "Rectangle (R / 2)" });
   const diamond = page.getByRole("button", { name: "Diamond (D / 3)" });
   await rectangle.focus();
+  const tooltip = page.getByRole("tooltip");
+  await expect(tooltip).toContainText("Rectangle · R / 2");
+  expect(await tooltip.evaluate((element) => element.parentElement === document.body)).toBe(true);
   await page.keyboard.press("ArrowRight");
   await expect(diamond).toBeFocused();
   await expect(toolbar.locator('button[tabindex="0"]')).toHaveCount(1);
@@ -95,6 +98,7 @@ test("keeps the toolbar keyboard navigable and reveals compact adjustments witho
   const darkBackground = await properties.evaluate((element) => getComputedStyle(element).backgroundColor);
   await adjustments.click();
   await expect(properties).toBeHidden();
+  await expect(adjustments).toBeFocused();
   await page.getByRole("button", { name: "Dark mode" }).click();
   await adjustments.click();
   await expect(properties).toBeVisible();
@@ -104,6 +108,51 @@ test("keeps the toolbar keyboard navigable and reveals compact adjustments witho
   expect(await toolbar.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
   await expect(toolbar).toBeInViewport({ ratio: 1 });
   await expect(properties).toBeInViewport({ ratio: 1 });
+});
+
+test("uses context-specific width presets and five curated stroke swatches", async ({ page }) => {
+  const properties = page.getByRole("complementary", { name: "Drawing properties" });
+  await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
+  await expect(properties.getByRole("group", { name: "Stroke color" }).locator("button.drawing-color-swatch")).toHaveCount(5);
+  await expect(properties.getByRole("button", { name: "Thin stroke (1px)" })).toBeVisible();
+  await expect(properties.getByRole("button", { name: "Thick stroke (4px)" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Pen (P / 7)" }).click();
+  await expect(properties.getByRole("button", { name: "Thin stroke (2px)" })).toBeVisible();
+  await expect(properties.getByRole("button", { name: "Thick stroke (8px)" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Highlighter (H)" }).click();
+  await expect(properties.getByRole("button", { name: "Medium stroke (18px)" })).toBeVisible();
+  await expect(properties.getByRole("button", { name: "Thick stroke (32px)" })).toBeVisible();
+});
+
+test("cancels interrupted opacity previews and commits lost pointer capture once", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  const bounds = await canvas.boundingBox();
+  if (!bounds) throw new Error("Canvas bounds were not available.");
+  await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
+  await page.mouse.click(bounds.x + 420, bounds.y + 320);
+  const rectangle = page.getByRole("button", { name: "Select and move rectangle element" });
+  const opacity = page.getByRole("slider", { name: "Opacity" });
+
+  await opacity.dispatchEvent("pointerdown", { pointerId: 41 });
+  await opacity.fill("35");
+  await expect.poll(async () => Number(await rectangle.evaluate((element) => (element as HTMLElement).style.opacity))).toBeCloseTo(0.35, 2);
+  await opacity.dispatchEvent("pointercancel", { pointerId: 41 });
+  await expect.poll(async () => Number(await rectangle.evaluate((element) => (element as HTMLElement).style.opacity))).toBe(1);
+
+  await opacity.dispatchEvent("pointerdown", { pointerId: 42 });
+  await opacity.fill("45");
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await expect.poll(async () => Number(await rectangle.evaluate((element) => (element as HTMLElement).style.opacity))).toBe(1);
+
+  await opacity.dispatchEvent("pointerdown", { pointerId: 43 });
+  await opacity.fill("55");
+  await opacity.dispatchEvent("lostpointercapture", { pointerId: 43 });
+  await expect.poll(async () => Number(await rectangle.evaluate((element) => (element as HTMLElement).style.opacity))).toBeCloseTo(0.55, 2);
+  await canvas.focus();
+  await page.keyboard.press("Control+z");
+  await expect.poll(async () => Number(await rectangle.evaluate((element) => (element as HTMLElement).style.opacity))).toBe(1);
 });
 
 test("shows text formatting only for selected or edited text", async ({ page }) => {

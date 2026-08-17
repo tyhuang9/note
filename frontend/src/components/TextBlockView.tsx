@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { Mark, Node as TiptapNode, mergeAttributes, type Editor, type JSONContent } from "@tiptap/core";
 import { AllSelection, TextSelection, type EditorState } from "@tiptap/pm/state";
@@ -912,6 +912,44 @@ export const TextBlockView = memo(function TextBlockView({
     onInteractionModeChange("selected");
   }
 
+  function handleHeaderKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      leaveEditorForBlockSelection(event.ctrlKey || event.metaKey);
+      return;
+    }
+    const step = (event.shiftKey ? 10 : 1) / zoomLevel;
+    const delta = event.key === "ArrowLeft"
+      ? { x: -step, y: 0 }
+      : event.key === "ArrowRight"
+        ? { x: step, y: 0 }
+        : event.key === "ArrowUp"
+          ? { x: 0, y: -step }
+          : event.key === "ArrowDown"
+            ? { x: 0, y: step }
+            : null;
+    if (!delta || block.locked) return;
+    event.preventDefault();
+    event.stopPropagation();
+    leaveEditorForBlockSelection();
+    onUpdate(block.id, { x: block.x + delta.x, y: block.y + delta.y });
+  }
+
+  function resizeWidthFromKeyboard(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (block.locked) return;
+    const direction = event.key === "ArrowLeft" || event.key === "ArrowDown" ? -1 : 1;
+    const nextWidth = Math.max(MIN_BLOCK_WIDTH, block.width + direction * (event.shiftKey ? 10 : 1) / zoomLevel);
+    hasManualWidth.current = true;
+    onUpdate(block.id, {
+      height: getAutoHeight(nextWidth, true),
+      isWidthManuallyResized: true,
+      width: nextWidth,
+    });
+  }
+
   function handleRootPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
     if (dragState.current) {
       moveBlock(event);
@@ -1011,7 +1049,8 @@ export const TextBlockView = memo(function TextBlockView({
       }}
     >
       <div
-        aria-label="Select and move text block"
+        aria-label={`${block.locked ? "Select locked" : "Select and move"} text block`}
+        aria-pressed={isSelected}
         className="text-block-header"
         onClick={(event) => {
           event.stopPropagation();
@@ -1026,6 +1065,7 @@ export const TextBlockView = memo(function TextBlockView({
           event.stopPropagation();
         }}
         onPointerDown={startDrag}
+        onKeyDown={handleHeaderKeyDown}
         role="button"
         tabIndex={0}
       />
@@ -1123,10 +1163,15 @@ export const TextBlockView = memo(function TextBlockView({
       {(["e"] as ResizeDirection[]).map((direction) => (
         <div
           aria-label={`Resize text block ${direction}`}
+          aria-orientation="horizontal"
+          aria-valuemin={MIN_BLOCK_WIDTH}
+          aria-valuenow={Math.round(block.width)}
+          aria-valuetext={`${Math.round(block.width)} pixels wide`}
           className={`resize-handle resize-${direction}`}
           key={direction}
+          onKeyDown={resizeWidthFromKeyboard}
           onPointerDown={(event) => startResize(event, direction)}
-          role="button"
+          role="slider"
           tabIndex={0}
         />
       ))}

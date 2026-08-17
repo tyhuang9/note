@@ -299,10 +299,17 @@ type DragLayerSession = {
   originId: string;
   overlayElement: HTMLDivElement;
   sourceElements: HTMLElement[];
+  selectedBlockIds: string[];
   startClientX: number;
   startClientY: number;
   startPanOffset: PanOffset;
   zoomLevel: number;
+};
+
+type ResizeLayerSession = {
+  groupElement: HTMLDivElement;
+  overlayElement: HTMLDivElement;
+  sourceElements: HTMLElement[];
 };
 
 type SelectionTransformSession = {
@@ -1074,7 +1081,6 @@ function App() {
   const [isGridVisible, setIsGridVisible] = useState(false);
   const [isSnapToGridEnabled, setIsSnapToGridEnabled] = useState(false);
   const [dragSourceBlockIds, setDragSourceBlockIds] = useState<string[]>([]);
-  const [selectionFramePreview, setSelectionFramePreview] = useState<SelectionRect | null>(null);
   const [selectedSidebarPageIds, setSelectedSidebarPageIds] = useState<string[]>([]);
   const [draggedPageIds, setDraggedPageIds] = useState<string[]>([]);
   const [pageDropTargetFolderId, setPageDropTargetFolderId] = useState<string | null>(null);
@@ -1118,7 +1124,10 @@ function App() {
   const canvasContentRef = useRef<HTMLDivElement | null>(null);
   const liveDraftLayerRef = useRef<SVGSVGElement | null>(null);
   const selectionRectRef = useRef<HTMLDivElement | null>(null);
+  const selectionFrameRef = useRef<HTMLDivElement | null>(null);
   const selectionTransformRef = useRef<SelectionTransformSession | null>(null);
+  const resizeLayerSessionRef = useRef<ResizeLayerSession | null>(null);
+  const cancelCanvasSelectionRef = useRef<() => void>(() => undefined);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const explorerPanelRef = useRef<HTMLDivElement | null>(null);
   const explorerToggleButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -1656,7 +1665,8 @@ function App() {
         window.cancelAnimationFrame(panRafId.current);
       }
 
-      clearMarquee();
+      cancelCanvasSelectionSession();
+      cancelSelectionFrameInteraction(false);
 
       if (dragLayerSessionRef.current) {
         cleanupDragLayerSession(dragLayerSessionRef.current);
@@ -1669,7 +1679,8 @@ function App() {
 
   useEffect(() => {
     function handleWindowBlur() {
-      clearMarquee();
+      cancelCanvasSelectionSession();
+      cancelSelectionFrameInteraction();
       if (!dragLayerSessionRef.current) {
         return;
       }
@@ -1685,7 +1696,8 @@ function App() {
   }, []);
 
   useEffect(() => {
-    clearMarquee();
+    cancelCanvasSelectionSession();
+    cancelSelectionFrameInteraction();
   }, [activeTool, selectedPageId]);
 
   useEffect(() => {
@@ -2977,7 +2989,8 @@ function App() {
       }
 
       if (event.key === "Escape") {
-        clearMarquee();
+        cancelCanvasSelectionSession();
+        cancelSelectionFrameInteraction();
       }
 
       const currentEditingBlockId = editingBlockIdRef.current;
@@ -3227,6 +3240,11 @@ function App() {
 
   function clearMarquee() {
     cleanupMarquee(selectionRafId, pendingSelectionRect, selectionRectRef);
+  }
+
+  function cancelCanvasSelectionSession() {
+    cancelCanvasSelectionRef.current();
+    clearMarquee();
   }
 
   function scheduleSelectionRectangle(rect: SelectionRect) {
@@ -5271,7 +5289,8 @@ function App() {
       const isGroupDrag =
         currentSelectedBlockIds.includes(originId) &&
         currentSelectedBlockIds.length > 1;
-      const requestedBlockIds = (isGroupDrag ? currentSelectedBlockIds : [originId])
+      const selectedBlockIds = isGroupDrag ? [...currentSelectedBlockIds] : [originId];
+      const requestedBlockIds = selectedBlockIds
         .filter((blockId) => {
           const block = dataRef.current.elements.find((element) => element.id === blockId);
           return Boolean(block && !block.locked && isBoxCanvasElement(block));
@@ -5346,6 +5365,7 @@ function App() {
         originId,
         overlayElement,
         sourceElements: sourceEntries.map((entry) => entry.element),
+        selectedBlockIds,
         startClientX: clientX,
         startClientY: clientY,
         startPanOffset: { ...panOffsetRef.current },
@@ -5419,14 +5439,14 @@ function App() {
       );
     }
 
-    selectDraggedBlocks(dragSession.blockIds);
+    selectDraggedBlocks(dragSession.selectedBlockIds);
     setEditingBlockId(null);
     setInsertionPoint(null);
     setIsCanvasKeyboardActive(true);
     setActiveMode("selected");
   }, []);
 
-  const cancelVisualDrag = useCallback(() => {
+  const cancelVisualDrag = useCallback((updateState = true) => {
     const dragSession = dragLayerSessionRef.current;
 
     if (!dragSession) {
@@ -5435,9 +5455,116 @@ function App() {
 
     cleanupDragLayerSession(dragSession);
     dragLayerSessionRef.current = null;
-    setDragSourceBlockIds([]);
-    setActiveMode("selected");
+    if (updateState) {
+      setDragSourceBlockIds([]);
+      setActiveMode("selected");
+    }
   }, []);
+
+  function cleanupResizeLayerSession(session: ResizeLayerSession) {
+    for (const sourceElement of session.sourceElements) {
+      sourceElement.classList.remove("is-drag-source-hidden");
+    }
+    session.overlayElement.remove();
+  }
+
+  function startSelectionResizePreview(bounds: SelectionRect, corner: SelectionCorner) {
+    if (resizeLayerSessionRef.current) return true;
+    const canvasElement = canvasRef.current;
+    if (!canvasElement) return false;
+
+    const sourceEntries = selectedBlockIdsRef.current
+      .map((blockId) => ({
+        blockId,
+        element: blockElementsRef.current.get(blockId) ?? null,
+      }))
+      .filter(
+        (entry): entry is { blockId: string; element: HTMLElement } => {
+          const block = dataRef.current.elements.find((candidate) => candidate.id === entry.blockId);
+          return Boolean(entry.element && block && !block.locked && isBoxCanvasElement(block));
+        },
+      );
+    if (sourceEntries.length === 0) return false;
+
+    const canvasRect = canvasElement.getBoundingClientRect();
+    const overlayElement = document.createElement("div");
+    const groupElement = document.createElement("div");
+    const zoom = zoomLevelRef.current;
+    const anchor = getOppositeCorner(bounds, corner);
+    overlayElement.className = "drag-layer resize-layer";
+    groupElement.className = "drag-layer-group resize-layer-group";
+    groupElement.style.transformOrigin = `${panOffsetRef.current.x + anchor.x * zoom}px ${panOffsetRef.current.y + anchor.y * zoom}px`;
+    overlayElement.append(groupElement);
+
+    for (const { element } of sourceEntries) {
+      const elementRect = element.getBoundingClientRect();
+      const cloneElement = element.cloneNode(true) as HTMLElement;
+      cloneElement.removeAttribute("data-block-id");
+      cloneElement.setAttribute("aria-hidden", "true");
+      cloneElement.classList.remove("is-content-selected", "is-drag-source-hidden", "is-editing");
+      cloneElement.classList.add("is-canvas-mode", "is-selected", "drag-layer-clone", "resize-layer-clone");
+      cloneElement.style.position = "absolute";
+      cloneElement.style.left = `${elementRect.left - canvasRect.left}px`;
+      cloneElement.style.top = `${elementRect.top - canvasRect.top}px`;
+      cloneElement.style.width = `${element.offsetWidth}px`;
+      cloneElement.style.height = `${element.offsetHeight}px`;
+      cloneElement.style.margin = "0";
+      cloneElement.style.pointerEvents = "none";
+      cloneElement.style.transform = `scale(${zoom})`;
+      cloneElement.style.transformOrigin = "0 0";
+      groupElement.append(cloneElement);
+    }
+
+    canvasElement.append(overlayElement);
+    const session = {
+      groupElement,
+      overlayElement,
+      sourceElements: sourceEntries.map((entry) => entry.element),
+    };
+    resizeLayerSessionRef.current = session;
+    setDragSourceBlockIds(sourceEntries.map((entry) => entry.blockId));
+    for (const sourceElement of session.sourceElements) {
+      sourceElement.classList.add("is-drag-source-hidden");
+    }
+    setActiveMode("resizing");
+    return true;
+  }
+
+  function updateSelectionResizePreview(scale: number) {
+    const session = resizeLayerSessionRef.current;
+    if (session) session.groupElement.style.transform = `scale(${scale})`;
+  }
+
+  function finishSelectionResizePreview(updateState = true) {
+    const session = resizeLayerSessionRef.current;
+    if (!session) return;
+    cleanupResizeLayerSession(session);
+    resizeLayerSessionRef.current = null;
+    if (updateState) setDragSourceBlockIds([]);
+  }
+
+  function setSelectionFrameVisualBounds(bounds: SelectionRect) {
+    const frame = selectionFrameRef.current;
+    if (!frame) return;
+    const zoom = zoomLevelRef.current;
+    const pan = panOffsetRef.current;
+    frame.style.left = `${pan.x + bounds.x * zoom}px`;
+    frame.style.top = `${pan.y + bounds.y * zoom}px`;
+    frame.style.width = `${bounds.width * zoom}px`;
+    frame.style.height = `${bounds.height * zoom}px`;
+  }
+
+  function cancelSelectionFrameInteraction(updateMode = true) {
+    const session = selectionTransformRef.current;
+    selectionTransformRef.current = null;
+    if (session?.corner) {
+      finishSelectionResizePreview(updateMode);
+      setSelectionFrameVisualBounds(session.startBounds);
+    } else if (session) {
+      cancelVisualDrag(updateMode);
+    }
+    if (updateMode && session) setActiveMode(selectedBlockIdsRef.current.length > 0 ? "selected" : "canvas");
+  }
 
   function selectionResizePreview(
     bounds: SelectionRect,
@@ -5493,9 +5620,10 @@ function App() {
     session.didMove = true;
 
     if (session.corner) {
-      setSelectionFramePreview(
-        selectionResizePreview(session.startBounds, session.corner, event.clientX, event.clientY, session).bounds,
-      );
+      const preview = selectionResizePreview(session.startBounds, session.corner, event.clientX, event.clientY, session);
+      if (!startSelectionResizePreview(session.startBounds, session.corner)) return;
+      updateSelectionResizePreview(preview.scale);
+      setSelectionFrameVisualBounds(preview.bounds);
       return;
     }
 
@@ -5512,18 +5640,23 @@ function App() {
   function finishSelectionFrameInteraction(event: ReactPointerEvent<HTMLElement>, cancelled = false) {
     const session = selectionTransformRef.current;
     if (!session || session.pointerId !== event.pointerId) return;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
     selectionTransformRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
 
     if (cancelled) {
-      if (!session.corner) cancelVisualDrag();
-      setSelectionFramePreview(null);
+      if (session.corner) {
+        finishSelectionResizePreview();
+        setSelectionFrameVisualBounds(session.startBounds);
+      } else {
+        cancelVisualDrag();
+      }
       return;
     }
 
     if (session.corner && session.didMove) {
       const preview = selectionResizePreview(session.startBounds, session.corner, event.clientX, event.clientY, session);
       const selectedIds = new Set(selectedBlockIdsRef.current);
+      finishSelectionResizePreview();
       setBlocksWithHistory((currentBlocks) =>
         scaleSelection(currentBlocks, selectedIds, session.startBounds, session.corner!, preview.scale),
       );
@@ -5531,7 +5664,6 @@ function App() {
       endVisualDrag(event.clientX, event.clientY);
     }
 
-    setSelectionFramePreview(null);
     setEditingBlockId(null);
     setInsertionPoint(null);
     setIsCanvasKeyboardActive(true);
@@ -5796,6 +5928,7 @@ function App() {
     zoomLevelRef,
     zoomStep: ZOOM_STEP,
   });
+  cancelCanvasSelectionRef.current = canvasInteraction.cancelMarquee;
 
   const completeInkStroke = useCallback(
     (tool: "pen" | "highlighter", points: readonly RawInkPoint[]) => {
@@ -6287,8 +6420,9 @@ function App() {
           </CanvasWorldLayer>
           <CanvasInteractionOverlay
             marqueeRef={selectionRectRef}
+            selectionFrameRef={selectionFrameRef}
             selectionFrame={(() => {
-              const bounds = selectionFramePreview ?? selectionWorldBounds;
+              const bounds = selectionWorldBounds;
               if (!bounds || selectedBlockIds.length === 0 || editingBlockId) return undefined;
               const selected = selectedBlockIds.length === 1
                 ? visibleBlocks.find((block) => block.id === selectedBlockIds[0])

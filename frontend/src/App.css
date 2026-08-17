@@ -2478,10 +2478,6 @@ h2 {
   touch-action: none;
 }
 
-.selection-frame-move-surface.is-single-selection {
-  inset: 12px;
-}
-
 .selection-frame-move-surface:active {
   cursor: grabbing;
 }
@@ -2495,9 +2491,9 @@ h2 {
   clip-path: polygon(
     0 0,
     100% 0,
-    100% calc(100% - 28px),
-    calc(100% - 28px) calc(100% - 28px),
-    calc(100% - 28px) 100%,
+    100% calc(100% - 12px),
+    calc(100% - 12px) calc(100% - 12px),
+    calc(100% - 12px) 100%,
     0 100%
   );
 }
@@ -2970,6 +2966,13 @@ h2 {
   width: 24px;
   height: 24px;
   cursor: nwse-resize;
+}
+
+.resize-handle.ink-resize-handle {
+  top: auto;
+  right: -12px;
+  bottom: -12px;
+  left: auto;
 }
 
 .image-resize-handle::after {

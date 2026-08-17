@@ -1,4 +1,4 @@
-import { useCallback, useRef, type RefObject } from "react";
+import { useCallback, useEffect, useRef, type RefObject } from "react";
 import type {
   PointerEvent as ReactPointerEvent,
   WheelEvent as ReactWheelEvent,
@@ -65,6 +65,8 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
     selectionState.current = null;
     optionsRef.current.cleanupMarquee();
   }, []);
+
+  useEffect(() => cancelMarquee, [cancelMarquee]);
 
   const getCanvasPoint = useCallback(
     (clientX: number, clientY: number): CanvasPoint | null => {

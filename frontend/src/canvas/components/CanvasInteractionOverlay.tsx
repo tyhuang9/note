@@ -4,6 +4,7 @@ import type { SelectionCorner } from "../model/selectionBounds";
 type CanvasInteractionOverlayProps = {
   children?: ReactNode;
   marqueeRef: Ref<HTMLDivElement>;
+  selectionFrameRef?: Ref<HTMLDivElement>;
   selectionFrame?: {
     height: number;
     onDoubleClick?: MouseEventHandler<HTMLButtonElement>;
@@ -29,6 +30,7 @@ export function CanvasInteractionOverlay({
   children,
   marqueeRef,
   selectionFrame,
+  selectionFrameRef,
 }: CanvasInteractionOverlayProps) {
   return (
     <div className="canvas-interaction-overlay">
@@ -36,12 +38,13 @@ export function CanvasInteractionOverlay({
       {selectionFrame ? (
         <div
           className="selection-frame"
+          ref={selectionFrameRef}
           style={{ height: selectionFrame.height, left: selectionFrame.x, top: selectionFrame.y, width: selectionFrame.width }}
         >
           {selectionFrame.showMoveSurface ? (
             <button
               aria-label="Move selected elements"
-              className={`selection-frame-move-surface ${selectionFrame.resizeCorners.length === 0 ? "is-single-selection" : ""} ${selectionFrame.preserveNativeSoutheastHandle ? "preserve-native-se-handle" : ""}`}
+              className={`selection-frame-move-surface ${selectionFrame.preserveNativeSoutheastHandle ? "preserve-native-se-handle" : ""}`}
               onDoubleClick={selectionFrame.onDoubleClick}
               onKeyDown={selectionFrame.onMoveKeyDown}
               onLostPointerCapture={selectionFrame.onLostPointerCapture}

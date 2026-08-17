@@ -10,6 +10,9 @@ import type { CanvasPoint } from "./geometry";
 
 /** The screen-space capture radius stays constant as the canvas zooms. */
 export const CONNECTOR_BINDING_SNAP_RADIUS_PX = 18;
+/** Mirrors the persistence boundary limit in the Rust repository. */
+export const MAX_CANVAS_VALUE = 1_000_000;
+const MAX_RESOLVED_CANVAS_VALUE = MAX_CANVAS_VALUE * 4;
 
 export type ShapeAnchorName = "top" | "right" | "bottom" | "left";
 
@@ -34,7 +37,15 @@ const CARDINAL_ANCHORS: readonly Readonly<{ name: ShapeAnchorName; t: number }>[
 export function isBindableShape(element: CanvasElement | undefined): element is ShapeElement {
   return element?.type === "shape" && (
     element.shape === "rectangle" || element.shape === "ellipse" || element.shape === "diamond"
-  );
+  ) && hasSafeShapeGeometry(element);
+}
+
+export function isSafeCanvasCoordinate(value: number): boolean {
+  return Number.isFinite(value) && Math.abs(value) <= MAX_CANVAS_VALUE;
+}
+
+export function isSafeCanvasDimension(value: number): boolean {
+  return Number.isFinite(value) && value >= 0 && value <= MAX_CANVAS_VALUE;
 }
 
 /** Resolves any compatible endpoint to its current world point. */
@@ -43,11 +54,15 @@ export function resolveConnectorEndpoint(
   elementsById: Readonly<Record<ElementId, CanvasElement>>,
 ): CanvasPoint | null {
   if (endpoint.kind === "free") {
-    return Number.isFinite(endpoint.x) && Number.isFinite(endpoint.y) ? endpoint : null;
+    return isSafeCanvasCoordinate(endpoint.x) && isSafeCanvasCoordinate(endpoint.y) ? endpoint : null;
   }
   if (endpoint.kind !== "element") return null;
   const target = elementsById[endpoint.targetElementId];
-  return isBindableShape(target) ? getShapeAnchorPoint(target, endpoint.anchor, endpoint.gap) : null;
+  if (!isBindableShape(target) || !isValidPerimeterAnchor(endpoint.anchor) || !isSafeGap(endpoint.gap)) {
+    return null;
+  }
+  const point = getShapeAnchorPoint(target, endpoint.anchor, endpoint.gap);
+  return isSafeResolvedPoint(point) ? point : null;
 }
 
 export function resolveConnectorPoints(
@@ -61,6 +76,7 @@ export function resolveConnectorPoints(
 
 /** Returns the four visible/persisted binding positions for a compatible shape. */
 export function getShapeBindingAnchors(shape: ShapeElement): readonly ShapeBindingAnchor[] {
+  if (!hasSafeShapeGeometry(shape)) return [];
   return CARDINAL_ANCHORS.map(({ name, t }) => ({
     anchor: { t },
     name,
@@ -77,6 +93,7 @@ export function getShapeAnchorPoint(
   anchor: PerimeterAnchor,
   gap = 0,
 ): CanvasPoint {
+  if (!hasSafeShapeGeometry(shape) || !isSafeGap(gap)) return { x: 0, y: 0 };
   const width = Math.max(0, shape.width);
   const height = Math.max(0, shape.height);
   const center = { x: shape.x + width / 2, y: shape.y + height / 2 };
@@ -101,11 +118,12 @@ export function getShapeAnchorPoint(
     : { x: direction.x * perimeterDistance, y: direction.y * perimeterDistance };
   const rotatedDirection = rotateVector(direction, shape.rotation);
   const rotatedLocal = rotateVector(local, shape.rotation);
-  const safeGap = Number.isFinite(gap) ? Math.max(0, gap) : 0;
-  return {
+  const safeGap = gap;
+  const point = {
     x: center.x + rotatedLocal.x + rotatedDirection.x * safeGap,
     y: center.y + rotatedLocal.y + rotatedDirection.y * safeGap,
   };
+  return isSafeResolvedPoint(point) ? point : { x: 0, y: 0 };
 }
 
 /** Snaps only arrow endpoints; callers pass `allowBinding` false for lines. */
@@ -116,7 +134,10 @@ export function snapConnectorEndpoint(
   allowBinding: boolean,
   radiusPx = CONNECTOR_BINDING_SNAP_RADIUS_PX,
 ): ConnectorEndpoint {
-  if (!allowBinding || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+  if (!isSafeResolvedPoint(point)) {
+    return { kind: "free", x: 0, y: 0 };
+  }
+  if (!allowBinding) {
     return { kind: "free", ...point };
   }
   const worldRadius = radiusPx / Math.max(zoom, Number.EPSILON);
@@ -148,7 +169,7 @@ export function detachConnectorEndpointsForDeletedTargets(
   const detach = (endpoint: ConnectorEndpoint): ConnectorEndpoint => {
     if (endpoint.kind !== "element" || !deletedIds.has(endpoint.targetElementId)) return endpoint;
     const resolved = resolveConnectorEndpoint(endpoint, elementsById);
-    return resolved ? { kind: "free", ...resolved } : endpoint;
+    return { kind: "free", ...(resolved ?? { x: 0, y: 0 }) };
   };
   return elements.map((element) => {
     if (element.type !== "connector" || deletedIds.has(element.id)) return element;
@@ -164,6 +185,29 @@ function normalizeAnchorT(t: number): number {
   if (!Number.isFinite(t)) return 0;
   const normalized = t % 1;
   return normalized < 0 ? normalized + 1 : normalized;
+}
+
+function hasSafeShapeGeometry(shape: ShapeElement): boolean {
+  return isSafeCanvasCoordinate(shape.x)
+    && isSafeCanvasCoordinate(shape.y)
+    && isSafeCanvasDimension(shape.width)
+    && isSafeCanvasDimension(shape.height)
+    && Number.isFinite(shape.rotation);
+}
+
+function isValidPerimeterAnchor(anchor: PerimeterAnchor): boolean {
+  return Number.isFinite(anchor.t) && anchor.t >= 0 && anchor.t <= 1;
+}
+
+function isSafeGap(gap: number): boolean {
+  return Number.isFinite(gap) && gap >= 0 && gap <= MAX_CANVAS_VALUE;
+}
+
+function isSafeResolvedPoint(point: CanvasPoint): boolean {
+  return Number.isFinite(point.x)
+    && Number.isFinite(point.y)
+    && Math.abs(point.x) <= MAX_RESOLVED_CANVAS_VALUE
+    && Math.abs(point.y) <= MAX_RESOLVED_CANVAS_VALUE;
 }
 
 function rotateVector(vector: CanvasPoint, rotation: number): CanvasPoint {

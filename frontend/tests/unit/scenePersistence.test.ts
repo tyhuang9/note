@@ -10,6 +10,7 @@ import {
   type Invoke,
   type SceneChangeBatch,
 } from "../../src/canvas/persistence/sceneRepository";
+import { MAX_CANVAS_VALUE } from "../../src/canvas/model/connectorBinding";
 
 function text(id: string, content = id): TextElement {
   return {
@@ -147,6 +148,31 @@ describe("scene repository", () => {
   });
 
   it("preserves bound connector endpoints through load normalization", async () => {
+    const rectangle: ShapeElement = {
+      createdAt: 1,
+      height: 60,
+      id: "rectangle",
+      locked: false,
+      opacity: 1,
+      pageId: "page",
+      rotation: 0,
+      shape: "rectangle",
+      style: {
+        fillColor: null,
+        roughness: 1,
+        roundness: 0,
+        seed: 1,
+        strokeColor: { kind: "theme", token: "foreground" },
+        strokeStyle: "solid",
+        strokeWidth: 2,
+      },
+      type: "shape",
+      updatedAt: 1,
+      width: 100,
+      x: 10,
+      y: 20,
+      zIndex: 0,
+    };
     const boundConnector: ConnectorElement = {
       createdAt: 1,
       end: { kind: "free", x: 180, y: 60 },
@@ -172,15 +198,114 @@ describe("scene repository", () => {
       zIndex: 1,
     };
     const invoke: Invoke = async (command) => {
-      if (command === "load_workspace_data") return { elements: [boundConnector], folders: [], pages: [], warnings: [] } as never;
+      if (command === "load_workspace_data") return { elements: [rectangle, boundConnector], folders: [], pages: [], warnings: [] } as never;
       return undefined as never;
     };
 
-    const [loaded] = (await createSceneRepository(invoke).loadWorkspace()).elements;
+    const loaded = (await createSceneRepository(invoke).loadWorkspace()).elements.find(
+      (element): element is ConnectorElement => element.id === boundConnector.id,
+    );
     expect(loaded).toMatchObject({
       start: { kind: "element", targetElementId: "rectangle", anchor: { t: 0.25 }, gap: 6 },
       style: { endArrowhead: "arrow" },
     });
+  });
+
+  it("normalizes malformed bindings and unsafe coordinates to safe free endpoints", async () => {
+    const rectangle: ShapeElement = {
+      createdAt: 1,
+      height: 60,
+      id: "rectangle",
+      locked: false,
+      opacity: 1,
+      pageId: "page",
+      rotation: 0,
+      shape: "rectangle",
+      style: {
+        fillColor: null,
+        roughness: 1,
+        roundness: 0,
+        seed: 1,
+        strokeColor: { kind: "theme", token: "foreground" },
+        strokeStyle: "solid",
+        strokeWidth: 2,
+      },
+      type: "shape",
+      updatedAt: 1,
+      width: 100,
+      x: 10,
+      y: 20,
+      zIndex: 0,
+    };
+    const arrow = (
+      id: string,
+      start: ConnectorElement["start"],
+      endArrowhead: "none" | "arrow" = "arrow",
+    ): ConnectorElement => ({
+      createdAt: 1,
+      end: { kind: "free", x: 180, y: 60 },
+      id,
+      locked: false,
+      opacity: 1,
+      pageId: "page",
+      routing: "straight",
+      start,
+      style: {
+        endArrowhead,
+        fillColor: null,
+        roughness: 1,
+        roundness: 0,
+        seed: 1,
+        startArrowhead: "none",
+        strokeColor: { kind: "theme", token: "foreground" },
+        strokeStyle: "solid",
+        strokeWidth: 2,
+      },
+      type: "connector",
+      updatedAt: 1,
+      zIndex: 1,
+    });
+    const bound = (targetElementId: string, gap = 0): ConnectorElement["start"] => (
+      { kind: "element", targetElementId, anchor: { t: 0.25 }, gap }
+    );
+    const foreignRectangle = { ...rectangle, id: "foreign-rectangle", pageId: "other-page" };
+    const unsafeRectangle = { ...rectangle, id: "unsafe-rectangle", x: MAX_CANVAS_VALUE + 1 };
+    const invoke: Invoke = async (command) => {
+      if (command !== "load_workspace_data") return undefined as never;
+      return {
+        elements: [
+          rectangle,
+          foreignRectangle,
+          unsafeRectangle,
+          text("text-target"),
+          arrow("missing", bound("missing")),
+          arrow("nonshape", bound("text-target")),
+          arrow("cross-page", bound("foreign-rectangle")),
+          arrow("unsafe-shape", bound("unsafe-rectangle")),
+          arrow("group", { kind: "group", targetGroupId: "group", anchor: { t: 0.25 }, gap: 0 }),
+          arrow("connector", { kind: "connector", targetConnectorId: "missing", pathT: 0.25, gap: 0 }),
+          arrow("large-free", { kind: "free", x: MAX_CANVAS_VALUE + 1, y: 0 }),
+          arrow("large-gap", bound("rectangle", MAX_CANVAS_VALUE + 1)),
+          arrow("line", bound("rectangle"), "none"),
+        ],
+        folders: [],
+        pages: [],
+        warnings: [],
+      } as never;
+    };
+
+    const loaded = await createSceneRepository(invoke).loadWorkspace();
+    const connectorById = Object.fromEntries(
+      loaded.elements
+        .filter((element): element is ConnectorElement => element.type === "connector")
+        .map((element) => [element.id, element]),
+    );
+    expect(loaded.elements.some((element) => element.id === "unsafe-rectangle")).toBe(false);
+    for (const id of ["missing", "nonshape", "unsafe-shape", "group", "connector", "large-free", "large-gap"]) {
+      expect(connectorById[id].start).toEqual({ kind: "free", x: 0, y: 0 });
+    }
+    expect(connectorById["cross-page"].start).toEqual({ kind: "free", x: 110, y: 50 });
+    expect(connectorById.line.start).toEqual({ kind: "free", x: 110, y: 50 });
   });
 });
 

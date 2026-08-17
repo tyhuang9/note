@@ -1,6 +1,13 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type { AppData, AppSessionState, Folder, Page } from "../../types";
 import type { CanvasElement, ConnectorElement, RoughStyle, ShapeElement } from "../model/elements";
+import {
+  isBindableShape,
+  isSafeCanvasCoordinate,
+  isSafeCanvasDimension,
+  MAX_CANVAS_VALUE,
+  resolveConnectorEndpoint,
+} from "../model/connectorBinding";
 
 export const MAX_ASSET_BYTES = 16 * 1024 * 1024;
 
@@ -80,7 +87,7 @@ export function createSceneRepository(invoke: Invoke = tauriInvoke): SceneReposi
     initializeStorage: () => invoke<StorageDiagnostics>("initialize_storage"),
     loadWorkspace: async () => {
       const workspace = await invoke<WorkspaceData>("load_workspace_data");
-      return { ...workspace, elements: workspace.elements.map(normalizeLoadedCanvasElement) };
+      return { ...workspace, elements: normalizeLoadedCanvasElements(workspace.elements) };
     },
     reconcileWorkspaceStructure: (structure) =>
       invoke<WorkspaceStructureResult>("reconcile_workspace_structure", { structure }),
@@ -112,6 +119,57 @@ export function normalizeLoadedCanvasElement(element: CanvasElement): CanvasElem
     };
   }
   return element;
+}
+
+function normalizeLoadedCanvasElements(elements: readonly CanvasElement[]): CanvasElement[] {
+  const safeElements = elements
+    .map(normalizeLoadedCanvasElement)
+    .filter(hasSafeLoadedGeometry);
+  const elementsById = Object.fromEntries(safeElements.map((element) => [element.id, element]));
+  return safeElements.map((element) => {
+    if (element.type !== "connector") return element;
+    return {
+      ...element,
+      start: normalizeLoadedConnectorEndpoint(element.start, element, elementsById),
+      end: normalizeLoadedConnectorEndpoint(element.end, element, elementsById),
+    };
+  });
+}
+
+function hasSafeLoadedGeometry(element: CanvasElement): boolean {
+  if (element.type === "connector") return true;
+  return isSafeCanvasCoordinate(element.x)
+    && isSafeCanvasCoordinate(element.y)
+    && isSafeCanvasDimension(element.width)
+    && isSafeCanvasDimension(element.height)
+    && Number.isFinite(element.rotation);
+}
+
+function normalizeLoadedConnectorEndpoint(
+  endpoint: ConnectorElement["start"],
+  connector: ConnectorElement,
+  elementsById: Readonly<Record<string, CanvasElement>>,
+): ConnectorElement["start"] {
+  if (endpoint.kind === "free") {
+    return isSafeCanvasCoordinate(endpoint.x) && isSafeCanvasCoordinate(endpoint.y)
+      ? endpoint
+      : { kind: "free", x: 0, y: 0 };
+  }
+  if (
+    endpoint.kind === "element"
+    && connector.style.endArrowhead === "arrow"
+    && Number.isFinite(endpoint.anchor.t)
+    && endpoint.anchor.t >= 0
+    && endpoint.anchor.t <= 1
+    && Number.isFinite(endpoint.gap)
+    && endpoint.gap >= 0
+    && endpoint.gap <= MAX_CANVAS_VALUE
+  ) {
+    const target = elementsById[endpoint.targetElementId];
+    if (target?.pageId === connector.pageId && isBindableShape(target)) return endpoint;
+  }
+  const resolved = resolveConnectorEndpoint(endpoint, elementsById);
+  return { kind: "free", ...(resolved ?? { x: 0, y: 0 }) };
 }
 
 export function isAssetBlobWithinLimit(blob: Pick<Blob, "size">): boolean {

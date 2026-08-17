@@ -1,7 +1,8 @@
 import { useLayoutEffect, useRef, type KeyboardEvent, type RefCallback } from "react";
 import { RoughSVG } from "roughjs/bin/svg";
 import type { Options } from "roughjs/bin/core";
-import type { ConnectorElement, ShapeElement } from "../model/elements";
+import type { CanvasElement, ConnectorElement, ElementId, ShapeElement } from "../model/elements";
+import { resolveConnectorPoints } from "../model/connectorBinding";
 import { canvasColorToCss } from "../rendering/canvasColor";
 
 type PrimitiveElementViewProps<T extends ShapeElement | ConnectorElement> = {
@@ -152,11 +153,16 @@ export function ShapeElementView({ element, isDragSourceHidden = false, isSelect
   );
 }
 
-export function ConnectorElementView({ element, isDragSourceHidden = false, isSelected, onElementChange, onKeyboardMove, onSelect }: PrimitiveElementViewProps<ConnectorElement>) {
-  if (element.start.kind !== "free" || element.end.kind !== "free") return null;
+type ConnectorElementViewProps = PrimitiveElementViewProps<ConnectorElement> & {
+  elementsById: Readonly<Record<ElementId, CanvasElement>>;
+};
+
+export function ConnectorElementView({ element, elementsById, isDragSourceHidden = false, isSelected, onElementChange, onKeyboardMove, onSelect }: ConnectorElementViewProps) {
+  const points = resolveConnectorPoints(element, elementsById);
+  if (!points) return null;
   return (
     <FreeConnectorElementView
-      element={element as FreeConnectorElement}
+      element={{ ...element, start: { kind: "free", ...points.start }, end: { kind: "free", ...points.end } }}
       isDragSourceHidden={isDragSourceHidden}
       isSelected={isSelected}
       onElementChange={onElementChange}

@@ -33,6 +33,7 @@ import { CanvasViewport } from "./canvas/components/CanvasViewport";
 import { CanvasWorldLayer } from "./canvas/components/CanvasWorldLayer";
 import { InkElementView } from "./canvas/components/InkElementView";
 import { ConnectorElementView, ShapeElementView } from "./canvas/components/PrimitiveElementView";
+import { ShapeBindingAnchors } from "./canvas/components/ShapeBindingAnchors";
 import { useCanvasInteraction } from "./canvas/interaction/useCanvasInteraction";
 import { cleanupMarquee } from "./canvas/interaction/marqueeCleanup";
 import {
@@ -165,6 +166,11 @@ import {
   translateSelection,
   type SelectionCorner,
 } from "./canvas/model/selectionBounds";
+import {
+  detachConnectorEndpointsForDeletedTargets,
+  resolveConnectorEndpoint,
+  snapConnectorEndpoint,
+} from "./canvas/model/connectorBinding";
 import {
   assetDataUrl,
   assetRequestFromDataUrl,
@@ -1134,6 +1140,7 @@ function App() {
   const [dragSourceBlockIds, setDragSourceBlockIds] = useState<string[]>([]);
   const [selectionFramePreview, setSelectionFramePreview] = useState<SelectionRect | null>(null);
   const [connectorEndpointPreview, setConnectorEndpointPreview] = useState<ConnectorElement | null>(null);
+  const [isConnectorEndpointRetargeting, setIsConnectorEndpointRetargeting] = useState(false);
   const [selectedSidebarPageIds, setSelectedSidebarPageIds] = useState<string[]>([]);
   const [draggedPageIds, setDraggedPageIds] = useState<string[]>([]);
   const [pageDropTargetFolderId, setPageDropTargetFolderId] = useState<string | null>(null);
@@ -1317,13 +1324,17 @@ function App() {
     () => data.elements.filter((element) => element.pageId === selectedPageId),
     [data.elements, selectedPageId],
   );
+  const visibleCanvasElementsById = useMemo(
+    () => Object.fromEntries(visibleCanvasElements.map((element) => [element.id, element])),
+    [visibleCanvasElements],
+  );
   const selectionWorldBounds = useMemo(() => {
     const selectedIds = new Set(selectedBlockIds);
     return getSelectionBounds(
       visibleCanvasElements.filter((element) => selectedIds.has(element.id)),
-      Object.fromEntries(visibleCanvasElements.map((element) => [element.id, element])),
+      visibleCanvasElementsById,
     );
-  }, [selectedBlockIds, visibleCanvasElements]);
+  }, [selectedBlockIds, visibleCanvasElements, visibleCanvasElementsById]);
   const selectedDrawingElements = useMemo(() => {
     const selectedIds = new Set(selectedBlockIds);
     return data.elements.filter((element) => element.pageId === selectedPageId && selectedIds.has(element.id));
@@ -1651,6 +1662,10 @@ function App() {
       ),
     );
   }, [canvasViewport, connectorEndpointPreview, selectedBlockIds, visibleCanvasElements, zoomLevel]);
+  const renderedCanvasElementsById = useMemo(
+    () => Object.fromEntries(renderedCanvasElements.map((element) => [element.id, element])),
+    [renderedCanvasElements],
+  );
   const offscreenGroups = useMemo<OffscreenGroup[]>(() => {
     if (!canvasViewport || visibleBlocks.length === 0) {
       return [];
@@ -3209,9 +3224,8 @@ function App() {
     if (blockIdsToDelete.size === 0) return false;
 
     setBlocksWithHistory((currentBlocks) =>
-      currentBlocks.filter(
-        (block) => !blockIdsToDelete.has(block.id),
-      ),
+      detachConnectorEndpointsForDeletedTargets(currentBlocks, blockIdsToDelete)
+        .filter((block) => !blockIdsToDelete.has(block.id)),
     );
     setSelectedBlockIds((currentBlockIds) =>
       currentBlockIds.filter((blockId) => !blockIdsToDelete.has(blockId)),
@@ -5503,9 +5517,10 @@ function App() {
   const eraseCanvasElements = useCallback((elementIds: readonly string[]) => {
     const ids = new Set(elementIds);
     if (ids.size === 0) return;
-    setBlocksWithHistory((currentElements) => currentElements.filter(
-      (element) => element.locked || !ids.has(element.id),
-    ));
+    setBlocksWithHistory((currentElements) =>
+      detachConnectorEndpointsForDeletedTargets(currentElements, ids)
+        .filter((element) => element.locked || !ids.has(element.id)),
+    );
     const nextSelection = selectedBlockIdsRef.current.filter((id) => !ids.has(id));
     selectedBlockIdsRef.current = nextSelection;
     setSelectedBlockIds(nextSelection);
@@ -5950,6 +5965,7 @@ function App() {
       setConnectorEndpointPreview(null);
       setSelectionFramePreview(null);
     }
+    setIsConnectorEndpointRetargeting(false);
     if (updateMode && session) setActiveMode(selectedBlockIdsRef.current.length > 0 ? "selected" : "canvas");
   }
 
@@ -5998,6 +6014,12 @@ function App() {
       startClientX: event.clientX,
       startClientY: event.clientY,
     };
+    const selectedConnector = connectorEndpoint
+      ? dataRef.current.elements.find((element): element is ConnectorElement =>
+        element.id === selectedBlockIdsRef.current[0] && element.type === "connector",
+      )
+      : null;
+    setIsConnectorEndpointRetargeting(selectedConnector?.style.endArrowhead === "arrow");
   }
 
   function getConnectorEndpointPreview(
@@ -6010,15 +6032,21 @@ function App() {
       ? dataRef.current.elements.find((element): element is ConnectorElement => element.id === selectedId && element.type === "connector")
       : null;
     const canvas = canvasRef.current;
-    if (!connector || !canvas || connector[endpoint].kind !== "free") return null;
+    if (!connector || !canvas) return null;
     const rect = canvas.getBoundingClientRect();
     const point = {
       x: (clientX - rect.left - panOffsetRef.current.x) / zoomLevelRef.current,
       y: (clientY - rect.top - panOffsetRef.current.y) / zoomLevelRef.current,
     };
+    const nextEndpoint = snapConnectorEndpoint(
+      point,
+      dataRef.current.elements.filter((element) => element.pageId === connector.pageId),
+      zoomLevelRef.current,
+      connector.style.endArrowhead === "arrow",
+    );
     return endpoint === "start"
-      ? { ...connector, start: { ...connector.start, ...point } }
-      : { ...connector, end: { ...connector.end, ...point } };
+      ? { ...connector, start: nextEndpoint }
+      : { ...connector, end: nextEndpoint };
   }
 
   function moveSelectionFrameInteraction(event: ReactPointerEvent<HTMLElement>) {
@@ -6033,7 +6061,11 @@ function App() {
       const preview = getConnectorEndpointPreview(session.connectorEndpoint, event.clientX, event.clientY);
       if (!preview) return;
       setConnectorEndpointPreview(preview);
-      setSelectionFramePreview(getSelectionElementBounds(preview));
+      const previewElementsById = {
+        ...Object.fromEntries(dataRef.current.elements.map((element) => [element.id, element])),
+        [preview.id]: preview,
+      };
+      setSelectionFramePreview(getSelectionElementBounds(preview, previewElementsById));
       return;
     }
 
@@ -6070,6 +6102,7 @@ function App() {
       }
       setConnectorEndpointPreview(null);
       setSelectionFramePreview(null);
+      setIsConnectorEndpointRetargeting(false);
       return;
     }
 
@@ -6093,6 +6126,7 @@ function App() {
 
     setConnectorEndpointPreview(null);
     setSelectionFramePreview(null);
+    setIsConnectorEndpointRetargeting(false);
     setEditingBlockId(null);
     setInsertionPoint(null);
     setIsCanvasKeyboardActive(true);
@@ -6155,9 +6189,12 @@ function App() {
       event.stopPropagation();
       const selectedId = selectedBlockIdsRef.current.length === 1 ? selectedBlockIdsRef.current[0] : null;
       if (!selectedId) return;
+      const elementsById = Object.fromEntries(dataRef.current.elements.map((element) => [element.id, element]));
       setBlocksWithHistory((currentBlocks) => currentBlocks.map((element) => {
-        if (element.id !== selectedId || element.type !== "connector" || element.locked || element[endpoint].kind !== "free") return element;
-        const moved = { ...element[endpoint], x: element[endpoint].x + delta.x, y: element[endpoint].y + delta.y };
+        if (element.id !== selectedId || element.type !== "connector" || element.locked) return element;
+        const resolved = resolveConnectorEndpoint(element[endpoint], elementsById);
+        if (!resolved) return element;
+        const moved = { kind: "free" as const, x: resolved.x + delta.x, y: resolved.y + delta.y };
         return endpoint === "start"
           ? { ...element, start: moved, updatedAt: Date.now() }
           : { ...element, end: moved, updatedAt: Date.now() };
@@ -6381,15 +6418,16 @@ function App() {
 
       setBlocksWithHistory((currentElements) => {
         if (geometry.kind === "connector") {
+          const canBind = tool === "arrow";
           const connector: ConnectorElement = {
             createdAt: timestamp,
-            end: { kind: "free", ...geometry.end },
+            end: snapConnectorEndpoint(geometry.end, currentElements, zoomLevelRef.current, canBind),
             id: elementId,
             locked: false,
             opacity: preference.opacity,
             pageId,
             routing: "straight",
-            start: { kind: "free", ...geometry.start },
+            start: snapConnectorEndpoint(geometry.start, currentElements, zoomLevelRef.current, canBind),
             style: {
               ...style,
               endArrowhead: tool === "arrow" ? "arrow" : "none",
@@ -6942,6 +6980,7 @@ function App() {
                 renderConnector={(connector) => (
                   <ConnectorElementView
                     element={connector}
+                    elementsById={renderedCanvasElementsById}
                     isDragSourceHidden={dragSourceBlockIds.includes(connector.id)}
                     isSelected={selectedBlockIds.includes(connector.id)}
                     onElementChange={registerBlockElement}
@@ -7033,6 +7072,11 @@ function App() {
                 )}
               />
             ))}
+            {activeTool === "arrow" || isConnectorEndpointRetargeting ? (
+              <ShapeBindingAnchors
+                shapes={visibleCanvasElements.filter((element): element is ShapeElement => element.type === "shape")}
+              />
+            ) : null}
             {pendingImagePlacement?.point ? (
               <img
                 alt=""
@@ -7077,10 +7121,16 @@ function App() {
                   : selected?.type === "shape"
                     ? ["nw", "ne", "se", "sw"]
                     : [];
-              const connectorEndpointHandles = selected?.type === "connector" && !selected.locked && selected.start.kind === "free" && selected.end.kind === "free"
+              const connectorEndpointPoints = selected?.type === "connector"
+                ? {
+                    start: resolveConnectorEndpoint(selected.start, renderedCanvasElementsById),
+                    end: resolveConnectorEndpoint(selected.end, renderedCanvasElementsById),
+                  }
+                : null;
+              const connectorEndpointHandles = selected?.type === "connector" && !selected.locked && connectorEndpointPoints?.start && connectorEndpointPoints.end
                 ? ([
-                    { endpoint: "start" as const, point: selected.start },
-                    { endpoint: "end" as const, point: selected.end },
+                    { endpoint: "start" as const, point: connectorEndpointPoints.start },
+                    { endpoint: "end" as const, point: connectorEndpointPoints.end },
                   ]).map(({ endpoint, point }) => ({
                     endpoint,
                     onKeyDown: moveConnectorEndpointByKeyboard(endpoint),

@@ -2217,6 +2217,25 @@ h2 {
   visibility: hidden;
 }
 
+.connector-binding-anchors {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+}
+
+.connector-binding-anchor {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  box-sizing: border-box;
+  border: 2px solid var(--canvas-selection, var(--accent-purple));
+  border-radius: 999px;
+  background: var(--canvas-tool-bg, #fff);
+  box-shadow: 0 0 0 2px var(--canvas-selection-soft, rgba(139, 92, 246, 0.16));
+  transform: translate(-50%, -50%);
+}
+
 .primitive-element[role="button"]:focus-visible,
 .text-block[role="button"]:focus-visible,
 .text-block-header:focus-visible {

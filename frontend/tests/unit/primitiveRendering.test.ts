@@ -3,6 +3,7 @@ import {
   arrowheadPoints,
   roughOptions,
   roundedRectanglePath,
+  shapeRenderPadding,
 } from "../../src/canvas/components/PrimitiveElementView";
 import { elementIdsBackToFront } from "../../src/canvas/interaction/useCanvasInteraction";
 import type { CanvasElement, RoughStyle, TextElement } from "../../src/canvas/model/elements";
@@ -52,6 +53,11 @@ describe("primitive rendering", () => {
     expect(roundedRectanglePath(100, 60, 0)).toBe("M 0 0 H 100 V 60 H 0 Z");
     expect(roundedRectanglePath(100, 60, 0.5)).toContain("Q 100 0 100 15");
     expect(roundedRectanglePath(100, 60, 2)).toContain("Q 100 0 100 30");
+  });
+
+  it("adds render-only padding for rough outlines without changing model geometry", () => {
+    expect(shapeRenderPadding({ ...style, roughness: 0, strokeWidth: 1 })).toBe(8);
+    expect(shapeRenderPadding({ ...style, roughness: 8, strokeWidth: 4 })).toBe(20);
   });
 
   it("builds a finite arrowhead and skips a zero-length connector", () => {

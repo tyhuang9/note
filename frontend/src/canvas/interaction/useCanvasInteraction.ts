@@ -134,10 +134,10 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
     primitivePreviewRef.current = group;
     group.replaceChildren();
     group.setAttribute("fill", "none");
-    group.setAttribute("opacity", "0.7");
+    group.setAttribute("opacity", "1");
     group.setAttribute("pointer-events", "none");
     group.setAttribute("stroke", "currentColor");
-    group.setAttribute("stroke-dasharray", "6 4");
+    group.removeAttribute("stroke-dasharray");
     group.setAttribute("stroke-width", "2");
 
     if (geometry.kind === "connector") {

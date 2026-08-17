@@ -32,6 +32,11 @@ export function roughOptions(style: ShapeElement["style"]): Options {
   };
 }
 
+/** Extra SVG-only space for RoughJS's imperfect outline; model geometry stays untouched. */
+export function shapeRenderPadding(style: ShapeElement["style"]): number {
+  return Math.ceil(Math.max(8, style.strokeWidth * 2, style.roughness * 2 + style.strokeWidth));
+}
+
 export function roundedRectanglePath(width: number, height: number, roundness: number): string {
   const safeWidth = Math.max(1, width);
   const safeHeight = Math.max(1, height);
@@ -103,6 +108,7 @@ function primitiveKeyDown(
 export function ShapeElementView({ element, isDragSourceHidden = false, isSelected, onElementChange, onKeyboardMove, onSelect }: PrimitiveElementViewProps<ShapeElement>) {
   const ref = useRef<SVGSVGElement | null>(null);
   const rootRef = createPrimitiveRootRef(element.id, onElementChange);
+  const renderPadding = shapeRenderPadding(element.style);
   useLayoutEffect(() => {
     const svg = ref.current;
     if (!svg) return;
@@ -118,8 +124,9 @@ export function ShapeElementView({ element, isDragSourceHidden = false, isSelect
       : element.shape === "ellipse"
         ? draw.ellipse(width / 2, height / 2, width, height, options)
         : draw.polygon([[width / 2, 0], [width, height / 2], [width / 2, height], [0, height / 2]], options);
+    node.setAttribute("transform", `translate(${renderPadding} ${renderPadding})`);
     svg.append(node);
-  }, [element]);
+  }, [element, renderPadding]);
   return (
     <div
       aria-label={`${element.locked ? "Select locked" : "Select and move"} ${element.shape} element`}
@@ -133,7 +140,14 @@ export function ShapeElementView({ element, isDragSourceHidden = false, isSelect
       style={{ height: element.height, left: element.x, opacity: element.opacity, position: "absolute", top: element.y, transform: `rotate(${element.rotation}deg)`, width: element.width, zIndex: element.zIndex }}
       tabIndex={0}
     >
-      <svg aria-label={`${element.shape} shape`} className="primitive-shape" height="100%" ref={ref} width="100%" />
+      <svg
+        aria-label={`${element.shape} shape`}
+        className="primitive-shape"
+        height={`calc(100% + ${renderPadding * 2}px)`}
+        overflow="visible"
+        ref={ref}
+        style={{ left: -renderPadding, position: "absolute", top: -renderPadding, width: `calc(100% + ${renderPadding * 2}px)` }}
+      />
     </div>
   );
 }

@@ -75,6 +75,26 @@ test("creates primitives, applies tool lock, supports temporary hand, and erases
   await expect(rectangle).toHaveCount(1);
 });
 
+test("keeps live primitive previews solid and fully opaque", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  const bounds = await canvas.boundingBox();
+  if (!bounds) throw new Error("Canvas bounds were not available.");
+
+  await page.getByRole("button", { name: "Ellipse (O / 4)" }).click();
+  await page.mouse.move(bounds.x + 360, bounds.y + 310);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + 490, bounds.y + 400, { steps: 3 });
+
+  const preview = canvas.getByTestId("canvas-live-draft-layer").locator("g");
+  await expect(preview).toHaveAttribute("opacity", "1");
+  await expect(preview).not.toHaveAttribute("stroke-dasharray", /./);
+  await page.mouse.up();
+
+  const ellipse = page.getByLabel("ellipse shape");
+  await expect(ellipse).toBeVisible();
+  await expect(ellipse).toHaveCSS("overflow", "visible");
+});
+
 test("renders every geometric primitive and moves connectors with a composite selection", async ({ page }) => {
   const canvas = page.getByRole("tabpanel");
   const bounds = await canvas.boundingBox();

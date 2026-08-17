@@ -13,6 +13,35 @@ test("renders authoring chrome only after a live page canvas is available", asyn
   await expect(page.locator('input[type="file"][accept="image/*"]')).toHaveCount(1);
 });
 
+test("returns toolbar focus to the canvas when the last page closes", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /create new note/i }).click();
+
+  const canvas = page.getByRole("tabpanel");
+  const select = page.getByRole("button", { name: "Select (V / 1)" });
+  await select.focus();
+  await expect(select).toBeFocused();
+  await page.getByRole("button", { name: "Close New page" }).dispatchEvent("click");
+
+  await expect(page.getByRole("toolbar", { name: "Drawing tools" })).toHaveCount(0);
+  await expect(canvas).toBeFocused();
+});
+
+test("returns properties-panel focus to the canvas when the last page closes", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /create new note/i }).click();
+
+  const canvas = page.getByRole("tabpanel");
+  await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
+  const opacity = page.getByRole("slider", { name: "Opacity" });
+  await opacity.focus();
+  await expect(opacity).toBeFocused();
+  await page.getByRole("button", { name: "Close New page" }).dispatchEvent("click");
+
+  await expect(page.getByRole("complementary", { name: "Drawing properties" })).toHaveCount(0);
+  await expect(canvas).toBeFocused();
+});
+
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: /create new note/i }).click();

@@ -1233,6 +1233,10 @@ function App() {
   const pendingImagePlacementRef = useRef<PendingImagePlacement | null>(null);
   const imagePickerRequestRef = useRef(0);
   const drawingPropertyPreviewRef = useRef<DrawingPropertyPreviewTransaction | null>(null);
+  const authoringChromeHadFocusRef = useRef(false);
+  const authoringFocusReturnRafRef = useRef<number | null>(null);
+  const isCanvasAuthoringAvailableRef = useRef(false);
+  const isWorkbenchOverlayOpenRef = useRef(false);
 
   dataRef.current = data;
   activeToolRef.current = activeTool;
@@ -1591,16 +1595,46 @@ function App() {
   const availableDrawingPropertiesContext = isCanvasAuthoringAvailable
     ? drawingPropertiesContext
     : null;
+  isCanvasAuthoringAvailableRef.current = isCanvasAuthoringAvailable;
+  isWorkbenchOverlayOpenRef.current =
+    isAssistantOverlayOpen || isExplorerOverlayOpen;
   useEffect(() => {
     if (!drawingPropertiesContext) setIsPropertiesPanelOpen(false);
   }, [drawingPropertiesContext]);
   useEffect(() => {
-    if (isCanvasAuthoringAvailable) return;
-    setIsPropertiesPanelOpen(false);
-    const activeElement = document.activeElement;
-    if (!(activeElement instanceof Element) || !activeElement.closest(".canvas-tool-palette, .drawing-properties-panel")) return;
-    window.requestAnimationFrame(() => canvasRef.current?.focus({ preventScroll: true }));
-  }, [isCanvasAuthoringAvailable]);
+    if (authoringFocusReturnRafRef.current !== null) {
+      window.cancelAnimationFrame(authoringFocusReturnRafRef.current);
+      authoringFocusReturnRafRef.current = null;
+    }
+    if (!isCanvasAuthoringAvailable) setIsPropertiesPanelOpen(false);
+    if (
+      isCanvasAuthoringAvailable ||
+      isAssistantOverlayOpen ||
+      isExplorerOverlayOpen ||
+      !authoringChromeHadFocusRef.current
+    ) return;
+
+    authoringFocusReturnRafRef.current = window.requestAnimationFrame(() => {
+      authoringFocusReturnRafRef.current = null;
+      if (
+        isCanvasAuthoringAvailableRef.current ||
+        isWorkbenchOverlayOpenRef.current ||
+        !authoringChromeHadFocusRef.current
+      ) return;
+      if (document.activeElement && document.activeElement !== document.body) {
+        authoringChromeHadFocusRef.current = false;
+        return;
+      }
+      authoringChromeHadFocusRef.current = false;
+      canvasRef.current?.focus({ preventScroll: true });
+    });
+
+    return () => {
+      if (authoringFocusReturnRafRef.current === null) return;
+      window.cancelAnimationFrame(authoringFocusReturnRafRef.current);
+      authoringFocusReturnRafRef.current = null;
+    };
+  }, [isAssistantOverlayOpen, isCanvasAuthoringAvailable, isExplorerOverlayOpen]);
   canvasViewportRef.current = canvasViewport;
   const renderedCanvasElements = useMemo(() => {
     const withConnectorPreview = connectorEndpointPreview
@@ -6769,46 +6803,57 @@ function App() {
           onWheel={canvasInteraction.handleWheel}
           ref={canvasRef}
         >
-          {isCanvasAuthoringAvailable ? <>
-            <div onPointerDown={(event) => event.stopPropagation()}>
-              <CanvasToolPalette
-                activeTool={activeTool}
-                isPropertiesPanelAvailable={Boolean(availableDrawingPropertiesContext)}
-                isPropertiesPanelOpen={isPropertiesPanelOpen}
-                isToolLocked={isToolLocked}
-                onPropertiesPanelToggle={() => setIsPropertiesPanelOpen((open) => !open)}
-                onToolLockChange={setIsToolLocked}
-                onToolSelect={selectDrawingTool}
-              />
-              <input
-                accept="image/*"
-                aria-hidden="true"
-                hidden
-                onChange={(event) => {
-                  const file = event.currentTarget.files?.[0];
-                  event.currentTarget.value = "";
-                  void handleImageFileSelected(file);
-                }}
-                ref={imagePickerInputRef}
-                tabIndex={-1}
-                type="file"
-              />
+          {isCanvasAuthoringAvailable ? (
+            <div
+              onBlurCapture={(event) => {
+                const nextTarget = event.relatedTarget;
+                if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
+                if (nextTarget) authoringChromeHadFocusRef.current = false;
+              }}
+              onFocusCapture={() => {
+                authoringChromeHadFocusRef.current = true;
+              }}
+            >
+              <div onPointerDown={(event) => event.stopPropagation()}>
+                <CanvasToolPalette
+                  activeTool={activeTool}
+                  isPropertiesPanelAvailable={Boolean(availableDrawingPropertiesContext)}
+                  isPropertiesPanelOpen={isPropertiesPanelOpen}
+                  isToolLocked={isToolLocked}
+                  onPropertiesPanelToggle={() => setIsPropertiesPanelOpen((open) => !open)}
+                  onToolLockChange={setIsToolLocked}
+                  onToolSelect={selectDrawingTool}
+                />
+                <input
+                  accept="image/*"
+                  aria-hidden="true"
+                  hidden
+                  onChange={(event) => {
+                    const file = event.currentTarget.files?.[0];
+                    event.currentTarget.value = "";
+                    void handleImageFileSelected(file);
+                  }}
+                  ref={imagePickerInputRef}
+                  tabIndex={-1}
+                  type="file"
+                />
+              </div>
+              {imageImportError ? <div className="canvas-image-import-error" role="alert">{imageImportError}</div> : null}
+              {availableDrawingPropertiesContext ? (
+                <DrawingPropertiesPanel
+                  contextLabel={availableDrawingPropertiesContext.contextLabel}
+                  isCompactOpen={isPropertiesPanelOpen}
+                  isSelection={availableDrawingPropertiesContext.isSelection}
+                  onCancelPreview={cancelDrawingPropertyPreview}
+                  onLayerAction={updateSelectedLayer}
+                  onPreview={previewDrawingProperty}
+                  onUpdate={updateDrawingProperty}
+                  strokeWidthPresets={availableDrawingPropertiesContext.strokeWidthPresets}
+                  supports={availableDrawingPropertiesContext.supports}
+                  values={availableDrawingPropertiesContext.values}
+                />
+              ) : null}
             </div>
-            {imageImportError ? <div className="canvas-image-import-error" role="alert">{imageImportError}</div> : null}
-          </> : null}
-          {availableDrawingPropertiesContext ? (
-            <DrawingPropertiesPanel
-              contextLabel={availableDrawingPropertiesContext.contextLabel}
-              isCompactOpen={isPropertiesPanelOpen}
-              isSelection={availableDrawingPropertiesContext.isSelection}
-              onCancelPreview={cancelDrawingPropertyPreview}
-              onLayerAction={updateSelectedLayer}
-              onPreview={previewDrawingProperty}
-              onUpdate={updateDrawingProperty}
-              strokeWidthPresets={availableDrawingPropertiesContext.strokeWidthPresets}
-              supports={availableDrawingPropertiesContext.supports}
-              values={availableDrawingPropertiesContext.values}
-            />
           ) : null}
           {offscreenGroups.length > 0 ? (
             <div

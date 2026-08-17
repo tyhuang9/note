@@ -47,8 +47,27 @@ test("marquee cleanup leaves one composite frame whose whitespace moves and resi
   }, whitespace);
   expect(hitInfo.hitClass, JSON.stringify(hitInfo)).toContain("selection-frame-move-surface");
 
+  const darkMode = page.getByRole("button", { name: "Dark mode" });
+  await darkMode.click();
+  await expect(darkMode).toHaveAttribute("aria-pressed", "false");
+  await darkMode.click();
+  await expect(darkMode).toHaveAttribute("aria-pressed", "true");
   await page.mouse.move(whitespace.x, whitespace.y);
-  await expect(page.getByRole("button", { name: "Move selected elements" })).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  const selectionMoveSurface = page.getByRole("button", { name: "Move selected elements" });
+  await expect(selectionMoveSurface).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await page.keyboard.press("Tab");
+  await selectionMoveSurface.focus();
+  const focusStyle = await selectionMoveSurface.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      color: style.outlineColor,
+      style: style.outlineStyle,
+      width: style.outlineWidth,
+    };
+  });
+  expect(focusStyle.style).toBe("solid");
+  expect(Number.parseFloat(focusStyle.width)).toBeGreaterThan(0);
+  expect(focusStyle.color).not.toBe("rgba(0, 0, 0, 0)");
 
   await page.mouse.click(whitespace.x, whitespace.y);
   await expect(frame).toHaveCount(1);

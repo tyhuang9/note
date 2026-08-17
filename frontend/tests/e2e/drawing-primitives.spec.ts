@@ -81,6 +81,9 @@ test("keeps live primitive previews solid and fully opaque", async ({ page }) =>
   if (!bounds) throw new Error("Canvas bounds were not available.");
 
   await page.getByRole("button", { name: "Ellipse (O / 4)" }).click();
+  const properties = page.getByRole("complementary", { name: "Drawing properties" });
+  await properties.getByRole("button", { name: "Thick stroke" }).click();
+  await properties.getByRole("button", { name: "Cartoonist" }).click();
   await page.mouse.move(bounds.x + 360, bounds.y + 310);
   await page.mouse.down();
   await page.mouse.move(bounds.x + 490, bounds.y + 400, { steps: 3 });
@@ -93,6 +96,32 @@ test("keeps live primitive previews solid and fully opaque", async ({ page }) =>
   const ellipse = page.getByLabel("ellipse shape");
   await expect(ellipse).toBeVisible();
   await expect(ellipse).toHaveCSS("overflow", "visible");
+  const renderBounds = await ellipse.evaluate((svg) => {
+    const root = svg.closest<HTMLElement>(".primitive-element");
+    if (!root) throw new Error("Ellipse root was not available.");
+    const rootBox = root.getBoundingClientRect();
+    const svgBox = svg.getBoundingClientRect();
+    return {
+      rootHeight: root.style.height,
+      rootWidth: root.style.width,
+      svgHeight: svg.getAttribute("height"),
+      svgLeft: svg.style.left,
+      svgTop: svg.style.top,
+      svgWidth: svg.style.width,
+      visualHeight: svgBox.height,
+      visualWidth: svgBox.width,
+      wrapperHeight: rootBox.height,
+      wrapperWidth: rootBox.width,
+    };
+  });
+  expect(renderBounds.rootWidth).toBe("130px");
+  expect(renderBounds.rootHeight).toBe("90px");
+  expect(Number.parseFloat(renderBounds.svgLeft)).toBeLessThan(0);
+  expect(Number.parseFloat(renderBounds.svgTop)).toBeLessThan(0);
+  expect(renderBounds.svgWidth).toContain("calc(100% +");
+  expect(renderBounds.svgHeight).toContain("calc(100% +");
+  expect(renderBounds.visualWidth).toBeGreaterThan(renderBounds.wrapperWidth);
+  expect(renderBounds.visualHeight).toBeGreaterThan(renderBounds.wrapperHeight);
 });
 
 test("renders every geometric primitive and moves connectors with a composite selection", async ({ page }) => {

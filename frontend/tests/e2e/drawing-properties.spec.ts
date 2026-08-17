@@ -63,6 +63,7 @@ test("applies tool defaults, edits compatible selections, and commits opacity on
   const properties = page.getByRole("complementary", { name: "Drawing properties" });
   await expect(properties).toBeVisible();
   await expect(properties).toContainText("rectangle defaults");
+  await expect(properties.getByRole("button", { name: "Rounded corners" })).toHaveAttribute("aria-pressed", "true");
   await properties.getByRole("button", { name: "Stroke color #e03131" }).click();
   await properties.getByRole("button", { name: "Thick stroke" }).click();
   await page.mouse.click(canvasBounds.x + 390, canvasBounds.y + 310);
@@ -188,6 +189,45 @@ test("uses context-specific width presets and five curated stroke swatches", asy
   await page.getByRole("button", { name: "Highlighter (H)" }).click();
   await expect(properties.getByRole("button", { name: "Medium stroke (18px)" })).toBeVisible();
   await expect(properties.getByRole("button", { name: "Thick stroke (32px)" })).toBeVisible();
+});
+
+test("keeps the properties scrollbar compact and themed in light and dark modes", async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 320 });
+  await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
+  const properties = page.getByRole("complementary", { name: "Drawing properties" });
+
+  const readScrollbarStyles = () => properties.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const thumb = getComputedStyle(element, "::-webkit-scrollbar-thumb");
+    const track = getComputedStyle(element, "::-webkit-scrollbar-track");
+    return {
+      scrollbarColor: style.scrollbarColor,
+      scrollbarWidth: style.scrollbarWidth,
+      thumbBackground: thumb.backgroundColor,
+      thumbClip: thumb.backgroundClip,
+      thumbWidth: getComputedStyle(element, "::-webkit-scrollbar").width,
+      trackBackground: track.backgroundColor,
+    };
+  });
+
+  const themeToggle = page.getByRole("button", { name: "Dark mode" });
+  if (await themeToggle.getAttribute("aria-pressed") !== "true") {
+    await themeToggle.click();
+  }
+  const dark = await readScrollbarStyles();
+  expect(dark.scrollbarWidth).toBe("thin");
+  expect(dark.thumbWidth).toBe("8px");
+  expect(dark.thumbClip).toBe("padding-box");
+  expect(dark.trackBackground).toBe("rgba(0, 0, 0, 0)");
+  expect(dark.scrollbarColor).toContain("rgba(209, 209, 218, 0.42)");
+
+  await themeToggle.click();
+  const light = await readScrollbarStyles();
+  expect(light.thumbWidth).toBe("8px");
+  expect(light.thumbClip).toBe("padding-box");
+  expect(light.trackBackground).toBe("rgba(0, 0, 0, 0)");
+  expect(light.scrollbarColor).toContain("rgba(96, 98, 111, 0.46)");
+  expect(light.thumbBackground).not.toBe(dark.thumbBackground);
 });
 
 test("cancels interrupted opacity previews and commits lost pointer capture once", async ({ page }) => {

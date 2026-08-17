@@ -85,7 +85,9 @@ export function createDefaultDrawingPreferences(): DrawingPreferences {
     highlighter: preference({ opacity: 0.38, roughness: 0, strokeColor: fixed("#f4c542"), strokeWidth: 18 }),
     line: preference(),
     pen: preference({ roughness: 0, strokeWidth: 4 }),
-    rectangle: preference({ roundness: 0 }),
+    // New rectangles use the existing rounded preset. Loaded element styles
+    // intentionally keep their own legacy fallback of 0 in sceneRepository.
+    rectangle: preference({ roundness: 0.18 }),
   };
 }
 

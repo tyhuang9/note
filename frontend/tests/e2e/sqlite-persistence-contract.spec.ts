@@ -75,6 +75,27 @@ test("SQLite bridge reconciles structure before scene changes and reloads text",
   await expect.poll(async () => (await persistenceCommands(page)).filter((command) => command === "apply_scene_changes").length).toBe(1);
 });
 
+test("persists the rounded rectangle default and an explicit sharp preference", async ({ page }) => {
+  await installTauriStorageMock(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: /create new note/i }).click();
+
+  await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
+  const properties = page.getByRole("complementary", { name: "Drawing properties" });
+  await expect(properties).toBeVisible();
+  await expect(properties.getByRole("button", { name: "Rounded corners" })).toHaveAttribute("aria-pressed", "true");
+
+  await properties.getByRole("button", { name: "Sharp corners" }).click();
+  await expect(properties.getByRole("button", { name: "Sharp corners" })).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(() => persistenceCommands(page)).toContain("save_session_state");
+
+  await page.reload();
+  await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
+  const restoredProperties = page.getByRole("complementary", { name: "Drawing properties" });
+  await expect(restoredProperties.getByRole("button", { name: "Sharp corners" })).toHaveAttribute("aria-pressed", "true");
+  await expect(restoredProperties.getByRole("button", { name: "Rounded corners" })).toHaveAttribute("aria-pressed", "false");
+});
+
 test("persists a bound arrow endpoint and resolves it from the current target after reload", async ({ page }) => {
   await installTauriStorageMock(page);
   await page.setViewportSize({ width: 1500, height: 900 });

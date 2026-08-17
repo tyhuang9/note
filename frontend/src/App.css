@@ -20,6 +20,9 @@
   --canvas-tool-active-text: #5b21b6;
   --canvas-focus: #005fcc;
   --canvas-highlighter-edge: #6b5200;
+  --drawing-properties-scrollbar-track: transparent;
+  --drawing-properties-scrollbar-thumb: rgba(96, 98, 111, 0.46);
+  --drawing-properties-scrollbar-thumb-hover: rgba(75, 76, 91, 0.72);
   --dark-app: var(--workbench-app);
   --dark-canvas: var(--workbench-canvas);
   --dark-panel: var(--workbench-panel);
@@ -5291,7 +5294,33 @@ h2 {
   box-shadow: 0 8px 28px rgba(15, 23, 42, 0.16);
   pointer-events: auto;
   scrollbar-width: thin;
+  scrollbar-color: var(--drawing-properties-scrollbar-thumb) var(--drawing-properties-scrollbar-track);
   backdrop-filter: blur(12px);
+}
+
+/* Keep the properties rail compact and visually part of the panel in WebKit. */
+.drawing-properties-panel::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.drawing-properties-panel::-webkit-scrollbar-track,
+.drawing-properties-panel::-webkit-scrollbar-corner {
+  border: 0;
+  border-radius: 999px;
+  background: var(--drawing-properties-scrollbar-track);
+}
+
+.drawing-properties-panel::-webkit-scrollbar-thumb {
+  min-height: 32px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+  background-color: var(--drawing-properties-scrollbar-thumb);
+}
+
+.drawing-properties-panel::-webkit-scrollbar-thumb:hover {
+  background-color: var(--drawing-properties-scrollbar-thumb-hover);
 }
 
 .drawing-properties-header {
@@ -5476,6 +5505,12 @@ h2 {
   color: #ececf1;
   background: rgba(36, 36, 40, 0.96);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.42);
+}
+
+.app-shell.is-dark {
+  --drawing-properties-scrollbar-track: transparent;
+  --drawing-properties-scrollbar-thumb: rgba(209, 209, 218, 0.42);
+  --drawing-properties-scrollbar-thumb-hover: rgba(236, 236, 241, 0.72);
 }
 
 .app-shell.is-dark .canvas-tool-palette button[aria-pressed="true"] {

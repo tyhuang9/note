@@ -86,10 +86,16 @@ describe("drawing preferences", () => {
     expect(normalized.rectangle.strokeStyle).toBe("solid");
   });
 
-  it("keeps unsupported defaults unchanged", () => {
+  it("uses a rounded rectangle default and keeps unsupported defaults unchanged", () => {
     const preferences = createDefaultDrawingPreferences();
-    expect(preferences.rectangle.roundness).toBe(0);
+    expect(preferences.rectangle.roundness).toBe(0.18);
     expect(updateDrawingPreference(preferences, "pen", { property: "roughness", value: 2 })).toBe(preferences);
+  });
+
+  it("keeps explicit sharp rectangle preferences while filling missing values with the rounded default", () => {
+    expect(normalizeDrawingPreferences({ rectangle: { roundness: 0 } }).rectangle.roundness).toBe(0);
+    expect(normalizeDrawingPreferences({ rectangle: {} }).rectangle.roundness).toBe(0.18);
+    expect(normalizeDrawingPreferences({}).rectangle.roundness).toBe(0.18);
   });
 
   it("reports mixed and unavailable values explicitly across compatible selections", () => {

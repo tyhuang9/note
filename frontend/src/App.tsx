@@ -6192,7 +6192,7 @@ function App() {
       const elementsById = Object.fromEntries(dataRef.current.elements.map((element) => [element.id, element]));
       setBlocksWithHistory((currentBlocks) => currentBlocks.map((element) => {
         if (element.id !== selectedId || element.type !== "connector" || element.locked) return element;
-        const resolved = resolveConnectorEndpoint(element[endpoint], elementsById);
+        const resolved = resolveConnectorEndpoint(element[endpoint], elementsById, element.pageId);
         if (!resolved) return element;
         const moved = { kind: "free" as const, x: resolved.x + delta.x, y: resolved.y + delta.y };
         return endpoint === "start"
@@ -7124,8 +7124,8 @@ function App() {
                     : [];
               const connectorEndpointPoints = selected?.type === "connector"
                 ? {
-                    start: resolveConnectorEndpoint(selected.start, renderedCanvasElementsById),
-                    end: resolveConnectorEndpoint(selected.end, renderedCanvasElementsById),
+                    start: resolveConnectorEndpoint(selected.start, renderedCanvasElementsById, selected.pageId),
+                    end: resolveConnectorEndpoint(selected.end, renderedCanvasElementsById, selected.pageId),
                   }
                 : null;
               const connectorEndpointHandles = selected?.type === "connector" && !selected.locked && connectorEndpointPoints?.start && connectorEndpointPoints.end

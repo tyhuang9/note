@@ -304,7 +304,7 @@ describe("scene repository", () => {
     for (const id of ["missing", "nonshape", "unsafe-shape", "group", "connector", "large-free", "large-gap"]) {
       expect(connectorById[id].start).toEqual({ kind: "free", x: 0, y: 0 });
     }
-    expect(connectorById["cross-page"].start).toEqual({ kind: "free", x: 110, y: 50 });
+    expect(connectorById["cross-page"].start).toEqual({ kind: "free", x: 0, y: 0 });
     expect(connectorById.line.start).toEqual({ kind: "free", x: 110, y: 50 });
   });
 });

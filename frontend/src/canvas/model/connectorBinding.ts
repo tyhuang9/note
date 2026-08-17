@@ -52,6 +52,7 @@ export function isSafeCanvasDimension(value: number): boolean {
 export function resolveConnectorEndpoint(
   endpoint: ConnectorEndpoint,
   elementsById: Readonly<Record<ElementId, CanvasElement>>,
+  sourcePageId?: string,
 ): CanvasPoint | null {
   if (endpoint.kind === "free") {
     return isSafeCanvasCoordinate(endpoint.x) && isSafeCanvasCoordinate(endpoint.y) ? endpoint : null;
@@ -61,6 +62,7 @@ export function resolveConnectorEndpoint(
   if (!isBindableShape(target) || !isValidPerimeterAnchor(endpoint.anchor) || !isSafeGap(endpoint.gap)) {
     return null;
   }
+  if (sourcePageId && target.pageId !== sourcePageId) return null;
   const point = getShapeAnchorPoint(target, endpoint.anchor, endpoint.gap);
   return isSafeResolvedPoint(point) ? point : null;
 }
@@ -69,8 +71,8 @@ export function resolveConnectorPoints(
   connector: ConnectorElement,
   elementsById: Readonly<Record<ElementId, CanvasElement>>,
 ): Readonly<{ start: CanvasPoint; end: CanvasPoint }> | null {
-  const start = resolveConnectorEndpoint(connector.start, elementsById);
-  const end = resolveConnectorEndpoint(connector.end, elementsById);
+  const start = resolveConnectorEndpoint(connector.start, elementsById, connector.pageId);
+  const end = resolveConnectorEndpoint(connector.end, elementsById, connector.pageId);
   return start && end ? { start, end } : null;
 }
 
@@ -166,15 +168,15 @@ export function detachConnectorEndpointsForDeletedTargets(
   deletedIds: ReadonlySet<ElementId>,
 ): CanvasElement[] {
   const elementsById = Object.fromEntries(elements.map((element) => [element.id, element]));
-  const detach = (endpoint: ConnectorEndpoint): ConnectorEndpoint => {
+  const detach = (endpoint: ConnectorEndpoint, sourcePageId: string): ConnectorEndpoint => {
     if (endpoint.kind !== "element" || !deletedIds.has(endpoint.targetElementId)) return endpoint;
-    const resolved = resolveConnectorEndpoint(endpoint, elementsById);
+    const resolved = resolveConnectorEndpoint(endpoint, elementsById, sourcePageId);
     return { kind: "free", ...(resolved ?? { x: 0, y: 0 }) };
   };
   return elements.map((element) => {
     if (element.type !== "connector" || deletedIds.has(element.id)) return element;
-    const start = detach(element.start);
-    const end = detach(element.end);
+    const start = detach(element.start, element.pageId);
+    const end = detach(element.end, element.pageId);
     return start === element.start && end === element.end
       ? element
       : { ...element, start, end, updatedAt: Date.now() };

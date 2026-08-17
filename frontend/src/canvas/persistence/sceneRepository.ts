@@ -168,7 +168,7 @@ function normalizeLoadedConnectorEndpoint(
     const target = elementsById[endpoint.targetElementId];
     if (target?.pageId === connector.pageId && isBindableShape(target)) return endpoint;
   }
-  const resolved = resolveConnectorEndpoint(endpoint, elementsById);
+  const resolved = resolveConnectorEndpoint(endpoint, elementsById, connector.pageId);
   return { kind: "free", ...(resolved ?? { x: 0, y: 0 }) };
 }
 

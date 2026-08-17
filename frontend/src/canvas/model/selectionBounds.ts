@@ -167,8 +167,8 @@ function getConnectorBounds(
   connector: ConnectorElement,
   elementsById: Readonly<Record<ElementId, CanvasElement>>,
 ): Bounds | null {
-  const start = resolveConnectorEndpoint(connector.start, elementsById);
-  const end = resolveConnectorEndpoint(connector.end, elementsById);
+  const start = resolveConnectorEndpoint(connector.start, elementsById, connector.pageId);
+  const end = resolveConnectorEndpoint(connector.end, elementsById, connector.pageId);
   if (!start || !end) return null;
   const padding = Math.max(0, connector.style.strokeWidth / 2);
   return {

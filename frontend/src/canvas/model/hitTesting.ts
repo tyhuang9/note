@@ -24,8 +24,8 @@ export function getElementBounds(
   elementsById: Readonly<Record<ElementId, CanvasElement>> = {},
 ): Bounds | null {
   if (element.type === "connector") {
-    const start = resolveConnectorEndpoint(element.start, elementsById);
-    const end = resolveConnectorEndpoint(element.end, elementsById);
+    const start = resolveConnectorEndpoint(element.start, elementsById, element.pageId);
+    const end = resolveConnectorEndpoint(element.end, elementsById, element.pageId);
     if (!start || !end) return null;
     const padding = Math.max(0, element.style.strokeWidth / 2);
     return {
@@ -123,8 +123,8 @@ export function canvasElementContainsPoint(
 ): boolean {
   if (element.type === "ink") return inkContainsPoint(element, point, tolerance);
   if (element.type === "connector") {
-    const start = resolveConnectorEndpoint(element.start, elementsById);
-    const end = resolveConnectorEndpoint(element.end, elementsById);
+    const start = resolveConnectorEndpoint(element.start, elementsById, element.pageId);
+    const end = resolveConnectorEndpoint(element.end, elementsById, element.pageId);
     return Boolean(start && end && pointToSegmentDistance(point, start, end) <= Math.max(0, tolerance) + element.style.strokeWidth / 2);
   }
   if (element.type === "shape") return shapeContainsPoint(element, point, tolerance);

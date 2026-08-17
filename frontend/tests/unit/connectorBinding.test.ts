@@ -129,6 +129,7 @@ describe("connector shape binding", () => {
   it("never resolves unsafe stored geometry or endpoint magnitudes", () => {
     const rectangle = shape("rectangle");
     const unsafeShape = shape("rectangle", { x: MAX_CANVAS_VALUE + 1 });
+    const foreignShape = shape("rectangle", { id: "foreign", pageId: "other-page" });
     expect(getShapeBindingAnchors(unsafeShape)).toEqual([]);
     expect(resolveConnectorEndpoint(
       { kind: "free", x: MAX_CANVAS_VALUE + 1, y: 0 },
@@ -141,6 +142,11 @@ describe("connector shape binding", () => {
     expect(resolveConnectorEndpoint(
       { kind: "element", targetElementId: unsafeShape.id, anchor: { t: 0.25 }, gap: 0 },
       { [unsafeShape.id]: unsafeShape },
+    )).toBeNull();
+    expect(resolveConnectorEndpoint(
+      { kind: "element", targetElementId: foreignShape.id, anchor: { t: 0.25 }, gap: 0 },
+      { [foreignShape.id]: foreignShape },
+      "page",
     )).toBeNull();
   });
 });

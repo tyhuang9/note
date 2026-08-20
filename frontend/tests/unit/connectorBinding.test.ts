@@ -117,6 +117,25 @@ describe("connector shape binding", () => {
     ));
   });
 
+  it("keeps an exact rounded, rotated perimeter point visible while authoring", () => {
+    const target = shape("rectangle", {
+      height: 140,
+      rotation: 31,
+      style: { ...style, roundness: 0.18 },
+      width: 240,
+      x: 420,
+      y: 240,
+    });
+    const exactPoint = getShapeAnchorPoint(target, { t: 0.18 });
+    expect(exactPoint).not.toBeNull();
+    const candidate = getConnectorAuthoringCandidate(exactPoint!, [target], 1);
+    expect(candidate).toMatchObject({
+      endpoint: { kind: "element", targetElementId: target.id },
+      target: { id: target.id },
+    });
+    expect(candidate?.activeAnchor.point).toEqual(exactPoint);
+  });
+
   it("reveals and snaps one authoring target using screen-space radii", () => {
     const rectangle = shape("rectangle");
     expect(getConnectorAuthoringCandidate({ x: 130, y: 50 }, [rectangle], 1)).toMatchObject({

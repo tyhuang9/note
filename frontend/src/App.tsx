@@ -8135,7 +8135,7 @@ function App() {
                 )}
               />
             ))}
-            {activeTool === "arrow" && canvasInteraction.arrowAuthoringVisual ? (
+            {canvasInteraction.arrowAuthoringVisual ? (
               <ShapeBindingAnchors
                 anchor={canvasInteraction.arrowAuthoringVisual.anchor}
                 isSnapped={canvasInteraction.arrowAuthoringVisual.isSnapped}

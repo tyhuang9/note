@@ -298,6 +298,7 @@ function TextBackgroundModeChoices({ disabled, onChange, value }: {
   value: PropertyValue<TextBackgroundMode>;
 }) {
   const mixedLabelId = useId();
+  const lockedReasonId = useId();
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const modes = ["surface", "transparent"] as const;
   const selectedIndex = value.kind === "value" ? modes.indexOf(value.value) : 0;
@@ -311,7 +312,11 @@ function TextBackgroundModeChoices({ disabled, onChange, value }: {
   }
   return (
     <div
-      aria-describedby={value.kind === "mixed" ? mixedLabelId : undefined}
+      aria-describedby={[
+        value.kind === "mixed" ? mixedLabelId : null,
+        disabled ? lockedReasonId : null,
+      ].filter(Boolean).join(" ") || undefined}
+      aria-disabled={disabled || undefined}
       aria-label="Text background"
       className="drawing-choice-group"
       role="radiogroup"
@@ -345,7 +350,7 @@ function TextBackgroundModeChoices({ disabled, onChange, value }: {
         </button>
       ))}
       {value.kind === "mixed" ? <span className="drawing-mixed-label" id={mixedLabelId}>Mixed</span> : null}
-      {disabled ? <span className="sr-only">All selected text boxes are locked.</span> : null}
+      {disabled ? <span className="sr-only" id={lockedReasonId}>All selected text boxes are locked.</span> : null}
     </div>
   );
 }

@@ -200,10 +200,42 @@ test("remembers text background choices, supports radio keys, and keeps selectio
   const properties = page.getByRole("complementary", { name: "Drawing properties" });
   const surface = properties.getByRole("radio", { name: "Surface text background" });
   const transparent = properties.getByRole("radio", { name: "Transparent text background" });
+  const themeToggle = page.getByRole("button", { name: "Dark mode" });
+  if (await themeToggle.getAttribute("aria-pressed") === "true") await themeToggle.click();
   await expect(surface).toHaveAttribute("aria-checked", "true");
+  const readRadioStyles = () => surface.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const groupStyle = getComputedStyle(element.parentElement!);
+    return {
+      background: style.backgroundColor,
+      border: style.borderColor,
+      groupBackground: groupStyle.backgroundColor,
+    };
+  });
+  const lightSelected = await readRadioStyles();
+  expect(contrastRatio(lightSelected.border, lightSelected.background)).toBeGreaterThanOrEqual(3);
   await surface.focus();
   await page.keyboard.press("ArrowRight");
   await expect(transparent).toBeFocused();
+  await expect(transparent).toHaveAttribute("aria-checked", "true");
+  await page.keyboard.press("ArrowUp");
+  await expect(surface).toBeFocused();
+  await expect(surface).toHaveAttribute("aria-checked", "true");
+  await page.keyboard.press("ArrowDown");
+  await expect(transparent).toBeFocused();
+  await page.keyboard.press("ArrowLeft");
+  await expect(surface).toBeFocused();
+  await page.keyboard.press("Space");
+  await expect(surface).toHaveAttribute("aria-checked", "true");
+  await themeToggle.click();
+  const darkSelected = await readRadioStyles();
+  expect(contrastRatio(darkSelected.border, darkSelected.background)).toBeGreaterThanOrEqual(3);
+  expect(darkSelected.background).not.toBe(lightSelected.background);
+  await themeToggle.click();
+  await surface.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(transparent).toHaveAttribute("aria-checked", "true");
+  await page.keyboard.press("Enter");
   await expect(transparent).toHaveAttribute("aria-checked", "true");
 
   await page.mouse.click(canvasBounds.x + 260, canvasBounds.y + 220);
@@ -225,6 +257,70 @@ test("remembers text background choices, supports radio keys, and keeps selectio
   await page.getByRole("button", { name: "Text (T / 8)" }).click();
   await page.mouse.click(canvasBounds.x + 500, canvasBounds.y + 300);
   await expect(page.locator(".text-block").last()).not.toHaveClass(/is-transparent-background/);
+});
+
+test("explains locked mixed text background choices without exposing radio tab stops", async ({ page }) => {
+  await page.addInitScript(() => {
+    const workspace = {
+      elements: [
+        {
+          backgroundMode: "surface", content: "Locked surface", createdAt: 1, height: 92, id: "locked-surface",
+          locked: true, opacity: 1, pageId: "page", rotation: 0, type: "text", updatedAt: 1,
+          width: 220, x: 180, y: 220, zIndex: 1,
+        },
+        {
+          backgroundMode: "transparent", content: "Locked transparent", createdAt: 1, height: 92, id: "locked-transparent",
+          locked: true, opacity: 1, pageId: "page", rotation: 0, type: "text", updatedAt: 1,
+          width: 220, x: 520, y: 220, zIndex: 2,
+        },
+      ],
+      folders: [],
+      isDarkMode: false,
+      pages: [{ folderId: "", id: "page", isBookmarked: false, revision: 0, title: "Locked text" }],
+      sessionState: {
+        openPageTabIds: ["page"], selectedFolderId: "", selectedPageId: "page",
+        textPreferences: { backgroundMode: "surface" },
+      },
+      warnings: [],
+    };
+    const runtime = window as unknown as {
+      __TAURI_INTERNALS__: { invoke: (command: string) => Promise<unknown> };
+      isTauri: boolean;
+    };
+    runtime.isTauri = true;
+    runtime.__TAURI_INTERNALS__ = {
+      invoke: async (command) => {
+        if (command === "initialize_storage") {
+          return { databasePath: "locked-background.db", importedLegacyData: false, schemaVersion: 1, warnings: [] };
+        }
+        if (command === "load_workspace_data") return workspace;
+        if (command === "reconcile_workspace_structure") return { pages: workspace.pages };
+        if (command === "save_session_state" || command === "apply_scene_changes") return { newRevision: 1, pageId: "page" };
+        throw new Error(`Unexpected command ${command}`);
+      },
+    };
+  });
+  await page.reload();
+
+  const surfaceText = page.locator('[data-block-id="locked-surface"]');
+  const transparentText = page.locator('[data-block-id="locked-transparent"]');
+  await expect(surfaceText).toBeVisible();
+  await surfaceText.locator(".text-block-header").click();
+  await transparentText.locator(".text-block-header").click({ modifiers: ["Control"] });
+
+  const group = page.getByRole("radiogroup", { name: "Text background" });
+  await expect(group).toHaveAttribute("aria-disabled", "true");
+  const descriptionIds = (await group.getAttribute("aria-describedby"))?.split(" ") ?? [];
+  expect(descriptionIds).toHaveLength(2);
+  await expect(group.locator(".drawing-mixed-label")).toHaveAttribute("id", descriptionIds[0]);
+  await expect(page.getByText("All selected text boxes are locked.")).toHaveAttribute("id", descriptionIds[1]);
+  for (const radio of [
+    group.getByRole("radio", { name: "Surface text background" }),
+    group.getByRole("radio", { name: "Transparent text background" }),
+  ]) {
+    await expect(radio).toBeDisabled();
+    await expect(radio).toHaveAttribute("tabindex", "-1");
+  }
 });
 
 test("keeps the properties scrollbar compact and themed in light and dark modes", async ({ page }) => {

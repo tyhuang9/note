@@ -5459,6 +5459,7 @@ h2 {
 }
 
 .drawing-choice-group button[aria-pressed="true"],
+.drawing-choice-group button[role="radio"][aria-checked="true"],
 .drawing-color-picker button[aria-pressed="true"] {
   border-color: #8064d9;
   color: #5f3dc4;
@@ -5591,11 +5592,19 @@ h2 {
 }
 
 .app-shell.is-dark .drawing-choice-group button[aria-pressed="true"],
+.app-shell.is-dark .drawing-choice-group button[role="radio"][aria-checked="true"],
 .app-shell.is-dark .drawing-color-picker button[aria-pressed="true"] {
   border-color: #a78bfa;
   color: #ddd6fe;
-  background: rgba(139, 92, 246, 0.24);
+  background: #493b73;
   box-shadow: inset 0 0 0 1px #a78bfa;
+}
+
+.app-shell.is-dark .drawing-choice-group button[role="radio"][aria-checked="true"] {
+  border-color: #ddd6fe;
+  color: #f5f3ff;
+  background: #4a3b70;
+  box-shadow: inset 0 0 0 1px #ddd6fe;
 }
 
 @media (max-width: 899px) {

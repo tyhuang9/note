@@ -181,6 +181,7 @@ import {
   type TextSelectionSize,
 } from "./canvas/model/selectionBounds";
 import { getDrawingToolLockPreference } from "./canvas/state/drawingToolLock";
+import { getDirectBindableTargetAtPoint } from "./canvas/model/hitTesting";
 import {
   detachConnectorEndpointsForDeletedTargets,
   getDefaultKeyboardArrowEndpoints,
@@ -6701,9 +6702,7 @@ function App() {
       y: (clientY - rect.top - panOffsetRef.current.y) / zoomLevelRef.current,
     };
     const targets = dataRef.current.elements.filter((element) => element.pageId === connector.pageId);
-    const directTargetId = document.elementsFromPoint(clientX, clientY)
-      .map((element) => element.closest<HTMLElement>("[data-canvas-element-id]")?.dataset.canvasElementId)
-      .find((id): id is string => Boolean(id && targets.some((element) => element.id === id && isBindableElement(element))));
+    const directTargetId = getDirectBindableTargetAtPoint(targets, point)?.id;
     const candidate = connector.style.endArrowhead === "arrow"
       ? getConnectorAuthoringCandidate(point, targets, zoomLevelRef.current, directTargetId)
       : null;

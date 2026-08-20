@@ -3,6 +3,7 @@ import type {
   ElementId,
   InkElement,
   ShapeElement,
+  TextElement,
 } from "./elements";
 import { isBoxCanvasElement } from "./elements";
 import { resolveConnectorEndpoint } from "./connectorBinding";
@@ -236,4 +237,40 @@ export function getTopmostElementAtPoint(
     if (element && canvasElementContainsPoint(element, point, tolerance, elementsById)) return element;
   }
   return undefined;
+}
+
+/**
+ * Finds a compatible target from model geometry, independent of DOM pointer
+ * targeting. This keeps arrow binding usable while the world layer is pointer
+ * inert and ignores connectors that visually cross a target.
+ */
+export function getDirectBindableTargetAtPoint(
+  elements: readonly CanvasElement[],
+  point: CanvasPoint,
+): ShapeElement | TextElement | undefined {
+  return elements
+    .map((element, index) => ({ element, index }))
+    .sort((first, second) => second.element.zIndex - first.element.zIndex || second.index - first.index)
+    .map(({ element }) => element)
+    .find((element): element is ShapeElement | TextElement =>
+      (element.type === "text" || (element.type === "shape" && (
+        element.shape === "rectangle" || element.shape === "ellipse" || element.shape === "diamond"
+      ))) && directBindableContainsPoint(element, point),
+    );
+}
+
+function directBindableContainsPoint(element: ShapeElement | TextElement, worldPoint: CanvasPoint): boolean {
+  if (!(element.width > 0 && element.height > 0)) return false;
+  const point = unrotatePoint(element, worldPoint);
+  const centerX = element.x + element.width / 2;
+  const centerY = element.y + element.height / 2;
+  if (element.type === "text" || element.shape === "rectangle") {
+    return boundsContainPoint(element, point);
+  }
+  const dx = point.x - centerX;
+  const dy = point.y - centerY;
+  if (element.shape === "ellipse") {
+    return (dx / (element.width / 2)) ** 2 + (dy / (element.height / 2)) ** 2 <= 1;
+  }
+  return Math.abs(dx) / (element.width / 2) + Math.abs(dy) / (element.height / 2) <= 1;
 }

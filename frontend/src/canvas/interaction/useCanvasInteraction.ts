@@ -16,14 +16,13 @@ import { getSelectionRect, rectsIntersect } from "../../editorUtils";
 import type { CanvasElement, ConnectorElement, ConnectorEndpoint, RoughStyle, ShapeElement } from "../model/elements";
 import {
   getConnectorAuthoringCandidate,
-  isBindableElement,
   normalizeFreeConnectorEndpoint,
   snapConnectorPointToAngle,
   type BindableElement,
   type ShapeBindingAnchor,
 } from "../model/connectorBinding";
 import { screenToleranceToWorld } from "../model/geometry";
-import { getElementBounds, getTopmostElementAtPoint } from "../model/hitTesting";
+import { getDirectBindableTargetAtPoint, getElementBounds, getTopmostElementAtPoint } from "../model/hitTesting";
 import { renderConnectorRoughSvg, renderShapeRoughSvg, shapeRenderPadding } from "../components/PrimitiveElementView";
 import {
   primitiveGeometryFromSession,
@@ -107,14 +106,10 @@ function isDragPrimitiveTool(tool: DrawingTool): tool is PrimitiveTool {
 }
 
 function directHoveredElementId(
-  event: Pick<ReactPointerEvent<HTMLElement>, "clientX" | "clientY" | "target">,
+  point: CanvasPoint,
   elements: readonly CanvasElement[],
 ): string | null {
-  const bindableIds = new Set(elements.filter((element) => isBindableElement(element)).map((element) => element.id));
-  const ids = typeof document === "undefined" ? [] : document.elementsFromPoint(event.clientX, event.clientY)
-    .map((element) => element.closest<HTMLElement>("[data-canvas-element-id]")?.dataset.canvasElementId);
-  if (event.target instanceof Element) ids.push(event.target.closest<HTMLElement>("[data-canvas-element-id]")?.dataset.canvasElementId);
-  return ids.find((id): id is string => Boolean(id && bindableIds.has(id))) ?? null;
+  return getDirectBindableTargetAtPoint(elements, point)?.id ?? null;
 }
 
 function isCanvasChromeTarget(target: EventTarget | null) {
@@ -224,7 +219,6 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
 
   const resolveArrowEndpoint = useCallback((
     point: CanvasPoint,
-    event: Pick<ReactPointerEvent<HTMLElement>, "clientX" | "clientY" | "target">,
     shiftKey: boolean,
     startPoint?: CanvasPoint,
   ) => {
@@ -232,7 +226,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       point,
       optionsRef.current.visibleElements,
       optionsRef.current.zoomLevelRef.current,
-      directHoveredElementId(event, optionsRef.current.visibleElements),
+      directHoveredElementId(point, optionsRef.current.visibleElements),
     );
     const endpoint = candidate?.endpoint ?? { kind: "free" as const, ...point };
     if (endpoint.kind === "element") {
@@ -400,7 +394,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
         current.setActiveMode("canvas");
         const pending = arrowSession.current;
         if (!pending) {
-          const resolved = resolveArrowEndpoint(point, event, false);
+          const resolved = resolveArrowEndpoint(point, false);
           if (!resolved) {
             current.onArrowStatusChange("Arrow endpoint is unavailable.");
             return;
@@ -425,7 +419,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
               : "Arrow start set. Choose an end point.",
           );
         } else {
-          const resolved = resolveArrowEndpoint(point, event, event.shiftKey, pending.startPoint);
+          const resolved = resolveArrowEndpoint(point, event.shiftKey, pending.startPoint);
           if (!resolved) {
             current.onArrowStatusChange("Arrow endpoint is unavailable.");
             return;
@@ -512,7 +506,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       if (currentArrow && !panState.current) {
         const point = getCanvasPoint(event.clientX, event.clientY);
         if (!point) return;
-        const resolved = resolveArrowEndpoint(point, event, event.shiftKey, currentArrow.startPoint);
+        const resolved = resolveArrowEndpoint(point, event.shiftKey, currentArrow.startPoint);
         if (!resolved) return;
         currentArrow.currentEndpoint = resolved.adjustedEndpoint;
         currentArrow.currentPoint = resolved.adjustedPoint;

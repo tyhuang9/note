@@ -4,6 +4,74 @@
 
 `final result: passed`
 
+---
+
+## Final Canvas Stack Product Design QA — 2026-08-20
+
+### Scope and Final Product State
+
+- Final product head: `0e4ddb5d199d5bf6e0bbb9f0ab15b8c6774bd76d` (`Fix connector chooser button sizing`).
+- Review scope: the four-branch canvas stack, including live composite selection, compact properties overflow, Surface/Transparent text backgrounds, two-click Arrow targeting, zoom-constant binding anchors, and keyboard Arrow creation/endpoint binding.
+- Visual status: no actionable P0, P1, or P2 findings remain.
+
+### Source Visual Truth and Same-state Evidence
+
+- Source 1: `C:\Users\huang\.codex\attachments\ff03dfbf-6956-4879-a530-5ec7860362c5\image-1.png`, 505x345 pixels; dark mixed primitive/text selection held mid-drag.
+- Implementation 1: `design-qa-evidence/implementation-mixed-live-drag-dark-505x345.png`, 505x345 pixels; CSS viewport 505x345, DPR 1.
+- Full-view comparison 1: `design-qa-evidence/comparison-reference1-live-drag-505x345.png`, 1010x345 pixels; source left, implementation right.
+- Source 2: `C:\Users\huang\.codex\attachments\ff03dfbf-6956-4879-a530-5ec7860362c5\image-2.png`, 280x224 pixels; dark compact properties overflow and embedded scrollbar.
+- Implementation 2: `design-qa-evidence/implementation-properties-overflow-dark-280x224.png`, 280x224 pixels; CSS viewport 280x224, DPR 1.
+- Full-view comparison 2: `design-qa-evidence/comparison-reference2-properties-dark-280x224.png`, 560x224 pixels; source left, implementation right.
+- Density normalization: none required. Each source/implementation pair uses identical pixel dimensions and DPR 1.
+- Approved difference: Note retains its own workspace chrome, toolbar, tokens, and content composition. The same-state comparisons judge the requested live selection-frame behavior and inset-scrollbar contract rather than unrelated Excalidraw chrome.
+
+### Final-state Evidence
+
+- Text-background board: `design-qa-evidence/board-text-background-controls-light-dark.png`, 1200x936 pixels. It contains selected Surface and Transparent controls in light and dark themes.
+- Individual text controls: `implementation-text-controls-surface-light-1000x720.png`, `implementation-text-controls-transparent-light-1000x720.png`, `implementation-text-controls-surface-dark-1000x720.png`, and `implementation-text-controls-transparent-dark-1000x720.png`; each source viewport is 1000x720 CSS pixels at DPR 1.
+- Compact text state: `design-qa-evidence/implementation-text-controls-compact-dark-320x640-200pct.png`, 320x640 pixels; CSS viewport 320x640 at DPR 1 with the properties panel rendered at effective 200% text size.
+- Arrow zoom board: `design-qa-evidence/board-arrow-pending-active-target-zoom.png`, 1500x336 pixels. It contains the same pending two-click Arrow state at canvas zoom 50%, 100%, and 200%.
+- Individual Arrow zoom states: `implementation-arrow-pending-active-target-dark-50pct-1500x900.png`, `implementation-arrow-pending-active-target-dark-100pct-1500x900.png`, and `implementation-arrow-pending-active-target-dark-200pct-1500x900.png`; each source viewport is 1500x900 CSS pixels at DPR 1.
+- Keyboard board: `design-qa-evidence/board-keyboard-arrow-endpoint-chooser.png`, 1400x456 pixels. It shows the keyboard-created Arrow with the start endpoint focused and the keyboard endpoint chooser open.
+- Individual keyboard states: `implementation-keyboard-arrow-focused-endpoint-light-1500x900.png` and `implementation-keyboard-arrow-chooser-light-1500x900.png`; each source viewport is 1500x900 CSS pixels at DPR 1.
+- Focused-region evidence was required because 10px/14px anchors, focus rings, radio selection borders, scrollbar geometry, and chooser labels are too small to judge reliably in the full-view reference boards. The three final-state boards and their unscaled implementation captures provide those focused views.
+
+### Findings and Comparison History
+
+| Pass | Severity | Finding | Resolution and post-fix evidence |
+| --- | --- | --- | --- |
+| 1 | P1 | The keyboard endpoint chooser inherited the global 30px button width. Target, anchor, Close, and Detach labels wrapped into narrow columns and overlapped, making the otherwise keyboard-reachable binding flow visually unusable. | Resolved in product commit `0e4ddb5` by giving chooser buttons content-sized width/height with a 44px minimum target and normal wrapping. Same-state recapture: `implementation-keyboard-arrow-chooser-light-1500x900.png`; combined post-fix view: `board-keyboard-arrow-endpoint-chooser.png`. |
+| 2 | None | No actionable P0/P1/P2 differences remained after the chooser recapture. | All nine final-head browser capture/assertion flows passed on isolated port 4326 with no console or page errors. |
+
+The first-pass P1 screenshot was superseded by the exact same-state post-fix capture; the finding, root cause, product commit, and replacement evidence are recorded above.
+
+### Required Fidelity Surfaces
+
+- Fonts and typography: existing compact system sans-serif type remains consistent across toolbar, properties, text-background controls, accessibility copy, and chooser. Labels have readable line height and do not collide or truncate in the final desktop chooser or the 320px/200% properties state.
+- Spacing and layout rhythm: the live composite frame follows its moving clones; the properties panel preserves section spacing and remains inside the compact viewport; text radio controls retain balanced padding; the chooser groups use consistent 8px gaps and 44px minimum actions.
+- Colors and visual tokens: purple selection/focus states, neutral surfaces, borders, disabled treatment, and dark/light backgrounds remain coherent. Surface versus Transparent has both text and selected-border feedback, and the thin scrollbar uses distinct light/dark tokens.
+- Image quality and asset fidelity: the reviewed states contain no raster product imagery, logo, illustration, or decorative image asset requiring recreation. Rough geometry remains sharp at 50%, 100%, and 200%. Existing library icons remain consistent; no emoji, placeholder asset, CSS-art image substitute, or new handcrafted illustration appears.
+- Copy and content: `Surface`, `Transparent`, target labels, target-relative anchor names, `Detach start endpoint`, and the keyboard-creation guidance are clear and standalone. Unique target labels include type/name and center coordinates without visual overlap after the P1 fix.
+- Responsive behavior: at 320x640 with effective 200% panel text, panel and document horizontal overflow are both zero, the 252px sheet remains within the viewport, and controls remain reachable without shrinking touch targets.
+- Interaction and accessibility-adjacent UX: the keyboard-created Arrow visibly focuses its start endpoint, Enter opens the correctly titled modal chooser, the first target receives focus, focus is visible, and all chooser actions have at least a 44x44px target. Visual binding anchors remain pointer-inert and out of the accessibility tree as intended.
+
+### Interaction and Runtime Verification
+
+- Recreated the supplied 505x345 live mixed-selection drag before pointer-up and verified two moving clones plus one composite frame at the current pointer delta.
+- Recreated the supplied 280x224 compact dark properties state, scrolled the embedded panel, and verified the thin themed scrollbar. Light and effective-200% variants also remained free of horizontal overflow.
+- Selected one text element and changed its text background between Surface and Transparent in both themes. The selected radio, focus treatment, and actual canvas background changed together.
+- At 320x640 and effective 200% panel text, verified both radio choices were visible, the panel stayed inside the viewport, and neither panel nor document developed horizontal overflow.
+- Armed Arrow with the first click at 50%, 100%, and 200%, moved near one target, and verified exactly four anchors for that target only: three 10x10px idle anchors and one 14x14px active anchor. The pending RoughSVG preview remained full opacity and Escape removed preview and anchors.
+- Created an Arrow using canvas focus, `A`, and Enter; verified one connector, visible start-endpoint focus, Enter-opened chooser, correctly focused first target, readable target/anchor/action controls, and non-overlapping modal layout.
+- Browser/runtime: Playwright Chromium on isolated `127.0.0.1:4326`; port 4173 was not started or used. Final capture run: 9/9 passed. Console errors: 0. Page errors: 0.
+
+### Remaining P3 Notes
+
+- The 10px idle anchors are intentionally subtle at 50% canvas zoom; the 14px active anchor and full-opacity preview preserve the interaction hierarchy without adding persistent chrome.
+- The compact properties sheet intentionally scrolls internally at short heights so it can preserve readable labels and 44px controls.
+
+final result: passed
+
 No unresolved P0, P1, or P2 visual findings remain.
 
 ## Source of Truth

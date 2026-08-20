@@ -136,6 +136,7 @@ import {
   type CanvasElement,
   type InkElement,
   type ConnectorElement,
+  type ConnectorEndpoint,
   type ShapeElement,
   type TextElement,
 } from "./canvas/model/elements";
@@ -6925,17 +6926,83 @@ function App() {
     [],
   );
 
+  const completeArrowCreation = useCallback((start: ConnectorEndpoint, end: ConnectorEndpoint) => {
+    const pageId = selectedPageIdRef.current;
+    if (!pageId) return false;
+    const elementId = createId("connector");
+    const timestamp = Date.now();
+    const preference = drawingPreferencesRef.current.arrow;
+    const connector: ConnectorElement = {
+      createdAt: timestamp,
+      end,
+      id: elementId,
+      locked: false,
+      opacity: preference.opacity,
+      pageId,
+      routing: "straight",
+      start,
+      style: {
+        endArrowhead: "arrow",
+        fillColor: null,
+        roughness: preference.roughness,
+        roundness: 0,
+        seed: deterministicSeed(elementId),
+        startArrowhead: "none",
+        strokeColor: preference.strokeColor,
+        strokeStyle: preference.strokeStyle,
+        strokeWidth: preference.strokeWidth,
+      },
+      type: "connector",
+      updatedAt: timestamp,
+      zIndex: dataRef.current.elements.length,
+    };
+    setBlocksWithHistory((currentElements) => [...currentElements, {
+      ...connector,
+      zIndex: currentElements.length,
+    }]);
+    selectedBlockIdsRef.current = [elementId];
+    setSelectedBlockIds([elementId]);
+    editingBlockIdRef.current = null;
+    setEditingBlockId(null);
+    setInsertionPoint(null);
+    setIsCanvasKeyboardActive(true);
+    setActiveMode("selected");
+    const nextTool = drawingToolAfterCreation("arrow", isToolLockedRef.current);
+    if (nextTool !== "arrow") {
+      activeToolRef.current = nextTool;
+      setActiveTool(nextTool);
+    }
+    return true;
+  }, []);
+
   const canvasInteraction = useCanvasInteraction({
     activeToolRef,
     canvasContentRef,
     canvasRef,
     cleanupMarquee: clearMarquee,
+    getArrowPreviewStyle: () => {
+      const preference = drawingPreferencesRef.current.arrow;
+      return {
+        endArrowhead: "arrow",
+        fillColor: null,
+        roughness: preference.roughness,
+        roundness: 0,
+        seed: 1,
+        startArrowhead: "none",
+        strokeColor: preference.strokeColor,
+        strokeStyle: preference.strokeStyle,
+        strokeWidth: preference.strokeWidth,
+      };
+    },
     hasPendingImage: () => pendingImagePlacementRef.current !== null,
+    interactionCancellationKey: `${activeTool}:${selectedPageId ?? ""}`,
     isTemporaryHandActiveRef,
     leaveTextEditing,
     liveDraftLayerRef,
     maxZoom: MAX_ZOOM,
     minZoom: MIN_ZOOM,
+    onArrowStatusChange: setConnectorBindingAnnouncement,
+    onCreateArrow: completeArrowCreation,
     onCreatePrimitive: completePrimitiveCreation,
     onCreateText: (point) =>
       createTextBlock(point.x, point.y, "", {
@@ -7525,8 +7592,18 @@ function App() {
                 )}
               />
             ))}
-            {activeTool === "arrow" || isConnectorEndpointRetargeting ? (
-              <ShapeBindingAnchors targets={visibleCanvasElements} />
+            {activeTool === "arrow" && canvasInteraction.arrowAuthoringVisual ? (
+              <ShapeBindingAnchors
+                activeAnchorName={canvasInteraction.arrowAuthoringVisual.activeAnchorName}
+                activeTargetId={canvasInteraction.arrowAuthoringVisual.targetId}
+                isSnapped={canvasInteraction.arrowAuthoringVisual.isSnapped}
+                targets={visibleCanvasElements.filter((element) =>
+                  element.id === canvasInteraction.arrowAuthoringVisual?.targetId,
+                )}
+                zoom={zoomLevel}
+              />
+            ) : isConnectorEndpointRetargeting ? (
+              <ShapeBindingAnchors targets={visibleCanvasElements} zoom={zoomLevel} />
             ) : null}
             {pendingImagePlacement?.point ? (
               <img

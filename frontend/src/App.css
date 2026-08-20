@@ -2472,7 +2472,20 @@ h2 {
   border-radius: 999px;
   background: var(--canvas-tool-bg, #fff);
   box-shadow: 0 0 0 2px var(--canvas-selection-soft, rgba(139, 92, 246, 0.16));
-  transform: translate(-50%, -50%);
+  transform-origin: center;
+  transition: width 150ms ease, height 150ms ease, border-color 150ms ease, background-color 150ms ease;
+}
+
+.connector-binding-anchor.is-active {
+  width: 14px;
+  height: 14px;
+  border-color: var(--canvas-focus, #6d28d9);
+  background: var(--canvas-selection-soft, #ede9fe);
+}
+
+.connector-binding-anchor.is-snapped {
+  background: var(--canvas-selection, #7c3aed);
+  box-shadow: 0 0 0 3px var(--canvas-selection-soft, rgba(124, 58, 237, 0.2));
 }
 
 .primitive-element[role="button"]:focus-visible,

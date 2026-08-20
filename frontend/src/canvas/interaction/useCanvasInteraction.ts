@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import type {
   PointerEvent as ReactPointerEvent,
   WheelEvent as ReactWheelEvent,
@@ -13,9 +13,15 @@ import type {
   SelectionState,
 } from "../../appTypes";
 import { getSelectionRect, rectsIntersect } from "../../editorUtils";
-import type { CanvasElement } from "../model/elements";
+import type { CanvasElement, ConnectorElement, ConnectorEndpoint } from "../model/elements";
+import {
+  getConnectorAuthoringCandidate,
+  snapConnectorPointToAngle,
+  type ShapeAnchorName,
+} from "../model/connectorBinding";
 import { screenToleranceToWorld } from "../model/geometry";
 import { getElementBounds, getTopmostElementAtPoint } from "../model/hitTesting";
+import { renderConnectorRoughSvg } from "../components/PrimitiveElementView";
 import {
   primitiveGeometryFromSession,
   type PrimitiveGeometry,
@@ -30,8 +36,23 @@ type PrimitiveSession = {
   modifiers: PrimitiveModifiers;
   pointerId: number;
   start: CanvasPoint;
-  tool: PrimitiveTool;
+  tool: Exclude<PrimitiveTool, "arrow">;
 };
+
+type ArrowAuthoringSession = {
+  cancellationKey: string;
+  currentEndpoint: ConnectorEndpoint;
+  currentPoint: CanvasPoint;
+  previousSelection: readonly string[];
+  startEndpoint: ConnectorEndpoint;
+  startPoint: CanvasPoint;
+};
+
+export type ArrowAuthoringVisual = Readonly<{
+  activeAnchorName: ShapeAnchorName;
+  isSnapped: boolean;
+  targetId: string;
+}>;
 
 type CanvasInteractionOptions = {
   activeToolRef: RefObject<DrawingTool>;
@@ -40,11 +61,15 @@ type CanvasInteractionOptions = {
   cleanupMarquee: () => void;
   hasPendingImage: () => boolean;
   isTemporaryHandActiveRef: RefObject<boolean>;
+  interactionCancellationKey: string;
   leaveTextEditing: () => void;
   liveDraftLayerRef: RefObject<SVGSVGElement | null>;
   maxZoom: number;
   minZoom: number;
+  getArrowPreviewStyle: () => ConnectorElement["style"];
+  onCreateArrow: (start: ConnectorEndpoint, end: ConnectorEndpoint) => boolean;
   onCreatePrimitive: (tool: PrimitiveTool, geometry: PrimitiveGeometry) => void;
+  onArrowStatusChange: (message: string) => void;
   onCreateText: (point: CanvasPoint) => void;
   onImagePreviewPointChange: (point: CanvasPoint | null) => void;
   onPlaceImage: (point: CanvasPoint) => void;
@@ -65,8 +90,14 @@ type CanvasInteractionOptions = {
   zoomStep: number;
 };
 
-function isPrimitiveTool(tool: DrawingTool): tool is PrimitiveTool {
-  return tool === "rectangle" || tool === "ellipse" || tool === "diamond" || tool === "line" || tool === "arrow";
+function isDragPrimitiveTool(tool: DrawingTool): tool is Exclude<PrimitiveTool, "arrow"> {
+  return tool === "rectangle" || tool === "ellipse" || tool === "diamond" || tool === "line";
+}
+
+function directHoveredElementId(target: EventTarget | null): string | null {
+  return target instanceof Element
+    ? target.closest<HTMLElement>("[data-canvas-element-id]")?.dataset.canvasElementId ?? null
+    : null;
 }
 
 function isCanvasChromeTarget(target: EventTarget | null) {
@@ -105,6 +136,10 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
   const selectionState = useRef<SelectionState | null>(null);
   const primitiveSession = useRef<PrimitiveSession | null>(null);
   const primitivePreviewRef = useRef<SVGGElement | null>(null);
+  const arrowSession = useRef<ArrowAuthoringSession | null>(null);
+  const arrowPreviewRef = useRef<SVGSVGElement | null>(null);
+  const ignoredLostCapturePointerIdRef = useRef<number | null>(null);
+  const [arrowAuthoringVisual, setArrowAuthoringVisual] = useState<ArrowAuthoringVisual | null>(null);
 
   optionsRef.current = options;
 
@@ -118,6 +153,93 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
   const clearPrimitivePreview = useCallback(() => {
     primitivePreviewRef.current?.remove();
     primitivePreviewRef.current = null;
+  }, []);
+
+  const clearArrowPreview = useCallback(() => {
+    arrowPreviewRef.current?.remove();
+    arrowPreviewRef.current = null;
+  }, []);
+
+  const paintArrowPreview = useCallback((session: ArrowAuthoringSession) => {
+    const draftLayer = optionsRef.current.liveDraftLayerRef.current;
+    if (!draftLayer) return;
+    const svg = arrowPreviewRef.current ?? document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    arrowPreviewRef.current = svg;
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("class", "arrow-authoring-preview");
+    svg.setAttribute("data-start-x", String(session.startPoint.x));
+    svg.setAttribute("data-start-y", String(session.startPoint.y));
+    svg.setAttribute("data-end-x", String(session.currentPoint.x));
+    svg.setAttribute("data-end-y", String(session.currentPoint.y));
+    svg.setAttribute("overflow", "visible");
+    svg.setAttribute("pointer-events", "none");
+    svg.setAttribute("opacity", "1");
+    renderConnectorRoughSvg(
+      svg,
+      optionsRef.current.getArrowPreviewStyle(),
+      session.startPoint,
+      session.currentPoint,
+    );
+    if (svg.parentNode !== draftLayer) draftLayer.append(svg);
+  }, []);
+
+  const cancelArrowAuthoring = useCallback((message = "Arrow canceled.", updateUi = true) => {
+    const session = arrowSession.current;
+    if (!session) return false;
+    arrowSession.current = null;
+    clearArrowPreview();
+    optionsRef.current.cleanupMarquee();
+    if (updateUi) {
+      const previousSelection = [...session.previousSelection];
+      optionsRef.current.selectedElementIdsRef.current = previousSelection;
+      optionsRef.current.setSelectedElementIds(previousSelection);
+      optionsRef.current.setInsertionPoint(null);
+      optionsRef.current.setActiveMode(previousSelection.length > 0 ? "selected" : "canvas");
+      optionsRef.current.onArrowStatusChange(message);
+      setArrowAuthoringVisual(null);
+    }
+    return true;
+  }, [clearArrowPreview]);
+
+  const resolveArrowEndpoint = useCallback((
+    point: CanvasPoint,
+    target: EventTarget | null,
+    shiftKey: boolean,
+    startPoint?: CanvasPoint,
+  ) => {
+    const candidate = getConnectorAuthoringCandidate(
+      point,
+      optionsRef.current.visibleElements,
+      optionsRef.current.zoomLevelRef.current,
+      directHoveredElementId(target),
+    );
+    const endpoint = candidate?.endpoint ?? { kind: "free" as const, ...point };
+    const adjustedPoint = endpoint.kind === "element"
+      ? candidate!.activeAnchor.point
+      : shiftKey && startPoint
+        ? snapConnectorPointToAngle(startPoint, point)
+        : point;
+    const adjustedEndpoint = endpoint.kind === "element"
+      ? endpoint
+      : { kind: "free" as const, ...adjustedPoint };
+    return { adjustedEndpoint, adjustedPoint, candidate };
+  }, []);
+
+  const updateArrowVisual = useCallback((candidate: ReturnType<typeof getConnectorAuthoringCandidate>) => {
+    const next = candidate
+      ? {
+          activeAnchorName: candidate.activeAnchor.name,
+          isSnapped: candidate.endpoint.kind === "element",
+          targetId: candidate.target.id,
+        }
+      : null;
+    setArrowAuthoringVisual((current) =>
+      current?.targetId === next?.targetId
+      && current?.activeAnchorName === next?.activeAnchorName
+      && current?.isSnapped === next?.isSnapped
+        ? current
+        : next,
+    );
   }, []);
 
   const paintPrimitivePreview = useCallback((session: PrimitiveSession) => {
@@ -240,7 +362,63 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
         startPan(event);
         return;
       }
-      if (!isPrimitiveTool(tool)) {
+      if (tool === "arrow") {
+        const point = getCanvasPoint(event.clientX, event.clientY);
+        if (!point) return;
+        event.preventDefault();
+        event.stopPropagation();
+        current.leaveTextEditing();
+        current.cleanupMarquee();
+        current.setInsertionPoint(null);
+        current.setIsCanvasKeyboardActive(true);
+        current.setActiveMode("canvas");
+        const pending = arrowSession.current;
+        if (!pending) {
+          const resolved = resolveArrowEndpoint(point, event.target, false);
+          const previousSelection = [...current.selectedElementIdsRef.current];
+          current.selectedElementIdsRef.current = [];
+          current.setSelectedElementIds([]);
+          arrowSession.current = {
+            cancellationKey: current.interactionCancellationKey,
+            currentEndpoint: resolved.adjustedEndpoint,
+            currentPoint: resolved.adjustedPoint,
+            previousSelection,
+            startEndpoint: resolved.adjustedEndpoint,
+            startPoint: resolved.adjustedPoint,
+          };
+          updateArrowVisual(resolved.candidate);
+          paintArrowPreview(arrowSession.current);
+          current.onArrowStatusChange(
+            resolved.adjustedEndpoint.kind === "element"
+              ? "Arrow start bound. Choose an end point."
+              : "Arrow start set. Choose an end point.",
+          );
+        } else {
+          const resolved = resolveArrowEndpoint(point, event.target, event.shiftKey, pending.startPoint);
+          pending.currentEndpoint = resolved.adjustedEndpoint;
+          pending.currentPoint = resolved.adjustedPoint;
+          updateArrowVisual(resolved.candidate);
+          paintArrowPreview(pending);
+          if (Math.hypot(
+            pending.currentPoint.x - pending.startPoint.x,
+            pending.currentPoint.y - pending.startPoint.y,
+          ) < 0.01) {
+            current.onArrowStatusChange("Arrow needs two different endpoints.");
+            return;
+          }
+          if (!current.onCreateArrow(pending.startEndpoint, pending.currentEndpoint)) {
+            current.onArrowStatusChange("Arrow is unavailable on this page.");
+            return;
+          }
+          arrowSession.current = null;
+          clearArrowPreview();
+          setArrowAuthoringVisual(null);
+          current.onArrowStatusChange("Arrow created.");
+        }
+        event.currentTarget.focus({ preventScroll: true });
+        return;
+      }
+      if (!isDragPrimitiveTool(tool)) {
         if (tool !== "text" && tool !== "image") return;
         const point = getCanvasPoint(event.clientX, event.clientY);
         if (!point) return;
@@ -283,17 +461,30 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       event.currentTarget.setPointerCapture(event.pointerId);
       event.currentTarget.focus({ preventScroll: true });
     },
-    [getCanvasPoint, paintPrimitivePreview, startPan],
+    [clearArrowPreview, getCanvasPoint, paintArrowPreview, paintPrimitivePreview, resolveArrowEndpoint, startPan, updateArrowVisual],
   );
 
   const handlePointerMoveCapture = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
       const current = optionsRef.current;
+      const currentArrow = arrowSession.current;
+      if (currentArrow && !panState.current) {
+        const point = getCanvasPoint(event.clientX, event.clientY);
+        if (!point) return;
+        const resolved = resolveArrowEndpoint(point, event.target, event.shiftKey, currentArrow.startPoint);
+        currentArrow.currentEndpoint = resolved.adjustedEndpoint;
+        currentArrow.currentPoint = resolved.adjustedPoint;
+        updateArrowVisual(resolved.candidate);
+        paintArrowPreview(currentArrow);
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       if (current.activeToolRef.current !== "image" || !current.hasPendingImage()) return;
       const point = getCanvasPoint(event.clientX, event.clientY);
       if (point) current.onImagePreviewPointChange(point);
     },
-    [getCanvasPoint],
+    [getCanvasPoint, paintArrowPreview, resolveArrowEndpoint, updateArrowVisual],
   );
 
   const handlePointerDown = useCallback(
@@ -385,11 +576,6 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       }
       const currentPan = panState.current;
       const currentSelection = selectionState.current;
-
-      if (!currentPan && !currentSelection) {
-        return;
-      }
-
       const current = optionsRef.current;
       if (currentPan) {
         const nextPanOffset = {
@@ -472,6 +658,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
         current.panOffsetRef.current = nextPanOffset;
         current.setPanOffset(nextPanOffset);
         current.setActiveMode("canvas");
+        ignoredLostCapturePointerIdRef.current = event.pointerId;
       }
 
       if (currentSelection?.didMove) {
@@ -508,7 +695,15 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       // The completed session has already been cleared by then, so it must not
       // reset the selected mode or discard a completed marquee.
       const currentPrimitive = primitiveSession.current;
-      if (!currentPan && !currentSelection && !currentPrimitive) return;
+      if (
+        event.type === "lostpointercapture"
+        && ignoredLostCapturePointerIdRef.current === event.pointerId
+      ) {
+        ignoredLostCapturePointerIdRef.current = null;
+        return;
+      }
+      const hadArrow = Boolean(arrowSession.current);
+      if (!currentPan && !currentSelection && !currentPrimitive && !hadArrow) return;
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);
       }
@@ -522,15 +717,36 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       primitiveSession.current = null;
       clearPrimitivePreview();
       cancelMarquee();
-      optionsRef.current.setActiveMode("canvas");
+      cancelArrowAuthoring();
+      if (!hadArrow) optionsRef.current.setActiveMode("canvas");
     },
-    [cancelMarquee, clearPrimitivePreview],
+    [cancelArrowAuthoring, cancelMarquee, clearPrimitivePreview],
   );
+
+  useEffect(() => {
+    const handleWindowBlur = () => cancelArrowAuthoring();
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") cancelArrowAuthoring();
+    };
+    window.addEventListener("blur", handleWindowBlur);
+    window.addEventListener("keydown", handleEscape, true);
+    return () => {
+      window.removeEventListener("blur", handleWindowBlur);
+      window.removeEventListener("keydown", handleEscape, true);
+    };
+  }, [cancelArrowAuthoring]);
+
+  useEffect(() => {
+    if (arrowSession.current?.cancellationKey !== options.interactionCancellationKey) {
+      cancelArrowAuthoring();
+    }
+  }, [cancelArrowAuthoring, options.interactionCancellationKey]);
 
   useEffect(() => () => {
     primitiveSession.current = null;
     clearPrimitivePreview();
-  }, [clearPrimitivePreview]);
+    cancelArrowAuthoring("", false);
+  }, [cancelArrowAuthoring, clearPrimitivePreview]);
 
   const handleWheel = useCallback((event: ReactWheelEvent<HTMLElement>) => {
     const current = optionsRef.current;
@@ -596,6 +812,8 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
     handlePointerMove,
     handlePointerMoveCapture,
     handleWheel,
+    arrowAuthoringVisual,
+    cancelArrowAuthoring,
     cancelMarquee,
     startPan,
   };

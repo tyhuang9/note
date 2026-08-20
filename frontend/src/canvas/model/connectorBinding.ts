@@ -69,6 +69,18 @@ export function isSafeCanvasRotation(value: number): boolean {
   return Number.isFinite(value) && Math.abs(value) <= MAX_CANVAS_ROTATION_DEGREES;
 }
 
+/** Clamps finite free endpoints to the persistence boundary and rejects non-finite input. */
+export function normalizeFreeConnectorEndpoint(
+  point: CanvasPoint,
+): Extract<ConnectorEndpoint, { kind: "free" }> | null {
+  if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return null;
+  return {
+    kind: "free",
+    x: clampCanvasCoordinate(point.x),
+    y: clampCanvasCoordinate(point.y),
+  };
+}
+
 /** Resolves any compatible endpoint to its current world point. */
 export function resolveConnectorEndpoint(
   endpoint: ConnectorEndpoint,
@@ -192,7 +204,7 @@ export function snapConnectorEndpoint(
   radiusPx = CONNECTOR_BINDING_SNAP_RADIUS_PX,
 ): ConnectorEndpoint {
   if (!isSafeResolvedPoint(point)) {
-    return { kind: "free", x: clampCanvasCoordinate(point.x), y: clampCanvasCoordinate(point.y) };
+    return normalizeFreeConnectorEndpoint(point) ?? { kind: "free", x: 0, y: 0 };
   }
   if (!allowBinding) {
     return { kind: "free", ...point };
@@ -360,7 +372,6 @@ function isSafeResolvedPoint(point: CanvasPoint): boolean {
 }
 
 function clampCanvasCoordinate(value: number): number {
-  if (!Number.isFinite(value)) return 0;
   return Math.max(-MAX_CANVAS_VALUE, Math.min(MAX_CANVAS_VALUE, value));
 }
 

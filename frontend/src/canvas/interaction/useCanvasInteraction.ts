@@ -16,6 +16,7 @@ import { getSelectionRect, rectsIntersect } from "../../editorUtils";
 import type { CanvasElement, ConnectorElement, ConnectorEndpoint } from "../model/elements";
 import {
   getConnectorAuthoringCandidate,
+  normalizeFreeConnectorEndpoint,
   snapConnectorPointToAngle,
   type ShapeAnchorName,
 } from "../model/connectorBinding";
@@ -218,15 +219,16 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       directHoveredElementId(target),
     );
     const endpoint = candidate?.endpoint ?? { kind: "free" as const, ...point };
-    const adjustedPoint = endpoint.kind === "element"
-      ? candidate!.activeAnchor.point
-      : shiftKey && startPoint
-        ? snapConnectorPointToAngle(startPoint, point)
-        : point;
-    const adjustedEndpoint = endpoint.kind === "element"
-      ? endpoint
-      : { kind: "free" as const, ...adjustedPoint };
-    return { adjustedEndpoint, adjustedPoint, candidate };
+    if (endpoint.kind === "element") {
+      return { adjustedEndpoint: endpoint, adjustedPoint: candidate!.activeAnchor.point, candidate };
+    }
+    const proposedPoint = shiftKey && startPoint
+      ? snapConnectorPointToAngle(startPoint, point)
+      : point;
+    const adjustedEndpoint = normalizeFreeConnectorEndpoint(proposedPoint);
+    return adjustedEndpoint
+      ? { adjustedEndpoint, adjustedPoint: { x: adjustedEndpoint.x, y: adjustedEndpoint.y }, candidate }
+      : null;
   }, []);
 
   const updateArrowVisual = useCallback((candidate: ReturnType<typeof getConnectorAuthoringCandidate>) => {
@@ -379,6 +381,10 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
         const pending = arrowSession.current;
         if (!pending) {
           const resolved = resolveArrowEndpoint(point, event.target, false);
+          if (!resolved) {
+            current.onArrowStatusChange("Arrow endpoint is unavailable.");
+            return;
+          }
           const previousSelection = [...current.selectedElementIdsRef.current];
           current.selectedElementIdsRef.current = [];
           current.setSelectedElementIds([]);
@@ -400,6 +406,10 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
           );
         } else {
           const resolved = resolveArrowEndpoint(point, event.target, event.shiftKey, pending.startPoint);
+          if (!resolved) {
+            current.onArrowStatusChange("Arrow endpoint is unavailable.");
+            return;
+          }
           pending.currentEndpoint = resolved.adjustedEndpoint;
           pending.currentPoint = resolved.adjustedPoint;
           updateArrowVisual(resolved.candidate);
@@ -477,6 +487,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
         const point = getCanvasPoint(event.clientX, event.clientY);
         if (!point) return;
         const resolved = resolveArrowEndpoint(point, event.target, event.shiftKey, currentArrow.startPoint);
+        if (!resolved) return;
         currentArrow.currentEndpoint = resolved.adjustedEndpoint;
         currentArrow.currentPoint = resolved.adjustedPoint;
         updateArrowVisual(resolved.candidate);

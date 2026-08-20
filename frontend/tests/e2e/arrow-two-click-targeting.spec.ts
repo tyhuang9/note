@@ -40,6 +40,28 @@ test("Arrow stays pending after the first click and commits once on the second c
   await expect(page.locator('[data-tool="select"]')).toHaveAttribute("aria-pressed", "true");
 });
 
+test("invalid authored coordinates do not write and finite extremes clamp to the persistence boundary", async ({ page }) => {
+  await resetCounts(page);
+  await selectTool(page, "arrow");
+
+  await dispatchArrowPointerWithCanvasLeft(page, "nan");
+  await expect(page.locator(".arrow-authoring-preview")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Select and move arrow connector" })).toHaveCount(0);
+  await expect(page.locator(".canvas-accessibility-status")).toHaveText("Arrow endpoint is unavailable.");
+  expect((await counts(page)).apply).toBe(0);
+
+  await dispatchArrowPointerWithCanvasLeft(page, -2_000_000);
+  const preview = page.locator(".arrow-authoring-preview");
+  await expect(preview).toHaveAttribute("data-start-x", "1000000");
+  await dispatchArrowPointerWithCanvasLeft(page, 2_000_000);
+  await expect(preview).toHaveCount(0);
+  await expect.poll(async () => (await counts(page)).apply).toBe(1);
+  await expect.poll(async () => newestConnector(page)).toMatchObject({
+    end: { kind: "free", x: -1_000_000 },
+    start: { kind: "free", x: 1_000_000 },
+  });
+});
+
 test("one direct or nearby target exposes screen-constant anchors and binding wins over Shift", async ({ page }) => {
   const canvas = page.getByRole("tabpanel");
   const shape = page.locator('[data-canvas-element-id="target-shape"]');
@@ -147,6 +169,40 @@ async function selectTool(page: Page, tool: string) {
   const button = page.locator(`.canvas-tool-palette [data-tool="${tool}"]`);
   await button.scrollIntoViewIfNeeded();
   await button.click();
+}
+
+async function dispatchArrowPointerWithCanvasLeft(page: Page, canvasLeft: number | "nan") {
+  await page.evaluate((leftValue) => {
+    const canvas = document.querySelector<HTMLElement>('[role="tabpanel"]');
+    const content = document.querySelector<HTMLElement>(".canvas-content");
+    if (!canvas || !content) throw new Error("Canvas DOM was unavailable.");
+    const originalRect = content.getBoundingClientRect();
+    const left = leftValue === "nan" ? Number.NaN : leftValue;
+    Object.defineProperty(content, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        bottom: originalRect.bottom,
+        height: originalRect.height,
+        left,
+        right: left + originalRect.width,
+        toJSON: () => ({}),
+        top: originalRect.top,
+        width: originalRect.width,
+        x: left,
+        y: originalRect.y,
+      }),
+    });
+    canvas.dispatchEvent(new PointerEvent("pointerdown", {
+      bubbles: true,
+      button: 0,
+      cancelable: true,
+      clientX: 100,
+      clientY: originalRect.top + 100,
+      composed: true,
+      pointerId: 91,
+    }));
+    delete (content as HTMLElement & { getBoundingClientRect?: () => DOMRect }).getBoundingClientRect;
+  }, canvasLeft);
 }
 
 async function setZoom(page: Page, canvas: Locator, percent: number) {

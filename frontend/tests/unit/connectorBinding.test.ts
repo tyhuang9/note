@@ -9,6 +9,7 @@ import {
   getShapeBindingAnchors,
   getTextAnchorPoint,
   MAX_CANVAS_VALUE,
+  normalizeFreeConnectorEndpoint,
   resolveConnectorEndpoint,
   snapConnectorEndpoint,
   snapConnectorPointToAngle,
@@ -108,6 +109,22 @@ describe("connector shape binding", () => {
     expect(snapped.x).toBeCloseTo(Math.hypot(10, 7) / Math.sqrt(2));
     expect(snapped.y).toBeCloseTo(Math.hypot(10, 7) / Math.sqrt(2));
     expect(snapConnectorPointToAngle({ x: 5, y: 5 }, { x: 5, y: 5 })).toEqual({ x: 5, y: 5 });
+  });
+
+  it("normalizes authored free endpoints to the persisted coordinate boundary", () => {
+    expect(normalizeFreeConnectorEndpoint({ x: MAX_CANVAS_VALUE, y: -MAX_CANVAS_VALUE })).toEqual({
+      kind: "free",
+      x: MAX_CANVAS_VALUE,
+      y: -MAX_CANVAS_VALUE,
+    });
+    expect(normalizeFreeConnectorEndpoint({ x: Number.MAX_VALUE, y: -Number.MAX_VALUE })).toEqual({
+      kind: "free",
+      x: MAX_CANVAS_VALUE,
+      y: -MAX_CANVAS_VALUE,
+    });
+    expect(normalizeFreeConnectorEndpoint({ x: Number.NaN, y: 0 })).toBeNull();
+    expect(normalizeFreeConnectorEndpoint({ x: 0, y: Number.POSITIVE_INFINITY })).toBeNull();
+    expect(normalizeFreeConnectorEndpoint({ x: Number.NEGATIVE_INFINITY, y: 0 })).toBeNull();
   });
 
   it.each(["rectangle", "ellipse", "diamond"] as const)("exposes the cardinal anchors for a %s", (shapeName) => {

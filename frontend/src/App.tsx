@@ -6927,6 +6927,13 @@ function App() {
   const completeArrowCreation = useCallback((elementId: string, start: ConnectorEndpoint, end: ConnectorEndpoint) => {
     const pageId = selectedPageIdRef.current;
     if (!pageId) return false;
+    const elementsById = Object.fromEntries(dataRef.current.elements.map((element) => [element.id, element]));
+    if (
+      !resolveConnectorEndpoint(start, elementsById, pageId)
+      || !resolveConnectorEndpoint(end, elementsById, pageId)
+    ) {
+      return false;
+    }
     const timestamp = Date.now();
     const preference = drawingPreferencesRef.current.arrow;
     const connector: ConnectorElement = {

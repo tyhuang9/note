@@ -29,7 +29,7 @@ describe("primitive drag geometry", () => {
       false,
     )).toEqual({ kind: "shape", rect: { x: 20, y: 30, width: 160, height: 100 } });
     expect(primitiveGeometryFromSession(
-      "arrow",
+      "line",
       { x: 20, y: 30 },
       { x: 20, y: 30 },
       { alt: false, shift: false },

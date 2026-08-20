@@ -6856,11 +6856,11 @@ function App() {
     (tool: PrimitiveTool, geometry: PrimitiveGeometry) => {
       const pageId = selectedPageIdRef.current;
       if (!pageId) return;
-      const elementId = createId(tool === "line" || tool === "arrow" ? "connector" : "shape");
+      const elementId = createId(tool === "line" ? "connector" : "shape");
       const timestamp = Date.now();
       const preference = drawingPreferencesRef.current[tool];
       const style = {
-        fillColor: tool === "line" || tool === "arrow" ? null : preference.backgroundColor,
+        fillColor: tool === "line" ? null : preference.backgroundColor,
         roughness: preference.roughness,
         roundness: tool === "rectangle" ? preference.roundness : 0,
         seed: deterministicSeed(elementId),
@@ -6871,20 +6871,18 @@ function App() {
 
       setBlocksWithHistory((currentElements) => {
         if (geometry.kind === "connector") {
-          const canBind = tool === "arrow";
-          const pageElements = currentElements.filter((element) => element.pageId === pageId);
           const connector: ConnectorElement = {
             createdAt: timestamp,
-            end: snapConnectorEndpoint(geometry.end, pageElements, zoomLevelRef.current, canBind),
+            end: { kind: "free", ...geometry.end },
             id: elementId,
             locked: false,
             opacity: preference.opacity,
             pageId,
             routing: "straight",
-            start: snapConnectorEndpoint(geometry.start, pageElements, zoomLevelRef.current, canBind),
+            start: { kind: "free", ...geometry.start },
             style: {
               ...style,
-              endArrowhead: tool === "arrow" ? "arrow" : "none",
+              endArrowhead: "none",
               startArrowhead: "none",
             },
             type: "connector",
@@ -6926,10 +6924,9 @@ function App() {
     [],
   );
 
-  const completeArrowCreation = useCallback((start: ConnectorEndpoint, end: ConnectorEndpoint) => {
+  const completeArrowCreation = useCallback((elementId: string, start: ConnectorEndpoint, end: ConnectorEndpoint) => {
     const pageId = selectedPageIdRef.current;
     if (!pageId) return false;
-    const elementId = createId("connector");
     const timestamp = Date.now();
     const preference = drawingPreferencesRef.current.arrow;
     const connector: ConnectorElement = {
@@ -6980,14 +6977,15 @@ function App() {
     canvasContentRef,
     canvasRef,
     cleanupMarquee: clearMarquee,
-    getArrowPreviewStyle: () => {
+    createArrowId: () => createId("connector"),
+    getArrowPreviewStyle: (elementId) => {
       const preference = drawingPreferencesRef.current.arrow;
       return {
         endArrowhead: "arrow",
         fillColor: null,
         roughness: preference.roughness,
         roundness: 0,
-        seed: 1,
+        seed: deterministicSeed(elementId),
         startArrowhead: "none",
         strokeColor: preference.strokeColor,
         strokeStyle: preference.strokeStyle,

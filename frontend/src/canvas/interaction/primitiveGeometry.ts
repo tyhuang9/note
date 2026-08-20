@@ -2,7 +2,7 @@ import type { CanvasPoint, CanvasRect } from "../model/geometry";
 
 export type PrimitiveModifiers = Readonly<{ alt: boolean; shift: boolean }>;
 export type ShapeTool = "rectangle" | "ellipse" | "diamond";
-export type ConnectorTool = "line" | "arrow";
+export type ConnectorTool = "line";
 export type PrimitiveTool = ShapeTool | ConnectorTool;
 export type PrimitiveGeometry =
   | Readonly<{ kind: "shape"; rect: CanvasRect }>
@@ -54,7 +54,7 @@ export function primitiveGeometryFromSession(
   modifiers: PrimitiveModifiers,
   didMove: boolean,
 ): PrimitiveGeometry {
-  if (tool === "line" || tool === "arrow") {
+  if (tool === "line") {
     if (!didMove) {
       return {
         kind: "connector",

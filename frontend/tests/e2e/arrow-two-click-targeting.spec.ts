@@ -19,11 +19,18 @@ test("Arrow stays pending after the first click and commits once on the second c
   expect((await counts(page)).apply).toBe(0);
 
   await page.mouse.move(bounds.x + bounds.width * 0.82, bounds.y + bounds.height * 0.82);
-  await expect(page.locator(".arrow-authoring-preview")).toHaveAttribute("opacity", "1");
+  const preview = page.locator(".arrow-authoring-preview");
+  await expect(preview).toHaveAttribute("opacity", "1");
+  const previewSeed = Number(await preview.getAttribute("data-seed"));
+  expect(previewSeed).toBeGreaterThan(0);
   await page.mouse.click(bounds.x + bounds.width * 0.82, bounds.y + bounds.height * 0.82);
   await expect(page.getByRole("button", { name: "Select and move arrow connector" })).toHaveCount(1);
   await expect(page.locator(".arrow-authoring-preview")).toHaveCount(0);
   await expect.poll(async () => (await counts(page)).apply).toBe(1);
+  await expect.poll(async () => {
+    const style = (await newestConnector(page))?.style as { seed?: number } | undefined;
+    return style?.seed;
+  }).toBe(previewSeed);
   await expect(page.locator('[data-tool="arrow"]')).toHaveAttribute("aria-pressed", "true");
 
   await page.locator("[data-tool-lock]").click();

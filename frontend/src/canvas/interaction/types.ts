@@ -21,7 +21,7 @@ export type InteractionSession =
   | { kind: "resizing"; pointerId: number; elementId: ElementId; handle: string; startWorld: CanvasPoint }
   | { kind: "drawing"; pointerId: number; tool: "pen" | "highlighter"; points: readonly NormalizedPointerSample[] }
   | { kind: "creating-shape"; pointerId: number; tool: "rectangle" | "ellipse" | "diamond"; startWorld: CanvasPoint; currentWorld: CanvasPoint }
-  | { kind: "creating-connector"; pointerId: number; tool: "line" | "arrow"; startWorld: CanvasPoint; currentWorld: CanvasPoint }
+  | { kind: "creating-connector"; pointerId: number; tool: "line"; startWorld: CanvasPoint; currentWorld: CanvasPoint }
   | { kind: "editing-text"; elementId: ElementId };
 
 export type CanvasToolHandler = Readonly<{

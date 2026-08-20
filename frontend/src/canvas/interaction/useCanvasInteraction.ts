@@ -36,13 +36,14 @@ type PrimitiveSession = {
   modifiers: PrimitiveModifiers;
   pointerId: number;
   start: CanvasPoint;
-  tool: Exclude<PrimitiveTool, "arrow">;
+  tool: PrimitiveTool;
 };
 
 type ArrowAuthoringSession = {
   cancellationKey: string;
   currentEndpoint: ConnectorEndpoint;
   currentPoint: CanvasPoint;
+  elementId: string;
   previousSelection: readonly string[];
   startEndpoint: ConnectorEndpoint;
   startPoint: CanvasPoint;
@@ -59,6 +60,7 @@ type CanvasInteractionOptions = {
   canvasContentRef: RefObject<HTMLDivElement | null>;
   canvasRef: RefObject<HTMLElement | null>;
   cleanupMarquee: () => void;
+  createArrowId: () => string;
   hasPendingImage: () => boolean;
   isTemporaryHandActiveRef: RefObject<boolean>;
   interactionCancellationKey: string;
@@ -66,8 +68,8 @@ type CanvasInteractionOptions = {
   liveDraftLayerRef: RefObject<SVGSVGElement | null>;
   maxZoom: number;
   minZoom: number;
-  getArrowPreviewStyle: () => ConnectorElement["style"];
-  onCreateArrow: (start: ConnectorEndpoint, end: ConnectorEndpoint) => boolean;
+  getArrowPreviewStyle: (elementId: string) => ConnectorElement["style"];
+  onCreateArrow: (elementId: string, start: ConnectorEndpoint, end: ConnectorEndpoint) => boolean;
   onCreatePrimitive: (tool: PrimitiveTool, geometry: PrimitiveGeometry) => void;
   onArrowStatusChange: (message: string) => void;
   onCreateText: (point: CanvasPoint) => void;
@@ -90,7 +92,7 @@ type CanvasInteractionOptions = {
   zoomStep: number;
 };
 
-function isDragPrimitiveTool(tool: DrawingTool): tool is Exclude<PrimitiveTool, "arrow"> {
+function isDragPrimitiveTool(tool: DrawingTool): tool is PrimitiveTool {
   return tool === "rectangle" || tool === "ellipse" || tool === "diamond" || tool === "line";
 }
 
@@ -174,9 +176,11 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
     svg.setAttribute("overflow", "visible");
     svg.setAttribute("pointer-events", "none");
     svg.setAttribute("opacity", "1");
+    const style = optionsRef.current.getArrowPreviewStyle(session.elementId);
+    svg.setAttribute("data-seed", String(style.seed));
     renderConnectorRoughSvg(
       svg,
-      optionsRef.current.getArrowPreviewStyle(),
+      style,
       session.startPoint,
       session.currentPoint,
     );
@@ -382,6 +386,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
             cancellationKey: current.interactionCancellationKey,
             currentEndpoint: resolved.adjustedEndpoint,
             currentPoint: resolved.adjustedPoint,
+            elementId: current.createArrowId(),
             previousSelection,
             startEndpoint: resolved.adjustedEndpoint,
             startPoint: resolved.adjustedPoint,
@@ -406,7 +411,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
             current.onArrowStatusChange("Arrow needs two different endpoints.");
             return;
           }
-          if (!current.onCreateArrow(pending.startEndpoint, pending.currentEndpoint)) {
+          if (!current.onCreateArrow(pending.elementId, pending.startEndpoint, pending.currentEndpoint)) {
             current.onArrowStatusChange("Arrow is unavailable on this page.");
             return;
           }

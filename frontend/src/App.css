@@ -2551,25 +2551,34 @@ h2 {
 
 .canvas-focus-indicator {
   position: absolute;
-  right: 16px;
-  bottom: 16px;
-  z-index: 30;
-  width: 10px;
-  height: 10px;
+  left: 50%;
+  bottom: 80px;
+  z-index: 16;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: min(116px, calc(100% - 32px));
+  min-height: 24px;
   box-sizing: border-box;
-  border: 2px solid var(--canvas-focus);
-  border-radius: 999px;
+  border: 1px solid var(--canvas-focus);
+  border-radius: 6px;
+  padding: 4px 10px;
+  color: var(--canvas-focus);
   background: var(--canvas-tool-bg);
-  box-shadow: 0 0 0 3px var(--canvas-selection-soft);
+  box-shadow: 0 2px 8px rgba(21, 28, 39, 0.16);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 16px;
   opacity: 0;
   pointer-events: none;
-  transform: scale(0.8);
+  transform: translateX(-50%) scale(0.8);
   transition: opacity 120ms ease, transform 120ms ease;
+  white-space: nowrap;
 }
 
 .canvas:focus-visible > .canvas-focus-indicator {
   opacity: 1;
-  transform: scale(1);
+  transform: translateX(-50%) scale(1);
 }
 
 .canvas-interaction-overlay {

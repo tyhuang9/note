@@ -104,7 +104,21 @@ test("uses tool-specific native cursors and localized canvas keyboard focus", as
   await expect(canvas).toBeFocused();
   await expect(focusIndicator).toBeVisible();
   await expect(focusIndicator).toHaveCSS("opacity", "1");
+  await expect(focusIndicator).toHaveText("Canvas focused");
+  expect(await focusIndicator.evaluate((node) => ({
+    height: node.getBoundingClientRect().height,
+    pointerEvents: getComputedStyle(node).pointerEvents,
+    tabIndex: (node as HTMLElement).tabIndex,
+  }))).toEqual({ height: expect.any(Number), pointerEvents: "none", tabIndex: -1 });
+  expect(await focusIndicator.evaluate((node) => node.getBoundingClientRect().height)).toBeGreaterThanOrEqual(24);
   expect(await activeTool.evaluate((node) => getComputedStyle(node).outlineStyle)).toBe("none");
+
+  await page.keyboard.press("Tab");
+  await expect(activeTool).toBeFocused();
+  await expect(focusIndicator).toHaveCSS("opacity", "0");
+  await page.keyboard.press("Shift+Tab");
+  await expect(canvas).toBeFocused();
+  await expect(focusIndicator).toHaveCSS("opacity", "1");
 
   await page.keyboard.down("Space");
   expect(await canvas.evaluate((node) => getComputedStyle(node).cursor)).toBe("grab");
@@ -142,6 +156,86 @@ test("uses tool-specific native cursors and localized canvas keyboard focus", as
   expect(Math.abs(startHandleBounds.y + startHandleBounds.height / 2 - (rightAnchorBounds.y + rightAnchorBounds.height / 2))).toBeLessThanOrEqual(2);
 });
 
+test("keeps the canvas focus badge contained and separate from offscreen navigation in light/dark compact zoomed workspaces", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 640 });
+  await appendOffscreenNavigationFixture(page);
+  await page.evaluate(() => {
+    document.documentElement.style.zoom = "2";
+  });
+
+  const canvas = page.getByRole("tabpanel");
+  const badge = canvas.locator("[data-canvas-focus-indicator]");
+  const activeTool = page.locator('.canvas-tool-palette [data-tool="select"]');
+  const navigation = canvas.locator(".offscreen-arrow");
+  await expect(navigation).toHaveCount(8);
+
+  for (const dark of [false, true]) {
+    await setDarkMode(page, dark);
+    await activeTool.focus();
+    await page.keyboard.press("Shift+Tab");
+    await expect(canvas).toBeFocused();
+    await expect(badge).toHaveText("Canvas focused");
+    await expect(badge).toHaveCSS("opacity", "1");
+    await expect(activeTool).not.toBeFocused();
+
+    const layout = await page.evaluate(() => {
+      const canvas = document.querySelector<HTMLElement>('[role="tabpanel"]');
+      const badge = canvas?.querySelector<HTMLElement>("[data-canvas-focus-indicator]");
+      if (!canvas || !badge) throw new Error("Canvas focus badge was unavailable.");
+      const canvasRect = canvas.getBoundingClientRect();
+      const badgeRect = badge.getBoundingClientRect();
+      const relatedSelectors = [
+        ".offscreen-arrow",
+        ".drawing-properties-panel",
+        ".zoom-indicator",
+        ".canvas-tool-palette",
+        ".canvas-controls",
+        ".global-text-toolbar",
+      ];
+      const rectangles = relatedSelectors.flatMap((selector) =>
+        Array.from(document.querySelectorAll<HTMLElement>(selector)).map((node) => ({
+          selector,
+          rect: node.getBoundingClientRect(),
+        })),
+      );
+      const intersects = (a: DOMRect, b: DOMRect) =>
+        a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+      return {
+        badge: {
+          bottom: badgeRect.bottom,
+          height: badgeRect.height,
+          left: badgeRect.left,
+          right: badgeRect.right,
+          top: badgeRect.top,
+        },
+        canvas: {
+          bottom: canvasRect.bottom,
+          left: canvasRect.left,
+          right: canvasRect.right,
+          top: canvasRect.top,
+        },
+        collisions: rectangles.filter(({ rect }) => intersects(badgeRect, rect)).map(({ selector }) => selector),
+        controls: rectangles.filter(({ selector }) => selector === ".offscreen-arrow").length,
+      };
+    });
+
+    expect(layout.controls).toBe(8);
+    expect(layout.badge.height).toBeGreaterThanOrEqual(24);
+    expect(layout.badge.left).toBeGreaterThanOrEqual(layout.canvas.left);
+    expect(layout.badge.right).toBeLessThanOrEqual(layout.canvas.right);
+    expect(layout.badge.top).toBeGreaterThanOrEqual(layout.canvas.top);
+    expect(layout.badge.bottom).toBeLessThanOrEqual(layout.canvas.bottom);
+    expect(layout.collisions).toEqual([]);
+
+    await page.keyboard.press("Tab");
+    await expect(activeTool).toBeFocused();
+    await expect(badge).toHaveCSS("opacity", "0");
+    await page.keyboard.press("Shift+Tab");
+    await expect(canvas).toBeFocused();
+    await expect(badge).toHaveCSS("opacity", "1");
+  }
+});
+
 async function svgSnapshot(locator: Locator) {
   return locator.evaluate((svg) => {
     const rect = (svg.querySelector("g") ?? svg).getBoundingClientRect();
@@ -167,6 +261,25 @@ async function setZoom(page: Page, canvas: Locator, percent: number) {
   const key = percent < 100 ? "Control+-" : "Control+=";
   for (let index = 0; index < Math.abs(percent - 100) / 10; index += 1) await page.keyboard.press(key);
   await expect(page.locator(".zoom-indicator")).toHaveText(`${percent}%`);
+}
+
+async function appendOffscreenNavigationFixture(page: Page) {
+  await page.getByRole("tabpanel").evaluate((canvas) => {
+    const existing = canvas.querySelector("[data-e2e-offscreen-navigation]");
+    existing?.remove();
+    const indicators = document.createElement("div");
+    indicators.className = "offscreen-indicators";
+    indicators.dataset.e2eOffscreenNavigation = "true";
+    for (const direction of ["n", "ne", "e", "se", "s", "sw", "w", "nw"]) {
+      const button = document.createElement("button");
+      button.className = `offscreen-arrow offscreen-${direction}`;
+      button.type = "button";
+      button.setAttribute("aria-label", `1 textbox offscreen ${direction}`);
+      button.textContent = "1";
+      indicators.append(button);
+    }
+    canvas.append(indicators);
+  });
 }
 
 async function requiredBounds(locator: Locator, label: string) {

@@ -2,8 +2,29 @@ import { describe, expect, it } from "vitest";
 import {
   getOffscreenDirection,
   getSelectionRect,
+  hasCanvasToolShortcutContext,
   rectsIntersect,
 } from "../../src/editorUtils";
+
+const canvasShortcutContext = {
+  activeElement: null,
+  canvasElement: {} as HTMLElement,
+  hasCanvasKeyboardOwnership: true,
+  isCanvasAuthoringAvailable: true,
+  isModalOrOverlayOpen: false,
+  isTextEditing: false,
+  target: null,
+};
+
+const shortcutEvent = (overrides: Partial<KeyboardEvent> = {}) => ({
+  altKey: false,
+  ctrlKey: false,
+  isComposing: false,
+  key: "r",
+  metaKey: false,
+  repeat: false,
+  ...overrides,
+}) as KeyboardEvent;
 
 describe("getSelectionRect", () => {
   it("normalizes a selection dragged in either direction", () => {
@@ -57,5 +78,36 @@ describe("getOffscreenDirection", () => {
         viewport,
       ),
     ).toBe("w");
+  });
+});
+
+describe("hasCanvasToolShortcutContext", () => {
+  it("allows bare shortcuts after the canvas owns the keyboard", () => {
+    expect(hasCanvasToolShortcutContext(shortcutEvent(), canvasShortcutContext)).toBe(true);
+  });
+
+  it.each([
+    ["there is no live authoring canvas", { isCanvasAuthoringAvailable: false }],
+    ["a modal or overlay is open", { isModalOrOverlayOpen: true }],
+    ["a text block is editing", { isTextEditing: true }],
+    ["the key repeats", {}, { repeat: true }],
+    ["the IME is composing", {}, { isComposing: true }],
+    ["the browser shortcut has a modifier", {}, { ctrlKey: true }],
+  ] as const)("rejects shortcuts when %s", (
+    _reason: string,
+    contextOverrides: Partial<typeof canvasShortcutContext>,
+    eventOverrides: Partial<KeyboardEvent> = {},
+  ) => {
+    expect(hasCanvasToolShortcutContext(
+      shortcutEvent(eventOverrides),
+      { ...canvasShortcutContext, ...contextOverrides },
+    )).toBe(false);
+  });
+
+  it("requires canvas ownership when the event is outside canvas DOM", () => {
+    expect(hasCanvasToolShortcutContext(shortcutEvent(), {
+      ...canvasShortcutContext,
+      hasCanvasKeyboardOwnership: false,
+    })).toBe(false);
   });
 });

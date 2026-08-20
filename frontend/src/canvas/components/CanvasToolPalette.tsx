@@ -33,6 +33,7 @@ export function CanvasToolPalette({ activeTool, isPropertiesPanelAvailable, isPr
   const [isCompact, setIsCompact] = useState(() => typeof window !== "undefined" && window.matchMedia("(max-width: 899px)").matches);
   const previousCompact = useRef(isCompact);
   const previousPropertiesAvailable = useRef(isPropertiesPanelAvailable);
+  const toolLockLabel = isToolLocked ? "Turn off drawing tool lock" : "Turn on drawing tool lock";
   const buttonCount = TOOLS.length + 1 + (isCompact && isPropertiesPanelAvailable ? 1 : 0);
   activeToolRef.current = activeTool;
 
@@ -139,18 +140,18 @@ export function CanvasToolPalette({ activeTool, isPropertiesPanelAvailable, isPr
         ))}
         <button
           aria-describedby={tooltip?.owner === "tool-lock" ? tooltipId : undefined}
-          aria-label="Keep drawing tool active"
+          aria-label={toolLockLabel}
           aria-pressed={isToolLocked}
           data-tool-lock
           onBlur={() => hideTooltip("tool-lock")}
           onClick={() => { setTabStop(TOOLS.length); onToolLockChange(!isToolLocked); }}
-          onFocus={(event) => { setTabStop(TOOLS.length); showTooltip("tool-lock", isToolLocked ? "Unlock drawing tool" : "Keep drawing tool active", event.currentTarget); }}
+          onFocus={(event) => { setTabStop(TOOLS.length); showTooltip("tool-lock", toolLockLabel, event.currentTarget); }}
           onKeyDown={(event) => moveFocus(event, TOOLS.length)}
-          onMouseEnter={(event) => showTooltip("tool-lock", isToolLocked ? "Unlock drawing tool" : "Keep drawing tool active", event.currentTarget)}
+          onMouseEnter={(event) => showTooltip("tool-lock", toolLockLabel, event.currentTarget)}
           onMouseLeave={(event) => hideTooltip("tool-lock", event.currentTarget)}
           ref={(button) => { buttonRefs.current[TOOLS.length] = button; }}
           tabIndex={tabStop === TOOLS.length ? 0 : -1}
-          title={isToolLocked ? "Unlock drawing tool" : "Keep drawing tool active"}
+          title={toolLockLabel}
           type="button"
         >
           <LockKeyhole aria-hidden="true" size={20} />

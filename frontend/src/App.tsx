@@ -100,6 +100,7 @@ import {
   createId,
   emptyData,
   getOffscreenDirection,
+  hasCanvasToolShortcutContext,
   isTextEntryTarget,
 } from "./editorUtils";
 import {
@@ -1119,7 +1120,7 @@ function App() {
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
   const [activeMode, setActiveMode] = useState<InteractionMode>("canvas");
   const [activeTool, setActiveTool] = useState<DrawingTool>("select");
-  const [isToolLocked, setIsToolLocked] = useState(false);
+  const [isToolLocked, setIsToolLocked] = useState(true);
   const [drawingPreferences, setDrawingPreferences] = useState<DrawingPreferences>(
     createDefaultDrawingPreferences,
   );
@@ -1250,6 +1251,7 @@ function App() {
   const zoomLevelRef = useRef(zoomLevel);
   const activeToolRef = useRef<DrawingTool>(activeTool);
   const isToolLockedRef = useRef(isToolLocked);
+  const isCanvasKeyboardActiveRef = useRef(isCanvasKeyboardActive);
   const drawingPreferencesRef = useRef(drawingPreferences);
   const isTemporaryHandActiveRef = useRef(false);
   const pendingImagePlacementRef = useRef<PendingImagePlacement | null>(null);
@@ -1271,6 +1273,7 @@ function App() {
   dataRef.current = data;
   activeToolRef.current = activeTool;
   isToolLockedRef.current = isToolLocked;
+  isCanvasKeyboardActiveRef.current = isCanvasKeyboardActive;
   drawingPreferencesRef.current = drawingPreferences;
   pendingImagePlacementRef.current = pendingImagePlacement;
   isSnapToGridEnabledRef.current = isGridVisible && isSnapToGridEnabled;
@@ -2010,7 +2013,7 @@ function App() {
         setIsDarkMode(savedData.isDarkMode ?? true);
         setIsSidebarCollapsed(savedSessionState?.isExplorerCollapsed ?? false);
         setIsAssistantOpen(savedSessionState?.isAssistantOpen ?? false);
-        setIsToolLocked(savedSessionState?.isDrawingToolLocked ?? false);
+        setIsToolLocked(savedSessionState?.isDrawingToolLocked ?? true);
         setDrawingPreferences(normalizeDrawingPreferences(savedSessionState?.drawingPreferences));
         pageViewportsRef.current = normalizePageViewports(
           savedSessionState?.pageViewports,
@@ -2053,7 +2056,7 @@ function App() {
           imageSourcesByAssetIdRef.current = legacy.imageSourcesByAssetId;
           setData(legacy.data);
           setIsDarkMode(legacy.data.isDarkMode ?? true);
-          setIsToolLocked(legacy.data.sessionState?.isDrawingToolLocked ?? false);
+          setIsToolLocked(legacy.data.sessionState?.isDrawingToolLocked ?? true);
           setDrawingPreferences(normalizeDrawingPreferences(legacy.data.sessionState?.drawingPreferences));
           const legacyPageIds = new Set(
             legacy.data.pages
@@ -3407,18 +3410,22 @@ function App() {
         return;
       }
 
-      const shortcutTarget = event.target instanceof Element ? event.target : null;
-      const hasCanvasOrToolFocus =
-        shortcutTarget === canvasRef.current ||
-        Boolean(shortcutTarget?.closest(".canvas-tool-palette, [data-canvas-element-id], [data-block-id]"));
-      const shortcutTool = drawingToolForShortcut(event, hasCanvasOrToolFocus);
+      const hasToolShortcutContext = hasCanvasToolShortcutContext(event, {
+        activeElement: document.activeElement,
+        canvasElement: canvasRef.current,
+        hasCanvasKeyboardOwnership: isCanvasKeyboardActiveRef.current,
+        isCanvasAuthoringAvailable: isCanvasAuthoringAvailableRef.current,
+        isModalOrOverlayOpen: Boolean(activeWorkbenchOverlay),
+        isTextEditing: Boolean(currentEditingBlockId),
+        target: event.target,
+      });
+      const shortcutTool = drawingToolForShortcut(event, hasToolShortcutContext);
       if (
-        !currentEditingBlockId &&
-        !isTextEntryTarget(event.target) &&
-        (!insertionPoint || event.key === "Escape") &&
         shortcutTool
       ) {
         event.preventDefault();
+        isCanvasKeyboardActiveRef.current = true;
+        setIsCanvasKeyboardActive(true);
         selectDrawingTool(shortcutTool);
         return;
       }
@@ -5335,6 +5342,8 @@ function App() {
   }
 
   function selectDrawingTool(tool: DrawingTool) {
+    isCanvasKeyboardActiveRef.current = true;
+    setIsCanvasKeyboardActive(true);
     if (tool === "image") {
       requestImagePicker();
       return;

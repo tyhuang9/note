@@ -89,6 +89,12 @@ describe("drawing shortcuts", () => {
     expect(drawingToolForShortcut({ altKey: false, ctrlKey: false, key: "p", metaKey: false }, false)).toBeNull();
   });
 
+  it("does not claim repeated or composing input", () => {
+    expect(drawingToolForShortcut({ altKey: false, ctrlKey: false, isComposing: true, key: "r", metaKey: false })).toBeNull();
+    expect(drawingToolForShortcut({ altKey: false, ctrlKey: false, key: "Process", metaKey: false })).toBeNull();
+    expect(drawingToolForShortcut({ altKey: false, ctrlKey: false, key: "r", metaKey: false, repeat: true })).toBeNull();
+  });
+
   it("returns creation tools to Select unless tool lock is active", () => {
     expect(drawingToolAfterCreation("rectangle", false)).toBe("select");
     expect(drawingToolAfterCreation("pen", false)).toBe("select");

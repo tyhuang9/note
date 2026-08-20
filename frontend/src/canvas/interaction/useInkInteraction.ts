@@ -84,10 +84,21 @@ export function screenSampleToWorld(
 }
 
 export function drawingToolForShortcut(
-  event: Readonly<Pick<KeyboardEvent, "altKey" | "ctrlKey" | "key" | "metaKey">>,
+  event: Readonly<
+    Pick<KeyboardEvent, "altKey" | "ctrlKey" | "key" | "metaKey"> &
+    Partial<Pick<KeyboardEvent, "isComposing" | "repeat">>
+  >,
   hasCanvasOrToolFocus = true,
 ): DrawingTool | null {
-  if (!hasCanvasOrToolFocus || event.altKey || event.ctrlKey || event.metaKey) return null;
+  if (
+    !hasCanvasOrToolFocus ||
+    event.altKey ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.isComposing ||
+    event.key === "Process" ||
+    event.repeat
+  ) return null;
   if (event.key === "Escape") return "select";
   switch (event.key.toLowerCase()) {
     case "v": return "select";

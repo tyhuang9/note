@@ -117,7 +117,7 @@ describe("connector shape binding", () => {
     ));
   });
 
-  it("keeps an exact rounded, rotated perimeter point visible while authoring", () => {
+  it("resolves an exact rounded, rotated perimeter point while authoring", () => {
     const target = shape("rectangle", {
       height: 140,
       rotation: 31,

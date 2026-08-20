@@ -184,14 +184,12 @@ import { getDrawingToolLockPreference } from "./canvas/state/drawingToolLock";
 import {
   detachConnectorEndpointsForDeletedTargets,
   getDefaultKeyboardArrowEndpoints,
-  getBindableBindingAnchors,
   getConnectorAuthoringCandidate,
   getNearestBindableBoundaryAnchor,
   isBindableElement,
   resolveConnectorEndpoint,
   resolveConnectorPoints,
   snapConnectorEndpoint,
-  type ShapeAnchorName,
 } from "./canvas/model/connectorBinding";
 import {
   assetDataUrl,
@@ -6953,9 +6951,6 @@ function App() {
       event.stopPropagation();
       const selectedId = selectedBlockIdsRef.current.length === 1 ? selectedBlockIdsRef.current[0] : null;
       if (!selectedId) return;
-      const selectedConnector = dataRef.current.elements.find((element): element is ConnectorElement =>
-        element.id === selectedId && element.type === "connector",
-      );
       const elementsById = Object.fromEntries(dataRef.current.elements.map((element) => [element.id, element]));
       setBlocksWithHistory((currentBlocks) => currentBlocks.map((element) => {
         if (element.id !== selectedId || element.type !== "connector" || element.locked) return element;
@@ -8298,15 +8293,16 @@ function App() {
               element.id === selectedBlockIds[0] && element.type === "connector" && element.style.endArrowhead === "arrow",
             );
             if (!connector) return null;
+            const chooserEndpoint = connector[connectorEndpointChooser.endpoint];
             const targets = getConnectorBindingTargets(connector.pageId)
               .map(({ element, label }) => ({ id: element.id, label, rotation: element.rotation }));
             return (
               <ConnectorEndpointChooser
-                anchorT={connector[connectorEndpointChooser.endpoint].kind === "element"
-                  ? connector[connectorEndpointChooser.endpoint].anchor.t
+                anchorT={chooserEndpoint.kind === "element"
+                  ? chooserEndpoint.anchor.t
                   : 0}
                 endpoint={connectorEndpointChooser.endpoint}
-                isBound={connector[connectorEndpointChooser.endpoint].kind === "element"}
+                isBound={chooserEndpoint.kind === "element"}
                 isDarkMode={isDarkMode}
                 onBind={bindSelectedConnectorEndpoint}
                 onClose={closeConnectorEndpointChooser}

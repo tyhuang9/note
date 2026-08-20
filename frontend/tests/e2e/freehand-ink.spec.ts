@@ -124,11 +124,16 @@ test("scopes drawing shortcuts to canvas and tool focus without stealing typed t
   await page.keyboard.press("h");
   await expect(highlighter).toHaveAttribute("aria-pressed", "true");
   await select.click();
+  await page.getByRole("button", { name: "Turn off drawing tool lock" }).click();
+  await page.getByRole("button", { name: "Text (T / 8)" }).click();
 
   const bounds = await canvas.boundingBox();
   if (!bounds) throw new Error("Canvas bounds were not available.");
   await page.mouse.click(bounds.x + 280, bounds.y + 230);
-  await page.keyboard.press("p");
-  await expect(page.locator(".text-block-editor-content").last()).toContainText("p");
+  const editor = page.locator(".text-block-editor-content").last();
+  await expect(editor).toBeVisible();
+  await editor.focus();
+  await editor.pressSequentially("p");
+  await expect(editor).toContainText("p");
   await expect(select).toHaveAttribute("aria-pressed", "true");
 });

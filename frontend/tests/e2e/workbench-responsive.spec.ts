@@ -43,6 +43,7 @@ test("canvas subsystem keeps world content and interaction overlay in separate l
   const bounds = await canvas.boundingBox();
   if (!bounds) throw new Error("Canvas bounds were not available.");
 
+  await page.getByRole("button", { name: "Text (T / 8)" }).click();
   await page.mouse.click(bounds.x + 280, bounds.y + 240);
   await page.keyboard.type("Layered element");
 

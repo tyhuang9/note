@@ -5,6 +5,7 @@ test.beforeEach(async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: /create new note/i }).click();
   await expect(page.getByRole("tabpanel")).toBeVisible();
+  await page.getByRole("button", { name: "Turn off drawing tool lock" }).click();
 });
 
 test("all-text selections keep native outlines, hide the composite frame, and move from either header", async ({ page }) => {
@@ -725,8 +726,8 @@ async function createMixedSelection(page: Page, bounds: { x: number; y: number }
 }
 
 async function createTextBlock(page: Page, x: number, y: number, text: string) {
+  await page.getByRole("button", { name: "Text (T / 8)" }).click();
   await page.mouse.click(x, y);
-  await page.keyboard.press(text[0]);
   const editor = page.locator(".text-block-editor-content").last();
   await expect(editor).toBeVisible();
   await editor.fill(text);

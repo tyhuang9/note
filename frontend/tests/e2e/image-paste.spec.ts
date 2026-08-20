@@ -107,6 +107,7 @@ test("image resizing uses world-space deltas when zoomed", async ({ page }) => {
 });
 
 test("pasting a clipboard image while editing a textbox inserts a rich image", async ({ page }) => {
+  await page.getByRole("button", { name: "Text (T / 8)" }).click();
   await clickCanvas(page, 360, 260);
   await page.keyboard.type("hello");
   await expect(page.locator(".text-block-editor-content")).toBeVisible();
@@ -123,6 +124,7 @@ test("pressing Ctrl+V with a clipboard image while editing a textbox inserts a r
   context,
   page,
 }) => {
+  await page.getByRole("button", { name: "Text (T / 8)" }).click();
   await clickCanvas(page, 360, 260);
   await page.keyboard.type("hello");
   await expect(page.locator(".text-block-editor-content")).toBeVisible();

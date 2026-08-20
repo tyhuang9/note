@@ -12,6 +12,8 @@ test("text blocks can be selected and dragged on the canvas", async ({ page }) =
     throw new Error("Canvas bounds were not available.");
   }
 
+  await page.getByRole("button", { name: "Turn off drawing tool lock" }).click();
+  await page.getByRole("button", { name: "Text (T / 8)" }).click();
   await page.mouse.click(canvasBounds.x + 280, canvasBounds.y + 240);
   await page.keyboard.type("Drag me");
 

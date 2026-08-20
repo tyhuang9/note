@@ -58,6 +58,7 @@ test("applies tool defaults, edits compatible selections, and commits opacity on
   const canvasBounds = await canvas.boundingBox();
   if (!canvasBounds) throw new Error("Canvas bounds were not available.");
 
+  await page.getByRole("button", { name: "Turn off drawing tool lock" }).click();
   await expect(page.getByRole("toolbar", { name: "Text formatting" })).toHaveCount(0);
   await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
   const properties = page.getByRole("complementary", { name: "Drawing properties" });
@@ -76,6 +77,7 @@ test("applies tool defaults, edits compatible selections, and commits opacity on
   await expect(rectangleShape.locator('path[stroke="#e03131"]').first()).toHaveAttribute("stroke-width", "4");
 
   const opacity = properties.getByRole("slider", { name: "Opacity" });
+  await opacity.scrollIntoViewIfNeeded();
   const opacityBounds = await opacity.boundingBox();
   if (!opacityBounds) throw new Error("Opacity slider was not visible.");
   await page.mouse.move(opacityBounds.x + opacityBounds.width - 2, opacityBounds.y + opacityBounds.height / 2);

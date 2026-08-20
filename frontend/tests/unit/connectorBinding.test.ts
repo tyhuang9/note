@@ -103,6 +103,20 @@ describe("connector shape binding", () => {
     )).toEqual(inverse!.point);
   });
 
+  it("canonicalizes authored seam anchors while continuing to resolve legacy t=1", () => {
+    const rectangle = shape("rectangle", { style: { ...style, roundness: 0.5 } });
+    const authored = getNearestBindableBoundaryAnchor(rectangle, { x: 60, y: 20 });
+    expect(authored?.anchor.t).toBe(0);
+    expect(Object.is(authored?.anchor.t, -0)).toBe(false);
+    expect(resolveConnectorEndpoint(
+      { kind: "element", targetElementId: rectangle.id, anchor: { t: 1 }, gap: 0 },
+      { [rectangle.id]: rectangle },
+    )).toEqual(resolveConnectorEndpoint(
+      { kind: "element", targetElementId: rectangle.id, anchor: { t: 0 }, gap: 0 },
+      { [rectangle.id]: rectangle },
+    ));
+  });
+
   it("reveals and snaps one authoring target using screen-space radii", () => {
     const rectangle = shape("rectangle");
     expect(getConnectorAuthoringCandidate({ x: 130, y: 50 }, [rectangle], 1)).toMatchObject({

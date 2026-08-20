@@ -1362,6 +1362,34 @@ mod tests {
     }
 
     #[test]
+    fn connector_element_endpoints_preserve_arbitrary_and_legacy_seam_anchors() {
+        let directory = root();
+        seed_page(directory.path());
+        let arbitrary = connector_element(
+            json!({"kind":"element","targetElementId":"shape-1","anchor":{"t":0.1736111111111111},"gap":0.0}),
+            json!({"kind":"element","targetElementId":"shape-1","anchor":{"t":1.0},"gap":0.0}),
+        );
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![shape_element("shape-1", "p"), arbitrary.clone()],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+        let persisted = load_workspace_data_at(directory.path())
+            .unwrap()
+            .elements
+            .into_iter()
+            .find(|element| element["id"] == "connector-1")
+            .unwrap();
+        assert_eq!(persisted["start"], arbitrary["start"]);
+        assert_eq!(persisted["end"], arbitrary["end"]);
+    }
+
+    #[test]
     fn bound_connector_endpoints_require_final_same_page_arrow_targets() {
         let directory = root();
         seed_page(directory.path());

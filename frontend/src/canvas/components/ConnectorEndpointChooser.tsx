@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ShapeAnchorName } from "../model/connectorBinding";
 
 type ConnectorEndpointChooserProps = {
+  anchorT: number;
   endpoint: "start" | "end";
   isBound: boolean;
   isDarkMode: boolean;
@@ -21,7 +22,7 @@ const CARDINAL_ANCHORS: readonly Readonly<{ name: ShapeAnchorName; label: string
   { name: "left", label: "Left" },
 ];
 
-const FOCUSABLE_SELECTOR = 'button:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const FOCUSABLE_SELECTOR = 'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 function targetRotationDescription(rotation: number): string {
   const roundedRotation = Math.round(rotation);
@@ -31,6 +32,7 @@ function targetRotationDescription(rotation: number): string {
 /** Keyboard-focused binding controls that intentionally complement visual-only anchors. */
 export function ConnectorEndpointChooser({
   endpoint,
+  anchorT,
   isBound,
   isDarkMode,
   onBind,
@@ -42,8 +44,10 @@ export function ConnectorEndpointChooser({
 }: ConnectorEndpointChooserProps) {
   const dialogRef = useRef<HTMLElement | null>(null);
   const [toolbarPosition, setToolbarPosition] = useState({ left: 0, top: 0 });
-  const [anchorDegrees, setAnchorDegrees] = useState(0);
+  const [anchorDegrees, setAnchorDegrees] = useState(Math.round(anchorT * 360) % 360);
   const selectedTarget = targets.find(({ id }) => id === targetElementId) ?? null;
+
+  useEffect(() => setAnchorDegrees(Math.round(anchorT * 360) % 360), [anchorT]);
 
   useLayoutEffect(() => {
     function updateToolbarPosition() {

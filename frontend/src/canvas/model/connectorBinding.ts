@@ -266,6 +266,7 @@ export function snapConnectorEndpoint(
   for (let index = 0; index < elements.length; index += 1) {
     const element = elements[index];
     if (!isBindableElement(element)) continue;
+    if (!isPointNearBindableBounds(point, element, worldRadius)) continue;
     const candidate = getNearestBindableBoundaryAnchor(element, point);
     if (!candidate) continue;
     const distance = Math.hypot(candidate.point.x - point.x, candidate.point.y - point.y);
@@ -379,6 +380,7 @@ function buildAuthoringCandidate(
   target: BindableElement,
   zoom: number,
 ): ConnectorAuthoringCandidate | null {
+  if (!isPointNearBindableBounds(point, target, CONNECTOR_BINDING_REVEAL_RADIUS_PX / zoom)) return null;
   const activeAnchor = getNearestBindableBoundaryAnchor(target, point);
   if (!activeAnchor) return null;
   const activeDistance = pointDistance(point, activeAnchor.point);
@@ -414,6 +416,13 @@ function unrotatePoint(
     x: center.x + dx * Math.cos(radians) - dy * Math.sin(radians),
     y: center.y + dx * Math.sin(radians) + dy * Math.cos(radians),
   };
+}
+
+/** Fast inverse-rotated broad phase before the quadratic/ellipse projection. */
+function isPointNearBindableBounds(point: CanvasPoint, target: BindableElement, radius: number): boolean {
+  const local = unrotatePoint(point, target);
+  return local.x >= target.x - radius && local.x <= target.x + target.width + radius
+    && local.y >= target.y - radius && local.y <= target.y + target.height + radius;
 }
 
 function closestRectanglePoint(point: CanvasPoint, center: CanvasPoint, radiusX: number, radiusY: number): CanvasPoint | null {

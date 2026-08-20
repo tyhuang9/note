@@ -165,6 +165,16 @@ describe("connector shape binding", () => {
     expect(getConnectorAuthoringCandidate({ x: 300, y: 300 }, [low], 1, "low")?.endpoint).toEqual({ kind: "free", x: 300, y: 300 });
   });
 
+  it("rejects a large scene outside the inverse-rotated reveal bounds", () => {
+    const distant = Array.from({ length: 500 }, (_, index) => shape("ellipse", {
+      id: `distant-${index}`,
+      x: 10_000 + index * 300,
+      y: 10_000,
+    }));
+    expect(getConnectorAuthoringCandidate({ x: 0, y: 0 }, distant, 1)).toBeNull();
+    expect(snapConnectorEndpoint({ x: 0, y: 0 }, distant, 1, true)).toEqual({ kind: "free", x: 0, y: 0 });
+  });
+
   it("supports text and locked targets and snaps free endpoints to 45 degrees", () => {
     const lockedText = text({ locked: true });
     expect(getConnectorAuthoringCandidate({ x: 90, y: 50 }, [lockedText], 1, lockedText.id)).toMatchObject({

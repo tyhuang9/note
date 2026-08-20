@@ -62,6 +62,25 @@ export function projectPointToShapeBoundary(
   return nearest;
 }
 
+/** Tests a local point against the same clean boundary used for anchors. */
+export function containsPointInsideShapeBoundary(
+  shape: ShapeBoundaryKind,
+  width: number,
+  height: number,
+  roundness: number,
+  point: CanvasPoint,
+): boolean {
+  if (!(width > 0 && height > 0)) return false;
+  const center = { x: width / 2, y: height / 2 };
+  const dx = point.x - center.x;
+  const dy = point.y - center.y;
+  if (shape === "ellipse") return (dx / center.x) ** 2 + (dy / center.y) ** 2 <= 1;
+  if (dx === 0 && dy === 0) return true;
+  const t = Math.atan2(dx, -dy) / (Math.PI * 2);
+  const boundary = getShapeBoundaryPoint(shape, width, height, roundness, t);
+  return Boolean(boundary && Math.hypot(dx, dy) <= Math.hypot(boundary.x - center.x, boundary.y - center.y) + 1e-10);
+}
+
 function roundedRectangleRadius(width: number, height: number, roundness: number) {
   const boundedRoundness = Math.max(MIN_VISUAL_RECTANGLE_ROUNDNESS, Math.min(1, roundness));
   return Math.min(width, height) * boundedRoundness / 2;

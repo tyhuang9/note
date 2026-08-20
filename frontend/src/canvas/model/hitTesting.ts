@@ -7,6 +7,7 @@ import type {
 } from "./elements";
 import { isBoxCanvasElement } from "./elements";
 import { resolveConnectorEndpoint } from "./connectorBinding";
+import { containsPointInsideShapeBoundary } from "./shapeBoundary";
 import type { CanvasPoint, CanvasRect } from "./geometry";
 
 export type Bounds = CanvasRect;
@@ -262,15 +263,16 @@ export function getDirectBindableTargetAtPoint(
 function directBindableContainsPoint(element: ShapeElement | TextElement, worldPoint: CanvasPoint): boolean {
   if (!(element.width > 0 && element.height > 0)) return false;
   const point = unrotatePoint(element, worldPoint);
-  const centerX = element.x + element.width / 2;
-  const centerY = element.y + element.height / 2;
   if (element.type === "text" || element.shape === "rectangle") {
-    return boundsContainPoint(element, point);
+    return element.type === "text"
+      ? boundsContainPoint(element, point)
+      : containsPointInsideShapeBoundary(element.shape, element.width, element.height, element.style.roundness, {
+        x: point.x - element.x,
+        y: point.y - element.y,
+      });
   }
-  const dx = point.x - centerX;
-  const dy = point.y - centerY;
-  if (element.shape === "ellipse") {
-    return (dx / (element.width / 2)) ** 2 + (dy / (element.height / 2)) ** 2 <= 1;
-  }
-  return Math.abs(dx) / (element.width / 2) + Math.abs(dy) / (element.height / 2) <= 1;
+  return containsPointInsideShapeBoundary(element.shape, element.width, element.height, element.style.roundness, {
+    x: point.x - element.x,
+    y: point.y - element.y,
+  });
 }

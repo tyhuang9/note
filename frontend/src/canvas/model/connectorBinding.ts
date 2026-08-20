@@ -380,7 +380,6 @@ function buildAuthoringCandidate(
   target: BindableElement,
   zoom: number,
 ): ConnectorAuthoringCandidate | null {
-  if (!isPointNearBindableBounds(point, target, CONNECTOR_BINDING_REVEAL_RADIUS_PX / zoom)) return null;
   const activeAnchor = getNearestBindableBoundaryAnchor(target, point);
   if (!activeAnchor) return null;
   const activeDistance = pointDistance(point, activeAnchor.point);

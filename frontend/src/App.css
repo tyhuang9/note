@@ -2972,12 +2972,17 @@ h2 {
 }
 
 .connector-endpoint-chooser button {
+  width: auto;
+  min-width: 44px;
+  height: auto;
   min-height: 44px;
   border: 1px solid var(--connector-chooser-border);
   border-radius: 7px;
   padding: 8px 12px;
   color: var(--connector-chooser-text);
   background: var(--connector-chooser-surface-muted);
+  line-height: 1.25;
+  white-space: normal;
   cursor: pointer;
 }
 

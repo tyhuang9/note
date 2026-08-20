@@ -155,7 +155,7 @@ for (const zoom of [50, 100, 200]) {
 }
 
 test("desktop dark endpoint chooser traps focus, stays below the toolbar, and binds with Space", async ({ page }) => {
-  await page.setViewportSize({ width: 1069, height: 598 });
+  await page.setViewportSize({ width: 1500, height: 900 });
   const canvas = page.getByRole("tabpanel");
   const canvasBounds = await requiredBounds(canvas, "canvas");
   await createRectangleWithTool(page, canvasBounds.x + 340, canvasBounds.y + 180);
@@ -198,14 +198,39 @@ test("desktop dark endpoint chooser traps focus, stays below the toolbar, and bi
   const dialogBounds = await requiredBounds(dialog, "endpoint chooser");
   expect(dialogBounds.y).toBeGreaterThanOrEqual(toolbarBounds.y + toolbarBounds.height);
   expect(dialogBounds.x + dialogBounds.width / 2).toBeCloseTo(toolbarBounds.x + toolbarBounds.width / 2, 0);
+  expect(dialogBounds.x).toBeGreaterThanOrEqual(0);
+  expect(dialogBounds.y).toBeGreaterThanOrEqual(0);
+  expect(dialogBounds.x + dialogBounds.width).toBeLessThanOrEqual(1500);
+  expect(dialogBounds.y + dialogBounds.height).toBeLessThanOrEqual(900);
   const firstTarget = dialog.locator('[data-connector-target="true"]').filter({
     hasText: /^Rectangle 1 \(center \d+, \d+\)$/,
   });
   await expect(dialog.getByRole("button", { name: /Text 1 \(Text binding target\)/ })).toBeVisible();
   await expect(firstTarget).toHaveAttribute("aria-pressed", "true");
   await expect(firstTarget).toBeFocused();
+  const desktopTargetMetrics = await firstTarget.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const bounds = element.getBoundingClientRect();
+    return {
+      height: bounds.height,
+      lineHeightRatio: Number.parseFloat(style.lineHeight) / Number.parseFloat(style.fontSize),
+      minHeight: style.minHeight,
+      minWidth: style.minWidth,
+      whiteSpace: style.whiteSpace,
+      width: bounds.width,
+    };
+  });
+  expect(desktopTargetMetrics.width).toBeGreaterThan(44);
+  expect(desktopTargetMetrics.height).toBeGreaterThanOrEqual(44);
+  expect(desktopTargetMetrics.minWidth).toBe("44px");
+  expect(desktopTargetMetrics.minHeight).toBe("44px");
+  expect(desktopTargetMetrics.lineHeightRatio).toBeCloseTo(1.25, 2);
+  expect(desktopTargetMetrics.whiteSpace).toBe("normal");
 
   const close = dialog.getByRole("button", { name: "Close endpoint chooser" });
+  const closeBounds = await requiredBounds(close, "close endpoint chooser");
+  expect(closeBounds.width).toBeGreaterThanOrEqual(44);
+  expect(closeBounds.height).toBeGreaterThanOrEqual(44);
   await close.focus();
   await page.keyboard.press("Shift+Tab");
   await expect(dialog.getByRole("button", { name: "Left anchor" })).toBeFocused();
@@ -252,6 +277,11 @@ test("compact light endpoint chooser is an in-viewport sheet and Escape restores
   const canvas = page.getByRole("tabpanel");
   const canvasBounds = await requiredBounds(canvas, "canvas");
   await createRectangleWithTool(page, canvasBounds.x + 36, canvasBounds.y + 150);
+  await selectTool(page, "text");
+  await page.mouse.click(canvasBounds.x + 48, canvasBounds.y + 210);
+  await expect(page.locator(".text-block-editor-content")).toBeFocused();
+  await page.keyboard.type("Long compact binding target label that needs to wrap");
+  await page.keyboard.press("Escape");
   await selectTool(page, "arrow");
   await authorArrow(page, canvasBounds.x + 32, canvasBounds.y + 280, canvasBounds.x + 220, canvasBounds.y + 280);
   const arrow = page.getByRole("button", { name: "Select and move arrow connector" });
@@ -270,6 +300,32 @@ test("compact light endpoint chooser is an in-viewport sheet and Escape restores
   expect(dialogBounds.x + dialogBounds.width).toBeLessThanOrEqual(320);
   expect(dialogBounds.y + dialogBounds.height).toBeLessThanOrEqual(598);
   expect(await dialog.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe("rgb(255, 255, 255)");
+  const longTarget = dialog.getByRole("button", { name: /Text 1 \(Long compact binding target lab/ });
+  await expect(longTarget).toBeVisible();
+  const compactTargetMetrics = await longTarget.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const bounds = element.getBoundingClientRect();
+    return {
+      height: bounds.height,
+      left: bounds.left,
+      lineHeightRatio: Number.parseFloat(style.lineHeight) / Number.parseFloat(style.fontSize),
+      minHeight: style.minHeight,
+      minWidth: style.minWidth,
+      right: bounds.right,
+      scrollWidth: element.scrollWidth,
+      whiteSpace: style.whiteSpace,
+      width: bounds.width,
+    };
+  });
+  expect(compactTargetMetrics.width).toBeGreaterThanOrEqual(44);
+  expect(compactTargetMetrics.height).toBeGreaterThan(44);
+  expect(compactTargetMetrics.minWidth).toBe("44px");
+  expect(compactTargetMetrics.minHeight).toBe("44px");
+  expect(compactTargetMetrics.lineHeightRatio).toBeCloseTo(1.25, 2);
+  expect(compactTargetMetrics.whiteSpace).toBe("normal");
+  expect(compactTargetMetrics.left).toBeGreaterThanOrEqual(dialogBounds.x);
+  expect(compactTargetMetrics.right).toBeLessThanOrEqual(dialogBounds.x + dialogBounds.width);
+  expect(compactTargetMetrics.scrollWidth).toBeLessThanOrEqual(Math.ceil(compactTargetMetrics.width));
 
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);

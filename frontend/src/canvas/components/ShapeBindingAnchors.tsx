@@ -13,7 +13,7 @@ export function ShapeBindingAnchors({ anchor, isSnapped = false, targetId, zoom 
   return (
     <div aria-hidden="true" className="connector-binding-anchors">
       <span
-        className={`connector-binding-anchor is-active ${isSnapped ? "is-snapped" : ""}`}
+        className={`connector-binding-anchor ${isSnapped ? "is-active is-snapped" : ""}`}
         data-connector-anchor={anchor.name}
         data-connector-target-id={targetId}
         style={{ left: anchor.point.x, top: anchor.point.y, transform: `translate(-50%, -50%) scale(${1 / safeZoom})` }}

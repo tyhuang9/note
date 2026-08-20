@@ -88,6 +88,8 @@ test("uses tool-specific native cursors and localized canvas keyboard focus", as
   expect(await canvas.evaluate((node) => getComputedStyle(node).cursor)).toBe("copy");
 
   await page.locator('[data-tool="select"]').click();
+  const focusIndicator = canvas.locator("[data-canvas-focus-indicator]");
+  expect(await focusIndicator.evaluate((node) => getComputedStyle(node).opacity)).toBe("0");
   await canvas.focus();
   const canvasFocus = await canvas.evaluate((node) => ({
     borderWidth: getComputedStyle(node).borderTopWidth,
@@ -97,7 +99,12 @@ test("uses tool-specific native cursors and localized canvas keyboard focus", as
   expect(canvasFocus.borderWidth).toBe("0px");
   expect(canvasFocus.outlineStyle).toBe("none");
   const activeTool = page.locator('.canvas-tool-palette [data-tool="select"]');
-  expect(await activeTool.evaluate((node) => getComputedStyle(node).outlineWidth)).toBe("3px");
+  await activeTool.focus();
+  await page.keyboard.press("Shift+Tab");
+  await expect(canvas).toBeFocused();
+  await expect(focusIndicator).toBeVisible();
+  await expect(focusIndicator).toHaveCSS("opacity", "1");
+  expect(await activeTool.evaluate((node) => getComputedStyle(node).outlineStyle)).toBe("none");
 
   await page.keyboard.down("Space");
   expect(await canvas.evaluate((node) => getComputedStyle(node).cursor)).toBe("grab");
@@ -106,8 +113,33 @@ test("uses tool-specific native cursors and localized canvas keyboard focus", as
   await page.mouse.down();
   await expect(canvas).toHaveClass(/is-panning/);
   expect(await canvas.evaluate((node) => getComputedStyle(node).cursor)).toBe("grabbing");
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await expect(canvas).not.toHaveAttribute("data-temporary-hand");
+  await expect(canvas).not.toHaveClass(/is-panning/);
+  expect(await canvas.evaluate((node) => getComputedStyle(node).cursor)).toBe("default");
   await page.mouse.up();
   await page.keyboard.up("Space");
+
+  await page.locator('[data-tool="diamond"]').click();
+  const diamondStart = { x: bounds.x + 320, y: bounds.y + 320 };
+  await page.mouse.click(diamondStart.x, diamondStart.y);
+  const diamond = page.getByRole("button", { name: "Select and move diamond element" });
+  await expect(diamond).toBeVisible();
+  const diamondId = await diamond.getAttribute("data-canvas-element-id");
+  if (!diamondId) throw new Error("Diamond id was unavailable.");
+  const diamondBounds = await requiredBounds(diamond, "diamond");
+
+  await page.locator('[data-tool="arrow"]').click();
+  await page.mouse.click(diamondBounds.x + diamondBounds.width - 1, diamondBounds.y + diamondBounds.height / 2);
+  const rightAnchor = page.locator(`[data-connector-target-id="${diamondId}"][data-connector-anchor="right"]`);
+  await expect(rightAnchor).toBeVisible();
+  const rightAnchorBounds = await requiredBounds(rightAnchor, "diamond right cardinal anchor");
+  await page.mouse.click(Math.min(bounds.x + bounds.width - 40, rightAnchorBounds.x + 220), rightAnchorBounds.y + rightAnchorBounds.height / 2);
+  await page.locator('[data-tool="select"]').click();
+  const startHandle = page.getByRole("button", { name: "Move connector start endpoint" });
+  const startHandleBounds = await requiredBounds(startHandle, "diamond-bound connector start");
+  expect(Math.abs(startHandleBounds.x + startHandleBounds.width / 2 - (rightAnchorBounds.x + rightAnchorBounds.width / 2))).toBeLessThanOrEqual(2);
+  expect(Math.abs(startHandleBounds.y + startHandleBounds.height / 2 - (rightAnchorBounds.y + rightAnchorBounds.height / 2))).toBeLessThanOrEqual(2);
 });
 
 async function svgSnapshot(locator: Locator) {

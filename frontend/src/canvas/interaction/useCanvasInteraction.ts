@@ -725,26 +725,13 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
     [cancelMarquee, clearPrimitivePreview, getCanvasPoint],
   );
 
-  const handlePointerCancel = useCallback(
-    (event: ReactPointerEvent<HTMLElement>) => {
+  const cancelTransientPointerInteraction = useCallback(
+    () => {
       const currentPan = panState.current;
       const currentSelection = selectionState.current;
-      // Browsers dispatch lostpointercapture after a successful pointerup.
-      // The completed session has already been cleared by then, so it must not
-      // reset the selected mode or discard a completed marquee.
       const currentPrimitive = primitiveSession.current;
-      if (
-        event.type === "lostpointercapture"
-        && ignoredLostCapturePointerIdRef.current === event.pointerId
-      ) {
-        ignoredLostCapturePointerIdRef.current = null;
-        return;
-      }
       const hadArrow = Boolean(arrowSession.current);
       if (!currentPan && !currentSelection && !currentPrimitive && !hadArrow) return;
-      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      }
       if (currentPan) {
         const startPan = { x: currentPan.startPanX, y: currentPan.startPanY };
         optionsRef.current.panOffsetRef.current = startPan;
@@ -761,8 +748,28 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
     [cancelArrowAuthoring, cancelMarquee, clearPrimitivePreview],
   );
 
+  const handlePointerCancel = useCallback(
+    (event: ReactPointerEvent<HTMLElement>) => {
+      // Browsers dispatch lostpointercapture after a successful pointerup.
+      // The completed session has already been cleared by then, so it must not
+      // reset the selected mode or discard a completed marquee.
+      if (
+        event.type === "lostpointercapture"
+        && ignoredLostCapturePointerIdRef.current === event.pointerId
+      ) {
+        ignoredLostCapturePointerIdRef.current = null;
+        return;
+      }
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      cancelTransientPointerInteraction();
+    },
+    [cancelTransientPointerInteraction],
+  );
+
   useEffect(() => {
-    const handleWindowBlur = () => cancelArrowAuthoring();
+    const handleWindowBlur = () => cancelTransientPointerInteraction();
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") cancelArrowAuthoring();
     };
@@ -772,7 +779,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       window.removeEventListener("blur", handleWindowBlur);
       window.removeEventListener("keydown", handleEscape, true);
     };
-  }, [cancelArrowAuthoring]);
+  }, [cancelArrowAuthoring, cancelTransientPointerInteraction]);
 
   useEffect(() => {
     if (arrowSession.current?.cancellationKey !== options.interactionCancellationKey) {

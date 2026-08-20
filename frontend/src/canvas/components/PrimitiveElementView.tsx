@@ -51,8 +51,10 @@ export function shapeRenderPadding(style: ShapeElement["style"]): number {
 export function roundedRectanglePath(width: number, height: number, roundness: number): string {
   const safeWidth = Math.max(1, width);
   const safeHeight = Math.max(1, height);
-  const radius = Math.min(safeWidth, safeHeight) * Math.max(0, Math.min(1, roundness)) / 2;
-  if (radius === 0) return `M 0 0 H ${safeWidth} V ${safeHeight} H 0 Z`;
+  // `roundness` stays exactly as persisted. This is a rendering-only floor so legacy
+  // rectangles remain compatible without looking mechanically sharp.
+  const visualRoundness = Math.max(0.06, Math.min(1, roundness));
+  const radius = Math.min(safeWidth, safeHeight) * visualRoundness / 2;
   return [
     `M ${radius} 0`,
     `H ${safeWidth - radius}`,
@@ -76,16 +78,24 @@ export function roundedDiamondPath(width: number, height: number): string {
   const cornerInset = Math.min(safeWidth, safeHeight) * 0.08;
   const horizontalInset = cornerInset * safeWidth / Math.max(1, Math.hypot(safeWidth, safeHeight));
   const verticalInset = cornerInset * safeHeight / Math.max(1, Math.hypot(safeWidth, safeHeight));
+  const control = 0.45;
+  // Each cardinal point is a real path endpoint (not merely a quadratic control
+  // point). Paired quadratics give it a continuous horizontal/vertical tangent,
+  // keeping the tip soft while matching model and connector cardinal extrema.
   return [
-    `M ${centerX + horizontalInset} ${verticalInset}`,
+    `M ${centerX} 0`,
+    `Q ${centerX + horizontalInset * control} 0 ${centerX + horizontalInset} ${verticalInset}`,
     `L ${safeWidth - horizontalInset} ${centerY - verticalInset}`,
-    `Q ${safeWidth} ${centerY} ${safeWidth - horizontalInset} ${centerY + verticalInset}`,
+    `Q ${safeWidth} ${centerY - verticalInset * control} ${safeWidth} ${centerY}`,
+    `Q ${safeWidth} ${centerY + verticalInset * control} ${safeWidth - horizontalInset} ${centerY + verticalInset}`,
     `L ${centerX + horizontalInset} ${safeHeight - verticalInset}`,
-    `Q ${centerX} ${safeHeight} ${centerX - horizontalInset} ${safeHeight - verticalInset}`,
+    `Q ${centerX + horizontalInset * control} ${safeHeight} ${centerX} ${safeHeight}`,
+    `Q ${centerX - horizontalInset * control} ${safeHeight} ${centerX - horizontalInset} ${safeHeight - verticalInset}`,
     `L ${horizontalInset} ${centerY + verticalInset}`,
-    `Q 0 ${centerY} ${horizontalInset} ${centerY - verticalInset}`,
+    `Q 0 ${centerY + verticalInset * control} 0 ${centerY}`,
+    `Q 0 ${centerY - verticalInset * control} ${horizontalInset} ${centerY - verticalInset}`,
     `L ${centerX - horizontalInset} ${verticalInset}`,
-    `Q ${centerX} 0 ${centerX + horizontalInset} ${verticalInset}`,
+    `Q ${centerX - horizontalInset * control} 0 ${centerX} 0`,
     "Z",
   ].join(" ");
 }

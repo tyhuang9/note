@@ -3570,12 +3570,19 @@ function App() {
       }
     }
 
+    function clearTemporaryHandForWindowBlur() {
+      isTemporaryHandActiveRef.current = false;
+      canvasRef.current?.removeAttribute("data-temporary-hand");
+    }
+
     document.addEventListener("keydown", handleKeyboard);
     document.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", clearTemporaryHandForWindowBlur);
 
     return () => {
       document.removeEventListener("keydown", handleKeyboard);
       document.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", clearTemporaryHandForWindowBlur);
       isTemporaryHandActiveRef.current = false;
       canvasRef.current?.removeAttribute("data-temporary-hand");
     };

@@ -72,6 +72,7 @@ export const CanvasViewport = forwardRef<HTMLElement, CanvasViewportProps>(
         role="tabpanel"
         tabIndex={0}
       >
+        <span aria-hidden="true" className="canvas-focus-indicator" data-canvas-focus-indicator />
         {children}
       </section>
     );

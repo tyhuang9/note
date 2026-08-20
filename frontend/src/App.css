@@ -2545,9 +2545,31 @@ h2 {
   outline: none;
 }
 
-.canvas:focus-visible .canvas-tool-palette button[aria-pressed="true"] {
-  outline: 3px solid var(--canvas-focus);
-  outline-offset: 1px;
+.canvas:focus-visible .canvas-tool-palette button {
+  outline: none;
+}
+
+.canvas-focus-indicator {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 30;
+  width: 10px;
+  height: 10px;
+  box-sizing: border-box;
+  border: 2px solid var(--canvas-focus);
+  border-radius: 999px;
+  background: var(--canvas-tool-bg);
+  box-shadow: 0 0 0 3px var(--canvas-selection-soft);
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(0.8);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.canvas:focus-visible > .canvas-focus-indicator {
+  opacity: 1;
+  transform: scale(1);
 }
 
 .canvas-interaction-overlay {

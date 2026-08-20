@@ -192,7 +192,7 @@ export function DrawingPropertiesPanel({
       {supports("roundness") ? (
         <PropertySection label="Edges">
           <ChoiceGroup label="Rectangle edges" mixed={values.roundness.kind === "mixed"}>
-            <ChoiceButton active={isValue(values.roundness, 0)} label="Sharp corners" mixed={values.roundness.kind === "mixed"} onClick={() => onUpdate({ property: "roundness", value: 0 })}>
+            <ChoiceButton active={isValue(values.roundness, 0)} label="Subtle corners" mixed={values.roundness.kind === "mixed"} onClick={() => onUpdate({ property: "roundness", value: 0 })}>
               <Square aria-hidden="true" size={19} />
             </ChoiceButton>
             <ChoiceButton active={isValue(values.roundness, 0.18)} label="Rounded corners" mixed={values.roundness.kind === "mixed"} onClick={() => onUpdate({ property: "roundness", value: 0.18 })}>

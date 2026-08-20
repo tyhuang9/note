@@ -63,19 +63,19 @@ describe("primitive rendering", () => {
     expect(roughOptions(style, zoom)).toMatchObject({ roughness: style.roughness, strokeWidth: style.strokeWidth });
   });
 
-  it("creates sharp and rounded rectangle paths from the persisted roundness", () => {
-    expect(roundedRectanglePath(100, 60, 0)).toBe("M 0 0 H 100 V 60 H 0 Z");
+  it("keeps persisted square preferences visually softened only at render time", () => {
+    expect(roundedRectanglePath(100, 60, 0)).toMatch(/Q 100 0 100 1\.\d+/);
     expect(roundedRectanglePath(100, 60, 0.5)).toContain("Q 100 0 100 15");
     expect(roundedRectanglePath(100, 60, 2)).toContain("Q 100 0 100 30");
   });
 
-  it("rounds diamond corners while retaining all four exact model anchors", () => {
+  it("rounds diamond corners while its rendered path reaches every model cardinal extent", () => {
     const path = roundedDiamondPath(100, 60);
-    expect(path).toMatch(/^M 5\d\.\d+ 2\.\d+ /);
-    expect(path).toContain("Q 100 30");
-    expect(path).toContain("Q 50 60");
-    expect(path).toContain("Q 0 30");
-    expect(path).toContain("Q 50 0");
+    const extents = sampledPathExtents(path);
+    expect(extents.minX).toBeCloseTo(0, 8);
+    expect(extents.maxX).toBeCloseTo(100, 8);
+    expect(extents.minY).toBeCloseTo(0, 8);
+    expect(extents.maxY).toBeCloseTo(60, 8);
   });
 
   it("adds render-only padding for rough outlines without changing model geometry", () => {
@@ -98,6 +98,45 @@ describe("primitive rendering", () => {
     expect(canvasColorToCss({ kind: "theme", token: "muted" })).toBe("var(--workbench-text-secondary)");
   });
 });
+
+function sampledPathExtents(path: string) {
+  const tokens = path.match(/[MLQZ]|-?\d+(?:\.\d+)?/g);
+  if (!tokens) throw new Error("Expected a numeric SVG path.");
+  const points: Array<{ x: number; y: number }> = [];
+  let cursor = { x: 0, y: 0 };
+  let start = cursor;
+  let index = 0;
+  while (index < tokens.length) {
+    const command = tokens[index++];
+    if (command === "M" || command === "L") {
+      cursor = { x: Number(tokens[index++]), y: Number(tokens[index++]) };
+      if (command === "M") start = cursor;
+      points.push(cursor);
+      continue;
+    }
+    if (command === "Q") {
+      const control = { x: Number(tokens[index++]), y: Number(tokens[index++]) };
+      const end = { x: Number(tokens[index++]), y: Number(tokens[index++]) };
+      for (let sample = 1; sample <= 128; sample += 1) {
+        const t = sample / 128;
+        const inverseT = 1 - t;
+        points.push({
+          x: inverseT ** 2 * cursor.x + 2 * inverseT * t * control.x + t ** 2 * end.x,
+          y: inverseT ** 2 * cursor.y + 2 * inverseT * t * control.y + t ** 2 * end.y,
+        });
+      }
+      cursor = end;
+      continue;
+    }
+    if (command === "Z") points.push(start);
+  }
+  return {
+    maxX: Math.max(...points.map((point) => point.x)),
+    maxY: Math.max(...points.map((point) => point.y)),
+    minX: Math.min(...points.map((point) => point.x)),
+    minY: Math.min(...points.map((point) => point.y)),
+  };
+}
 
 describe("canvas hit-test ordering", () => {
   it("sorts by z-index and preserves source order for ties", () => {

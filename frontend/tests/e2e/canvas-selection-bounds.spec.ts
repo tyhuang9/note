@@ -5,32 +5,32 @@ test.beforeEach(async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: /create new note/i }).click();
   await expect(page.getByRole("tabpanel")).toBeVisible();
-  await page.getByRole("button", { name: "Turn off drawing tool lock" }).click();
 });
 
-test("all-text selections keep native outlines, hide the composite frame, and move from either header", async ({ page }) => {
+test("all-text selections render a four-corner composite frame and move as one group", async ({ page }) => {
   const canvas = page.getByRole("tabpanel");
   const bounds = await requiredBounds(canvas, "canvas");
   const blocks = await createTwoTextBlocks(page, bounds);
 
   await marqueeSelect(page, bounds, [blocks.first, blocks.second]);
-  await expect(page.locator(".selection-frame")).toHaveCount(0);
+  await expect(page.locator(".selection-frame")).toHaveCount(1);
   await expect(page.locator(".selection-rectangle")).toBeHidden();
   await expect(blocks.first).toHaveClass(/is-selected/);
-  await expect(blocks.first).not.toHaveClass(/is-multi-selected/);
+  await expect(blocks.first).toHaveClass(/is-multi-selected/);
   await expect(blocks.second).toHaveClass(/is-selected/);
-  await expect(blocks.second).not.toHaveClass(/is-multi-selected/);
+  await expect(blocks.second).toHaveClass(/is-multi-selected/);
   await expect(blocks.first.locator(".text-block-header")).toHaveCSS("opacity", "1");
   await expect(blocks.second.locator(".text-block-header")).toHaveCSS("opacity", "1");
   await expect(blocks.first.locator(".resize-e")).toHaveCount(0);
   await expect(blocks.second.locator(".resize-e")).toHaveCount(0);
+  await expect(page.locator(".selection-frame-handle")).toHaveCount(4);
 
   const before = await Promise.all([readWorldPosition(blocks.first), readWorldPosition(blocks.second)]);
-  const header = blocks.first.locator(".text-block-header");
-  const headerBounds = await requiredBounds(header, "first text header");
-  await page.mouse.move(headerBounds.x + headerBounds.width / 2, headerBounds.y + headerBounds.height / 2);
+  const moveSurface = page.getByRole("button", { name: "Move selected elements" });
+  const moveBounds = await requiredBounds(moveSurface, "all-text selection move surface");
+  await page.mouse.move(moveBounds.x + moveBounds.width / 2, moveBounds.y + moveBounds.height / 2);
   await page.mouse.down();
-  await page.mouse.move(headerBounds.x + headerBounds.width / 2 + 84, headerBounds.y + headerBounds.height / 2 + 56, { steps: 7 });
+  await page.mouse.move(moveBounds.x + moveBounds.width / 2 + 84, moveBounds.y + moveBounds.height / 2 + 56, { steps: 7 });
   await page.mouse.up();
   await expect.poll(() => Promise.all([readWorldPosition(blocks.first), readWorldPosition(blocks.second)])).toEqual([
     { x: before[0].x + 84, y: before[0].y + 56 },
@@ -39,6 +39,7 @@ test("all-text selections keep native outlines, hide the composite frame, and mo
 
   const beforeWidth = await readWorldWidth(blocks.first);
   const beforeSecondWidth = await readWorldWidth(blocks.second);
+  const header = blocks.first.locator(".text-block-header");
   await header.focus();
   await expect(header).toHaveAttribute("aria-keyshortcuts", "Alt+Shift+ArrowLeft Alt+Shift+ArrowRight");
   await header.press("Alt+Shift+ArrowRight");
@@ -77,6 +78,32 @@ for (const zoom of [50, 100, 200]) {
       readWorldPosition(blocks.first),
       readWorldPosition(blocks.second),
     ])).toEqual(before);
+
+    const beforeSizes = await Promise.all([readWorldSize(blocks.first), readWorldSize(blocks.second)]);
+    const { bounds: handleBounds, corner } = await interactiveResizeHandle(page);
+    const start = {
+      x: handleBounds.x + handleBounds.width / 2,
+      y: handleBounds.y + handleBounds.height / 2,
+    };
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(
+      start.x + (corner.includes("e") ? 60 : -60),
+      start.y + (corner.includes("s") ? 48 : -48),
+      { steps: 6 },
+    );
+    const textClones = page.locator('.resize-layer-clone[data-canvas-element-type="text"]');
+    await expect(textClones).toHaveCount(2);
+    const previewSizes = await Promise.all([readWorldSize(textClones.nth(0)), readWorldSize(textClones.nth(1))]);
+    expect(previewSizes[0].width).toBeGreaterThan(beforeSizes[0].width);
+    expect(previewSizes[1].width).toBeGreaterThan(beforeSizes[1].width);
+    await expect.poll(() => Promise.all([readWorldSize(blocks.first), readWorldSize(blocks.second)])).toEqual(beforeSizes);
+    await page.mouse.up();
+    await expect.poll(() => Promise.all([readWorldSize(blocks.first), readWorldSize(blocks.second)])).toEqual(previewSizes);
+
+    await canvas.focus();
+    await page.keyboard.press("Control+z");
+    await expect.poll(() => Promise.all([readWorldSize(blocks.first), readWorldSize(blocks.second)])).toEqual(beforeSizes);
   });
 }
 
@@ -97,7 +124,7 @@ for (const cancelPath of ["Escape", "tool change", "page change", "window blur",
 
     const blocks = await createTwoTextBlocks(page, canvasBounds);
     await marqueeSelect(page, canvasBounds, [blocks.first, blocks.second]);
-    await expect(page.locator(".selection-frame")).toHaveCount(0);
+    await expect(page.locator(".selection-frame")).toHaveCount(1);
     const firstBlockId = await blocks.first.getAttribute("data-block-id");
     if (!firstBlockId) throw new Error("Selected text block id was unavailable.");
     const sourceText = page.locator(`.text-block[data-block-id="${firstBlockId}"]:not(.drag-layer-clone)`);
@@ -207,18 +234,18 @@ for (const cancelPath of ["Escape", "tool change", "page change", "window blur",
   });
 }
 
-test("mixed resize handles describe and keyboard-apply non-text-only scaling", async ({ page }) => {
+test("mixed resize handles describe and keyboard-apply text reflow with shape scaling", async ({ page }) => {
   const canvas = page.getByRole("tabpanel");
   const bounds = await requiredBounds(canvas, "canvas");
   const elements = await createMixedSelection(page, bounds);
   await marqueeSelect(page, bounds, [elements.shape, elements.text]);
 
   const handles = page.getByRole("button", {
-    name: /Resize non-text geometry from (nw|ne|se|sw); text blocks reposition without resizing/,
+    name: /Resize selected elements from (nw|ne|se|sw)/,
   });
   await expect(handles).toHaveCount(4);
   const southeast = page.getByRole("button", {
-    name: "Resize non-text geometry from se; text blocks reposition without resizing",
+    name: "Resize selected elements from se",
   });
   const beforeShapeWidth = await readWorldWidth(elements.shape);
   const beforeTextWidth = await readWorldWidth(elements.text);
@@ -226,7 +253,7 @@ test("mixed resize handles describe and keyboard-apply non-text-only scaling", a
   await southeast.focus();
   await southeast.press("Shift+ArrowRight");
   await expect.poll(() => readWorldWidth(elements.shape)).toBeGreaterThan(beforeShapeWidth);
-  await expect.poll(() => readWorldWidth(elements.text)).toBeCloseTo(beforeTextWidth, 1);
+  await expect.poll(() => readWorldWidth(elements.text)).toBeGreaterThan(beforeTextWidth);
   await expect.poll(() => readWorldPosition(elements.text)).not.toEqual(beforeTextPosition);
 });
 
@@ -438,7 +465,7 @@ for (const zoom of [50, 100, 200]) {
     })));
   });
 
-  test(`mixed resize keeps text size fixed in preview, commit, and undo at ${zoom}%`, async ({ page }) => {
+  test(`mixed resize reflows text in preview, commit, and undo at ${zoom}%`, async ({ page }) => {
     const canvas = page.getByRole("tabpanel");
     const bounds = await requiredBounds(canvas, "canvas");
     const elements = await createMixedSelection(page, bounds);
@@ -446,7 +473,7 @@ for (const zoom of [50, 100, 200]) {
     await setZoom(page, canvas, zoom);
 
     const { bounds: handleBounds, corner, handle } = await interactiveResizeHandle(page);
-    const beforeTextWidth = await readWorldWidth(elements.text);
+    const beforeTextSize = await readWorldSize(elements.text);
     const beforeTextPosition = await readWorldPosition(elements.text);
     const beforeShapeWidth = await readWorldWidth(elements.shape);
     const beforeTextScreen = await requiredBounds(elements.text, "text block");
@@ -469,23 +496,25 @@ for (const zoom of [50, 100, 200]) {
     const textCloneBounds = await requiredBounds(textClone, "text resize preview");
     const shapeCloneBounds = await requiredBounds(shapeClone, "shape resize preview");
     const previewFrame = await requiredBounds(page.locator(".selection-frame"), "resize preview frame");
-    expect(textCloneBounds.width).toBeCloseTo(beforeTextScreen.width, 0);
+    expect(textCloneBounds.width).toBeGreaterThan(beforeTextScreen.width);
     expect(shapeCloneBounds.width).toBeGreaterThan(beforeShapeWidth * (zoom / 100));
     expect(previewFrame.x).toBeLessThanOrEqual(Math.min(textCloneBounds.x, shapeCloneBounds.x));
     expect(previewFrame.x + previewFrame.width).toBeGreaterThanOrEqual(
       Math.max(textCloneBounds.x + textCloneBounds.width, shapeCloneBounds.x + shapeCloneBounds.width),
     );
-    expect(await readWorldWidth(elements.text)).toBe(beforeTextWidth);
+    expect(await readWorldSize(elements.text)).toEqual(beforeTextSize);
     expect(await readWorldWidth(elements.shape)).toBe(beforeShapeWidth);
+    const previewTextSize = await readWorldSize(textClone);
+    expect(previewTextSize.width).toBeGreaterThan(beforeTextSize.width);
 
     await page.mouse.up();
-    await expect.poll(() => readWorldWidth(elements.text)).toBeCloseTo(beforeTextWidth, 1);
+    await expect.poll(() => readWorldSize(elements.text)).toEqual(previewTextSize);
     await expect.poll(() => readWorldWidth(elements.shape)).toBeGreaterThan(beforeShapeWidth);
     await expect.poll(() => readWorldPosition(elements.text)).not.toEqual(beforeTextPosition);
 
     await canvas.focus();
     await page.keyboard.press("Control+z");
-    await expect.poll(() => readWorldWidth(elements.text)).toBeCloseTo(beforeTextWidth, 1);
+    await expect.poll(() => readWorldSize(elements.text)).toEqual(beforeTextSize);
     await expect.poll(() => readWorldWidth(elements.shape)).toBeCloseTo(beforeShapeWidth, 1);
     await expect.poll(() => readWorldPosition(elements.text)).toEqual(beforeTextPosition);
   });
@@ -500,7 +529,7 @@ test("mixed resize preview and frame return to their original geometry on pointe
   const originalFrame = await roundedBounds(frame);
   const originalWidths = await Promise.all([readWorldWidth(elements.shape), readWorldWidth(elements.text)]);
   const handle = page.getByRole("button", {
-    name: "Resize non-text geometry from se; text blocks reposition without resizing",
+    name: "Resize selected elements from se",
   });
   const handleBounds = await requiredBounds(handle, "selection resize handle");
   const start = { x: handleBounds.x + handleBounds.width / 2, y: handleBounds.y + handleBounds.height / 2 };
@@ -721,7 +750,12 @@ async function createMixedSelection(page: Page, bounds: { x: number; y: number }
   await page.mouse.up();
   const shape = page.locator('[data-canvas-element-type="shape"]:not(.drag-layer-clone)').last();
   await expect(shape).toBeVisible();
-  const text = await createTextBlock(page, bounds.x + 560, bounds.y + 300, "Mixed selection text");
+  const text = await createTextBlock(
+    page,
+    bounds.x + 560,
+    bounds.y + 300,
+    "One two three four five six\nOne two three four five six\nOne two three four five six\nOne two three four five six",
+  );
   return { shape, text };
 }
 
@@ -734,7 +768,7 @@ async function createTextBlock(page: Page, x: number, y: number, text: string) {
   await page.mouse.click(x + 380, y + 180);
   const allBlocks = page.locator(".text-block");
   const block = allBlocks.nth((await allBlocks.count()) - 1);
-  await expect(block.locator(".text-block-display")).toContainText(text);
+  await expect(block.locator(".text-block-display")).toContainText(text.replaceAll("\n", ""));
   return block;
 }
 
@@ -813,4 +847,11 @@ async function readWorldPosition(locator: Locator) {
 
 async function readWorldWidth(locator: Locator) {
   return locator.evaluate((element) => Number.parseFloat((element as HTMLElement).style.width));
+}
+
+async function readWorldSize(locator: Locator) {
+  return locator.evaluate((element) => ({
+    height: Number.parseFloat((element as HTMLElement).style.height),
+    width: Number.parseFloat((element as HTMLElement).style.width),
+  }));
 }

@@ -19,7 +19,7 @@ test("a mixed text and locked-image selection moves only the unlocked element an
   const frame = page.locator(".selection-frame");
   await expect(frame).toHaveCount(1);
   await expect(page.getByRole("button", { name: "Move unlocked selected elements" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /Resize non-text geometry/ })).toHaveCount(4);
+  await expect(page.getByRole("button", { name: /Resize unlocked selected elements from (nw|ne|se|sw)/ })).toHaveCount(4);
   await expect(unlocked.locator(".resize-e")).toHaveCount(0);
 
   const beforeUnlocked = await readWorldPosition(unlocked);
@@ -49,6 +49,24 @@ test("a mixed text and locked-image selection moves only the unlocked element an
   await expect(unlocked).toHaveClass(/is-multi-selected/);
   await expect(locked).toHaveClass(/is-multi-selected/);
   await expect(frame).toHaveCount(1);
+
+  const beforeResizeUnlocked = await readWorldGeometry(unlocked);
+  const beforeResizeLocked = await readWorldGeometry(locked);
+  const resizeHandle = page.getByRole("button", { name: "Resize unlocked selected elements from se" });
+  const resizeBounds = await requiredBounds(resizeHandle, "mixed locked selection resize handle");
+  const resizeStart = {
+    x: resizeBounds.x + resizeBounds.width / 2,
+    y: resizeBounds.y + resizeBounds.height / 2,
+  };
+  await page.mouse.move(resizeStart.x, resizeStart.y);
+  await page.mouse.down();
+  await page.mouse.move(resizeStart.x + 60, resizeStart.y + 40, { steps: 5 });
+  await expect(unlocked).toHaveClass(/is-drag-source-hidden/);
+  await expect.poll(() => readWorldGeometry(unlocked)).toEqual(beforeResizeUnlocked);
+  await expect.poll(() => readWorldGeometry(locked)).toEqual(beforeResizeLocked);
+  await page.mouse.up();
+  await expect.poll(() => readWorldGeometry(unlocked)).not.toEqual(beforeResizeUnlocked);
+  await expect.poll(() => readWorldGeometry(locked)).toEqual(beforeResizeLocked);
 
   const unlockedControl = unlocked.getByRole("button", { name: "Select and move text block" });
   await unlockedControl.focus();
@@ -97,7 +115,7 @@ test("all-text header Arrow movement moves unlocked selected text and preserves 
   const lockedHeader = locked.locator(".text-block-header");
   await unlockedHeader.click();
   await lockedHeader.click({ modifiers: ["Control"] });
-  await expect(page.locator(".selection-frame")).toHaveCount(0);
+  await expect(page.locator(".selection-frame")).toHaveCount(1);
 
   const beforeUnlocked = await readWorldPosition(unlocked);
   const beforeLocked = await readWorldPosition(locked);
@@ -232,4 +250,16 @@ async function readWorldPosition(locator: ReturnType<Page["locator"]>) {
     x: Number.parseFloat((element as HTMLElement).style.left),
     y: Number.parseFloat((element as HTMLElement).style.top),
   }));
+}
+
+async function readWorldGeometry(locator: ReturnType<Page["locator"]>) {
+  return locator.evaluate((element) => {
+    const style = element as HTMLElement;
+    return {
+      height: Number.parseFloat(style.style.height),
+      width: Number.parseFloat(style.style.width),
+      x: Number.parseFloat(style.style.left),
+      y: Number.parseFloat(style.style.top),
+    };
+  });
 }

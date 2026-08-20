@@ -7,6 +7,7 @@ import {
   createSceneRepository,
   isAssetBlobWithinLimit,
   MAX_ASSET_BYTES,
+  normalizeLoadedCanvasElement,
   type Invoke,
   type SceneChangeBatch,
 } from "../../src/canvas/persistence/sceneRepository";
@@ -14,6 +15,7 @@ import { MAX_CANVAS_VALUE } from "../../src/canvas/model/connectorBinding";
 
 function text(id: string, content = id): TextElement {
   return {
+    backgroundMode: "surface",
     content,
     createdAt: 1,
     height: 20,
@@ -32,6 +34,14 @@ function text(id: string, content = id): TextElement {
 }
 
 describe("scene repository", () => {
+  it("normalizes missing and invalid legacy text background modes to surface", () => {
+    const legacy = { ...text("legacy"), backgroundMode: undefined } as unknown as TextElement;
+    const invalid = { ...text("invalid"), backgroundMode: "gradient" } as unknown as TextElement;
+    expect(normalizeLoadedCanvasElement(legacy)).toMatchObject({ backgroundMode: "surface" });
+    expect(normalizeLoadedCanvasElement(invalid)).toMatchObject({ backgroundMode: "surface" });
+    expect(normalizeLoadedCanvasElement({ ...text("transparent"), backgroundMode: "transparent" })).toMatchObject({ backgroundMode: "transparent" });
+  });
+
   it("maps every SQLite command through one typed Tauri boundary", async () => {
     const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
     const invoke: Invoke = async (command, args) => {

@@ -6,7 +6,7 @@ import { emptySceneHistory, executeSceneCommand, redoSceneCommand, undoSceneComm
 import { createSceneState, reduceScene } from "../../src/canvas/state/scene";
 
 function text(id: string, overrides: Partial<TextElement> = {}): TextElement {
-  return { id, pageId: "page", type: "text", zIndex: 0, opacity: 1, locked: false, createdAt: 1, updatedAt: 1, x: 0, y: 0, width: 20, height: 20, rotation: 0, content: id, ...overrides };
+  return { id, pageId: "page", type: "text", zIndex: 0, opacity: 1, locked: false, createdAt: 1, updatedAt: 1, x: 0, y: 0, width: 20, height: 20, rotation: 0, backgroundMode: "surface", content: id, ...overrides };
 }
 
 function xOf(element: Parameters<typeof isBoxCanvasElement>[0]): number {

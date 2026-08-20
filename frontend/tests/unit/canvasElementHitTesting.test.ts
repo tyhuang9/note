@@ -33,6 +33,7 @@ const base = {
 
 const text: TextElement = {
   ...base,
+  backgroundMode: "surface",
   content: "Text",
   height: 50,
   id: "text",

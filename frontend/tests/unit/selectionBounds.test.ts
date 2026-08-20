@@ -10,6 +10,7 @@ import {
 } from "../../src/canvas/model/selectionBounds";
 
 const text: TextElement = {
+  backgroundMode: "surface",
   content: "One",
   createdAt: 1,
   height: 40,

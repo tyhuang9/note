@@ -28,9 +28,22 @@ describe("legacy canvas persistence adapter", () => {
     ]), now);
 
     expect(result.data.elements).toMatchObject([
-      { type: "text", id: "text-1", content: "plain", zIndex: 0, opacity: 1, locked: false, rotation: 0, createdAt: now, updatedAt: now },
+      { type: "text", id: "text-1", content: "plain", backgroundMode: "surface", zIndex: 0, opacity: 1, locked: false, rotation: 0, createdAt: now, updatedAt: now },
       { type: "text", id: "text-2", richContent: { type: "doc" }, zIndex: 1 },
     ]);
+  });
+
+  it("preserves a transparent legacy text background while normalizing invalid values", () => {
+    const input = legacy([
+      { backgroundMode: "transparent", content: "clear", height: 80, id: "transparent", pageId: "page-1", width: 240, x: 10, y: 20 },
+      { backgroundMode: "gradient" as never, content: "legacy", height: 80, id: "invalid", pageId: "page-1", width: 240, x: 10, y: 20 },
+    ]);
+    const result = fromLegacyAppData(input, now);
+    expect(result.data.elements).toMatchObject([
+      { id: "transparent", backgroundMode: "transparent" },
+      { id: "invalid", backgroundMode: "surface" },
+    ]);
+    expect(toLegacyAppData(result.data, result.imageSourcesByAssetId)?.blocks[0]).toMatchObject({ backgroundMode: "transparent" });
   });
 
   it("round-trips standalone image sources through the in-memory asset map", () => {
@@ -101,10 +114,12 @@ describe("legacy canvas persistence adapter", () => {
     expect(result.data.elements.map((element) => element.id)).toEqual(["x", "x-image-2", "x-image"]);
     expect(result.imageSourcesByAssetId.get("legacy-image:x-image-2")).toBe(source);
     expect(result.imageSourcesByAssetId.get("legacy-image:x-image")).toBe("data:image/png;base64,BB==");
-    expect(toLegacyAppData(result.data, result.imageSourcesByAssetId)).toEqual({
-      ...input,
+    expect(toLegacyAppData(result.data, result.imageSourcesByAssetId)).toMatchObject({
+      folders: input.folders,
+      isDarkMode: input.isDarkMode,
+      pages: input.pages,
       blocks: [
-        { ...input.blocks[0], imageData: undefined, imageName: undefined },
+        { backgroundMode: "surface", content: "text", height: 80, id: "x", pageId: "page-1", width: 120, x: 0, y: 0 },
         { content: "", height: 80, id: "x-image-2", imageData: source, imageName: "mixed.png", pageId: "page-1", width: 120, x: 0, y: 0 },
         input.blocks[1],
       ],

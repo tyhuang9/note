@@ -3,7 +3,7 @@ import type { TextElement } from "../../src/canvas/model/elements";
 import { reorderLayers } from "../../src/canvas/model/layerOrdering";
 
 function text(id: string, zIndex: number, pageId = "page", locked = false): TextElement {
-  return { content: id, createdAt: 1, height: 20, id, locked, opacity: 1, pageId, rotation: 0, type: "text", updatedAt: 1, width: 20, x: 0, y: 0, zIndex };
+  return { backgroundMode: "surface", content: id, createdAt: 1, height: 20, id, locked, opacity: 1, pageId, rotation: 0, type: "text", updatedAt: 1, width: 20, x: 0, y: 0, zIndex };
 }
 
 function order(elements: readonly TextElement[], pageId = "page") {

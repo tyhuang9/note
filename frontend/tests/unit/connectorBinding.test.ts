@@ -80,7 +80,7 @@ describe("connector shape binding", () => {
 
   it("snaps only within a fixed screen-pixel radius and only to compatible shapes", () => {
     const rectangle = shape("rectangle");
-    const text = { ...rectangle, id: "text", type: "text" as const, content: "not a target" };
+    const text = { ...rectangle, backgroundMode: "surface" as const, id: "text", type: "text" as const, content: "not a target" };
     const nearAt200 = snapConnectorEndpoint({ x: 118, y: 50 }, [rectangle, text], 2, true);
     expect(nearAt200).toEqual({ kind: "element", targetElementId: rectangle.id, anchor: { t: 0.25 }, gap: 0 });
     expect(snapConnectorEndpoint({ x: 120, y: 50 }, [rectangle], 2, true)).toEqual({ kind: "free", x: 120, y: 50 });

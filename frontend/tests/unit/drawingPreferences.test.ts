@@ -50,6 +50,7 @@ const ellipse: ShapeElement = {
 
 const text: TextElement = {
   ...base,
+  backgroundMode: "surface",
   content: "Text",
   height: 40,
   id: "text",
@@ -104,6 +105,8 @@ describe("drawing preferences", () => {
     expect(values.opacity).toEqual({ kind: "value", value: 1 });
     expect(values.roundness).toEqual({ kind: "value", value: 0 });
     expect(readDrawingProperties([text]).strokeWidth.kind).toBe("unavailable");
+    expect(readDrawingProperties([text]).backgroundMode).toEqual({ kind: "value", value: "surface" });
+    expect(readDrawingProperties([text, { ...text, id: "transparent", backgroundMode: "transparent" }]).backgroundMode).toEqual({ kind: "mixed" });
   });
 
   it("updates only selected, unlocked, compatible elements", () => {
@@ -118,6 +121,26 @@ describe("drawing preferences", () => {
     expect(updated[1]).toBe(ellipse);
     expect(updated[2]).toBe(text);
     expect(updated[3]).toBe(lockedRectangle);
+  });
+
+  it("updates text background mode without regressing text opacity or locked text", () => {
+    const lockedText = { ...text, id: "locked-text", locked: true };
+    const transparent = applyDrawingPropertyUpdate(
+      [text, lockedText],
+      new Set([text.id, lockedText.id]),
+      { property: "backgroundMode", value: "transparent" },
+      10,
+    );
+    expect(transparent[0]).toMatchObject({ backgroundMode: "transparent", updatedAt: 10 });
+    expect(transparent[1]).toBe(lockedText);
+
+    const faded = applyDrawingPropertyUpdate(
+      transparent,
+      new Set([text.id]),
+      { property: "opacity", value: 0.4 },
+      11,
+    );
+    expect(faded[0]).toMatchObject({ backgroundMode: "transparent", opacity: 0.4, updatedAt: 11 });
   });
 });
 

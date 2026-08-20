@@ -21,6 +21,7 @@ const style: RoughStyle = {
 
 function text(id: string, zIndex: number): TextElement {
   return {
+    backgroundMode: "surface",
     content: id,
     createdAt: 1,
     height: 20,

@@ -191,6 +191,42 @@ test("uses context-specific width presets and five curated stroke swatches", asy
   await expect(properties.getByRole("button", { name: "Thick stroke (32px)" })).toBeVisible();
 });
 
+test("remembers text background choices, supports radio keys, and keeps selection history atomic", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  const canvasBounds = await canvas.boundingBox();
+  if (!canvasBounds) throw new Error("Canvas bounds were not available.");
+
+  await page.getByRole("button", { name: "Text (T / 8)" }).click();
+  const properties = page.getByRole("complementary", { name: "Drawing properties" });
+  const surface = properties.getByRole("radio", { name: "Surface text background" });
+  const transparent = properties.getByRole("radio", { name: "Transparent text background" });
+  await expect(surface).toHaveAttribute("aria-checked", "true");
+  await surface.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(transparent).toBeFocused();
+  await expect(transparent).toHaveAttribute("aria-checked", "true");
+
+  await page.mouse.click(canvasBounds.x + 260, canvasBounds.y + 220);
+  const firstText = page.locator(".text-block").last();
+  await expect(firstText).toHaveClass(/is-transparent-background/);
+  await page.keyboard.type("Transparent default");
+  await page.getByRole("button", { name: "Select (V / 1)" }).click();
+  await firstText.locator(".text-block-header").click();
+  await expect(surface).toBeVisible();
+  await surface.click();
+  await expect(firstText).not.toHaveClass(/is-transparent-background/);
+
+  await canvas.focus();
+  await page.keyboard.press("Control+z");
+  await expect(firstText).toHaveClass(/is-transparent-background/);
+  await page.keyboard.press("Control+y");
+  await expect(firstText).not.toHaveClass(/is-transparent-background/);
+
+  await page.getByRole("button", { name: "Text (T / 8)" }).click();
+  await page.mouse.click(canvasBounds.x + 500, canvasBounds.y + 300);
+  await expect(page.locator(".text-block").last()).not.toHaveClass(/is-transparent-background/);
+});
+
 test("keeps the properties scrollbar compact and themed in light and dark modes", async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 320 });
   await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();

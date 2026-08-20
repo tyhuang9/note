@@ -4,14 +4,22 @@ import type {
   ConnectorEndpoint,
   ElementId,
   InkElement,
+  TextElement,
 } from "./elements";
 import { isBoxCanvasElement } from "./elements";
 import { resolveConnectorEndpoint } from "./connectorBinding";
 import type { CanvasPoint } from "./geometry";
 import type { Bounds } from "./hitTesting";
 import { normalizeBounds } from "./hitTesting";
+import { MIN_BLOCK_HEIGHT, MIN_BLOCK_WIDTH } from "../../constants";
 
 export type SelectionCorner = "nw" | "ne" | "se" | "sw";
+
+/** Exact text box dimensions measured by the caller after rich-content reflow. */
+export type TextSelectionSize = Readonly<{
+  height: number;
+  width: number;
+}>;
 
 /**
  * The visual bounding box of an element in world coordinates. Unlike the DOM
@@ -130,9 +138,12 @@ export function translateSelection(
 }
 
 /**
- * Uniformly scales a selection about its opposite frame corner. Text boxes
- * move with the transform but retain their complete geometry and content so
- * mixed selections never visually scale or reflow text.
+ * Uniformly scales a selection about its opposite frame corner. Callers may
+ * supply exact text measurements after reflow at the scaled width. Text keeps
+ * its content intact while its opposite local edge is transformed around the
+ * selection anchor for every corner direction. The local-edge calculation
+ * accounts for rotation, so changing reflow height cannot make rotated text
+ * jump between preview and commit.
  */
 export function scaleSelection(
   elements: readonly CanvasElement[],
@@ -140,23 +151,27 @@ export function scaleSelection(
   bounds: Bounds,
   corner: SelectionCorner,
   scale: number,
+  textSizes: ReadonlyMap<ElementId, TextSelectionSize> = new Map(),
 ): CanvasElement[] {
-  const factor = Math.max(0.01, scale);
+  const factor = finiteAtLeast(scale, 0.01);
   const anchor = getOppositeCorner(bounds, corner);
   return elements.map((element) => {
     if (!selectedIds.has(element.id) || element.locked) return element;
     if (element.type === "connector") return scaleConnector(element, anchor, factor);
     if (!isBoxCanvasElement(element)) return element;
 
-    const position = scalePoint({ x: element.x, y: element.y }, anchor, factor);
     if (element.type === "text") {
+      const size = getScaledTextSize(element, factor, textSizes.get(element.id));
       return {
         ...element,
-        x: position.x,
-        y: position.y,
+        ...getTextPosition(element, anchor, factor, corner, size),
+        height: size.height,
+        isWidthManuallyResized: true,
+        width: size.width,
         updatedAt: Date.now(),
       };
     }
+    const position = scalePoint({ x: element.x, y: element.y }, anchor, factor);
     const box = {
       ...element,
       x: position.x,
@@ -169,6 +184,81 @@ export function scaleSelection(
     if (box.type !== "ink") return box;
     return scaleInkGeometry(box, factor);
   });
+}
+
+function getScaledTextSize(
+  element: TextElement,
+  factor: number,
+  measured: TextSelectionSize | undefined,
+): TextSelectionSize {
+  return {
+    height: finiteAtLeast(measured?.height ?? element.height * factor, MIN_BLOCK_HEIGHT),
+    width: finiteAtLeast(measured?.width ?? element.width * factor, MIN_BLOCK_WIDTH),
+  };
+}
+
+function getTextPosition(
+  element: TextElement,
+  anchor: CanvasPoint,
+  factor: number,
+  corner: SelectionCorner,
+  size: TextSelectionSize,
+): CanvasPoint {
+  const oppositeLocalPoint = {
+    x: corner.includes("w") ? element.width : 0,
+    y: corner.includes("n") ? element.height : 0,
+  };
+  const targetWorldPoint = scalePoint(
+    getRotatedLocalPoint(element, oppositeLocalPoint),
+    anchor,
+    factor,
+  );
+  const nextOppositeLocalPoint = {
+    x: corner.includes("w") ? size.width : 0,
+    y: corner.includes("n") ? size.height : 0,
+  };
+  return getBoxPositionForRotatedLocalPoint(
+    size,
+    element.rotation,
+    nextOppositeLocalPoint,
+    targetWorldPoint,
+  );
+}
+
+function getRotatedLocalPoint(
+  box: Pick<TextElement, "height" | "rotation" | "width" | "x" | "y">,
+  point: CanvasPoint,
+): CanvasPoint {
+  const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  const angle = (box.rotation * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const delta = { x: point.x - box.width / 2, y: point.y - box.height / 2 };
+  return {
+    x: center.x + delta.x * cos - delta.y * sin,
+    y: center.y + delta.x * sin + delta.y * cos,
+  };
+}
+
+function getBoxPositionForRotatedLocalPoint(
+  size: TextSelectionSize,
+  rotation: number,
+  localPoint: CanvasPoint,
+  worldPoint: CanvasPoint,
+): CanvasPoint {
+  const angle = (rotation * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const delta = { x: localPoint.x - size.width / 2, y: localPoint.y - size.height / 2 };
+  const center = {
+    x: worldPoint.x - (delta.x * cos - delta.y * sin),
+    y: worldPoint.y - (delta.x * sin + delta.y * cos),
+  };
+  return { x: center.x - size.width / 2, y: center.y - size.height / 2 };
+}
+
+function finiteAtLeast(value: number, minimum: number): number {
+  return Number.isFinite(value) ? Math.max(minimum, value) : minimum;
 }
 
 function getConnectorBounds(

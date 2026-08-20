@@ -326,9 +326,10 @@ describe("scene repository", () => {
     );
     expect(loaded.elements.some((element) => element.id === "unsafe-rectangle")).toBe(false);
     expect(loaded.elements.some((element) => element.id === "unsafe-rotation")).toBe(false);
-    for (const id of ["missing", "nonshape", "unsafe-shape", "group", "connector", "large-free", "large-gap", "resolved-overshoot", "null", "undefined", "string", "number"]) {
+    for (const id of ["missing", "unsafe-shape", "group", "connector", "large-free", "large-gap", "resolved-overshoot", "null", "undefined", "string", "number"]) {
       expect(connectorById[id].start).toEqual({ kind: "free", x: 0, y: 0 });
     }
+    expect(connectorById.nonshape.start).toEqual(bound("text-target"));
     expect(connectorById["cross-page"].start).toEqual({ kind: "free", x: 0, y: 0 });
     expect(connectorById.line.start).toEqual({ kind: "free", x: 110, y: 50 });
   });

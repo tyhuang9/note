@@ -8,6 +8,7 @@ import type {
   TextElement,
 } from "./elements";
 import type { CanvasPoint } from "./geometry";
+import { getShapeBoundaryPoint, projectPointToShapeBoundary } from "./shapeBoundary";
 
 /** The screen-space capture radius stays constant as the canvas zooms. */
 export const CONNECTOR_BINDING_SNAP_RADIUS_PX = 18;
@@ -22,7 +23,7 @@ export type ShapeAnchorName = "top" | "right" | "bottom" | "left";
 
 export type ShapeBindingAnchor = Readonly<{
   anchor: PerimeterAnchor;
-  name: ShapeAnchorName;
+  name: ShapeAnchorName | "perimeter";
   point: CanvasPoint;
 }>;
 
@@ -161,8 +162,45 @@ export function getBindableAnchorPoint(
 }
 
 /**
- * Finds the rotated logical perimeter point for an anchor. Render padding is
- * deliberately excluded: it protects RoughJS output only, never model space.
+ * Projects a world point onto the nearest logical boundary and returns the
+ * persisted angular anchor that the existing resolver maps back to that point.
+ * The calculation deliberately ignores rendered RoughJS padding.
+ */
+export function getNearestBindableBoundaryAnchor(
+  target: BindableElement,
+  point: CanvasPoint,
+): ShapeBindingAnchor | null {
+  if (!hasSafeBoxGeometry(target) || !isSafeResolvedPoint(point)) return null;
+  const local = unrotatePoint(point, target);
+  const width = Math.max(0, target.width);
+  const height = Math.max(0, target.height);
+  const center = { x: target.x + width / 2, y: target.y + height / 2 };
+  const localPoint = target.type === "shape"
+    ? projectPointToShapeBoundary(target.shape, width, height, target.style.roundness, {
+      x: local.x - target.x, y: local.y - target.y,
+    })
+    : closestRectanglePoint(local, center, width / 2, height / 2);
+  if (!localPoint) return null;
+
+  const t = canonicalAnchorT(target.type === "shape" && target.shape === "ellipse"
+    ? Math.atan2(
+      localPoint.x - width / 2,
+      -(localPoint.y - height / 2) * (width / Math.max(height, Number.EPSILON)),
+    ) / (Math.PI * 2)
+    : target.type === "shape"
+      ? Math.atan2(localPoint.x - width / 2, height / 2 - localPoint.y) / (Math.PI * 2)
+      : Math.atan2(localPoint.x - center.x, center.y - localPoint.y) / (Math.PI * 2));
+  const anchor = { t };
+  // Always use the production resolver for the returned world point, avoiding
+  // any small differences between the inverse and persisted forward geometry.
+  const resolved = getBindableAnchorPoint(target, anchor);
+  if (!resolved) return null;
+  return { anchor, name: anchorNameForT(t), point: resolved };
+}
+
+/**
+ * Finds the rotated clean logical perimeter point for an anchor. It matches
+ * the rounded shape path before RoughJS jitter and render padding are applied.
  */
 export function getShapeAnchorPoint(
   shape: ShapeElement,
@@ -175,29 +213,16 @@ export function getShapeAnchorPoint(
   const center = { x: shape.x + width / 2, y: shape.y + height / 2 };
   const t = normalizeAnchorT(anchor.t);
   const radians = t * Math.PI * 2;
-  const direction = {
-    x: zeroSmall(Math.sin(radians)),
-    y: zeroSmall(-Math.cos(radians)),
-  };
-  const radiusX = width / 2;
-  const radiusY = height / 2;
-  const perimeterDistance = shape.shape === "ellipse"
-    ? 1
-    : shape.shape === "diamond"
-      ? 1 / Math.max(Number.EPSILON, Math.abs(direction.x) / Math.max(radiusX, Number.EPSILON) + Math.abs(direction.y) / Math.max(radiusY, Number.EPSILON))
-      : Math.min(
-        direction.x === 0 ? Number.POSITIVE_INFINITY : radiusX / Math.abs(direction.x),
-        direction.y === 0 ? Number.POSITIVE_INFINITY : radiusY / Math.abs(direction.y),
-      );
-  const local = shape.shape === "ellipse"
-    ? { x: direction.x * radiusX, y: direction.y * radiusY }
-    : { x: direction.x * perimeterDistance, y: direction.y * perimeterDistance };
+  const direction = { x: zeroSmall(Math.sin(radians)), y: zeroSmall(-Math.cos(radians)) };
+  const localBoundary = getShapeBoundaryPoint(shape.shape, width, height, shape.style.roundness, t);
+  if (!localBoundary) return null;
+  const local = { x: localBoundary.x - width / 2, y: localBoundary.y - height / 2 };
   const rotatedDirection = rotateVector(direction, shape.rotation);
   const rotatedLocal = rotateVector(local, shape.rotation);
   const safeGap = gap;
   const point = {
-    x: center.x + rotatedLocal.x + rotatedDirection.x * safeGap,
-    y: center.y + rotatedLocal.y + rotatedDirection.y * safeGap,
+    x: cleanCoordinate(center.x + rotatedLocal.x + rotatedDirection.x * safeGap),
+    y: cleanCoordinate(center.y + rotatedLocal.y + rotatedDirection.y * safeGap),
   };
   return isSafeResolvedPoint(point) ? point : null;
 }
@@ -237,14 +262,19 @@ export function snapConnectorEndpoint(
     return { kind: "free", ...point };
   }
   const worldRadius = radiusPx / Math.max(zoom, Number.EPSILON);
-  let closest: Readonly<{ elementId: ElementId; anchor: PerimeterAnchor; distance: number }> | null = null;
-  for (const element of elements) {
+  let closest: Readonly<{ elementId: ElementId; anchor: PerimeterAnchor; distance: number; index: number; zIndex: number }> | null = null;
+  for (let index = 0; index < elements.length; index += 1) {
+    const element = elements[index];
     if (!isBindableElement(element)) continue;
-    for (const candidate of getBindableBindingAnchors(element)) {
-      const distance = Math.hypot(candidate.point.x - point.x, candidate.point.y - point.y);
-      if (distance <= worldRadius && (!closest || distance < closest.distance)) {
-        closest = { anchor: candidate.anchor, distance, elementId: element.id };
-      }
+    const candidate = getNearestBindableBoundaryAnchor(element, point);
+    if (!candidate) continue;
+    const distance = Math.hypot(candidate.point.x - point.x, candidate.point.y - point.y);
+    if (distance <= worldRadius && (!closest || distance < closest.distance || (
+      distance === closest.distance && (element.zIndex > closest.zIndex || (
+        element.zIndex === closest.zIndex && index < closest.index
+      ))
+    ))) {
+      closest = { anchor: candidate.anchor, distance, elementId: element.id, index, zIndex: element.zIndex };
     }
   }
   return closest
@@ -349,25 +379,56 @@ function buildAuthoringCandidate(
   target: BindableElement,
   zoom: number,
 ): ConnectorAuthoringCandidate | null {
-  const anchors = getBindableBindingAnchors(target);
-  let activeAnchor: ShapeBindingAnchor | null = null;
-  let activeDistance = Number.POSITIVE_INFINITY;
-  for (const anchor of anchors) {
-    const distance = pointDistance(point, anchor.point);
-    if (distance < activeDistance) {
-      activeAnchor = anchor;
-      activeDistance = distance;
-    }
-  }
+  const activeAnchor = getNearestBindableBoundaryAnchor(target, point);
   if (!activeAnchor) return null;
+  const activeDistance = pointDistance(point, activeAnchor.point);
   return {
     activeAnchor,
-    anchors,
+    anchors: [activeAnchor],
     endpoint: activeDistance * zoom <= CONNECTOR_BINDING_SNAP_RADIUS_PX
       ? { kind: "element", targetElementId: target.id, anchor: activeAnchor.anchor, gap: 0 }
       : { kind: "free", ...point },
     target,
   };
+}
+
+function canonicalAnchorT(value: number): number {
+  const normalized = normalizeAnchorT(value);
+  return normalized === 0 || normalized === 1 ? 0 : normalized;
+}
+
+function anchorNameForT(t: number): ShapeBindingAnchor["name"] {
+  const cardinal = CARDINAL_ANCHORS.find((candidate) => Math.abs(t - candidate.t) < 1e-8);
+  return cardinal?.name ?? "perimeter";
+}
+
+function unrotatePoint(
+  point: CanvasPoint,
+  target: Readonly<{ x: number; y: number; width: number; height: number; rotation: number }>,
+): CanvasPoint {
+  const center = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+  const radians = -target.rotation * Math.PI / 180;
+  const dx = point.x - center.x;
+  const dy = point.y - center.y;
+  return {
+    x: center.x + dx * Math.cos(radians) - dy * Math.sin(radians),
+    y: center.y + dx * Math.sin(radians) + dy * Math.cos(radians),
+  };
+}
+
+function closestRectanglePoint(point: CanvasPoint, center: CanvasPoint, radiusX: number, radiusY: number): CanvasPoint | null {
+  if (radiusX === 0 && radiusY === 0) return center;
+  const candidates = [
+    { x: Math.max(center.x - radiusX, Math.min(center.x + radiusX, point.x)), y: center.y - radiusY },
+    { x: center.x + radiusX, y: Math.max(center.y - radiusY, Math.min(center.y + radiusY, point.y)) },
+    { x: Math.max(center.x - radiusX, Math.min(center.x + radiusX, point.x)), y: center.y + radiusY },
+    { x: center.x - radiusX, y: Math.max(center.y - radiusY, Math.min(center.y + radiusY, point.y)) },
+  ];
+  return nearestPoint(point, candidates);
+}
+
+function nearestPoint(point: CanvasPoint, candidates: readonly CanvasPoint[]): CanvasPoint | null {
+  return candidates.reduce<CanvasPoint | null>((nearest, candidate) => !nearest || pointDistance(point, candidate) < pointDistance(point, nearest) ? candidate : nearest, null);
 }
 
 function pointDistance(first: CanvasPoint, second: CanvasPoint): number {
@@ -381,8 +442,8 @@ function hasSafeShapeGeometry(shape: ShapeElement): boolean {
 function hasSafeBoxGeometry(shape: BindableElement): boolean {
   return isSafeCanvasCoordinate(shape.x)
     && isSafeCanvasCoordinate(shape.y)
-    && isSafeCanvasDimension(shape.width)
-    && isSafeCanvasDimension(shape.height)
+    && isSafeCanvasDimension(shape.width) && shape.width > 0
+    && isSafeCanvasDimension(shape.height) && shape.height > 0
     && isSafeCanvasRotation(shape.rotation);
 }
 
@@ -414,4 +475,9 @@ function rotateVector(vector: CanvasPoint, rotation: number): CanvasPoint {
 
 function zeroSmall(value: number): number {
   return Math.abs(value) < 1e-12 ? 0 : value;
+}
+
+function cleanCoordinate(value: number): number {
+  const rounded = Math.round(value);
+  return Math.abs(value - rounded) < 1e-12 ? rounded : zeroSmall(value);
 }

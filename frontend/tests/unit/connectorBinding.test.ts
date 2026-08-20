@@ -6,6 +6,7 @@ import {
   detachConnectorEndpointsForDeletedTargets,
   getDefaultKeyboardArrowEndpoints,
   getConnectorAuthoringCandidate,
+  getNearestBindableBoundaryAnchor,
   getShapeAnchorPoint,
   getShapeBindingAnchors,
   getTextAnchorPoint,
@@ -71,6 +72,37 @@ function arrow(start: ConnectorElement["start"], end: ConnectorElement["end"]): 
 }
 
 describe("connector shape binding", () => {
+  it("inverts rotated rectangle, text, and diamond boundaries to continuous canonical anchors", () => {
+    const rectangle = shape("rectangle", { rotation: 31, width: 180, height: 60 });
+    const diamond = shape("diamond", { rotation: -27, width: 160, height: 80 });
+    const targetText = text({ rotation: 18, width: 150, height: 44 });
+    for (const [target, point] of [
+      [rectangle, { x: 163, y: 52 }],
+      [diamond, { x: 139, y: 62 }],
+      [targetText, { x: 145, y: 61 }],
+    ] as const) {
+      const inverse = getNearestBindableBoundaryAnchor(target, point);
+      expect(inverse).not.toBeNull();
+      expect(inverse!.anchor.t).toBeGreaterThanOrEqual(0);
+      expect(inverse!.anchor.t).toBeLessThan(1);
+      expect(resolveConnectorEndpoint(
+        { kind: "element", targetElementId: target.id, anchor: inverse!.anchor, gap: 0 },
+        { [target.id]: target },
+      )).toEqual(inverse!.point);
+    }
+  });
+
+  it("uses a Euclidean ellipse boundary projection instead of radial projection", () => {
+    const ellipse = shape("ellipse", { width: 240, height: 60, rotation: 23 });
+    const inverse = getNearestBindableBoundaryAnchor(ellipse, { x: 189, y: 81 });
+    expect(inverse).not.toBeNull();
+    expect(inverse!.anchor.t).not.toBeCloseTo(0.25, 2);
+    expect(resolveConnectorEndpoint(
+      { kind: "element", targetElementId: ellipse.id, anchor: inverse!.anchor, gap: 0 },
+      { [ellipse.id]: ellipse },
+    )).toEqual(inverse!.point);
+  });
+
   it("reveals and snaps one authoring target using screen-space radii", () => {
     const rectangle = shape("rectangle");
     expect(getConnectorAuthoringCandidate({ x: 130, y: 50 }, [rectangle], 1)).toMatchObject({

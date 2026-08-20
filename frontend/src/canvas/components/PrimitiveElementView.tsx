@@ -3,6 +3,8 @@ import { RoughSVG } from "roughjs/bin/svg";
 import type { Options } from "roughjs/bin/core";
 import type { CanvasElement, ConnectorElement, ElementId, RoughStyle, ShapeElement } from "../model/elements";
 import { resolveConnectorPoints } from "../model/connectorBinding";
+import { roundedDiamondPath, roundedRectanglePath } from "../model/shapeBoundary";
+export { roundedDiamondPath, roundedRectanglePath } from "../model/shapeBoundary";
 import { canvasColorToCss } from "../rendering/canvasColor";
 
 type PrimitiveElementViewProps<T extends ShapeElement | ConnectorElement> = {
@@ -46,58 +48,6 @@ function finishRoughNode(node: SVGElement): SVGElement {
 /** Extra SVG-only space for RoughJS's imperfect outline; model geometry stays untouched. */
 export function shapeRenderPadding(style: ShapeElement["style"]): number {
   return Math.ceil(Math.max(8, style.strokeWidth * 2, style.roughness * 2 + style.strokeWidth));
-}
-
-export function roundedRectanglePath(width: number, height: number, roundness: number): string {
-  const safeWidth = Math.max(1, width);
-  const safeHeight = Math.max(1, height);
-  // `roundness` stays exactly as persisted. This is a rendering-only floor so legacy
-  // rectangles remain compatible without looking mechanically sharp.
-  const visualRoundness = Math.max(0.06, Math.min(1, roundness));
-  const radius = Math.min(safeWidth, safeHeight) * visualRoundness / 2;
-  return [
-    `M ${radius} 0`,
-    `H ${safeWidth - radius}`,
-    `Q ${safeWidth} 0 ${safeWidth} ${radius}`,
-    `V ${safeHeight - radius}`,
-    `Q ${safeWidth} ${safeHeight} ${safeWidth - radius} ${safeHeight}`,
-    `H ${radius}`,
-    `Q 0 ${safeHeight} 0 ${safeHeight - radius}`,
-    `V ${radius}`,
-    `Q 0 0 ${radius} 0`,
-    "Z",
-  ].join(" ");
-}
-
-/** A visually softened diamond whose four model anchors and bounds remain exact. */
-export function roundedDiamondPath(width: number, height: number): string {
-  const safeWidth = Math.max(1, width);
-  const safeHeight = Math.max(1, height);
-  const centerX = safeWidth / 2;
-  const centerY = safeHeight / 2;
-  const cornerInset = Math.min(safeWidth, safeHeight) * 0.08;
-  const horizontalInset = cornerInset * safeWidth / Math.max(1, Math.hypot(safeWidth, safeHeight));
-  const verticalInset = cornerInset * safeHeight / Math.max(1, Math.hypot(safeWidth, safeHeight));
-  const control = 0.45;
-  // Each cardinal point is a real path endpoint (not merely a quadratic control
-  // point). Paired quadratics give it a continuous horizontal/vertical tangent,
-  // keeping the tip soft while matching model and connector cardinal extrema.
-  return [
-    `M ${centerX} 0`,
-    `Q ${centerX + horizontalInset * control} 0 ${centerX + horizontalInset} ${verticalInset}`,
-    `L ${safeWidth - horizontalInset} ${centerY - verticalInset}`,
-    `Q ${safeWidth} ${centerY - verticalInset * control} ${safeWidth} ${centerY}`,
-    `Q ${safeWidth} ${centerY + verticalInset * control} ${safeWidth - horizontalInset} ${centerY + verticalInset}`,
-    `L ${centerX + horizontalInset} ${safeHeight - verticalInset}`,
-    `Q ${centerX + horizontalInset * control} ${safeHeight} ${centerX} ${safeHeight}`,
-    `Q ${centerX - horizontalInset * control} ${safeHeight} ${centerX - horizontalInset} ${safeHeight - verticalInset}`,
-    `L ${horizontalInset} ${centerY + verticalInset}`,
-    `Q 0 ${centerY + verticalInset * control} 0 ${centerY}`,
-    `Q 0 ${centerY - verticalInset * control} ${horizontalInset} ${centerY - verticalInset}`,
-    `L ${centerX - horizontalInset} ${verticalInset}`,
-    `Q ${centerX - horizontalInset * control} 0 ${centerX} 0`,
-    "Z",
-  ].join(" ");
 }
 
 /** Shared seeded shape painter used by committed elements and live previews. */

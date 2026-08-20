@@ -107,12 +107,52 @@ test("lines stay free while arrows detach and rebind through real endpoint contr
   }
 });
 
+for (const zoom of [50, 100, 200]) {
+  test(`a free-bound arrow follows the transient target drag and restores on cancellation at ${zoom}%`, async ({ page }) => {
+    const canvas = page.getByRole("tabpanel");
+    const canvasBounds = await requiredBounds(canvas, "canvas");
+    await setZoom(page, canvas, zoom);
+    const rectangle = await createRectangle(page, canvasBounds.x + 360, canvasBounds.y + 300);
+    const rectangleControl = page.getByRole("button", { name: "Select and move rectangle element" }).last();
+    const targetId = await rectangleControl.getAttribute("data-canvas-element-id");
+    if (!targetId) throw new Error("Rectangle target id was unavailable.");
+    await selectTool(page, "arrow");
+    const rightAnchor = await requiredBounds(page.locator(`[data-connector-target-id="${targetId}"][data-connector-anchor="right"]`), "right anchor");
+    await draw(page, rightAnchor.x + 5, rightAnchor.y + 5, canvasBounds.x + 820, rightAnchor.y + 5);
+    const arrow = page.getByRole("button", { name: "Select and move arrow connector" }).last();
+    const originalArrow = await roundedBounds(arrow);
+
+    await selectTool(page, "select");
+    await rectangleControl.focus();
+    await page.keyboard.press("Enter");
+    const moveSurface = page.getByRole("button", { name: "Move selected elements" });
+    const moveBounds = await requiredBounds(moveSurface, "selection move surface");
+    await page.mouse.move(moveBounds.x + moveBounds.width / 2, moveBounds.y + moveBounds.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(moveBounds.x + moveBounds.width / 2 + 48, moveBounds.y + moveBounds.height / 2 + 24, { steps: 4 });
+
+    const preview = page.locator(".connector-transform-preview");
+    await expect(preview).toHaveCount(1);
+    await expect.poll(() => roundedBounds(preview)).not.toEqual(originalArrow);
+    await expect(arrow).not.toBeVisible();
+    await moveSurface.dispatchEvent("pointercancel", { button: 0, pointerId: 1 });
+    await page.mouse.up();
+    await expect(preview).toHaveCount(0);
+    await expect(arrow).toBeVisible();
+    await expect.poll(() => roundedBounds(arrow)).toEqual(originalArrow);
+  });
+}
+
 test("desktop dark endpoint chooser traps focus, stays below the toolbar, and binds with Space", async ({ page }) => {
   await page.setViewportSize({ width: 1069, height: 598 });
   const canvas = page.getByRole("tabpanel");
   const canvasBounds = await requiredBounds(canvas, "canvas");
   await createRectangleWithTool(page, canvasBounds.x + 340, canvasBounds.y + 180);
   await createRectangleWithTool(page, canvasBounds.x + 500, canvasBounds.y + 300);
+  await selectTool(page, "text");
+  await page.mouse.click(canvasBounds.x + 720, canvasBounds.y + 220);
+  await page.keyboard.type("Text binding target");
+  await page.keyboard.press("Escape");
 
   await selectTool(page, "arrow");
   await draw(
@@ -147,6 +187,7 @@ test("desktop dark endpoint chooser traps focus, stays below the toolbar, and bi
   expect(dialogBounds.y).toBeGreaterThanOrEqual(toolbarBounds.y + toolbarBounds.height);
   expect(dialogBounds.x + dialogBounds.width / 2).toBeCloseTo(toolbarBounds.x + toolbarBounds.width / 2, 0);
   const firstTarget = dialog.getByRole("button", { name: /Rectangle 1 \(center \d+, \d+\)/ });
+  await expect(dialog.getByRole("button", { name: /Text 1 \(Text binding target\)/ })).toBeVisible();
   await expect(firstTarget).toHaveAttribute("aria-pressed", "true");
   await expect(firstTarget).toBeFocused();
 
@@ -234,7 +275,7 @@ test("free arrow with no shapes announces that binding targets are unavailable",
   await page.keyboard.press("Space");
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.locator(".canvas-accessibility-status[role='status']")).toHaveText(
-    "No compatible shapes are available to bind the start endpoint.",
+    "No compatible shapes or text blocks are available to bind the start endpoint.",
   );
   await expect(startHandle).toBeFocused();
 });

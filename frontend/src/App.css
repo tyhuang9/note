@@ -5001,6 +5001,30 @@ h2 {
   background: transparent;
 }
 
+/* The element keeps its outline and drag header affordances, but the text card itself
+ * stays transparent through every interactive state. This deliberately does not alter
+ * pointer-events or the box geometry used by hit testing. */
+.text-block.is-transparent-background,
+.text-block.is-transparent-background:hover,
+.text-block.is-transparent-background.is-canvas-mode,
+.text-block.is-transparent-background.is-selected,
+.text-block.is-transparent-background.is-multi-selected,
+.text-block.is-transparent-background.is-editing,
+.text-block.is-transparent-background.is-content-selected,
+.text-block.is-transparent-background.is-dragging,
+.text-block.is-transparent-background.is-resizing,
+.app-shell.is-dark .text-block.is-transparent-background,
+.app-shell.is-dark .text-block.is-transparent-background:hover,
+.app-shell.is-dark .text-block.is-transparent-background.is-canvas-mode,
+.app-shell.is-dark .text-block.is-transparent-background.is-selected,
+.app-shell.is-dark .text-block.is-transparent-background.is-multi-selected,
+.app-shell.is-dark .text-block.is-transparent-background.is-editing,
+.app-shell.is-dark .text-block.is-transparent-background.is-content-selected,
+.app-shell.is-dark .text-block.is-transparent-background.is-dragging,
+.app-shell.is-dark .text-block.is-transparent-background.is-resizing {
+  background: transparent;
+}
+
 .app-shell.is-dark .assistant-panel {
   border-left-color: var(--workbench-border);
   background: var(--workbench-panel);

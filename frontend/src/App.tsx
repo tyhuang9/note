@@ -150,6 +150,7 @@ import {
   applyDrawingPropertyUpdate,
   createDefaultDrawingPreferences,
   drawingPropertiesFromPreference,
+  drawingPropertiesFromTextPreferences,
   isDrawingPreferenceTool,
   isPropertySupportedByTool,
   normalizeDrawingPreferences,
@@ -1390,8 +1391,21 @@ function App() {
           : selectedInkKinds.has("pen")
             ? [2, 4, 8] as const
             : [1, 2, 4] as const,
+        isBackgroundModeDisabled: !selectedDrawingElements.some(
+          (element) => isTextElement(element) && !element.locked,
+        ),
         supports: (property: DrawingProperty) => values[property].kind !== "unavailable",
         values,
+      };
+    }
+    if (activeTool === "text") {
+      return {
+        contextLabel: "text defaults",
+        isBackgroundModeDisabled: false,
+        isSelection: false,
+        strokeWidthPresets: [] as const,
+        supports: (property: DrawingProperty) => property === "backgroundMode",
+        values: drawingPropertiesFromTextPreferences(textPreferences),
       };
     }
     if (!isDrawingPreferenceTool(activeTool)) return null;
@@ -1402,12 +1416,13 @@ function App() {
       strokeWidthPresets: activeTool === "highlighter"
         ? [8, 18, 32] as const
         : activeTool === "pen"
-          ? [2, 4, 8] as const
-          : [1, 2, 4] as const,
-      supports: (property: DrawingProperty) => isPropertySupportedByTool(activeTool, property),
-      values: drawingPropertiesFromPreference(preference),
-    };
-  }, [activeTool, drawingPreferences, selectedDrawingElements]);
+            ? [2, 4, 8] as const
+            : [1, 2, 4] as const,
+        isBackgroundModeDisabled: true,
+        supports: (property: DrawingProperty) => isPropertySupportedByTool(activeTool, property),
+        values: drawingPropertiesFromPreference(preference),
+      };
+  }, [activeTool, drawingPreferences, selectedDrawingElements, textPreferences]);
   const isTextFormattingVisible = Boolean(
     activeTextEditor && !activeTextEditor.isDestroyed
   ) || selectedDrawingElements.some((element) => element.type === "text");
@@ -2022,6 +2037,7 @@ function App() {
         setIsAssistantOpen(savedSessionState?.isAssistantOpen ?? false);
         setIsToolLocked(savedSessionState?.isDrawingToolLocked ?? true);
         setDrawingPreferences(normalizeDrawingPreferences(savedSessionState?.drawingPreferences));
+        setTextPreferences(normalizeTextPreferences(savedSessionState?.textPreferences));
         pageViewportsRef.current = normalizePageViewports(
           savedSessionState?.pageViewports,
           validPageIds,
@@ -7164,6 +7180,7 @@ function App() {
             {availableDrawingPropertiesContext ? (
               <DrawingPropertiesPanel
                 contextLabel={availableDrawingPropertiesContext.contextLabel}
+                isBackgroundModeDisabled={availableDrawingPropertiesContext.isBackgroundModeDisabled}
                 isCompactOpen={isPropertiesPanelOpen}
                 isSelection={availableDrawingPropertiesContext.isSelection}
                 onCancelPreview={cancelDrawingPropertyPreview}

@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Activity, ArrowDown, ArrowUp, Ban, ChevronsDown, ChevronsUp, Circle, Minus, Palette, Square, Waves } from "lucide-react";
-import type { CanvasColor, RoughStyle } from "../model/elements";
+import type { CanvasColor, RoughStyle, TextBackgroundMode } from "../model/elements";
 import type {
   DrawingProperty,
   DrawingPropertyUpdate,
@@ -11,6 +11,7 @@ import type { LayerAction } from "../model/layerOrdering";
 
 type DrawingPropertiesPanelProps = {
   contextLabel: string;
+  isBackgroundModeDisabled: boolean;
   isCompactOpen: boolean;
   isSelection: boolean;
   onCancelPreview: () => void;
@@ -27,6 +28,7 @@ const backgroundColors = ["#ffc9c9", "#ffec99", "#b2f2bb", "#a5d8ff", "#d0bfff"]
 
 export function DrawingPropertiesPanel({
   contextLabel,
+  isBackgroundModeDisabled,
   isCompactOpen,
   isSelection,
   onCancelPreview,
@@ -116,6 +118,16 @@ export function DrawingPropertiesPanel({
             label="Background color"
             onChange={(value) => onUpdate({ property: "backgroundColor", value })}
             value={values.backgroundColor}
+          />
+        </PropertySection>
+      ) : null}
+
+      {supports("backgroundMode") ? (
+        <PropertySection label="Text background">
+          <TextBackgroundModeChoices
+            disabled={isBackgroundModeDisabled}
+            onChange={(value) => onUpdate({ property: "backgroundMode", value })}
+            value={values.backgroundMode}
           />
         </PropertySection>
       ) : null}
@@ -277,6 +289,64 @@ function ChoiceButton({ active = false, children, label, mixed = false, onClick,
       {children}
       {text ? <span>{text}</span> : null}
     </button>
+  );
+}
+
+function TextBackgroundModeChoices({ disabled, onChange, value }: {
+  disabled: boolean;
+  onChange: (value: TextBackgroundMode) => void;
+  value: PropertyValue<TextBackgroundMode>;
+}) {
+  const mixedLabelId = useId();
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const modes = ["surface", "transparent"] as const;
+  const selectedIndex = value.kind === "value" ? modes.indexOf(value.value) : 0;
+
+  function moveRadioFocus(index: number) {
+    if (disabled) return;
+    const nextIndex = (index + modes.length) % modes.length;
+    const nextMode = modes[nextIndex];
+    onChange(nextMode);
+    optionRefs.current[nextIndex]?.focus();
+  }
+  return (
+    <div
+      aria-describedby={value.kind === "mixed" ? mixedLabelId : undefined}
+      aria-label="Text background"
+      className="drawing-choice-group"
+      role="radiogroup"
+    >
+      {modes.map((mode, index) => (
+        <button
+          aria-checked={value.kind === "value" && value.value === mode}
+          aria-label={`${mode === "surface" ? "Surface" : "Transparent"} text background`}
+          className={value.kind === "mixed" ? "has-mixed-value" : undefined}
+          data-tooltip={mode === "surface" ? "Surface" : "Transparent"}
+          disabled={disabled}
+          key={mode}
+          onClick={() => onChange(mode)}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+              event.preventDefault();
+              moveRadioFocus(index - 1);
+            }
+            if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+              event.preventDefault();
+              moveRadioFocus(index + 1);
+            }
+          }}
+          ref={(element) => { optionRefs.current[index] = element; }}
+          role="radio"
+          tabIndex={disabled ? -1 : index === selectedIndex ? 0 : -1}
+          title={mode === "surface" ? "Surface" : "Transparent"}
+          type="button"
+        >
+          <span>{mode === "surface" ? "Surface" : "Transparent"}</span>
+        </button>
+      ))}
+      {value.kind === "mixed" ? <span className="drawing-mixed-label" id={mixedLabelId}>Mixed</span> : null}
+      {disabled ? <span className="sr-only">All selected text boxes are locked.</span> : null}
+    </div>
   );
 }
 

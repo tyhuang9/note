@@ -935,7 +935,7 @@ export const TextBlockView = memo(function TextBlockView({
         isSelected && isMultiSelected ? "is-multi-selected" : ""
       } ${
         isSelected && !isEditing ? "is-canvas-mode" : ""
-      } ${isContentSelected ? "is-content-selected" : ""
+      } ${block.backgroundMode === "transparent" ? "is-transparent-background" : ""} ${isContentSelected ? "is-content-selected" : ""
       }`}
       onClick={(event) => {
         event.stopPropagation();

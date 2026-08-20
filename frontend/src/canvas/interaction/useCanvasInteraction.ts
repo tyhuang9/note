@@ -16,10 +16,11 @@ import { getSelectionRect, rectsIntersect } from "../../editorUtils";
 import type { CanvasElement, ConnectorElement, ConnectorEndpoint, RoughStyle, ShapeElement } from "../model/elements";
 import {
   getConnectorAuthoringCandidate,
+  isBindableElement,
   normalizeFreeConnectorEndpoint,
   snapConnectorPointToAngle,
   type BindableElement,
-  type ShapeAnchorName,
+  type ShapeBindingAnchor,
 } from "../model/connectorBinding";
 import { screenToleranceToWorld } from "../model/geometry";
 import { getElementBounds, getTopmostElementAtPoint } from "../model/hitTesting";
@@ -55,7 +56,7 @@ type ArrowAuthoringSession = {
 };
 
 export type ArrowAuthoringVisual = Readonly<{
-  activeAnchorName: ShapeAnchorName;
+  anchor: ShapeBindingAnchor;
   isSnapped: boolean;
   targetId: string;
 }>;
@@ -105,10 +106,15 @@ function isDragPrimitiveTool(tool: DrawingTool): tool is PrimitiveTool {
   return tool === "rectangle" || tool === "ellipse" || tool === "diamond" || tool === "line";
 }
 
-function directHoveredElementId(target: EventTarget | null): string | null {
-  return target instanceof Element
-    ? target.closest<HTMLElement>("[data-canvas-element-id]")?.dataset.canvasElementId ?? null
-    : null;
+function directHoveredElementId(
+  event: Pick<ReactPointerEvent<HTMLElement>, "clientX" | "clientY" | "target">,
+  elements: readonly CanvasElement[],
+): string | null {
+  const bindableIds = new Set(elements.filter((element) => isBindableElement(element)).map((element) => element.id));
+  const ids = typeof document === "undefined" ? [] : document.elementsFromPoint(event.clientX, event.clientY)
+    .map((element) => element.closest<HTMLElement>("[data-canvas-element-id]")?.dataset.canvasElementId);
+  if (event.target instanceof Element) ids.push(event.target.closest<HTMLElement>("[data-canvas-element-id]")?.dataset.canvasElementId);
+  return ids.find((id): id is string => Boolean(id && bindableIds.has(id))) ?? null;
 }
 
 function isCanvasChromeTarget(target: EventTarget | null) {
@@ -218,7 +224,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
 
   const resolveArrowEndpoint = useCallback((
     point: CanvasPoint,
-    target: EventTarget | null,
+    event: Pick<ReactPointerEvent<HTMLElement>, "clientX" | "clientY" | "target">,
     shiftKey: boolean,
     startPoint?: CanvasPoint,
   ) => {
@@ -226,7 +232,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       point,
       optionsRef.current.visibleElements,
       optionsRef.current.zoomLevelRef.current,
-      directHoveredElementId(target),
+      directHoveredElementId(event, optionsRef.current.visibleElements),
     );
     const endpoint = candidate?.endpoint ?? { kind: "free" as const, ...point };
     if (endpoint.kind === "element") {
@@ -244,13 +250,13 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
   const updateArrowVisual = useCallback((candidate: ReturnType<typeof getConnectorAuthoringCandidate>) => {
     const next = candidate
       ? {
-          activeAnchorName: candidate.activeAnchor.name,
+          anchor: candidate.activeAnchor,
           isSnapped: candidate.endpoint.kind === "element",
           targetId: candidate.target.id,
         }
       : null;
     const announcementKey = next
-      ? `${next.targetId}:${next.activeAnchorName}:${next.isSnapped ? "snapped" : "near"}`
+      ? `${next.targetId}:${next.anchor.anchor.t}:${next.isSnapped ? "snapped" : "near"}`
       : null;
     const previousAnnouncementKey = lastArrowCandidateAnnouncementRef.current;
     if (announcementKey !== previousAnnouncementKey) {
@@ -258,15 +264,15 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       if (candidate) {
         const targetLabel = optionsRef.current.getArrowTargetLabel(candidate.target);
         optionsRef.current.onArrowStatusChange(candidate.endpoint.kind === "element"
-          ? `Snapped to ${targetLabel}, target-relative ${candidate.activeAnchor.name} anchor.`
-          : `Near ${targetLabel}, target-relative ${candidate.activeAnchor.name} anchor; move closer to snap.`);
+          ? `Snapped to ${targetLabel} at target-relative boundary position ${Math.round(candidate.activeAnchor.anchor.t * 360)} degrees.`
+          : `Near ${targetLabel} at target-relative boundary position ${Math.round(candidate.activeAnchor.anchor.t * 360)} degrees; move closer to snap.`);
       } else if (previousAnnouncementKey !== null) {
         optionsRef.current.onArrowStatusChange("No binding target. Endpoint will remain free.");
       }
     }
     setArrowAuthoringVisual((current) =>
       current?.targetId === next?.targetId
-      && current?.activeAnchorName === next?.activeAnchorName
+      && current?.anchor.anchor.t === next?.anchor.anchor.t
       && current?.isSnapped === next?.isSnapped
         ? current
         : next,
@@ -394,7 +400,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
         current.setActiveMode("canvas");
         const pending = arrowSession.current;
         if (!pending) {
-          const resolved = resolveArrowEndpoint(point, event.target, false);
+          const resolved = resolveArrowEndpoint(point, event, false);
           if (!resolved) {
             current.onArrowStatusChange("Arrow endpoint is unavailable.");
             return;
@@ -419,7 +425,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
               : "Arrow start set. Choose an end point.",
           );
         } else {
-          const resolved = resolveArrowEndpoint(point, event.target, event.shiftKey, pending.startPoint);
+          const resolved = resolveArrowEndpoint(point, event, event.shiftKey, pending.startPoint);
           if (!resolved) {
             current.onArrowStatusChange("Arrow endpoint is unavailable.");
             return;
@@ -506,7 +512,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       if (currentArrow && !panState.current) {
         const point = getCanvasPoint(event.clientX, event.clientY);
         if (!point) return;
-        const resolved = resolveArrowEndpoint(point, event.target, event.shiftKey, currentArrow.startPoint);
+        const resolved = resolveArrowEndpoint(point, event, event.shiftKey, currentArrow.startPoint);
         if (!resolved) return;
         currentArrow.currentEndpoint = resolved.adjustedEndpoint;
         currentArrow.currentPoint = resolved.adjustedPoint;

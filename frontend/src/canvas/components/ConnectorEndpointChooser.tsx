@@ -6,7 +6,7 @@ type ConnectorEndpointChooserProps = {
   endpoint: "start" | "end";
   isBound: boolean;
   isDarkMode: boolean;
-  onBind: (anchor: ShapeAnchorName) => void;
+  onBind: (anchorT: number) => void;
   onClose: () => void;
   onDetach: () => void;
   onSelectTarget: (targetElementId: string) => void;
@@ -42,6 +42,7 @@ export function ConnectorEndpointChooser({
 }: ConnectorEndpointChooserProps) {
   const dialogRef = useRef<HTMLElement | null>(null);
   const [toolbarPosition, setToolbarPosition] = useState({ left: 0, top: 0 });
+  const [anchorDegrees, setAnchorDegrees] = useState(0);
   const selectedTarget = targets.find(({ id }) => id === targetElementId) ?? null;
 
   useLayoutEffect(() => {
@@ -145,7 +146,7 @@ export function ConnectorEndpointChooser({
           <div>
             <h2 id="connector-endpoint-chooser-title">Choose {endpoint} endpoint target</h2>
             <p id="connector-endpoint-chooser-instructions">
-              Choose a shape or text block, then a target-relative cardinal anchor. Anchor names are relative to the selected target and rotate with it.
+              Choose a shape or text block, then a target-relative boundary position. Cardinal presets and the one-degree range rotate with the target. Bind commits the choice.
             </p>
           </div>
           <button aria-label="Close endpoint chooser" onClick={onClose} type="button">Close</button>
@@ -171,14 +172,30 @@ export function ConnectorEndpointChooser({
                 : `${label} anchor`}
               disabled={!selectedTarget}
               key={name}
-              onClick={() => onBind(name)}
+              aria-pressed={anchorDegrees === CARDINAL_ANCHORS.findIndex((anchor) => anchor.name === name) * 90}
+              onClick={() => setAnchorDegrees(CARDINAL_ANCHORS.findIndex((anchor) => anchor.name === name) * 90)}
               type="button"
             >
               {label} anchor
             </button>
           ))}
         </div>
+        <label className="connector-endpoint-chooser-range" htmlFor="connector-boundary-position">
+          Boundary position: {anchorDegrees} degrees{selectedTarget ? `${targetRotationDescription(selectedTarget.rotation)}` : ""}
+          <input
+            aria-label={selectedTarget ? `Target-relative boundary position on ${selectedTarget.label}${targetRotationDescription(selectedTarget.rotation)}` : "Target-relative boundary position"}
+            disabled={!selectedTarget}
+            id="connector-boundary-position"
+            max="359"
+            min="0"
+            onChange={(event) => setAnchorDegrees(Number(event.target.value))}
+            step="1"
+            type="range"
+            value={anchorDegrees}
+          />
+        </label>
         <div className="connector-endpoint-chooser-actions">
+          <button disabled={!selectedTarget} onClick={() => onBind(anchorDegrees / 360)} type="button">Bind {endpoint} endpoint</button>
           <button disabled={!isBound} onClick={onDetach} type="button">Detach {endpoint} endpoint</button>
         </div>
       </section>

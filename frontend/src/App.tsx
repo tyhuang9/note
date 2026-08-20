@@ -185,6 +185,7 @@ import {
   detachConnectorEndpointsForDeletedTargets,
   getDefaultKeyboardArrowEndpoints,
   getBindableBindingAnchors,
+  getNearestBindableBoundaryAnchor,
   isBindableElement,
   resolveConnectorEndpoint,
   resolveConnectorPoints,
@@ -6941,14 +6942,24 @@ function App() {
       const selectedConnector = dataRef.current.elements.find((element): element is ConnectorElement =>
         element.id === selectedId && element.type === "connector",
       );
-      if (selectedConnector?.[endpoint].kind === "element") {
-        setConnectorBindingAnnouncement(`Detached ${endpoint} endpoint and moved it with the keyboard.`);
-      }
       const elementsById = Object.fromEntries(dataRef.current.elements.map((element) => [element.id, element]));
       setBlocksWithHistory((currentBlocks) => currentBlocks.map((element) => {
         if (element.id !== selectedId || element.type !== "connector" || element.locked) return element;
         const resolved = resolveConnectorEndpoint(element[endpoint], elementsById, element.pageId);
         if (!resolved) return element;
+        if (element[endpoint].kind === "element") {
+          const target = elementsById[element[endpoint].targetElementId];
+          const anchor = isBindableElement(target)
+            ? getNearestBindableBoundaryAnchor(target, { x: resolved.x + delta.x, y: resolved.y + delta.y })
+            : null;
+          if (anchor) {
+            const moved = { ...element[endpoint], anchor: anchor.anchor };
+            setConnectorBindingAnnouncement(`Moved ${endpoint} endpoint along its target boundary to ${Math.round(anchor.anchor.t * 360)} degrees.`);
+            return endpoint === "start"
+              ? { ...element, start: moved, updatedAt: Date.now() }
+              : { ...element, end: moved, updatedAt: Date.now() };
+          }
+        }
         const moved = { kind: "free" as const, x: resolved.x + delta.x, y: resolved.y + delta.y };
         return endpoint === "start"
           ? { ...element, start: moved, updatedAt: Date.now() }
@@ -7069,7 +7080,7 @@ function App() {
     });
   }
 
-  function bindSelectedConnectorEndpoint(anchorName: ShapeAnchorName) {
+  function bindSelectedConnectorEndpoint(anchorT: number) {
     const chooser = connectorEndpointChooser;
     const connector = getSelectedArrowConnector();
     if (!chooser || !connector || !chooser.targetElementId) return;
@@ -7078,9 +7089,7 @@ function App() {
         && element.pageId === connector.pageId
         && isBindableElement(element),
     );
-    const anchor = target
-      ? getBindableBindingAnchors(target).find(({ name }) => name === anchorName)?.anchor
-      : undefined;
+    const anchor = Number.isFinite(anchorT) && anchorT >= 0 && anchorT < 1 ? { t: anchorT } : undefined;
     if (!target || !anchor) return;
     const previous = connector[chooser.endpoint];
     const next = {
@@ -8113,16 +8122,11 @@ function App() {
             ))}
             {activeTool === "arrow" && canvasInteraction.arrowAuthoringVisual ? (
               <ShapeBindingAnchors
-                activeAnchorName={canvasInteraction.arrowAuthoringVisual.activeAnchorName}
-                activeTargetId={canvasInteraction.arrowAuthoringVisual.targetId}
+                anchor={canvasInteraction.arrowAuthoringVisual.anchor}
                 isSnapped={canvasInteraction.arrowAuthoringVisual.isSnapped}
-                targets={visibleCanvasElements.filter((element) =>
-                  element.id === canvasInteraction.arrowAuthoringVisual?.targetId,
-                )}
+                targetId={canvasInteraction.arrowAuthoringVisual.targetId}
                 zoom={zoomLevel}
               />
-            ) : isConnectorEndpointRetargeting ? (
-              <ShapeBindingAnchors targets={visibleCanvasElements} zoom={zoomLevel} />
             ) : null}
             {pendingImagePlacement?.point ? (
               <img

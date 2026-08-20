@@ -5,6 +5,8 @@ type ShapeBoundaryKind = "rectangle" | "ellipse" | "diamond";
 const MIN_VISUAL_RECTANGLE_ROUNDNESS = 0.06;
 const DIAMOND_CORNER_INSET = 0.08;
 const ROOT_TOLERANCE = 1e-10;
+/** Fixed global bracket count; each bracket uses at most 52 bisection steps. */
+export const ELLIPSE_STATIONARY_BRACKET_COUNT = 64;
 
 /** The clean intended shape boundary shared by painter and connector binding. */
 export function roundedRectanglePath(width: number, height: number, roundness: number): string {
@@ -29,6 +31,7 @@ export function getShapeBoundaryPoint(
 ): CanvasPoint | null {
   const safeWidth = Math.max(0, width);
   const safeHeight = Math.max(0, height);
+  if (safeWidth <= 0 || safeHeight <= 0) return null;
   const center = { x: safeWidth / 2, y: safeHeight / 2 };
   const radians = t * Math.PI * 2;
   const direction = { x: Math.sin(radians), y: -Math.cos(radians) };
@@ -45,6 +48,7 @@ export function projectPointToShapeBoundary(
   point: CanvasPoint,
 ): CanvasPoint | null {
   const center = { x: Math.max(0, width) / 2, y: Math.max(0, height) / 2 };
+  if (width <= 0 || height <= 0) return null;
   if (shape === "ellipse") return closestEllipsePoint(point, center, center.x, center.y);
   const segments = boundarySegments(shape, Math.max(0, width), Math.max(0, height), roundness);
   if (segments.length === 0) return null;
@@ -147,7 +151,47 @@ function closestPointOnQuadratic(point: CanvasPoint, start: CanvasPoint, control
 /** All real cubic roots via critical-point intervals; repeated roots are tested explicitly. */
 function cubicRealRoots(a: number, b: number, c: number, d: number) { if (Math.abs(a) < ROOT_TOLERANCE) return quadraticRoots(b, c, d); const evaluate = (x: number) => ((a * x + b) * x + c) * x + d; const critical = quadraticRoots(3 * a, 2 * b, c).sort((first, second) => first - second); const bounds = [-1_000_000, ...critical, 1_000_000]; const roots: number[] = []; for (const criticalPoint of critical) if (Math.abs(evaluate(criticalPoint)) < ROOT_TOLERANCE) roots.push(criticalPoint); for (let index = 0; index < bounds.length - 1; index += 1) { let low = bounds[index]; let high = bounds[index + 1]; let lowValue = evaluate(low); const highValue = evaluate(high); if (lowValue === 0) roots.push(low); if (lowValue * highValue >= 0) continue; for (let iteration = 0; iteration < 80; iteration += 1) { const middle = (low + high) / 2; const value = evaluate(middle); if (Math.abs(value) < ROOT_TOLERANCE) { low = high = middle; break; } if (lowValue * value < 0) high = middle; else { low = middle; lowValue = value; } } roots.push((low + high) / 2); } return roots; }
 /** Globally bracketed stationary-point search over the ellipse parameter. */
-function closestEllipsePoint(point: CanvasPoint, center: CanvasPoint, radiusX: number, radiusY: number): CanvasPoint | null { if (radiusX === 0 || radiusY === 0) return { x: center.x, y: center.y }; const dx = point.x - center.x; const dy = point.y - center.y; const stationary = (angle: number) => (radiusY * radiusY - radiusX * radiusX) * Math.sin(angle) * Math.cos(angle) + radiusX * dx * Math.sin(angle) - radiusY * dy * Math.cos(angle); const roots = [0, Math.PI / 2, Math.PI, Math.PI * 1.5]; const steps = 64; let previousAngle = 0; let previousValue = stationary(previousAngle); for (let index = 1; index <= steps; index += 1) { const nextAngle = index * Math.PI * 2 / steps; const nextValue = stationary(nextAngle); if (Math.abs(previousValue) < ROOT_TOLERANCE) roots.push(previousAngle); if (previousValue * nextValue < 0) { let low = previousAngle; let high = nextAngle; let lowValue = previousValue; for (let iteration = 0; iteration < 52; iteration += 1) { const middle = (low + high) / 2; const value = stationary(middle); if (Math.abs(value) < ROOT_TOLERANCE) { low = high = middle; break; } if (lowValue * value <= 0) high = middle; else { low = middle; lowValue = value; } } roots.push((low + high) / 2); } previousAngle = nextAngle; previousValue = nextValue; } return roots.map((angle) => ({ x: center.x + radiusX * Math.cos(angle), y: center.y + radiusY * Math.sin(angle) })).reduce((best, candidate) => distanceSquared(point, candidate) < distanceSquared(point, best) ? candidate : best); }
+/** Globally bracketed stationary-point search over the ellipse parameter. */
+function closestEllipsePoint(
+  point: CanvasPoint,
+  center: CanvasPoint,
+  radiusX: number,
+  radiusY: number,
+): CanvasPoint | null {
+  if (radiusX === 0 || radiusY === 0) return { x: center.x, y: center.y };
+  const dx = point.x - center.x;
+  const dy = point.y - center.y;
+  const stationary = (angle: number) =>
+    (radiusY * radiusY - radiusX * radiusX) * Math.sin(angle) * Math.cos(angle)
+    + radiusX * dx * Math.sin(angle) - radiusY * dy * Math.cos(angle);
+  const roots = [0, Math.PI / 2, Math.PI, Math.PI * 1.5];
+  let previousAngle = 0;
+  let previousValue = stationary(previousAngle);
+  for (let index = 1; index <= ELLIPSE_STATIONARY_BRACKET_COUNT; index += 1) {
+    const nextAngle = index * Math.PI * 2 / ELLIPSE_STATIONARY_BRACKET_COUNT;
+    const nextValue = stationary(nextAngle);
+    if (Math.abs(previousValue) < ROOT_TOLERANCE) roots.push(previousAngle);
+    if (previousValue * nextValue < 0) {
+      let low = previousAngle;
+      let high = nextAngle;
+      let lowValue = previousValue;
+      for (let iteration = 0; iteration < 52; iteration += 1) {
+        const middle = (low + high) / 2;
+        const value = stationary(middle);
+        if (Math.abs(value) < ROOT_TOLERANCE) { low = middle; high = middle; break; }
+        if (lowValue * value <= 0) high = middle;
+        else { low = middle; lowValue = value; }
+      }
+      roots.push((low + high) / 2);
+    }
+    previousAngle = nextAngle;
+    previousValue = nextValue;
+  }
+  return roots.map((angle) => ({
+    x: center.x + radiusX * Math.cos(angle),
+    y: center.y + radiusY * Math.sin(angle),
+  })).reduce((best, candidate) => distanceSquared(point, candidate) < distanceSquared(point, best) ? candidate : best);
+}
 function cross(first: CanvasPoint, second: CanvasPoint) { return first.x * second.y - first.y * second.x; }
 function dot(first: CanvasPoint, second: CanvasPoint) { return first.x * second.x + first.y * second.y; }
 function distanceSquared(first: CanvasPoint, second: CanvasPoint) { const dx = first.x - second.x; const dy = first.y - second.y; return dx * dx + dy * dy; }

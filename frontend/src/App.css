@@ -2927,10 +2927,15 @@ h2 {
   border: 0;
   padding: 0;
   background: transparent;
-  cursor: ew-resize;
   pointer-events: auto;
+  transform-origin: center;
   touch-action: none;
 }
+
+.selection-frame-text-resize-e.is-ew-resize { cursor: ew-resize; }
+.selection-frame-text-resize-e.is-nwse-resize { cursor: nwse-resize; }
+.selection-frame-text-resize-e.is-ns-resize { cursor: ns-resize; }
+.selection-frame-text-resize-e.is-nesw-resize { cursor: nesw-resize; }
 
 .selection-frame-text-resize-e::after {
   position: absolute;

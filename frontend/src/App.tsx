@@ -384,7 +384,10 @@ type TextResizeSession = {
   block: TextElement;
   connectorPreviewElements: Map<string, HTMLDivElement>;
   connectorSourceElements: HTMLElement[];
+  handleElement: HTMLButtonElement | null;
   originalHeight: string;
+  originalHandleLeft: string;
+  originalHandleTop: string;
   originalLeft: string;
   originalTop: string;
   originalWidth: string;
@@ -1187,6 +1190,7 @@ function App() {
   const [isGridVisible, setIsGridVisible] = useState(false);
   const [isSnapToGridEnabled, setIsSnapToGridEnabled] = useState(false);
   const [selectionFramePreview, setSelectionFramePreview] = useState<SelectionRect | null>(null);
+  const [textResizeHandleGeometry, setTextResizeHandleGeometry] = useState<TextElement | null>(null);
   const [connectorEndpointPreview, setConnectorEndpointPreview] = useState<ConnectorElement | null>(null);
   const [isConnectorEndpointRetargeting, setIsConnectorEndpointRetargeting] = useState(false);
   const [connectorEndpointChooser, setConnectorEndpointChooser] = useState<ConnectorEndpointChooserState | null>(null);
@@ -1240,6 +1244,7 @@ function App() {
   const selectionFrameVisualBoundsRef = useRef<SelectionRect | null>(null);
   const selectionTransformRef = useRef<SelectionTransformSession | null>(null);
   const resizeLayerSessionRef = useRef<ResizeLayerSession | null>(null);
+  const textResizeHandleRef = useRef<HTMLButtonElement | null>(null);
   const textResizeSessionRef = useRef<TextResizeSession | null>(null);
   const cancelCanvasSelectionRef = useRef<() => void>(() => undefined);
   const cancelVisualDragRef = useRef<(updateState?: boolean) => void>(() => undefined);
@@ -1397,6 +1402,35 @@ function App() {
     () => Object.fromEntries(visibleCanvasElements.map((element) => [element.id, element])),
     [visibleCanvasElements],
   );
+  useLayoutEffect(() => {
+    const selectedId = selectedBlockIds.length === 1 ? selectedBlockIds[0] : null;
+    const selected = selectedId
+      ? visibleCanvasElements.find((element): element is TextElement =>
+        element.id === selectedId && element.type === "text" && !element.locked,
+      )
+      : null;
+    const sourceElement = selected ? blockElementsRef.current.get(selected.id) : null;
+    const nextGeometry = selected
+      ? sourceElement
+        ? getRenderedTextResizeBlock(selected, sourceElement)
+        : selected
+      : null;
+    setTextResizeHandleGeometry((current) => {
+      if (
+        current &&
+        nextGeometry &&
+        current.id === nextGeometry.id &&
+        current.x === nextGeometry.x &&
+        current.y === nextGeometry.y &&
+        current.width === nextGeometry.width &&
+        current.height === nextGeometry.height &&
+        current.rotation === nextGeometry.rotation
+      ) {
+        return current;
+      }
+      return nextGeometry;
+    });
+  }, [selectedBlockIds, visibleCanvasElements]);
   const selectionWorldBounds = useMemo(() => {
     const selectedIds = new Set(selectedBlockIds);
     return getSelectionBounds(
@@ -6224,6 +6258,23 @@ function App() {
     };
   }
 
+  function getTextResizeCursorClass(rotation: number) {
+    const normalized = ((rotation % 180) + 180) % 180;
+    if (normalized < 22.5 || normalized >= 157.5) return "is-ew-resize";
+    if (normalized < 67.5) return "is-nwse-resize";
+    if (normalized < 112.5) return "is-ns-resize";
+    return "is-nesw-resize";
+  }
+
+  function positionTextResizeHandle(handleElement: HTMLButtonElement | null, block: TextElement) {
+    if (!handleElement) return;
+    const point = getTextEastResizeHandlePoint(block);
+    const zoom = zoomLevelRef.current;
+    const pan = panOffsetRef.current;
+    handleElement.style.left = `${pan.x + point.x * zoom - 22}px`;
+    handleElement.style.top = `${pan.y + point.y * zoom - 22}px`;
+  }
+
   function getRenderedTextResizeBlock(block: TextElement, sourceElement: HTMLElement): TextElement {
     const fromStyle = (property: "height" | "left" | "top" | "width", fallback: number) => {
       const value = Number.parseFloat(sourceElement.style[property]);
@@ -6246,6 +6297,7 @@ function App() {
       dataRef.current.elements,
       new Set([block.id]),
     );
+    const handleElement = textResizeHandleRef.current;
     const session: TextResizeSession = {
       block: getRenderedTextResizeBlock(block, sourceElement),
       connectorPreviewElements: new Map(),
@@ -6253,7 +6305,10 @@ function App() {
         const element = blockElementsRef.current.get(id);
         return element ? [element] : [];
       }),
+      handleElement,
       originalHeight: sourceElement.style.height,
+      originalHandleLeft: handleElement?.style.left ?? "",
+      originalHandleTop: handleElement?.style.top ?? "",
       originalLeft: sourceElement.style.left,
       originalTop: sourceElement.style.top,
       originalWidth: sourceElement.style.width,
@@ -6291,6 +6346,7 @@ function App() {
     session.sourceElement.style.top = `${preview.y}px`;
     session.sourceElement.style.width = `${preview.width}px`;
     session.sourceElement.style.height = `${preview.height}px`;
+    positionTextResizeHandle(session.handleElement, preview);
     const previewElements = dataRef.current.elements.map((element) =>
       element.id === preview.id ? preview : element,
     );
@@ -6302,12 +6358,18 @@ function App() {
     return preview;
   }
 
-  function cleanupTextResizePreview(session: TextResizeSession) {
+  function cleanupTextResizePreview(session: TextResizeSession, handleBlock = session.block) {
     session.sourceElement.classList.remove("is-resizing");
     session.sourceElement.style.width = session.originalWidth;
     session.sourceElement.style.height = session.originalHeight;
     session.sourceElement.style.left = session.originalLeft;
     session.sourceElement.style.top = session.originalTop;
+    if (handleBlock === session.block) {
+      session.handleElement?.style.setProperty("left", session.originalHandleLeft);
+      session.handleElement?.style.setProperty("top", session.originalHandleTop);
+    } else {
+      positionTextResizeHandle(session.handleElement, handleBlock);
+    }
     for (const connectorElement of session.connectorSourceElements) {
       connectorElement.classList.remove("is-drag-source-hidden");
     }
@@ -6315,11 +6377,11 @@ function App() {
     document.body.classList.remove("is-interacting");
   }
 
-  function finishTextResizePreview() {
+  function finishTextResizePreview(handleBlock?: TextElement) {
     const session = textResizeSessionRef.current;
     if (!session) return null;
     textResizeSessionRef.current = null;
-    cleanupTextResizePreview(session);
+    cleanupTextResizePreview(session, handleBlock);
     return session;
   }
 
@@ -6749,8 +6811,10 @@ function App() {
           Math.abs(preview.height - textResize.block.height) > 0.01 ||
           Math.abs(preview.x - textResize.block.x) > 0.01 ||
           Math.abs(preview.y - textResize.block.y) > 0.01;
-        finishTextResizePreview();
+        finishTextResizePreview(preview);
         if (didResize) commitTextResize(preview);
+      } else if (textResize) {
+        finishTextResizePreview();
       }
     } else if (session.corner && session.didMove) {
       const selectedIds = new Set(selectedBlockIdsRef.current);
@@ -8093,8 +8157,12 @@ function App() {
                 )
                 : null;
               if (!selected || activeTool !== "select" || editingBlockId) return undefined;
-              const point = getTextEastResizeHandlePoint(selected);
+              const handleBlock = textResizeHandleGeometry?.id === selected.id
+                ? textResizeHandleGeometry
+                : selected;
+              const point = getTextEastResizeHandlePoint(handleBlock);
               return {
+                cursorClass: getTextResizeCursorClass(handleBlock.rotation),
                 onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => {
                   if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
                   event.preventDefault();
@@ -8110,6 +8178,8 @@ function App() {
                 onPointerDown: startTextResizeInteraction,
                 onPointerMove: moveSelectionFrameInteraction,
                 onPointerUp: finishSelectionFrameInteraction,
+                ref: textResizeHandleRef,
+                rotation: handleBlock.rotation,
                 x: panOffset.x + point.x * zoomLevel,
                 y: panOffset.y + point.y * zoomLevel,
               };

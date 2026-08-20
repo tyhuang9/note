@@ -28,6 +28,7 @@ test("a 30 degree text east resize keeps its west midpoint fixed through preview
   await page.mouse.move(start.x + 80 * localAxis.x, start.y + 80 * localAxis.y, { steps: 6 });
 
   const previewBounds = await roundedBounds(text, "rotated text resize preview");
+  await expectTextResizeGripAligned(handle, text);
   const previewWest = await rotatedWestMidpoint(text);
   expect(previewWest.x).toBeCloseTo(originalWest.x, 1);
   expect(previewWest.y).toBeCloseTo(originalWest.y, 1);
@@ -41,11 +42,62 @@ test("a 30 degree text east resize keeps its west midpoint fixed through preview
   await expect(connectorPreviews).toHaveCount(0);
   await expect(arrow).toBeVisible();
   await expect.poll(() => roundedBounds(text, "committed rotated text")).toEqual(previewBounds);
+  await expectTextResizeGripAligned(handle, text);
   const committedWest = await rotatedWestMidpoint(text);
   expect(committedWest.x).toBeCloseTo(originalWest.x, 1);
   expect(committedWest.y).toBeCloseTo(originalWest.y, 1);
   await expect.poll(async () => (await persistenceCounts(page)).apply).toBe(callsBefore.apply + 1);
   expect((await persistenceCounts(page)).session).toBe(callsBefore.session + 1);
+});
+
+for (const { rotation, darkMode, cursor } of [
+  { rotation: 0, darkMode: false, cursor: "ew-resize" },
+  { rotation: 30, darkMode: false, cursor: "nwse-resize" },
+  { rotation: 90, darkMode: true, cursor: "ns-resize" },
+]) {
+  test(`text east resize grip aligns and exposes its ${rotation} degree cursor`, async ({ page }) => {
+    await installLiveFollowWorkspace(page, rotation);
+    await page.setViewportSize({ width: 1500, height: 900 });
+    await page.goto("/");
+    if (darkMode) {
+      await page.getByRole("button", { name: "Dark mode" }).click();
+      await expect(page.locator(".app-shell")).toHaveClass(/is-dark/);
+    } else {
+      await expect(page.locator(".app-shell")).not.toHaveClass(/is-dark/);
+    }
+
+    const text = page.locator('[data-block-id="target-text"]');
+    await text.locator(".text-block-display").click();
+    const handle = page.getByRole("button", { name: "Resize text width" });
+    await expect(handle).toHaveCSS("cursor", cursor);
+    expect(await handle.evaluate((element) => (element as HTMLElement).style.transform)).toBe(`rotate(${rotation}deg)`);
+    await expectTextResizeGripAligned(handle, text);
+  });
+}
+
+test("a no-motion text east grip interaction cleans the preview without writes", async ({ page }) => {
+  await installLiveFollowWorkspace(page, 30);
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await page.goto("/");
+
+  const text = page.locator('[data-block-id="target-text"]');
+  const arrow = page.getByRole("button", { name: "Select locked arrow connector" });
+  await text.locator(".text-block-display").click();
+  const handle = page.getByRole("button", { name: "Resize text width" });
+  const handleBounds = await requiredBounds(handle, "text resize handle");
+  await page.waitForTimeout(650);
+  await resetPersistenceCounts(page);
+  const callsBefore = await persistenceCounts(page);
+
+  await page.mouse.move(handleBounds.x + handleBounds.width / 2, handleBounds.y + handleBounds.height / 2);
+  await page.mouse.down();
+  await page.mouse.up();
+
+  await expect(text).not.toHaveClass(/is-resizing/);
+  await expect(page.locator("body")).not.toHaveClass(/is-interacting/);
+  await expect(page.locator(".connector-transform-preview")).toHaveCount(0);
+  await expect(arrow).toBeVisible();
+  await expect.poll(() => persistenceCounts(page)).toEqual(callsBefore);
 });
 
 for (const zoom of [50, 100, 200]) {
@@ -223,6 +275,34 @@ async function rotatedWestMidpoint(locator: Locator) {
       y: bounds.y + bounds.height / 2 - width / 2 * Math.sin(angle),
     };
   });
+}
+
+async function rotatedEastMidpoint(locator: Locator) {
+  return locator.evaluate((element) => {
+    const block = element as HTMLElement;
+    const canvas = block.closest<HTMLElement>(".canvas");
+    const worldLayer = canvas?.querySelector<HTMLElement>(".canvas-content");
+    if (!canvas || !worldLayer) throw new Error("Text east midpoint was missing its canvas geometry.");
+    const canvasBounds = canvas.getBoundingClientRect();
+    const transform = new DOMMatrixReadOnly(getComputedStyle(worldLayer).transform);
+    const rotation = Number.parseFloat(block.style.transform.match(/rotate\(([-\d.]+)deg\)/)?.[1] ?? "0");
+    const width = Number.parseFloat(block.style.width);
+    const height = Number.parseFloat(block.style.height);
+    const left = Number.parseFloat(block.style.left);
+    const top = Number.parseFloat(block.style.top);
+    const angle = rotation * Math.PI / 180;
+    return {
+      x: canvasBounds.x + transform.e + transform.a * (left + width / 2 + width / 2 * Math.cos(angle)),
+      y: canvasBounds.y + transform.f + transform.d * (top + height / 2 + width / 2 * Math.sin(angle)),
+    };
+  });
+}
+
+async function expectTextResizeGripAligned(handle: Locator, text: Locator) {
+  const handleBounds = await requiredBounds(handle, "text resize grip");
+  const east = await rotatedEastMidpoint(text);
+  expect(handleBounds.x + handleBounds.width / 2).toBeCloseTo(east.x, 1);
+  expect(handleBounds.y + handleBounds.height / 2).toBeCloseTo(east.y, 1);
 }
 
 async function connectorPreviewPathSignature(locator: Locator) {

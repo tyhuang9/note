@@ -5,12 +5,15 @@ type CanvasInteractionOverlayProps = {
   children?: ReactNode;
   marqueeRef: Ref<HTMLDivElement>;
   textResizeHandle?: {
+    cursorClass: string;
     onKeyDown: KeyboardEventHandler<HTMLButtonElement>;
     onLostPointerCapture: PointerEventHandler<HTMLButtonElement>;
     onPointerCancel: PointerEventHandler<HTMLButtonElement>;
     onPointerDown: PointerEventHandler<HTMLButtonElement>;
     onPointerMove: PointerEventHandler<HTMLButtonElement>;
     onPointerUp: PointerEventHandler<HTMLButtonElement>;
+    ref: Ref<HTMLButtonElement>;
+    rotation: number;
     x: number;
     y: number;
   };
@@ -123,14 +126,19 @@ export function CanvasInteractionOverlay({
         <button
           aria-label="Resize text width"
           aria-keyshortcuts="ArrowLeft ArrowRight"
-          className="selection-frame-text-resize-e"
+          className={`selection-frame-text-resize-e ${textResizeHandle.cursorClass}`}
           onKeyDown={textResizeHandle.onKeyDown}
           onLostPointerCapture={textResizeHandle.onLostPointerCapture}
           onPointerCancel={textResizeHandle.onPointerCancel}
           onPointerDown={textResizeHandle.onPointerDown}
           onPointerMove={textResizeHandle.onPointerMove}
           onPointerUp={textResizeHandle.onPointerUp}
-          style={{ left: textResizeHandle.x - 22, top: textResizeHandle.y - 22 }}
+          ref={textResizeHandle.ref}
+          style={{
+            left: textResizeHandle.x - 22,
+            top: textResizeHandle.y - 22,
+            transform: `rotate(${textResizeHandle.rotation}deg)`,
+          }}
           type="button"
         />
       ) : null}

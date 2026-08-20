@@ -98,6 +98,37 @@ test("edge auto-pan keeps locked bound arrows in a transient preview and cancel 
   await expect.poll(() => persistenceCounts(page)).toEqual(callsBefore);
 });
 
+test("keyboard endpoint chooser describes rotated text targets and binds a target-relative anchor", async ({ page }) => {
+  await installLiveFollowWorkspace(page, 37.6);
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await page.goto("/");
+
+  const arrow = page.getByRole("button", { name: "Select and move arrow connector" }).last();
+  await arrow.focus();
+  await page.keyboard.press("Enter");
+  const endHandle = page.getByRole("button", { name: "Move connector end endpoint" });
+  const description = page.locator("#connector-end-endpoint-description");
+  await expect(endHandle).toBeVisible();
+  await expect(description).toContainText("Currently free. Press Enter to choose a target shape or text block and a target-relative cardinal anchor.");
+
+  await endHandle.focus();
+  await page.keyboard.press("Space");
+  const dialog = page.getByRole("dialog", { name: "Choose end endpoint target" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("Anchor names are relative to the selected target and rotate with it.")).toBeVisible();
+
+  const textTarget = dialog.getByRole("button", { name: /Text 1 \(Resizable text target\)/ });
+  await textTarget.focus();
+  await page.keyboard.press("Space");
+  const rightAnchor = dialog.getByRole("button", { name: /Right anchor on Text 1 \(Resizable text target\).*target rotated 38 degrees/ });
+  await rightAnchor.focus();
+  await expect(rightAnchor).toBeFocused();
+  await page.keyboard.press("Space");
+
+  await expect(description).toContainText("Currently bound to Text 1 (Resizable text target)");
+  await expect(description).toContainText("target-relative right anchor, target rotated 38 degrees.");
+});
+
 async function selectBothTargets(page: Page) {
   await page.getByRole("button", { name: "Select (V / 1)" }).click();
   const rectangle = page.getByRole("button", { name: "Select and move rectangle element" });
@@ -185,8 +216,8 @@ function connectorRecord(id: string) {
   };
 }
 
-async function installLiveFollowWorkspace(page: Page) {
-  await page.addInitScript(() => {
+async function installLiveFollowWorkspace(page: Page, targetTextRotation = 0) {
+  await page.addInitScript((rotation) => {
     type ElementRecord = Record<string, unknown> & { id: string; pageId: string };
     const storageKey = "note-live-follow-playwright-workspace";
     const initializationKey = `${storageKey}:initialized`;
@@ -207,7 +238,7 @@ async function installLiveFollowWorkspace(page: Page) {
         },
         {
           backgroundMode: "surface", content: "Resizable text target", createdAt: 1, height: 92,
-          id: "target-text", locked: false, opacity: 1, pageId: "page", rotation: 0, type: "text",
+          id: "target-text", locked: false, opacity: 1, pageId: "page", rotation, type: "text",
           updatedAt: 1, width: 240, x: 560, y: 300, zIndex: 2,
         },
         {
@@ -271,5 +302,5 @@ async function installLiveFollowWorkspace(page: Page) {
         throw new Error(`Unexpected command ${command}`);
       },
     };
-  });
+  }, targetTextRotation);
 }

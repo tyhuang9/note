@@ -6530,22 +6530,28 @@ function App() {
     return anchorName ? `${anchorName} anchor` : "perimeter anchor";
   }
 
+  function getTargetRotationDescription(rotation: number): string {
+    const roundedRotation = Math.round(rotation);
+    return roundedRotation === 0 ? "" : `, target rotated ${roundedRotation} degrees`;
+  }
+
   function getConnectorEndpointDescription(
     connector: ConnectorElement,
     endpoint: "start" | "end",
   ): string {
     const current = connector[endpoint];
     if (connector.style.endArrowhead !== "arrow") {
-      return `Currently free. This line endpoint cannot bind to shapes. Arrow keys move it.`;
+      return `Currently free. This line endpoint cannot bind to elements. Arrow keys move it.`;
     }
     if (current.kind !== "element") {
-      return `Currently free. Press Enter to choose a target shape and cardinal anchor. Arrow keys move the endpoint.`;
+      return `Currently free. Press Enter to choose a target shape or text block and a target-relative cardinal anchor. Arrow keys move the endpoint.`;
     }
     const target = dataRef.current.elements.find((element): element is ShapeElement | TextElement =>
       element.id === current.targetElementId && element.pageId === connector.pageId && isBindableElement(element),
     );
     const targetLabel = target ? getBindableTargetLabel(target) : "an unavailable target";
-    return `Currently bound to ${targetLabel} at the ${getAnchorLabel(current.anchor)}. Press Enter to rebind or detach. Arrow keys detach and move the endpoint.`;
+    const targetRotation = target ? getTargetRotationDescription(target.rotation) : "";
+    return `Currently bound to ${targetLabel} at the target-relative ${getAnchorLabel(current.anchor)}${targetRotation}. Press Enter to rebind or detach. Arrow keys detach and move the endpoint.`;
   }
 
   function openConnectorEndpointChooser(endpoint: "start" | "end", origin: HTMLButtonElement) {
@@ -7639,7 +7645,7 @@ function App() {
             );
             if (!connector) return null;
             const targets = getConnectorBindingTargets(connector.pageId)
-              .map(({ element, label }) => ({ id: element.id, label }));
+              .map(({ element, label }) => ({ id: element.id, label, rotation: element.rotation }));
             return (
               <ConnectorEndpointChooser
                 endpoint={connectorEndpointChooser.endpoint}

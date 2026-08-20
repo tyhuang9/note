@@ -10,7 +10,7 @@ type ConnectorEndpointChooserProps = {
   onClose: () => void;
   onDetach: () => void;
   onSelectTarget: (targetElementId: string) => void;
-  targets: readonly Readonly<{ id: string; label: string }>[];
+  targets: readonly Readonly<{ id: string; label: string; rotation: number }>[];
   targetElementId: string | null;
 };
 
@@ -22,6 +22,11 @@ const CARDINAL_ANCHORS: readonly Readonly<{ name: ShapeAnchorName; label: string
 ];
 
 const FOCUSABLE_SELECTOR = 'button:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function targetRotationDescription(rotation: number): string {
+  const roundedRotation = Math.round(rotation);
+  return roundedRotation === 0 ? "" : `, target rotated ${roundedRotation} degrees`;
+}
 
 /** Keyboard-focused binding controls that intentionally complement visual-only anchors. */
 export function ConnectorEndpointChooser({
@@ -139,7 +144,9 @@ export function ConnectorEndpointChooser({
         <header className="connector-endpoint-chooser-header">
           <div>
             <h2 id="connector-endpoint-chooser-title">Choose {endpoint} endpoint target</h2>
-            <p id="connector-endpoint-chooser-instructions">Choose a shape or text block, then a cardinal anchor.</p>
+            <p id="connector-endpoint-chooser-instructions">
+              Choose a shape or text block, then a target-relative cardinal anchor. Anchor names are relative to the selected target and rotate with it.
+            </p>
           </div>
           <button aria-label="Close endpoint chooser" onClick={onClose} type="button">Close</button>
         </header>
@@ -159,6 +166,9 @@ export function ConnectorEndpointChooser({
         <div aria-label="Cardinal anchor" className="connector-endpoint-chooser-group" role="group">
           {CARDINAL_ANCHORS.map(({ name, label }) => (
             <button
+              aria-label={selectedTarget
+                ? `${label} anchor on ${selectedTarget.label}${targetRotationDescription(selectedTarget.rotation)}`
+                : `${label} anchor`}
               disabled={!selectedTarget}
               key={name}
               onClick={() => onBind(name)}

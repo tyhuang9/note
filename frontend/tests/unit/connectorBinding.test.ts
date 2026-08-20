@@ -103,6 +103,20 @@ describe("connector shape binding", () => {
     expect(detached).toMatchObject({ start: { kind: "free", x: 94, y: 50 } });
   });
 
+  it("keeps a locked bound-bound arrow live when a text target is transformed", () => {
+    const source = text({ id: "source" });
+    const destination = shape("rectangle", { id: "destination", x: 260 });
+    const connector = { ...arrow(
+      { kind: "element", targetElementId: source.id, anchor: { t: 0 }, gap: 0 },
+      { kind: "element", targetElementId: destination.id, anchor: { t: 0.5 }, gap: 0 },
+    ), locked: true };
+    const original = resolveConnectorEndpoint(connector.start, { [source.id]: source, [destination.id]: destination });
+    const preview = translateSelection([source, destination, connector], new Set([source.id]), { x: 40, y: 20 });
+    const previewById = Object.fromEntries(preview.map((element) => [element.id, element]));
+    expect(resolveConnectorEndpoint(connector.start, previewById)).toEqual({ x: original!.x + 40, y: original!.y + 20 });
+    expect(resolveConnectorEndpoint(connector.end, previewById)).toEqual(resolveConnectorEndpoint(connector.end, { [source.id]: source, [destination.id]: destination }));
+  });
+
   it("resolves mixed endpoints consistently for selection bounds and hit testing", () => {
     const rectangle = shape("rectangle");
     const connector = arrow(

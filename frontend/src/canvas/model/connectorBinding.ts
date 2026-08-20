@@ -5,6 +5,7 @@ import type {
   ElementId,
   PerimeterAnchor,
   ShapeElement,
+  TextElement,
 } from "./elements";
 import type { CanvasPoint } from "./geometry";
 
@@ -34,10 +35,17 @@ const CARDINAL_ANCHORS: readonly Readonly<{ name: ShapeAnchorName; t: number }>[
   { name: "left", t: 0.75 },
 ];
 
+export type BindableElement = ShapeElement | TextElement;
+
 export function isBindableShape(element: CanvasElement | undefined): element is ShapeElement {
   return element?.type === "shape" && (
     element.shape === "rectangle" || element.shape === "ellipse" || element.shape === "diamond"
   ) && hasSafeShapeGeometry(element);
+}
+
+/** Shapes and text blocks have an explicit model rectangle and may host arrows. */
+export function isBindableElement(element: CanvasElement | undefined): element is BindableElement {
+  return isBindableShape(element) || (element?.type === "text" && hasSafeBoxGeometry(element));
 }
 
 export function isSafeCanvasCoordinate(value: number): boolean {
@@ -63,11 +71,11 @@ export function resolveConnectorEndpoint(
   }
   if (endpoint.kind !== "element") return null;
   const target = elementsById[endpoint.targetElementId];
-  if (!isBindableShape(target) || !isValidPerimeterAnchor(endpoint.anchor) || !isSafeGap(endpoint.gap)) {
+  if (!isBindableElement(target) || !isValidPerimeterAnchor(endpoint.anchor) || !isSafeGap(endpoint.gap)) {
     return null;
   }
   if (sourcePageId && target.pageId !== sourcePageId) return null;
-  const point = getShapeAnchorPoint(target, endpoint.anchor, endpoint.gap);
+  const point = getBindableAnchorPoint(target, endpoint.anchor, endpoint.gap);
   return point && isSafeResolvedPoint(point) ? point : null;
 }
 
@@ -82,11 +90,26 @@ export function resolveConnectorPoints(
 
 /** Returns the four visible/persisted binding positions for a compatible shape. */
 export function getShapeBindingAnchors(shape: ShapeElement): readonly ShapeBindingAnchor[] {
-  if (!hasSafeShapeGeometry(shape)) return [];
+  return getBindableBindingAnchors(shape);
+}
+
+/** Shared shape/text anchor list so snapping, overlays, and chooser agree. */
+export function getBindableBindingAnchors(target: BindableElement): readonly ShapeBindingAnchor[] {
+  if (!hasSafeBoxGeometry(target)) return [];
   return CARDINAL_ANCHORS.flatMap(({ name, t }) => {
-    const point = getShapeAnchorPoint(shape, { t });
+    const point = getBindableAnchorPoint(target, { t });
     return point ? [{ anchor: { t }, name, point }] : [];
   });
+}
+
+export function getBindableAnchorPoint(
+  target: BindableElement,
+  anchor: PerimeterAnchor,
+  gap = 0,
+): CanvasPoint | null {
+  return target.type === "shape"
+    ? getShapeAnchorPoint(target, anchor, gap)
+    : getTextAnchorPoint(target, anchor, gap);
 }
 
 /**
@@ -131,6 +154,26 @@ export function getShapeAnchorPoint(
   return isSafeResolvedPoint(point) ? point : null;
 }
 
+/** Text binds to its rotated model rectangle, not its rendered surface padding. */
+export function getTextAnchorPoint(
+  text: TextElement,
+  anchor: PerimeterAnchor,
+  gap = 0,
+): CanvasPoint | null {
+  if (!hasSafeBoxGeometry(text) || !isSafeGap(gap)) return null;
+  const center = { x: text.x + text.width / 2, y: text.y + text.height / 2 };
+  const t = normalizeAnchorT(anchor.t);
+  const direction = { x: zeroSmall(Math.sin(t * Math.PI * 2)), y: zeroSmall(-Math.cos(t * Math.PI * 2)) };
+  const distance = Math.min(
+    direction.x === 0 ? Number.POSITIVE_INFINITY : text.width / 2 / Math.abs(direction.x),
+    direction.y === 0 ? Number.POSITIVE_INFINITY : text.height / 2 / Math.abs(direction.y),
+  );
+  const rotatedDirection = rotateVector(direction, text.rotation);
+  const local = rotateVector({ x: direction.x * distance, y: direction.y * distance }, text.rotation);
+  const point = { x: center.x + local.x + rotatedDirection.x * gap, y: center.y + local.y + rotatedDirection.y * gap };
+  return isSafeResolvedPoint(point) ? point : null;
+}
+
 /** Snaps only arrow endpoints; callers pass `allowBinding` false for lines. */
 export function snapConnectorEndpoint(
   point: CanvasPoint,
@@ -148,8 +191,8 @@ export function snapConnectorEndpoint(
   const worldRadius = radiusPx / Math.max(zoom, Number.EPSILON);
   let closest: Readonly<{ elementId: ElementId; anchor: PerimeterAnchor; distance: number }> | null = null;
   for (const element of elements) {
-    if (!isBindableShape(element)) continue;
-    for (const candidate of getShapeBindingAnchors(element)) {
+    if (!isBindableElement(element)) continue;
+    for (const candidate of getBindableBindingAnchors(element)) {
       const distance = Math.hypot(candidate.point.x - point.x, candidate.point.y - point.y);
       if (distance <= worldRadius && (!closest || distance < closest.distance)) {
         closest = { anchor: candidate.anchor, distance, elementId: element.id };
@@ -193,6 +236,10 @@ function normalizeAnchorT(t: number): number {
 }
 
 function hasSafeShapeGeometry(shape: ShapeElement): boolean {
+  return hasSafeBoxGeometry(shape);
+}
+
+function hasSafeBoxGeometry(shape: BindableElement): boolean {
   return isSafeCanvasCoordinate(shape.x)
     && isSafeCanvasCoordinate(shape.y)
     && isSafeCanvasDimension(shape.width)

@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { ConnectorElement, RoughStyle, ShapeElement } from "../../src/canvas/model/elements";
+import type { ConnectorElement, RoughStyle, ShapeElement, TextElement } from "../../src/canvas/model/elements";
 import {
   CONNECTOR_BINDING_SNAP_RADIUS_PX,
   detachConnectorEndpointsForDeletedTargets,
   getShapeAnchorPoint,
   getShapeBindingAnchors,
+  getTextAnchorPoint,
   MAX_CANVAS_VALUE,
   resolveConnectorEndpoint,
   snapConnectorEndpoint,
@@ -43,6 +44,10 @@ function shape(shapeName: ShapeElement["shape"], overrides: Partial<ShapeElement
   };
 }
 
+function text(overrides: Partial<TextElement> = {}): TextElement {
+  return { ...shape("rectangle"), backgroundMode: "surface", content: "bound text", id: "text", rotation: 90, type: "text", ...overrides };
+}
+
 function arrow(start: ConnectorElement["start"], end: ConnectorElement["end"]): ConnectorElement {
   return {
     createdAt: 1,
@@ -78,15 +83,24 @@ describe("connector shape binding", () => {
     expect(getShapeAnchorPoint(shape("diamond", { rotation: 90 }), { t: 0.25 })).toEqual({ x: 60, y: 100 });
   });
 
-  it("snaps only within a fixed screen-pixel radius and only to compatible shapes", () => {
+  it("snaps only within a fixed screen-pixel radius and to compatible shapes or text", () => {
     const rectangle = shape("rectangle");
-    const text = { ...rectangle, backgroundMode: "surface" as const, id: "text", type: "text" as const, content: "not a target" };
-    const nearAt200 = snapConnectorEndpoint({ x: 118, y: 50 }, [rectangle, text], 2, true);
+    const nearAt200 = snapConnectorEndpoint({ x: 118, y: 50 }, [rectangle], 2, true);
     expect(nearAt200).toEqual({ kind: "element", targetElementId: rectangle.id, anchor: { t: 0.25 }, gap: 0 });
     expect(snapConnectorEndpoint({ x: 120, y: 50 }, [rectangle], 2, true)).toEqual({ kind: "free", x: 120, y: 50 });
     expect(snapConnectorEndpoint({ x: 130, y: 50 }, [rectangle], 0.5, true)).toMatchObject({ kind: "element", targetElementId: rectangle.id });
     expect(snapConnectorEndpoint({ x: 110, y: 50 }, [rectangle], 1, false)).toEqual({ kind: "free", x: 110, y: 50 });
+    expect(snapConnectorEndpoint({ x: 92, y: 50 }, [text()], 1, true)).toMatchObject({ kind: "element", targetElementId: "text" });
     expect(CONNECTOR_BINDING_SNAP_RADIUS_PX).toBeGreaterThan(0);
+  });
+
+  it("resolves text cardinal anchors against its rotated model rectangle and detaches on delete", () => {
+    const target = text();
+    const connector = arrow({ kind: "element", targetElementId: target.id, anchor: { t: 0 }, gap: 4 }, { kind: "free", x: 190, y: 50 });
+    expect(getTextAnchorPoint(target, { t: 0 })).toEqual({ x: 90, y: 50 });
+    expect(resolveConnectorEndpoint(connector.start, { [target.id]: target })).toEqual({ x: 94, y: 50 });
+    const [, detached] = detachConnectorEndpointsForDeletedTargets([target, connector], new Set([target.id]));
+    expect(detached).toMatchObject({ start: { kind: "free", x: 94, y: 50 } });
   });
 
   it("resolves mixed endpoints consistently for selection bounds and hit testing", () => {

@@ -536,43 +536,50 @@ fn validate_bound_connector_target(
         .map_err(|error| error.to_string())?;
     let Some((target_page_id, target_type, target_payload)) = target else {
         return Err(format!(
-            "{context}.targetElementId must reference an existing shape on this page"
+            "{context}.targetElementId must reference an existing compatible element on this page"
         ));
     };
     if target_page_id != page_id {
         return Err(format!(
-            "{context}.targetElementId must reference a shape on the same page"
+            "{context}.targetElementId must reference a compatible element on the same page"
         ));
     }
-    if target_type != "shape" {
+    if target_type != "shape" && target_type != "text" {
         return Err(format!(
-            "{context}.targetElementId must reference a rectangle, ellipse, or diamond"
+            "{context}.targetElementId must reference a rectangle, ellipse, diamond, or text block"
         ));
     }
     let target: Value = serde_json::from_str(&target_payload).map_err(|error| {
         format!("{context}.targetElementId has invalid stored payload: {error}")
     })?;
-    if !matches!(
-        target.get("shape").and_then(Value::as_str),
-        Some("rectangle" | "ellipse" | "diamond")
-    ) {
+    if target_type == "shape"
+        && !matches!(
+            target.get("shape").and_then(Value::as_str),
+            Some("rectangle" | "ellipse" | "diamond")
+        )
+    {
         return Err(format!(
-            "{context}.targetElementId must reference a rectangle, ellipse, or diamond"
+            "{context}.targetElementId must reference a rectangle, ellipse, diamond, or text block"
         ));
     }
-    validate_bound_connector_resolution(&target, endpoint, context)?;
+    validate_bound_connector_resolution(&target, &target_type, endpoint, context)?;
     Ok(())
 }
 
 fn validate_bound_connector_resolution(
     target: &Value,
+    target_type: &str,
     endpoint: &Value,
     context: &str,
 ) -> Result<(), String> {
-    let shape = target
-        .get("shape")
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("{context}.targetElementId has invalid shape payload"))?;
+    let shape = if target_type == "text" {
+        "rectangle"
+    } else {
+        target
+            .get("shape")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("{context}.targetElementId has invalid shape payload"))?
+    };
     let x = required_finite(target, "x", context)?;
     let y = required_finite(target, "y", context)?;
     let width = required_finite(target, "width", context)?;
@@ -581,9 +588,7 @@ fn validate_bound_connector_resolution(
     validate_canvas_coordinate(x, &format!("{context}.targetElementId.x"))?;
     validate_canvas_coordinate(y, &format!("{context}.targetElementId.y"))?;
     if !(0.0..=MAX_CANVAS_VALUE).contains(&width) || !(0.0..=MAX_CANVAS_VALUE).contains(&height) {
-        return Err(format!(
-            "{context}.targetElementId has invalid shape dimensions"
-        ));
+        return Err(format!("{context}.targetElementId has invalid dimensions"));
     }
     validate_canvas_rotation(rotation, &format!("{context}.targetElementId.rotation"))?;
 
@@ -1357,7 +1362,7 @@ mod tests {
     }
 
     #[test]
-    fn bound_connector_endpoints_require_final_same_page_arrow_shapes() {
+    fn bound_connector_endpoints_require_final_same_page_arrow_targets() {
         let directory = root();
         seed_page(directory.path());
         let target = shape_element("shape-1", "p");
@@ -1375,6 +1380,23 @@ mod tests {
                         json!({"kind":"free","x":160.0,"y":60.0}),
                     ),
                 ],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+        let text_bound = connector_element_on_page(
+            "text-connector",
+            "p",
+            json!({"kind":"element","targetElementId":"text-1","anchor":{"t":0.0},"gap":4.0}),
+            json!({"kind":"free","x":160.0,"y":60.0}),
+            true,
+        );
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 1,
+                upserts: vec![element("text-1", 1), text_bound],
                 deleted_element_ids: vec![],
             },
         )
@@ -1402,19 +1424,19 @@ mod tests {
                     true,
                 ),
                 vec![],
-                "existing shape",
+                "existing compatible element",
             ),
             (
-                "nonshape",
+                "incompatible-image",
                 connector_element_on_page(
-                    "text-connector",
+                    "incompatible-connector",
                     "p",
-                    json!({"kind":"element","targetElementId":"text-1","anchor":{"t":0.25},"gap":4.0}),
+                    json!({"kind":"element","targetElementId":"ink-1","anchor":{"t":0.25},"gap":4.0}),
                     json!({"kind":"free","x":160.0,"y":60.0}),
                     true,
                 ),
-                vec![element("text-1", 1)],
-                "rectangle, ellipse, or diamond",
+                vec![ink_element()],
+                "rectangle, ellipse, diamond, or text block",
             ),
             (
                 "cross-page",
@@ -1472,7 +1494,7 @@ mod tests {
                 directory.path(),
                 SceneChangeBatch {
                     page_id: "p".into(),
-                    base_revision: 1,
+                    base_revision: 2,
                     upserts,
                     deleted_element_ids: vec![],
                 },
@@ -1484,7 +1506,7 @@ mod tests {
             );
             assert_eq!(
                 load_workspace_data_at(directory.path()).unwrap().pages[0].revision,
-                1
+                2
             );
         }
     }
@@ -1517,7 +1539,7 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert!(error.contains("existing shape"));
+        assert!(error.contains("existing compatible element"));
         assert_eq!(
             load_workspace_data_at(directory.path())
                 .unwrap()

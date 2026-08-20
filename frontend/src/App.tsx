@@ -34,7 +34,7 @@ import { DrawingPropertiesPanel } from "./canvas/components/DrawingPropertiesPan
 import { CanvasViewport } from "./canvas/components/CanvasViewport";
 import { CanvasWorldLayer } from "./canvas/components/CanvasWorldLayer";
 import { InkElementView } from "./canvas/components/InkElementView";
-import { ConnectorElementView, ShapeElementView } from "./canvas/components/PrimitiveElementView";
+import { ConnectorElementView, renderConnectorRoughSvg, ShapeElementView } from "./canvas/components/PrimitiveElementView";
 import { ShapeBindingAnchors } from "./canvas/components/ShapeBindingAnchors";
 import { useCanvasInteraction } from "./canvas/interaction/useCanvasInteraction";
 import { cleanupMarquee } from "./canvas/interaction/marqueeCleanup";
@@ -176,8 +176,10 @@ import {
 } from "./canvas/model/selectionBounds";
 import {
   detachConnectorEndpointsForDeletedTargets,
-  getShapeBindingAnchors,
+  getBindableBindingAnchors,
+  isBindableElement,
   resolveConnectorEndpoint,
+  resolveConnectorPoints,
   snapConnectorEndpoint,
   type ShapeAnchorName,
 } from "./canvas/model/connectorBinding";
@@ -348,6 +350,8 @@ type DragLayerSession = {
   groupElement: HTMLDivElement;
   overlayElement: HTMLDivElement;
   sourceElements: HTMLElement[];
+  connectorPreviewElements: Map<string, HTMLDivElement>;
+  connectorSourceElements: HTMLElement[];
   selectedBlockIds: string[];
   startClientX: number;
   startClientY: number;
@@ -363,6 +367,8 @@ type ResizeLayerSession = {
   }[];
   overlayElement: HTMLDivElement;
   sourceElements: HTMLElement[];
+  connectorPreviewElements: Map<string, HTMLDivElement>;
+  connectorSourceElements: HTMLElement[];
 };
 
 type SelectionTransformSession = {
@@ -5665,9 +5671,82 @@ function App() {
     for (const sourceElement of session.sourceElements) {
       sourceElement.classList.remove("is-drag-source-hidden");
     }
+    for (const sourceElement of session.connectorSourceElements) {
+      sourceElement.classList.remove("is-drag-source-hidden");
+    }
+    for (const preview of session.connectorPreviewElements.values()) preview.remove();
 
     session.overlayElement.remove();
     document.body.classList.remove("is-interacting");
+  }
+
+  function getBoundConnectorIdsForTargets(
+    elements: readonly CanvasElement[],
+    targetIds: ReadonlySet<string>,
+  ) {
+    return new Set(elements.flatMap((element) => {
+      if (element.type !== "connector") return [];
+      return [element.start, element.end].some((endpoint) =>
+        endpoint.kind === "element" && targetIds.has(endpoint.targetElementId),
+      ) ? [element.id] : [];
+    }));
+  }
+
+  function renderTransientConnectorPreviews(
+    previewElements: readonly CanvasElement[],
+    connectorIds: ReadonlySet<string>,
+    previewElementsById: Map<string, HTMLDivElement>,
+  ) {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const zoom = zoomLevelRef.current;
+    const pan = panOffsetRef.current;
+    const elementsById = Object.fromEntries(previewElements.map((element) => [element.id, element]));
+    for (const connectorId of connectorIds) {
+      const connector = elementsById[connectorId];
+      if (!connector || connector.type !== "connector") continue;
+      const points = resolveConnectorPoints(connector, elementsById);
+      if (!points) continue;
+      let wrapper = previewElementsById.get(connectorId);
+      if (!wrapper) {
+        wrapper = document.createElement("div");
+        wrapper.className = "drag-layer-clone connector-transform-preview";
+        wrapper.setAttribute("aria-hidden", "true");
+        wrapper.style.pointerEvents = "none";
+        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svg.classList.add("primitive-connector");
+        wrapper.append(svg);
+        canvas.append(wrapper);
+        previewElementsById.set(connectorId, wrapper);
+      }
+      const padding = Math.max(8, connector.style.strokeWidth * 2) * zoom;
+      const minX = Math.min(points.start.x, points.end.x) * zoom;
+      const minY = Math.min(points.start.y, points.end.y) * zoom;
+      const width = Math.max(1, Math.abs(points.end.x - points.start.x) * zoom + padding * 2);
+      const height = Math.max(1, Math.abs(points.end.y - points.start.y) * zoom + padding * 2);
+      wrapper.style.position = "absolute";
+      wrapper.style.left = `${pan.x + minX - padding}px`;
+      wrapper.style.top = `${pan.y + minY - padding}px`;
+      wrapper.style.width = `${width}px`;
+      wrapper.style.height = `${height}px`;
+      wrapper.style.opacity = String(connector.opacity);
+      wrapper.style.zIndex = String(connector.zIndex);
+      const svg = wrapper.firstElementChild as SVGSVGElement;
+      svg.setAttribute("width", String(width));
+      svg.setAttribute("height", String(height));
+      svg.setAttribute("overflow", "visible");
+      renderConnectorRoughSvg(svg, {
+        ...connector.style,
+        roughness: connector.style.roughness * zoom,
+        strokeWidth: connector.style.strokeWidth * zoom,
+      }, {
+        x: (points.start.x * zoom - minX) + padding,
+        y: (points.start.y * zoom - minY) + padding,
+      }, {
+        x: (points.end.x * zoom - minX) + padding,
+        y: (points.end.y * zoom - minY) + padding,
+      });
+    }
   }
 
   function selectDraggedBlocks(blockIds: string[]) {
@@ -5733,6 +5812,11 @@ function App() {
       dataRef.current.elements,
       selectedIds,
       getDragCommitOffset(session),
+    );
+    renderTransientConnectorPreviews(
+      previewElements,
+      getBoundConnectorIdsForTargets(dataRef.current.elements, new Set(session.blockIds)),
+      session.connectorPreviewElements,
     );
     const previewBounds = getPreviewSelectionBounds(previewElements, selectedIds);
     if (previewBounds) previewSelectionFrameVisualBounds(previewBounds);
@@ -5800,6 +5884,10 @@ function App() {
           const block = dataRef.current.elements.find((element) => element.id === blockId);
           return Boolean(block && !block.locked);
         });
+      const affectedConnectorIds = getBoundConnectorIdsForTargets(
+        dataRef.current.elements,
+        new Set(requestedBlockIds),
+      );
       const sourceEntries = requestedBlockIds
         .map((blockId) => ({
           blockId,
@@ -5829,7 +5917,8 @@ function App() {
       groupElement.className = "drag-layer-group";
       overlayElement.append(groupElement);
 
-      for (const { element } of sourceEntries) {
+      for (const { blockId, element } of sourceEntries) {
+        if (affectedConnectorIds.has(blockId)) continue;
         const elementRect = element.getBoundingClientRect();
         const cloneElement = element.cloneNode(true) as HTMLElement;
 
@@ -5868,6 +5957,11 @@ function App() {
         groupElement,
         overlayElement,
         sourceElements: sourceEntries.map((entry) => entry.element),
+        connectorPreviewElements: new Map(),
+        connectorSourceElements: Array.from(affectedConnectorIds).flatMap((id) => {
+          const element = blockElementsRef.current.get(id);
+          return element ? [element] : [];
+        }),
         selectedBlockIds,
         startClientX: clientX,
         startClientY: clientY,
@@ -5881,6 +5975,14 @@ function App() {
       for (const sourceElement of dragSession.sourceElements) {
         sourceElement.classList.add("is-drag-source-hidden");
       }
+      for (const sourceElement of dragSession.connectorSourceElements) {
+        sourceElement.classList.add("is-drag-source-hidden");
+      }
+      renderTransientConnectorPreviews(
+        dataRef.current.elements,
+        affectedConnectorIds,
+        dragSession.connectorPreviewElements,
+      );
 
       return true;
     },
@@ -5962,6 +6064,10 @@ function App() {
     for (const sourceElement of session.sourceElements) {
       sourceElement.classList.remove("is-drag-source-hidden");
     }
+    for (const sourceElement of session.connectorSourceElements) {
+      sourceElement.classList.remove("is-drag-source-hidden");
+    }
+    for (const preview of session.connectorPreviewElements.values()) preview.remove();
     session.overlayElement.remove();
     document.body.classList.remove("is-interacting");
   }
@@ -5986,6 +6092,10 @@ function App() {
           Boolean(entry.element && entry.model && !entry.model.locked && isBoxCanvasElement(entry.model)),
       );
     if (sourceEntries.length === 0) return false;
+    const affectedConnectorIds = getBoundConnectorIdsForTargets(
+      dataRef.current.elements,
+      new Set(sourceEntries.map((entry) => entry.blockId)),
+    );
 
     const overlayElement = document.createElement("div");
     const groupElement = document.createElement("div");
@@ -6022,6 +6132,11 @@ function App() {
       items,
       overlayElement,
       sourceElements: sourceEntries.map((entry) => entry.element),
+      connectorPreviewElements: new Map<string, HTMLDivElement>(),
+      connectorSourceElements: Array.from(affectedConnectorIds).flatMap((id) => {
+        const element = blockElementsRef.current.get(id);
+        return element ? [element] : [];
+      }),
     };
     resizeLayerSessionRef.current = session;
     updateSelectionResizePreview(1, bounds, corner);
@@ -6029,6 +6144,10 @@ function App() {
     for (const sourceElement of session.sourceElements) {
       sourceElement.classList.add("is-drag-source-hidden");
     }
+    for (const sourceElement of session.connectorSourceElements) {
+      sourceElement.classList.add("is-drag-source-hidden");
+    }
+    renderTransientConnectorPreviews(dataRef.current.elements, affectedConnectorIds, session.connectorPreviewElements);
     return true;
   }
 
@@ -6048,6 +6167,13 @@ function App() {
       const visualScale = zoom * (item.element.type === "text" ? 1 : scale);
       item.wrapperElement.style.transform = `translate3d(${pan.x + x * zoom}px, ${pan.y + y * zoom}px, 0) scale(${visualScale})`;
     }
+    const selectedIds = new Set(selectedBlockIdsRef.current);
+    const previewElements = scaleSelection(dataRef.current.elements, selectedIds, bounds, corner, scale);
+    renderTransientConnectorPreviews(
+      previewElements,
+      getBoundConnectorIdsForTargets(dataRef.current.elements, new Set(session.blockIds)),
+      session.connectorPreviewElements,
+    );
   }
 
   function finishSelectionResizePreview() {
@@ -6368,11 +6494,19 @@ function App() {
     return connector?.style.endArrowhead === "arrow" ? connector : null;
   }
 
-  function getConnectorBindingTargets(pageId: string): readonly Readonly<{ element: ShapeElement; label: string }>[] {
+  function getConnectorBindingTargets(pageId: string): readonly Readonly<{ element: ShapeElement | TextElement; label: string }>[] {
     const shapeOrdinals = new Map<ShapeElement["shape"], number>();
+    let textOrdinal = 0;
     return dataRef.current.elements
-      .filter((element): element is ShapeElement => element.pageId === pageId && element.type === "shape")
+      .filter((element): element is ShapeElement | TextElement => element.pageId === pageId && isBindableElement(element))
       .map((element) => {
+        if (element.type === "text") {
+          textOrdinal += 1;
+          const centerX = Math.round(element.x + element.width / 2);
+          const centerY = Math.round(element.y + element.height / 2);
+          const excerpt = element.content.trim().replace(/\s+/g, " ").slice(0, 32);
+          return { element, label: `Text ${textOrdinal}${excerpt ? ` (${excerpt})` : ""} (center ${centerX}, ${centerY})` };
+        }
         const ordinal = (shapeOrdinals.get(element.shape) ?? 0) + 1;
         shapeOrdinals.set(element.shape, ordinal);
         const centerX = Math.round(element.x + element.width / 2);
@@ -6384,9 +6518,9 @@ function App() {
       });
   }
 
-  function getShapeTargetLabel(shape: ShapeElement): string {
-    return getConnectorBindingTargets(shape.pageId).find(({ element }) => element.id === shape.id)?.label
-      ?? `${shape.shape[0].toUpperCase()}${shape.shape.slice(1)} (center ${Math.round(shape.x + shape.width / 2)}, ${Math.round(shape.y + shape.height / 2)})`;
+  function getBindableTargetLabel(target: ShapeElement | TextElement): string {
+    return getConnectorBindingTargets(target.pageId).find(({ element }) => element.id === target.id)?.label
+      ?? `${target.type === "text" ? "Text" : `${target.shape[0].toUpperCase()}${target.shape.slice(1)}`} (center ${Math.round(target.x + target.width / 2)}, ${Math.round(target.y + target.height / 2)})`;
   }
 
   function getAnchorLabel(anchor: { t: number }): string {
@@ -6407,10 +6541,10 @@ function App() {
     if (current.kind !== "element") {
       return `Currently free. Press Enter to choose a target shape and cardinal anchor. Arrow keys move the endpoint.`;
     }
-    const target = dataRef.current.elements.find((element): element is ShapeElement =>
-      element.id === current.targetElementId && element.pageId === connector.pageId && element.type === "shape",
+    const target = dataRef.current.elements.find((element): element is ShapeElement | TextElement =>
+      element.id === current.targetElementId && element.pageId === connector.pageId && isBindableElement(element),
     );
-    const targetLabel = target ? getShapeTargetLabel(target) : "an unavailable target";
+    const targetLabel = target ? getBindableTargetLabel(target) : "an unavailable target";
     return `Currently bound to ${targetLabel} at the ${getAnchorLabel(current.anchor)}. Press Enter to rebind or detach. Arrow keys detach and move the endpoint.`;
   }
 
@@ -6419,7 +6553,7 @@ function App() {
     if (!connector || connector.locked) return;
     const targets = getConnectorBindingTargets(connector.pageId);
     if (targets.length === 0) {
-      setConnectorBindingAnnouncement(`No compatible shapes are available to bind the ${endpoint} endpoint.`);
+      setConnectorBindingAnnouncement(`No compatible shapes or text blocks are available to bind the ${endpoint} endpoint.`);
       return;
     }
     const current = connector[endpoint];
@@ -6459,13 +6593,13 @@ function App() {
     const chooser = connectorEndpointChooser;
     const connector = getSelectedArrowConnector();
     if (!chooser || !connector || !chooser.targetElementId) return;
-    const target = dataRef.current.elements.find((element): element is ShapeElement =>
+    const target = dataRef.current.elements.find((element): element is ShapeElement | TextElement =>
       element.id === chooser.targetElementId
         && element.pageId === connector.pageId
-        && element.type === "shape",
+        && isBindableElement(element),
     );
     const anchor = target
-      ? getShapeBindingAnchors(target).find(({ name }) => name === anchorName)?.anchor
+      ? getBindableBindingAnchors(target).find(({ name }) => name === anchorName)?.anchor
       : undefined;
     if (!target || !anchor) return;
     const previous = connector[chooser.endpoint];
@@ -6482,7 +6616,7 @@ function App() {
         : { ...element, end: next, updatedAt: Date.now() };
     }));
     setConnectorBindingAnnouncement(
-      `${previous.kind === "element" ? "Rebound" : "Bound"} ${chooser.endpoint} endpoint to ${getShapeTargetLabel(target)} at the ${getAnchorLabel(anchor)}.`,
+      `${previous.kind === "element" ? "Rebound" : "Bound"} ${chooser.endpoint} endpoint to ${getBindableTargetLabel(target)} at the ${getAnchorLabel(anchor)}.`,
     );
     closeConnectorEndpointChooser();
   }
@@ -7386,9 +7520,7 @@ function App() {
               />
             ))}
             {activeTool === "arrow" || isConnectorEndpointRetargeting ? (
-              <ShapeBindingAnchors
-                shapes={visibleCanvasElements.filter((element): element is ShapeElement => element.type === "shape")}
-              />
+              <ShapeBindingAnchors targets={visibleCanvasElements} />
             ) : null}
             {pendingImagePlacement?.point ? (
               <img
@@ -7506,7 +7638,7 @@ function App() {
               element.id === selectedBlockIds[0] && element.type === "connector" && element.style.endArrowhead === "arrow",
             );
             if (!connector) return null;
-            const shapes = getConnectorBindingTargets(connector.pageId)
+            const targets = getConnectorBindingTargets(connector.pageId)
               .map(({ element, label }) => ({ id: element.id, label }));
             return (
               <ConnectorEndpointChooser
@@ -7519,7 +7651,7 @@ function App() {
                 onSelectTarget={(targetElementId) => setConnectorEndpointChooser((current) =>
                   current ? { ...current, targetElementId } : current,
                 )}
-                shapes={shapes}
+                targets={targets}
                 targetElementId={connectorEndpointChooser.targetElementId}
               />
             );

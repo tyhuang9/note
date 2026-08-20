@@ -189,24 +189,9 @@ function FreeConnectorElementView({ element, isDragSourceHidden = false, isSelec
   useLayoutEffect(() => {
     const svg = ref.current;
     if (!svg) return;
-    svg.replaceChildren();
-    const draw = new RoughSVG(svg);
-    const options = roughOptions(element.style);
     const start = { x: x1 + padding, y: y1 + padding };
     const end = { x: x2 + padding, y: y2 + padding };
-    svg.append(draw.line(start.x, start.y, end.x, end.y, options));
-    if (element.style.endArrowhead === "arrow") {
-      const points = arrowheadPoints(start, end);
-      if (points) {
-        svg.append(draw.polygon(points, {
-          ...options,
-          fill: canvasColorToCss(element.style.strokeColor),
-          fillStyle: "solid",
-          seed: ((element.style.seed + 1) >>> 0) || 1,
-          strokeLineDash: undefined,
-        }));
-      }
-    }
+    renderConnectorRoughSvg(svg, element.style, start, end);
   }, [element, height, padding, width, x1, x2, y1, y2]);
   return (
     <div
@@ -224,4 +209,27 @@ function FreeConnectorElementView({ element, isDragSourceHidden = false, isSelec
       <svg aria-label="Connector" className="primitive-connector" height="100%" overflow="visible" ref={ref} width="100%" />
     </div>
   );
+}
+
+/** Shared seeded connector painter for React elements and transient transform previews. */
+export function renderConnectorRoughSvg(
+  svg: SVGSVGElement,
+  style: ConnectorElement["style"],
+  start: Readonly<{ x: number; y: number }>,
+  end: Readonly<{ x: number; y: number }>,
+) {
+  svg.replaceChildren();
+  const draw = new RoughSVG(svg);
+  const options = roughOptions(style);
+  svg.append(draw.line(start.x, start.y, end.x, end.y, options));
+  if (style.endArrowhead === "arrow") {
+    const points = arrowheadPoints(start, end);
+    if (points) svg.append(draw.polygon(points, {
+      ...options,
+      fill: canvasColorToCss(style.strokeColor),
+      fillStyle: "solid",
+      seed: ((style.seed + 1) >>> 0) || 1,
+      strokeLineDash: undefined,
+    }));
+  }
 }

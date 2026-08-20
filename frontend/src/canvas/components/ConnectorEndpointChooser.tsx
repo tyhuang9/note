@@ -10,7 +10,7 @@ type ConnectorEndpointChooserProps = {
   onClose: () => void;
   onDetach: () => void;
   onSelectTarget: (targetElementId: string) => void;
-  shapes: readonly Readonly<{ id: string; label: string }>[];
+  targets: readonly Readonly<{ id: string; label: string }>[];
   targetElementId: string | null;
 };
 
@@ -32,12 +32,12 @@ export function ConnectorEndpointChooser({
   onClose,
   onDetach,
   onSelectTarget,
-  shapes,
+  targets,
   targetElementId,
 }: ConnectorEndpointChooserProps) {
   const dialogRef = useRef<HTMLElement | null>(null);
   const [toolbarPosition, setToolbarPosition] = useState({ left: 0, top: 0 });
-  const selectedTarget = shapes.find(({ id }) => id === targetElementId) ?? null;
+  const selectedTarget = targets.find(({ id }) => id === targetElementId) ?? null;
 
   useLayoutEffect(() => {
     function updateToolbarPosition() {
@@ -139,12 +139,12 @@ export function ConnectorEndpointChooser({
         <header className="connector-endpoint-chooser-header">
           <div>
             <h2 id="connector-endpoint-chooser-title">Choose {endpoint} endpoint target</h2>
-            <p id="connector-endpoint-chooser-instructions">Choose a shape, then a cardinal anchor.</p>
+            <p id="connector-endpoint-chooser-instructions">Choose a shape or text block, then a cardinal anchor.</p>
           </div>
           <button aria-label="Close endpoint chooser" onClick={onClose} type="button">Close</button>
         </header>
-        <div aria-label="Target shape" className="connector-endpoint-chooser-group" role="group">
-          {shapes.map(({ id, label }) => (
+        <div aria-label="Target element" className="connector-endpoint-chooser-group" role="group">
+          {targets.map(({ id, label }) => (
             <button
               aria-pressed={id === targetElementId}
               data-connector-target

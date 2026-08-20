@@ -47,7 +47,7 @@ test("invalid authored coordinates do not write and finite extremes clamp to the
   await dispatchArrowPointerWithCanvasLeft(page, "nan");
   await expect(page.locator(".arrow-authoring-preview")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Select and move arrow connector" })).toHaveCount(0);
-  await expect(page.locator(".canvas-accessibility-status")).toHaveText("Arrow endpoint is unavailable.");
+  await expect(page.locator(".canvas-accessibility-status[role='status']")).toHaveText("Arrow endpoint is unavailable.");
   expect((await counts(page)).apply).toBe(0);
 
   await dispatchArrowPointerWithCanvasLeft(page, -2_000_000);
@@ -60,6 +60,189 @@ test("invalid authored coordinates do not write and finite extremes clamp to the
     end: { kind: "free", x: -1_000_000 },
     start: { kind: "free", x: 1_000_000 },
   });
+});
+
+test("keyboard Arrow creates once, focuses endpoint controls, and binds without pointer input", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  await canvas.focus();
+  await page.keyboard.press("a");
+  await resetCounts(page);
+  await page.keyboard.press("Enter");
+
+  await expect(page.getByRole("button", { name: "Select and move arrow connector" })).toHaveCount(1);
+  await expect.poll(async () => (await counts(page)).apply).toBe(1);
+  await expect(page.locator('[data-tool="arrow"]')).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".canvas-accessibility-status[role='status']")).toHaveText(
+    "Arrow created. Tool lock kept Arrow active. Use the endpoint handles to bind or move it.",
+  );
+  const startHandle = page.getByRole("button", { name: "Move connector start endpoint" });
+  const endHandle = page.getByRole("button", { name: "Move connector end endpoint" });
+  await expect(startHandle).toBeFocused();
+  await expect(endHandle).toBeVisible();
+
+  await page.keyboard.press("Enter");
+  const dialog = page.getByRole("dialog", { name: "Choose start endpoint target" });
+  await expect(dialog).toBeVisible();
+  expect((await counts(page)).apply).toBe(1);
+  const textTarget = dialog.locator('[data-connector-target="true"]').filter({ hasText: /^Text 1 / });
+  await textTarget.focus();
+  await page.keyboard.press("Enter");
+  expect((await counts(page)).apply).toBe(1);
+  await page.keyboard.press("Space");
+  const leftAnchor = dialog.getByRole("button", { name: /^Left anchor on Text 1 / });
+  await leftAnchor.focus();
+  await page.keyboard.press("Space");
+  await expect(startHandle).toBeFocused();
+  await expect.poll(async () => newestConnector(page)).toMatchObject({
+    start: { kind: "element", targetElementId: "locked-text" },
+  });
+
+  await page.keyboard.press("Enter");
+  const detach = page.getByRole("button", { name: "Detach start endpoint" });
+  await detach.focus();
+  await page.keyboard.press("Space");
+  await expect(startHandle).toBeFocused();
+  await expect.poll(async () => newestConnector(page)).toMatchObject({ start: { kind: "free" } });
+
+  await page.keyboard.press("Enter");
+  const shapeTarget = page.getByRole("dialog", { name: "Choose start endpoint target" })
+    .locator('[data-connector-target="true"]').filter({ hasText: /^Rectangle 1 / });
+  await shapeTarget.focus();
+  await page.keyboard.press("Space");
+  const rightAnchor = page.getByRole("button", { name: /^Right anchor on Rectangle 1 / });
+  await rightAnchor.focus();
+  await page.keyboard.press("Space");
+  await expect.poll(async () => newestConnector(page)).toMatchObject({
+    start: { kind: "element", targetElementId: "target-shape" },
+  });
+
+  const toolLock = page.locator("[data-tool-lock]");
+  await toolLock.focus();
+  await page.keyboard.press("Enter");
+  await expect(toolLock).toHaveAttribute("aria-pressed", "false");
+  await resetCounts(page);
+  await canvas.focus();
+  await page.keyboard.press("a");
+  await page.keyboard.press("Enter");
+  await expect.poll(async () => (await counts(page)).apply).toBe(1);
+  await expect(page.locator('[data-tool="select"]')).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".canvas-accessibility-status[role='status']")).toHaveText(
+    "Arrow created. Switched to Select. Use the endpoint handles to bind or move it.",
+  );
+  await expect(startHandle).toBeFocused();
+});
+
+test("keyboard Arrow honors guards and stays centered across zoom, pan, and unsafe viewports", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  await canvas.focus();
+  await page.keyboard.press("a");
+  await resetCounts(page);
+
+  await page.evaluate(() => {
+    const input = document.createElement("input");
+    input.setAttribute("aria-label", "Arrow guard input");
+    document.body.append(input);
+  });
+  const input = page.getByLabel("Arrow guard input");
+  await input.focus();
+  await page.keyboard.press("Enter");
+  await page.evaluate(() => {
+    const editor = document.createElement("div");
+    editor.contentEditable = "true";
+    editor.setAttribute("aria-label", "Arrow guard editor");
+    editor.setAttribute("role", "textbox");
+    document.body.append(editor);
+  });
+  const editor = page.getByLabel("Arrow guard editor");
+  await editor.focus();
+  await page.keyboard.press("Enter");
+  await canvas.focus();
+  await page.keyboard.press("Control+Enter");
+  await page.keyboard.press("Shift+Enter");
+  await canvas.evaluate((element) => {
+    element.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, isComposing: true, key: "Enter" }));
+    element.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter", repeat: true }));
+  });
+  expect((await counts(page)).apply).toBe(0);
+  await expect(page.getByRole("button", { name: "Select and move arrow connector" })).toHaveCount(0);
+
+  let expectedApplyCount = 0;
+  for (const zoom of [50, 100, 200]) {
+    await setZoom(page, canvas, zoom);
+    await canvas.focus();
+    await page.keyboard.press("a");
+    await page.keyboard.press("Enter");
+    expectedApplyCount += 1;
+    await expect.poll(async () => (await counts(page)).apply).toBe(expectedApplyCount);
+    await expectKeyboardArrowCentered(page, canvas);
+  }
+
+  await canvas.evaluate((element) => element.dispatchEvent(new WheelEvent("wheel", {
+    bubbles: true,
+    cancelable: true,
+    deltaX: 180,
+    deltaY: 90,
+  })));
+  await canvas.focus();
+  await page.keyboard.press("a");
+  await page.keyboard.press("Enter");
+  expectedApplyCount += 1;
+  await expect.poll(async () => (await counts(page)).apply).toBe(expectedApplyCount);
+  await expectKeyboardArrowCentered(page, canvas);
+
+  const connectorCount = await page.getByRole("button", { name: "Select and move arrow connector" }).count();
+  await resetCounts(page);
+  await canvas.evaluate((element) => element.dispatchEvent(new WheelEvent("wheel", {
+    bubbles: true,
+    cancelable: true,
+    deltaX: 4_000_000,
+  })));
+  await canvas.focus();
+  await page.keyboard.press("a");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".canvas-accessibility-status[role='status']")).toHaveText(
+    "Arrow is unavailable at the current canvas position.",
+  );
+  expect((await counts(page)).apply).toBe(0);
+  await expect(page.getByRole("button", { name: "Select and move arrow connector" })).toHaveCount(connectorCount);
+});
+
+test("candidate announcements use unique labels and only repeat on meaningful transitions", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  const bounds = await requiredBounds(canvas, "canvas");
+  const shape = page.locator('[data-canvas-element-id="target-shape"]');
+  await selectTool(page, "arrow");
+  await page.mouse.click(bounds.x + bounds.width * 0.8, bounds.y + bounds.height * 0.8);
+  await page.evaluate(() => {
+    const status = document.querySelector(".canvas-accessibility-status[role='status']");
+    const runtime = window as unknown as { __candidateAnnouncements: string[]; __candidateObserver: MutationObserver };
+    runtime.__candidateAnnouncements = [];
+    runtime.__candidateObserver = new MutationObserver(() => {
+      const message = status?.textContent?.trim() ?? "";
+      if (message) runtime.__candidateAnnouncements.push(message);
+    });
+    if (status) runtime.__candidateObserver.observe(status, { childList: true, characterData: true, subtree: true });
+  });
+  const shapeBounds = await requiredBounds(shape, "target shape");
+  const near = { x: shapeBounds.x + shapeBounds.width + 24, y: shapeBounds.y + shapeBounds.height / 2 };
+  await page.mouse.move(near.x, near.y);
+  await page.mouse.move(near.x + 1, near.y, { steps: 4 });
+  await expect(page.locator(".canvas-accessibility-status[role='status']")).toHaveText(
+    "Near Rectangle 1 (center 310, 280), target-relative right anchor; move closer to snap.",
+  );
+  const snapped = { x: shapeBounds.x + shapeBounds.width + 16, y: near.y };
+  await page.mouse.move(snapped.x, snapped.y);
+  await page.mouse.move(snapped.x - 1, snapped.y, { steps: 4 });
+  await expect(page.locator(".canvas-accessibility-status[role='status']")).toHaveText(
+    "Snapped to Rectangle 1 (center 310, 280), target-relative right anchor.",
+  );
+  const announcements = await page.evaluate(() => {
+    const runtime = window as unknown as { __candidateAnnouncements: string[]; __candidateObserver: MutationObserver };
+    runtime.__candidateObserver.disconnect();
+    return runtime.__candidateAnnouncements;
+  });
+  expect(announcements.filter((message) => message.startsWith("Near Rectangle 1"))).toHaveLength(1);
+  expect(announcements.filter((message) => message.startsWith("Snapped to Rectangle 1"))).toHaveLength(1);
 });
 
 test("one direct or nearby target exposes screen-constant anchors and binding wins over Shift", async ({ page }) => {
@@ -121,7 +304,7 @@ test("zero length, cancellation paths, Space pan, and Line regression do not cre
   await page.mouse.click(point.x, point.y);
   await page.mouse.click(point.x, point.y);
   await expect(page.locator(".arrow-authoring-preview")).toHaveCount(1);
-  await expect(page.locator(".canvas-accessibility-status")).toHaveText("Arrow needs two different endpoints.");
+  await expect(page.locator(".canvas-accessibility-status[role='status']")).toHaveText("Arrow needs two different endpoints.");
   expect((await counts(page)).apply).toBe(0);
 
   await page.keyboard.press("Escape");
@@ -203,6 +386,20 @@ async function dispatchArrowPointerWithCanvasLeft(page: Page, canvasLeft: number
     }));
     delete (content as HTMLElement & { getBoundingClientRect?: () => DOMRect }).getBoundingClientRect;
   }, canvasLeft);
+}
+
+async function expectKeyboardArrowCentered(page: Page, canvas: Locator) {
+  const canvasBounds = await requiredBounds(canvas, "canvas");
+  const start = await requiredBounds(page.getByRole("button", { name: "Move connector start endpoint" }), "start endpoint");
+  const end = await requiredBounds(page.getByRole("button", { name: "Move connector end endpoint" }), "end endpoint");
+  expect(Math.abs(
+    (start.x + start.width / 2 + end.x + end.width / 2) / 2
+      - (canvasBounds.x + canvasBounds.width / 2),
+  )).toBeLessThanOrEqual(2);
+  expect(Math.abs(
+    (start.y + start.height / 2 + end.y + end.height / 2) / 2
+      - (canvasBounds.y + canvasBounds.height / 2),
+  )).toBeLessThanOrEqual(2);
 }
 
 async function setZoom(page: Page, canvas: Locator, percent: number) {

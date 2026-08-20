@@ -16,6 +16,7 @@ export const CONNECTOR_BINDING_REVEAL_RADIUS_PX = 28;
 /** Mirrors the persistence boundary limit in the Rust repository. */
 export const MAX_CANVAS_VALUE = 1_000_000;
 export const MAX_CANVAS_ROTATION_DEGREES = 360;
+const DEFAULT_KEYBOARD_ARROW_LENGTH = 160;
 
 export type ShapeAnchorName = "top" | "right" | "bottom" | "left";
 
@@ -79,6 +80,32 @@ export function normalizeFreeConnectorEndpoint(
     x: clampCanvasCoordinate(point.x),
     y: clampCanvasCoordinate(point.y),
   };
+}
+
+/** Creates a visible horizontal keyboard-authored arrow centered in the current viewport. */
+export function getDefaultKeyboardArrowEndpoints(
+  viewport: Readonly<{ x: number; y: number; width: number; height: number }>,
+): Readonly<{
+  start: Extract<ConnectorEndpoint, { kind: "free" }>;
+  end: Extract<ConnectorEndpoint, { kind: "free" }>;
+}> | null {
+  if (
+    !Number.isFinite(viewport.width)
+    || !Number.isFinite(viewport.height)
+    || viewport.width <= 0
+    || viewport.height <= 0
+  ) return null;
+  const center = {
+    x: viewport.x + viewport.width / 2,
+    y: viewport.y + viewport.height / 2,
+  };
+  if (!isSafeCanvasCoordinate(center.x) || !isSafeCanvasCoordinate(center.y)) return null;
+  const length = Math.min(DEFAULT_KEYBOARD_ARROW_LENGTH, viewport.width / 2);
+  const start = normalizeFreeConnectorEndpoint({ x: center.x - length / 2, y: center.y });
+  const end = normalizeFreeConnectorEndpoint({ x: center.x + length / 2, y: center.y });
+  return start && end && Math.hypot(end.x - start.x, end.y - start.y) >= 0.01
+    ? { start, end }
+    : null;
 }
 
 /** Resolves any compatible endpoint to its current world point. */

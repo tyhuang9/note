@@ -177,6 +177,7 @@ import {
 } from "./canvas/model/selectionBounds";
 import {
   detachConnectorEndpointsForDeletedTargets,
+  getDefaultKeyboardArrowEndpoints,
   getBindableBindingAnchors,
   isBindableElement,
   resolveConnectorEndpoint,
@@ -1168,6 +1169,7 @@ function App() {
   const [isConnectorEndpointRetargeting, setIsConnectorEndpointRetargeting] = useState(false);
   const [connectorEndpointChooser, setConnectorEndpointChooser] = useState<ConnectorEndpointChooserState | null>(null);
   const [connectorBindingAnnouncement, setConnectorBindingAnnouncement] = useState("");
+  const [keyboardArrowEndpointAccessId, setKeyboardArrowEndpointAccessId] = useState<string | null>(null);
   const [selectedSidebarPageIds, setSelectedSidebarPageIds] = useState<string[]>([]);
   const [draggedPageIds, setDraggedPageIds] = useState<string[]>([]);
   const [pageDropTargetFolderId, setPageDropTargetFolderId] = useState<string | null>(null);
@@ -1278,6 +1280,8 @@ function App() {
   const connectorEndpointChooserRef = useRef<ConnectorEndpointChooserState | null>(null);
   const connectorEndpointOriginFocusRef = useRef<HTMLButtonElement | null>(null);
   const connectorEndpointFocusReturnRafRef = useRef<number | null>(null);
+  const keyboardArrowCreationRef = useRef<() => boolean>(() => false);
+  const keyboardArrowEndpointFocusRafRef = useRef<number | null>(null);
 
   useLayoutEffect(() => {
     const bounds = selectionFrameVisualBoundsRef.current;
@@ -1900,6 +1904,9 @@ function App() {
       }
       if (connectorEndpointFocusReturnRafRef.current !== null) {
         window.cancelAnimationFrame(connectorEndpointFocusReturnRafRef.current);
+      }
+      if (keyboardArrowEndpointFocusRafRef.current !== null) {
+        window.cancelAnimationFrame(keyboardArrowEndpointFocusRafRef.current);
       }
 
       cancelCanvasSelectionSession();
@@ -3454,6 +3461,26 @@ function App() {
         }
 
         selectAllVisibleBlocks();
+        return;
+      }
+
+      if (
+        event.key === "Enter"
+        && event.target === canvasRef.current
+        && document.activeElement === canvasRef.current
+        && activeToolRef.current === "arrow"
+        && isCanvasAuthoringAvailableRef.current
+        && connectorEndpointChooserRef.current === null
+        && !currentEditingBlockId
+        && !event.isComposing
+        && !event.repeat
+        && !event.altKey
+        && !event.ctrlKey
+        && !event.metaKey
+        && !event.shiftKey
+      ) {
+        event.preventDefault();
+        keyboardArrowCreationRef.current();
         return;
       }
 
@@ -6985,6 +7012,9 @@ function App() {
     canvasRef,
     cleanupMarquee: clearMarquee,
     createArrowId: () => createId("connector"),
+    getArrowCreatedStatus: () => isToolLockedRef.current
+      ? "Arrow created. Tool lock kept Arrow active. Use the endpoint handles to bind or move it."
+      : "Arrow created. Switched to Select. Use the endpoint handles to bind or move it.",
     getArrowPreviewStyle: (elementId) => {
       const preference = drawingPreferencesRef.current.arrow;
       return {
@@ -6999,6 +7029,7 @@ function App() {
         strokeWidth: preference.strokeWidth,
       };
     },
+    getArrowTargetLabel: getBindableTargetLabel,
     hasPendingImage: () => pendingImagePlacementRef.current !== null,
     interactionCancellationKey: `${activeTool}:${selectedPageId ?? ""}`,
     isTemporaryHandActiveRef,
@@ -7039,6 +7070,35 @@ function App() {
     zoomStep: ZOOM_STEP,
   });
   cancelCanvasSelectionRef.current = canvasInteraction.cancelMarquee;
+  keyboardArrowCreationRef.current = () => {
+    canvasInteraction.cancelArrowAuthoring();
+    const endpoints = canvasViewportRef.current
+      ? getDefaultKeyboardArrowEndpoints(canvasViewportRef.current)
+      : null;
+    if (!endpoints) {
+      setConnectorBindingAnnouncement("Arrow is unavailable at the current canvas position.");
+      return false;
+    }
+    const elementId = createId("connector");
+    const keepsArrowActive = isToolLockedRef.current;
+    if (!completeArrowCreation(elementId, endpoints.start, endpoints.end)) {
+      setConnectorBindingAnnouncement("Arrow is unavailable at the current canvas position.");
+      return false;
+    }
+    setKeyboardArrowEndpointAccessId(elementId);
+    setConnectorBindingAnnouncement(keepsArrowActive
+      ? "Arrow created. Tool lock kept Arrow active. Use the endpoint handles to bind or move it."
+      : "Arrow created. Switched to Select. Use the endpoint handles to bind or move it.");
+    if (keyboardArrowEndpointFocusRafRef.current !== null) {
+      window.cancelAnimationFrame(keyboardArrowEndpointFocusRafRef.current);
+    }
+    keyboardArrowEndpointFocusRafRef.current = window.requestAnimationFrame(() => {
+      keyboardArrowEndpointFocusRafRef.current = null;
+      document.querySelector<HTMLButtonElement>('[data-connector-endpoint-handle="start"]')
+        ?.focus({ preventScroll: true });
+    });
+    return true;
+  };
 
   const completeInkStroke = useCallback(
     (tool: "pen" | "highlighter", points: readonly RawInkPoint[]) => {
@@ -7637,8 +7697,11 @@ function App() {
             selectionFrameRef={selectionFrameRef}
             selectionFrame={(() => {
               const bounds = selectionFramePreview ?? selectionWorldBounds;
+              const isKeyboardArrowEndpointAccess = activeTool === "arrow"
+                && selectedBlockIds.length === 1
+                && selectedBlockIds[0] === keyboardArrowEndpointAccessId;
               if (
-                activeTool !== "select"
+                (activeTool !== "select" && !isKeyboardArrowEndpointAccess)
                 || !bounds
                 || selectedBlockIds.length === 0
                 || selectionContainsOnlyText
@@ -7714,7 +7777,7 @@ function App() {
                   ? `Resize non-text geometry from ${corner}; text blocks reposition without resizing`
                   : `Resize selected elements from ${corner}`,
                 resizeCorners,
-                showMoveSurface: selectionHasUnlockedElements && !usesNativeSingleElementInteraction,
+                showMoveSurface: activeTool === "select" && selectionHasUnlockedElements && !usesNativeSingleElementInteraction,
                 width: bounds.width * zoomLevel + framePadding * 2,
                 x: panOffset.x + bounds.x * zoomLevel - framePadding,
                 y: panOffset.y + bounds.y * zoomLevel - framePadding,

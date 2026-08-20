@@ -18,6 +18,7 @@ import {
   getConnectorAuthoringCandidate,
   normalizeFreeConnectorEndpoint,
   snapConnectorPointToAngle,
+  type BindableElement,
   type ShapeAnchorName,
 } from "../model/connectorBinding";
 import { screenToleranceToWorld } from "../model/geometry";
@@ -70,6 +71,8 @@ type CanvasInteractionOptions = {
   maxZoom: number;
   minZoom: number;
   getArrowPreviewStyle: (elementId: string) => ConnectorElement["style"];
+  getArrowCreatedStatus: () => string;
+  getArrowTargetLabel: (target: BindableElement) => string;
   onCreateArrow: (elementId: string, start: ConnectorEndpoint, end: ConnectorEndpoint) => boolean;
   onCreatePrimitive: (tool: PrimitiveTool, geometry: PrimitiveGeometry) => void;
   onArrowStatusChange: (message: string) => void;
@@ -142,6 +145,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
   const arrowSession = useRef<ArrowAuthoringSession | null>(null);
   const arrowPreviewRef = useRef<SVGSVGElement | null>(null);
   const ignoredLostCapturePointerIdRef = useRef<number | null>(null);
+  const lastArrowCandidateAnnouncementRef = useRef<string | null>(null);
   const [arrowAuthoringVisual, setArrowAuthoringVisual] = useState<ArrowAuthoringVisual | null>(null);
 
   optionsRef.current = options;
@@ -192,6 +196,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
     const session = arrowSession.current;
     if (!session) return false;
     arrowSession.current = null;
+    lastArrowCandidateAnnouncementRef.current = null;
     clearArrowPreview();
     optionsRef.current.cleanupMarquee();
     if (updateUi) {
@@ -239,6 +244,18 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
           targetId: candidate.target.id,
         }
       : null;
+    const announcementKey = next
+      ? `${next.targetId}:${next.activeAnchorName}:${next.isSnapped ? "snapped" : "near"}`
+      : null;
+    if (announcementKey !== lastArrowCandidateAnnouncementRef.current) {
+      lastArrowCandidateAnnouncementRef.current = announcementKey;
+      if (candidate) {
+        const targetLabel = optionsRef.current.getArrowTargetLabel(candidate.target);
+        optionsRef.current.onArrowStatusChange(candidate.endpoint.kind === "element"
+          ? `Snapped to ${targetLabel}, target-relative ${candidate.activeAnchor.name} anchor.`
+          : `Near ${targetLabel}, target-relative ${candidate.activeAnchor.name} anchor; move closer to snap.`);
+      }
+    }
     setArrowAuthoringVisual((current) =>
       current?.targetId === next?.targetId
       && current?.activeAnchorName === next?.activeAnchorName
@@ -426,9 +443,10 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
             return;
           }
           arrowSession.current = null;
+          lastArrowCandidateAnnouncementRef.current = null;
           clearArrowPreview();
           setArrowAuthoringVisual(null);
-          current.onArrowStatusChange("Arrow created.");
+          current.onArrowStatusChange(current.getArrowCreatedStatus());
         }
         event.currentTarget.focus({ preventScroll: true });
         return;

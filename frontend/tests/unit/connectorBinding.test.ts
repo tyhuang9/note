@@ -4,6 +4,7 @@ import {
   CONNECTOR_BINDING_SNAP_RADIUS_PX,
   CONNECTOR_BINDING_REVEAL_RADIUS_PX,
   detachConnectorEndpointsForDeletedTargets,
+  getDefaultKeyboardArrowEndpoints,
   getConnectorAuthoringCandidate,
   getShapeAnchorPoint,
   getShapeBindingAnchors,
@@ -125,6 +126,29 @@ describe("connector shape binding", () => {
     expect(normalizeFreeConnectorEndpoint({ x: Number.NaN, y: 0 })).toBeNull();
     expect(normalizeFreeConnectorEndpoint({ x: 0, y: Number.POSITIVE_INFINITY })).toBeNull();
     expect(normalizeFreeConnectorEndpoint({ x: Number.NEGATIVE_INFINITY, y: 0 })).toBeNull();
+  });
+
+  it("centers a nonzero keyboard arrow in safe viewports and rejects an unsafe center", () => {
+    expect(getDefaultKeyboardArrowEndpoints({ x: 100, y: 200, width: 800, height: 400 })).toEqual({
+      start: { kind: "free", x: 420, y: 400 },
+      end: { kind: "free", x: 580, y: 400 },
+    });
+    expect(getDefaultKeyboardArrowEndpoints({ x: 0, y: 0, width: 100, height: 80 })).toEqual({
+      start: { kind: "free", x: 25, y: 40 },
+      end: { kind: "free", x: 75, y: 40 },
+    });
+    expect(getDefaultKeyboardArrowEndpoints({
+      x: MAX_CANVAS_VALUE - 200,
+      y: 0,
+      width: 400,
+      height: 100,
+    })).toEqual({
+      start: { kind: "free", x: MAX_CANVAS_VALUE - 80, y: 50 },
+      end: { kind: "free", x: MAX_CANVAS_VALUE, y: 50 },
+    });
+    expect(getDefaultKeyboardArrowEndpoints({ x: MAX_CANVAS_VALUE + 1, y: 0, width: 400, height: 100 })).toBeNull();
+    expect(getDefaultKeyboardArrowEndpoints({ x: Number.NaN, y: 0, width: 400, height: 100 })).toBeNull();
+    expect(getDefaultKeyboardArrowEndpoints({ x: 0, y: 0, width: 0, height: 100 })).toBeNull();
   });
 
   it.each(["rectangle", "ellipse", "diamond"] as const)("exposes the cardinal anchors for a %s", (shapeName) => {

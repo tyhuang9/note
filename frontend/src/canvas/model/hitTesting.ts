@@ -249,30 +249,59 @@ export function getDirectBindableTargetAtPoint(
   elements: readonly CanvasElement[],
   point: CanvasPoint,
 ): ShapeElement | TextElement | undefined {
-  return elements
-    .map((element, index) => ({ element, index }))
-    .sort((first, second) => second.element.zIndex - first.element.zIndex || second.index - first.index)
-    .map(({ element }) => element)
-    .find((element): element is ShapeElement | TextElement =>
-      (element.type === "text" || (element.type === "shape" && (
-        element.shape === "rectangle" || element.shape === "ellipse" || element.shape === "diamond"
-      ))) && directBindableContainsPoint(element, point),
-    );
+  let best: ShapeElement | TextElement | undefined;
+  let bestZIndex = Number.NEGATIVE_INFINITY;
+  let bestIndex = -1;
+
+  for (let index = 0; index < elements.length; index += 1) {
+    const element = elements[index];
+    if (!isDirectBindableElement(element)) continue;
+
+    // A candidate can only win if it has a higher z-index, or the same
+    // z-index and a later source position than the current winner. This
+    // avoids exact geometry work for candidates that cannot replace `best`.
+    if (element.zIndex < bestZIndex || (element.zIndex === bestZIndex && index <= bestIndex)) continue;
+    if (!directBindableContainsPoint(element, point)) continue;
+
+    best = element;
+    bestZIndex = element.zIndex;
+    bestIndex = index;
+  }
+
+  return best;
+}
+
+function isDirectBindableElement(element: CanvasElement): element is ShapeElement | TextElement {
+  return element.type === "text" || (element.type === "shape" && (
+    element.shape === "rectangle" || element.shape === "ellipse" || element.shape === "diamond"
+  ));
 }
 
 function directBindableContainsPoint(element: ShapeElement | TextElement, worldPoint: CanvasPoint): boolean {
   if (!(element.width > 0 && element.height > 0)) return false;
-  const point = unrotatePoint(element, worldPoint);
+  const centerX = element.x + element.width / 2;
+  const centerY = element.y + element.height / 2;
+  const angle = (-element.rotation * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const dx = worldPoint.x - centerX;
+  const dy = worldPoint.y - centerY;
+  const localX = centerX + dx * cos - dy * sin - element.x;
+  const localY = centerY + dx * sin + dy * cos - element.y;
+
+  // Reject outside the inverse-rotated local AABB before invoking the more
+  // expensive rounded boundary containment calculation.
+  if (localX < 0 || localY < 0 || localX > element.width || localY > element.height) return false;
   if (element.type === "text" || element.shape === "rectangle") {
     return element.type === "text"
-      ? boundsContainPoint(element, point)
+      ? true
       : containsPointInsideShapeBoundary(element.shape, element.width, element.height, element.style.roundness, {
-        x: point.x - element.x,
-        y: point.y - element.y,
+        x: localX,
+        y: localY,
       });
   }
   return containsPointInsideShapeBoundary(element.shape, element.width, element.height, element.style.roundness, {
-    x: point.x - element.x,
-    y: point.y - element.y,
+    x: localX,
+    y: localY,
   });
 }

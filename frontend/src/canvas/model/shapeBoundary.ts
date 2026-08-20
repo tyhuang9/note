@@ -63,16 +63,18 @@ export function projectPointToShapeBoundary(
 }
 
 function roundedRectangleRadius(width: number, height: number, roundness: number) {
-  return Math.min(width, height) * Math.max(MIN_VISUAL_RECTANGLE_ROUNDNESS, Math.min(1, roundness)) / 2;
+  const boundedRoundness = Math.max(MIN_VISUAL_RECTANGLE_ROUNDNESS, Math.min(1, roundness));
+  return Math.min(width, height) * boundedRoundness / 2;
 }
 
 function diamondMeasures(width: number, height: number) {
   const cornerInset = Math.min(width, height) * DIAMOND_CORNER_INSET;
+  const diagonal = Math.max(1, Math.hypot(width, height));
   return {
     centerX: width / 2,
     centerY: height / 2,
-    horizontalInset: cornerInset * width / Math.max(1, Math.hypot(width, height)),
-    verticalInset: cornerInset * height / Math.max(1, Math.hypot(width, height)),
+    horizontalInset: cornerInset * width / diagonal,
+    verticalInset: cornerInset * height / diagonal,
   };
 }
 
@@ -111,8 +113,12 @@ function boundarySegments(shape: Exclude<ShapeBoundaryKind, "ellipse">, width: n
 
 type Segment = { kind: "line"; end: CanvasPoint } | { kind: "quadratic"; control: CanvasPoint; end: CanvasPoint };
 function chainSegments(segments: readonly Segment[], start: CanvasPoint): BoundarySegment[] {
-  const result: BoundarySegment[] = []; let current = start;
-  for (const segment of segments) { result.push(segment.kind === "line" ? { ...segment, start: current } : { ...segment, start: current }); current = segment.end; }
+  const result: BoundarySegment[] = [];
+  let current = start;
+  for (const segment of segments) {
+    result.push({ ...segment, start: current });
+    current = segment.end;
+  }
   return result;
 }
 
@@ -125,32 +131,139 @@ function serializeBoundarySegments(segments: readonly BoundarySegment[]): string
 }
 
 function rayIntersectionOnSegments(center: CanvasPoint, direction: CanvasPoint, segments: readonly BoundarySegment[]) {
-  let best: CanvasPoint | null = null; let bestDistance = Number.POSITIVE_INFINITY;
+  let best: CanvasPoint | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
   for (const segment of segments) {
-    const candidates = segment.kind === "line" ? [raySegmentIntersection(center, direction, segment.start, segment.end)] : rayQuadraticIntersections(center, direction, segment.start, segment.control, segment.end);
-    for (const point of candidates) if (point && distanceSquared(center, point) < bestDistance) { best = point; bestDistance = distanceSquared(center, point); }
+    const candidates = segment.kind === "line"
+      ? [raySegmentIntersection(center, direction, segment.start, segment.end)]
+      : rayQuadraticIntersections(center, direction, segment.start, segment.control, segment.end);
+    for (const point of candidates) {
+      if (point && distanceSquared(center, point) < bestDistance) {
+        best = point;
+        bestDistance = distanceSquared(center, point);
+      }
+    }
   }
   return best;
 }
+
 function raySegmentIntersection(origin: CanvasPoint, direction: CanvasPoint, start: CanvasPoint, end: CanvasPoint) {
-  const edge = { x: end.x - start.x, y: end.y - start.y }; const denominator = cross(direction, edge);
+  const edge = { x: end.x - start.x, y: end.y - start.y };
+  const denominator = cross(direction, edge);
   if (Math.abs(denominator) < 1e-12) return null;
-  const delta = { x: start.x - origin.x, y: start.y - origin.y }; const ray = cross(delta, edge) / denominator; const segment = cross(delta, direction) / denominator;
-  return ray >= 0 && segment >= -1e-12 && segment <= 1 + 1e-12 ? { x: origin.x + direction.x * ray, y: origin.y + direction.y * ray } : null;
+  const delta = { x: start.x - origin.x, y: start.y - origin.y };
+  const ray = cross(delta, edge) / denominator;
+  const segment = cross(delta, direction) / denominator;
+  return ray >= 0 && segment >= -1e-12 && segment <= 1 + 1e-12
+    ? { x: origin.x + direction.x * ray, y: origin.y + direction.y * ray }
+    : null;
 }
-function rayQuadraticIntersections(origin: CanvasPoint, direction: CanvasPoint, start: CanvasPoint, control: CanvasPoint, end: CanvasPoint) {
-  const a = { x: start.x - 2 * control.x + end.x, y: start.y - 2 * control.y + end.y };
-  const b = { x: 2 * (control.x - start.x), y: 2 * (control.y - start.y) }; const c = { x: start.x - origin.x, y: start.y - origin.y };
+
+function rayQuadraticIntersections(
+  origin: CanvasPoint,
+  direction: CanvasPoint,
+  start: CanvasPoint,
+  control: CanvasPoint,
+  end: CanvasPoint,
+) {
+  const a = {
+    x: start.x - 2 * control.x + end.x,
+    y: start.y - 2 * control.y + end.y,
+  };
+  const b = { x: 2 * (control.x - start.x), y: 2 * (control.y - start.y) };
+  const c = { x: start.x - origin.x, y: start.y - origin.y };
   const roots = quadraticRoots(cross(a, direction), cross(b, direction), cross(c, direction));
-  return roots.filter((ratio) => ratio >= -1e-12 && ratio <= 1 + 1e-12).map((ratio) => quadraticPoint(start, control, end, ratio)).filter((point) => (point.x - origin.x) * direction.x + (point.y - origin.y) * direction.y >= -1e-12);
+  return roots
+    .filter((ratio) => ratio >= -1e-12 && ratio <= 1 + 1e-12)
+    .map((ratio) => quadraticPoint(start, control, end, ratio))
+    .filter((point) => (point.x - origin.x) * direction.x + (point.y - origin.y) * direction.y >= -1e-12);
 }
-function quadraticRoots(a: number, b: number, c: number) { if (Math.abs(a) < 1e-12) return Math.abs(b) < 1e-12 ? [] : [-c / b]; const discriminant = b * b - 4 * a * c; if (discriminant < -1e-12) return []; const root = Math.sqrt(Math.max(0, discriminant)); return [(-b - root) / (2 * a), (-b + root) / (2 * a)]; }
-function closestPointOnSegment(point: CanvasPoint, start: CanvasPoint, end: CanvasPoint): CanvasPoint { const dx = end.x - start.x; const dy = end.y - start.y; const size = dx * dx + dy * dy; const ratio = size === 0 ? 0 : Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / size)); return { x: start.x + dx * ratio, y: start.y + dy * ratio }; }
-function quadraticPoint(start: CanvasPoint, control: CanvasPoint, end: CanvasPoint, ratio: number) { const reverse = 1 - ratio; return { x: reverse * reverse * start.x + 2 * reverse * ratio * control.x + ratio * ratio * end.x, y: reverse * reverse * start.y + 2 * reverse * ratio * control.y + ratio * ratio * end.y }; }
-function closestPointOnQuadratic(point: CanvasPoint, start: CanvasPoint, control: CanvasPoint, end: CanvasPoint) { const a = { x: start.x - 2 * control.x + end.x, y: start.y - 2 * control.y + end.y }; const b = { x: 2 * (control.x - start.x), y: 2 * (control.y - start.y) }; const c = { x: start.x - point.x, y: start.y - point.y }; const roots = [0, 1, ...cubicRealRoots(2 * dot(a, a), 3 * dot(a, b), dot(b, b) + 2 * dot(a, c), dot(b, c))].filter((ratio) => ratio >= -ROOT_TOLERANCE && ratio <= 1 + ROOT_TOLERANCE).map((ratio) => Math.max(0, Math.min(1, ratio))); return roots.map((ratio) => quadraticPoint(start, control, end, ratio)).reduce((nearest, candidate) => distanceSquared(point, candidate) < distanceSquared(point, nearest) ? candidate : nearest); }
+
+function quadraticRoots(a: number, b: number, c: number) {
+  if (Math.abs(a) < 1e-12) return Math.abs(b) < 1e-12 ? [] : [-c / b];
+  const discriminant = b * b - 4 * a * c;
+  if (discriminant < -1e-12) return [];
+  const root = Math.sqrt(Math.max(0, discriminant));
+  return [(-b - root) / (2 * a), (-b + root) / (2 * a)];
+}
+
+function closestPointOnSegment(point: CanvasPoint, start: CanvasPoint, end: CanvasPoint): CanvasPoint {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const size = dx * dx + dy * dy;
+  const ratio = size === 0
+    ? 0
+    : Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / size));
+  return { x: start.x + dx * ratio, y: start.y + dy * ratio };
+}
+
+function quadraticPoint(start: CanvasPoint, control: CanvasPoint, end: CanvasPoint, ratio: number) {
+  const reverse = 1 - ratio;
+  return {
+    x: reverse * reverse * start.x + 2 * reverse * ratio * control.x + ratio * ratio * end.x,
+    y: reverse * reverse * start.y + 2 * reverse * ratio * control.y + ratio * ratio * end.y,
+  };
+}
+
+function closestPointOnQuadratic(
+  point: CanvasPoint,
+  start: CanvasPoint,
+  control: CanvasPoint,
+  end: CanvasPoint,
+) {
+  const a = {
+    x: start.x - 2 * control.x + end.x,
+    y: start.y - 2 * control.y + end.y,
+  };
+  const b = { x: 2 * (control.x - start.x), y: 2 * (control.y - start.y) };
+  const c = { x: start.x - point.x, y: start.y - point.y };
+  const roots = [
+    0,
+    1,
+    ...cubicRealRoots(2 * dot(a, a), 3 * dot(a, b), dot(b, b) + 2 * dot(a, c), dot(b, c)),
+  ]
+    .filter((ratio) => ratio >= -ROOT_TOLERANCE && ratio <= 1 + ROOT_TOLERANCE)
+    .map((ratio) => Math.max(0, Math.min(1, ratio)));
+  return roots
+    .map((ratio) => quadraticPoint(start, control, end, ratio))
+    .reduce((nearest, candidate) => distanceSquared(point, candidate) < distanceSquared(point, nearest) ? candidate : nearest);
+}
 /** All real cubic roots via critical-point intervals; repeated roots are tested explicitly. */
-function cubicRealRoots(a: number, b: number, c: number, d: number) { if (Math.abs(a) < ROOT_TOLERANCE) return quadraticRoots(b, c, d); const evaluate = (x: number) => ((a * x + b) * x + c) * x + d; const critical = quadraticRoots(3 * a, 2 * b, c).sort((first, second) => first - second); const bounds = [-1_000_000, ...critical, 1_000_000]; const roots: number[] = []; for (const criticalPoint of critical) if (Math.abs(evaluate(criticalPoint)) < ROOT_TOLERANCE) roots.push(criticalPoint); for (let index = 0; index < bounds.length - 1; index += 1) { let low = bounds[index]; let high = bounds[index + 1]; let lowValue = evaluate(low); const highValue = evaluate(high); if (lowValue === 0) roots.push(low); if (lowValue * highValue >= 0) continue; for (let iteration = 0; iteration < 80; iteration += 1) { const middle = (low + high) / 2; const value = evaluate(middle); if (Math.abs(value) < ROOT_TOLERANCE) { low = high = middle; break; } if (lowValue * value < 0) high = middle; else { low = middle; lowValue = value; } } roots.push((low + high) / 2); } return roots; }
-/** Globally bracketed stationary-point search over the ellipse parameter. */
+function cubicRealRoots(a: number, b: number, c: number, d: number) {
+  if (Math.abs(a) < ROOT_TOLERANCE) return quadraticRoots(b, c, d);
+  const evaluate = (x: number) => ((a * x + b) * x + c) * x + d;
+  const critical = quadraticRoots(3 * a, 2 * b, c).sort((first, second) => first - second);
+  const bounds = [-1_000_000, ...critical, 1_000_000];
+  const roots: number[] = [];
+  for (const criticalPoint of critical) {
+    if (Math.abs(evaluate(criticalPoint)) < ROOT_TOLERANCE) roots.push(criticalPoint);
+  }
+  for (let index = 0; index < bounds.length - 1; index += 1) {
+    let low = bounds[index];
+    let high = bounds[index + 1];
+    let lowValue = evaluate(low);
+    const highValue = evaluate(high);
+    if (lowValue === 0) roots.push(low);
+    if (lowValue * highValue >= 0) continue;
+    for (let iteration = 0; iteration < 80; iteration += 1) {
+      const middle = (low + high) / 2;
+      const value = evaluate(middle);
+      if (Math.abs(value) < ROOT_TOLERANCE) {
+        low = middle;
+        high = middle;
+        break;
+      }
+      if (lowValue * value < 0) high = middle;
+      else {
+        low = middle;
+        lowValue = value;
+      }
+    }
+    roots.push((low + high) / 2);
+  }
+  return roots;
+}
+
 /** Globally bracketed stationary-point search over the ellipse parameter. */
 function closestEllipsePoint(
   point: CanvasPoint,
@@ -192,6 +305,16 @@ function closestEllipsePoint(
     y: center.y + radiusY * Math.sin(angle),
   })).reduce((best, candidate) => distanceSquared(point, candidate) < distanceSquared(point, best) ? candidate : best);
 }
-function cross(first: CanvasPoint, second: CanvasPoint) { return first.x * second.y - first.y * second.x; }
-function dot(first: CanvasPoint, second: CanvasPoint) { return first.x * second.x + first.y * second.y; }
-function distanceSquared(first: CanvasPoint, second: CanvasPoint) { const dx = first.x - second.x; const dy = first.y - second.y; return dx * dx + dy * dy; }
+function cross(first: CanvasPoint, second: CanvasPoint) {
+  return first.x * second.y - first.y * second.x;
+}
+
+function dot(first: CanvasPoint, second: CanvasPoint) {
+  return first.x * second.x + first.y * second.y;
+}
+
+function distanceSquared(first: CanvasPoint, second: CanvasPoint) {
+  const dx = first.x - second.x;
+  const dy = first.y - second.y;
+  return dx * dx + dy * dy;
+}

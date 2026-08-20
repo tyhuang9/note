@@ -164,6 +164,7 @@ type TextBlockViewProps = {
     element: HTMLDivElement | null,
   ) => void;
   onKeyboardMove: (blockId: string, delta: Readonly<{ x: number; y: number }>) => void;
+  onKeyboardResize: (blockId: string, direction: -1 | 1, zoomLevel: number) => void;
   onSelect: (blockId: string, additive?: boolean) => void;
   onSelectAllBlocks: () => void;
   onUpdate: (blockId: string, updates: BlockUpdates) => void;
@@ -203,6 +204,7 @@ export const TextBlockView = memo(function TextBlockView({
   onFocusEndHandled,
   onBlockElementChange,
   onKeyboardMove,
+  onKeyboardResize,
   onSelect,
   onSelectAllBlocks,
   onUpdate,
@@ -386,14 +388,6 @@ export const TextBlockView = memo(function TextBlockView({
         measuredHeight + TEXT_BLOCK_HEADER_HEIGHT + TEXT_BLOCK_HEIGHT_BUFFER,
       ),
     };
-  }
-
-  function getAutoHeight(widthOverride?: number, forceFixedWidth = false) {
-    return getAutoSize(
-      widthOverride,
-      forceFixedWidth,
-      draftRichContentRef.current,
-    ).height;
   }
 
   function updateBlockElementSize() {
@@ -846,14 +840,11 @@ export const TextBlockView = memo(function TextBlockView({
       event.preventDefault();
       event.stopPropagation();
       if (block.locked) return;
-      const direction = event.key === "ArrowLeft" ? -1 : 1;
-      const nextWidth = Math.max(MIN_BLOCK_WIDTH, block.width + direction * 10 / zoomLevel);
-      hasManualWidth.current = true;
-      onUpdate(block.id, {
-        height: getAutoHeight(nextWidth, true),
-        isWidthManuallyResized: true,
-        width: nextWidth,
-      });
+      onKeyboardResize(
+        block.id,
+        event.key === "ArrowLeft" ? -1 : 1,
+        zoomLevel,
+      );
       return;
     }
     if (event.key === "Enter" || event.key === " ") {
@@ -1007,6 +998,8 @@ export const TextBlockView = memo(function TextBlockView({
       style={{
         left: block.x,
         top: block.y,
+        transform: `rotate(${block.rotation}deg)`,
+        transformOrigin: "center",
         width: block.width,
         height: block.height,
         zIndex: isSelected || isEditing || isDragSourceHidden

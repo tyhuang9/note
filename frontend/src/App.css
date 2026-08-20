@@ -2916,6 +2916,39 @@ h2 {
   outline-offset: 2px;
 }
 
+.selection-frame-text-resize-e {
+  position: absolute;
+  z-index: 2;
+  box-sizing: border-box;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: ew-resize;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.selection-frame-text-resize-e::after {
+  position: absolute;
+  top: 9px;
+  left: 20px;
+  width: 4px;
+  height: 26px;
+  border-radius: 999px;
+  background: var(--accent-purple);
+  box-shadow: 0 0 0 2px var(--canvas-tool-bg, #fff);
+  content: "";
+}
+
+.selection-frame-text-resize-e:focus-visible {
+  outline: 3px solid var(--canvas-focus, var(--accent-purple));
+  outline-offset: 2px;
+}
+
 .selection-frame-endpoint-handle {
   position: absolute;
   z-index: 2;

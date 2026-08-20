@@ -4,6 +4,16 @@ import type { SelectionCorner } from "../model/selectionBounds";
 type CanvasInteractionOverlayProps = {
   children?: ReactNode;
   marqueeRef: Ref<HTMLDivElement>;
+  textResizeHandle?: {
+    onKeyDown: KeyboardEventHandler<HTMLButtonElement>;
+    onLostPointerCapture: PointerEventHandler<HTMLButtonElement>;
+    onPointerCancel: PointerEventHandler<HTMLButtonElement>;
+    onPointerDown: PointerEventHandler<HTMLButtonElement>;
+    onPointerMove: PointerEventHandler<HTMLButtonElement>;
+    onPointerUp: PointerEventHandler<HTMLButtonElement>;
+    x: number;
+    y: number;
+  };
   selectionFrameRef?: Ref<HTMLDivElement>;
   selectionFrame?: {
     connectorEndpointHandles?: readonly {
@@ -41,6 +51,7 @@ export function CanvasInteractionOverlay({
   marqueeRef,
   selectionFrame,
   selectionFrameRef,
+  textResizeHandle,
 }: CanvasInteractionOverlayProps) {
   return (
     <div className="canvas-interaction-overlay">
@@ -107,6 +118,21 @@ export function CanvasInteractionOverlay({
             </span>
           ))}
         </div>
+      ) : null}
+      {textResizeHandle ? (
+        <button
+          aria-label="Resize text width"
+          aria-keyshortcuts="ArrowLeft ArrowRight"
+          className="selection-frame-text-resize-e"
+          onKeyDown={textResizeHandle.onKeyDown}
+          onLostPointerCapture={textResizeHandle.onLostPointerCapture}
+          onPointerCancel={textResizeHandle.onPointerCancel}
+          onPointerDown={textResizeHandle.onPointerDown}
+          onPointerMove={textResizeHandle.onPointerMove}
+          onPointerUp={textResizeHandle.onPointerUp}
+          style={{ left: textResizeHandle.x - 22, top: textResizeHandle.y - 22 }}
+          type="button"
+        />
       ) : null}
       {children}
     </div>

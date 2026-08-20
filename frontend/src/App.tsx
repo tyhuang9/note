@@ -67,8 +67,11 @@ import {
   DEFAULT_ZOOM,
   GRID_SIZE,
   MAX_ZOOM,
+  MIN_BLOCK_HEIGHT,
+  MIN_BLOCK_WIDTH,
   MIN_ZOOM,
   SAVE_DELAY_MS,
+  TEXT_BLOCK_HEIGHT_BUFFER,
   TEXT_BLOCK_HEADER_HEIGHT,
   ZOOM_STEP,
 } from "./constants";
@@ -175,6 +178,7 @@ import {
   scaleSelection,
   translateSelection,
   type SelectionCorner,
+  type TextSelectionSize,
 } from "./canvas/model/selectionBounds";
 import { getDrawingToolLockPreference } from "./canvas/state/drawingToolLock";
 import {
@@ -366,6 +370,7 @@ type DragLayerSession = {
 type ResizeLayerSession = {
   blockIds: string[];
   items: {
+    cloneElement: HTMLElement;
     element: CanvasElement & BoxCanvasElement;
     wrapperElement: HTMLDivElement;
   }[];
@@ -375,7 +380,18 @@ type ResizeLayerSession = {
   connectorSourceElements: HTMLElement[];
 };
 
+type TextResizeSession = {
+  block: TextElement;
+  connectorPreviewElements: Map<string, HTMLDivElement>;
+  connectorSourceElements: HTMLElement[];
+  originalHeight: string;
+  originalWidth: string;
+  preview: TextElement;
+  sourceElement: HTMLElement;
+};
+
 type SelectionTransformSession = {
+  captureTarget: HTMLElement;
   corner: SelectionCorner | null;
   connectorEndpoint: "start" | "end" | null;
   didMove: boolean;
@@ -383,6 +399,9 @@ type SelectionTransformSession = {
   startBounds: SelectionRect;
   startClientX: number;
   startClientY: number;
+  selectionScale: number | null;
+  textResize: boolean;
+  textSizes: ReadonlyMap<string, TextSelectionSize> | null;
 };
 
 type ConnectorEndpointChooserState = {
@@ -1220,6 +1239,7 @@ function App() {
   const selectionFrameVisualBoundsRef = useRef<SelectionRect | null>(null);
   const selectionTransformRef = useRef<SelectionTransformSession | null>(null);
   const resizeLayerSessionRef = useRef<ResizeLayerSession | null>(null);
+  const textResizeSessionRef = useRef<TextResizeSession | null>(null);
   const cancelCanvasSelectionRef = useRef<() => void>(() => undefined);
   const cancelVisualDragRef = useRef<(updateState?: boolean) => void>(() => undefined);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -1387,9 +1407,6 @@ function App() {
     const selectedIds = new Set(selectedBlockIds);
     return data.elements.filter((element) => element.pageId === selectedPageId && selectedIds.has(element.id));
   }, [data.elements, selectedBlockIds, selectedPageId]);
-  const selectionContainsOnlyText = selectedBlockIds.length > 0
-    && selectedDrawingElements.length === selectedBlockIds.length
-    && selectedDrawingElements.every(isTextElement);
   const drawingPropertiesContext = useMemo(() => {
     if (selectedDrawingElements.length > 0) {
       const values = readDrawingProperties(selectedDrawingElements);
@@ -6112,7 +6129,198 @@ function App() {
     document.body.classList.remove("is-interacting");
   }
 
-  function startSelectionResizePreview(bounds: SelectionRect, corner: SelectionCorner) {
+  function resolveTextResizeWidth(width: number) {
+    const finiteWidth = Number.isFinite(width) ? width : MIN_BLOCK_WIDTH;
+    const resolvedWidth = Math.max(MIN_BLOCK_WIDTH, finiteWidth);
+    return isSnapToGridEnabledRef.current
+      ? Math.max(MIN_BLOCK_WIDTH, snapValue(resolvedWidth))
+      : resolvedWidth;
+  }
+
+  function measureTextReflowSize(
+    block: TextElement,
+    requestedWidth: number,
+    sourceElement = blockElementsRef.current.get(block.id),
+  ): TextSelectionSize {
+    const width = resolveTextResizeWidth(requestedWidth);
+    if (!sourceElement) {
+      return { height: Math.max(MIN_BLOCK_HEIGHT, block.height), width };
+    }
+
+    const clone = sourceElement.cloneNode(true) as HTMLElement;
+    clone.removeAttribute("data-block-id");
+    clone.setAttribute("aria-hidden", "true");
+    clone.style.height = "";
+    clone.style.left = "-100000px";
+    clone.style.pointerEvents = "none";
+    clone.style.position = "fixed";
+    clone.style.top = "0";
+    clone.style.transform = "none";
+    clone.style.visibility = "hidden";
+    clone.style.width = `${width}px`;
+    const heightMeasurer = clone.querySelector<HTMLElement>(".text-block-height-measurer");
+    if (heightMeasurer) heightMeasurer.style.width = `${width}px`;
+    document.body.append(clone);
+    const measuredHeight = heightMeasurer?.scrollHeight ?? clone.scrollHeight;
+    clone.remove();
+    return {
+      height: Number.isFinite(measuredHeight)
+        ? Math.max(MIN_BLOCK_HEIGHT, measuredHeight + TEXT_BLOCK_HEADER_HEIGHT + TEXT_BLOCK_HEIGHT_BUFFER)
+        : Math.max(MIN_BLOCK_HEIGHT, block.height),
+      width,
+    };
+  }
+
+  function getTextSelectionSizes(
+    elements: readonly CanvasElement[],
+    selectedIds: ReadonlySet<string>,
+    scale: number,
+    sourceElementsById: ReadonlyMap<string, HTMLElement> = new Map(),
+  ) {
+    const sizes = new Map<string, TextSelectionSize>();
+    const factor = Number.isFinite(scale) ? Math.max(0.01, scale) : 0.01;
+    for (const element of elements) {
+      if (!selectedIds.has(element.id) || element.locked || element.type !== "text") continue;
+      const previewClone = sourceElementsById.get(element.id);
+      if (previewClone) previewClone.style.height = "";
+      const sourceElement = previewClone ?? blockElementsRef.current.get(element.id);
+      sizes.set(
+        element.id,
+        measureTextReflowSize(element, element.width * factor, sourceElement),
+      );
+    }
+    return sizes;
+  }
+
+  function getEastResizedTextPreview(block: TextElement, size: TextSelectionSize): TextElement {
+    const angle = (block.rotation * Math.PI) / 180;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const originalCenter = { x: block.x + block.width / 2, y: block.y + block.height / 2 };
+    const fixedWestMidpoint = {
+      x: originalCenter.x - block.width / 2 * cos,
+      y: originalCenter.y - block.width / 2 * sin,
+    };
+    const nextCenter = {
+      x: fixedWestMidpoint.x + size.width / 2 * cos,
+      y: fixedWestMidpoint.y + size.width / 2 * sin,
+    };
+    return {
+      ...block,
+      height: size.height,
+      isWidthManuallyResized: true,
+      width: size.width,
+      x: nextCenter.x - size.width / 2,
+      y: nextCenter.y - size.height / 2,
+    };
+  }
+
+  function getTextEastResizeHandlePoint(block: TextElement) {
+    const angle = (block.rotation * Math.PI) / 180;
+    return {
+      x: block.x + block.width / 2 + block.width / 2 * Math.cos(angle),
+      y: block.y + block.height / 2 + block.width / 2 * Math.sin(angle),
+    };
+  }
+
+  function startTextResizePreview(block: TextElement): boolean {
+    if (textResizeSessionRef.current) return textResizeSessionRef.current.block.id === block.id;
+    const sourceElement = blockElementsRef.current.get(block.id);
+    if (!sourceElement) return false;
+    const affectedConnectorIds = getBoundConnectorIdsForTargets(
+      dataRef.current.elements,
+      new Set([block.id]),
+    );
+    const session: TextResizeSession = {
+      block,
+      connectorPreviewElements: new Map(),
+      connectorSourceElements: Array.from(affectedConnectorIds).flatMap((id) => {
+        const element = blockElementsRef.current.get(id);
+        return element ? [element] : [];
+      }),
+      originalHeight: sourceElement.style.height,
+      originalWidth: sourceElement.style.width,
+      preview: block,
+      sourceElement,
+    };
+    textResizeSessionRef.current = session;
+    sourceElement.classList.add("is-resizing");
+    for (const connectorElement of session.connectorSourceElements) {
+      connectorElement.classList.add("is-drag-source-hidden");
+    }
+    document.body.classList.add("is-interacting");
+    renderTransientConnectorPreviews(dataRef.current.elements, affectedConnectorIds, session.connectorPreviewElements);
+    return true;
+  }
+
+  function updateTextResizePreview(
+    session: TextResizeSession,
+    startClientX: number,
+    startClientY: number,
+    clientX: number,
+    clientY: number,
+  ) {
+    const angle = (session.block.rotation * Math.PI) / 180;
+    const projectedDelta = (
+      (clientX - startClientX) * Math.cos(angle) +
+      (clientY - startClientY) * Math.sin(angle)
+    ) / zoomLevelRef.current;
+    const size = measureTextReflowSize(
+      session.block,
+      session.block.width + projectedDelta,
+      session.sourceElement,
+    );
+    const preview = getEastResizedTextPreview(session.block, size);
+    session.preview = preview;
+    session.sourceElement.style.width = `${preview.width}px`;
+    session.sourceElement.style.height = `${preview.height}px`;
+    const previewElements = dataRef.current.elements.map((element) =>
+      element.id === preview.id ? preview : element,
+    );
+    renderTransientConnectorPreviews(
+      previewElements,
+      getBoundConnectorIdsForTargets(dataRef.current.elements, new Set([preview.id])),
+      session.connectorPreviewElements,
+    );
+    return preview;
+  }
+
+  function cleanupTextResizePreview(session: TextResizeSession) {
+    session.sourceElement.classList.remove("is-resizing");
+    session.sourceElement.style.width = session.originalWidth;
+    session.sourceElement.style.height = session.originalHeight;
+    for (const connectorElement of session.connectorSourceElements) {
+      connectorElement.classList.remove("is-drag-source-hidden");
+    }
+    for (const preview of session.connectorPreviewElements.values()) preview.remove();
+    document.body.classList.remove("is-interacting");
+  }
+
+  function finishTextResizePreview() {
+    const session = textResizeSessionRef.current;
+    if (!session) return null;
+    textResizeSessionRef.current = null;
+    cleanupTextResizePreview(session);
+    return session;
+  }
+
+  function commitTextResize(block: TextElement) {
+    setBlocksWithHistory((currentBlocks) => currentBlocks.map((element) =>
+      element.id === block.id && element.type === "text" && !element.locked
+        ? {
+            ...element,
+            height: block.height,
+            isWidthManuallyResized: true,
+            width: block.width,
+            x: block.x,
+            y: block.y,
+            updatedAt: Date.now(),
+          }
+        : element,
+    ));
+  }
+
+  function startSelectionResizePreview() {
     if (resizeLayerSessionRef.current) return true;
     const canvasElement = canvasRef.current;
     if (!canvasElement) return false;
@@ -6163,7 +6371,7 @@ function App() {
       wrapperElement.style.transformOrigin = "0 0";
       wrapperElement.append(cloneElement);
       groupElement.append(wrapperElement);
-      return { element: model, wrapperElement };
+      return { cloneElement, element: model, wrapperElement };
     });
 
     canvasElement.append(overlayElement);
@@ -6179,7 +6387,6 @@ function App() {
       }),
     };
     resizeLayerSessionRef.current = session;
-    updateSelectionResizePreview(1, bounds, corner);
     document.body.classList.add("is-interacting");
     for (const sourceElement of session.sourceElements) {
       sourceElement.classList.add("is-drag-source-hidden");
@@ -6193,22 +6400,23 @@ function App() {
 
   function updateSelectionResizePreview(
     scale: number,
-    bounds: SelectionRect,
-    corner: SelectionCorner,
+    previewElements: readonly CanvasElement[],
   ) {
     const session = resizeLayerSessionRef.current;
     if (!session) return;
-    const anchor = getOppositeCorner(bounds, corner);
     const zoom = zoomLevelRef.current;
     const pan = panOffsetRef.current;
+    const previewById = new Map(previewElements.map((element) => [element.id, element]));
     for (const item of session.items) {
-      const x = anchor.x + (item.element.x - anchor.x) * scale;
-      const y = anchor.y + (item.element.y - anchor.y) * scale;
+      const preview = previewById.get(item.element.id);
+      if (!preview || !isBoxCanvasElement(preview)) continue;
+      if (preview.type === "text") {
+        item.cloneElement.style.width = `${preview.width}px`;
+        item.cloneElement.style.height = `${preview.height}px`;
+      }
       const visualScale = zoom * (item.element.type === "text" ? 1 : scale);
-      item.wrapperElement.style.transform = `translate3d(${pan.x + x * zoom}px, ${pan.y + y * zoom}px, 0) scale(${visualScale})`;
+      item.wrapperElement.style.transform = `translate3d(${pan.x + preview.x * zoom}px, ${pan.y + preview.y * zoom}px, 0) scale(${visualScale})`;
     }
-    const selectedIds = new Set(selectedBlockIdsRef.current);
-    const previewElements = scaleSelection(dataRef.current.elements, selectedIds, bounds, corner, scale);
     renderTransientConnectorPreviews(
       previewElements,
       getBoundConnectorIdsForTargets(dataRef.current.elements, new Set(session.blockIds)),
@@ -6244,6 +6452,12 @@ function App() {
     if (restoredBounds) applySelectionFrameVisualBounds(restoredBounds);
   }
 
+  function releaseSelectionPointerCapture(session: SelectionTransformSession) {
+    if (session.captureTarget.hasPointerCapture(session.pointerId)) {
+      session.captureTarget.releasePointerCapture(session.pointerId);
+    }
+  }
+
   function getPreviewSelectionBounds(
     elements: readonly CanvasElement[],
     selectedIds: ReadonlySet<string>,
@@ -6258,7 +6472,10 @@ function App() {
   function cancelSelectionFrameInteraction(updateMode = true) {
     const session = selectionTransformRef.current;
     selectionTransformRef.current = null;
-    if (session?.corner) {
+    if (session) releaseSelectionPointerCapture(session);
+    if (session?.textResize) {
+      finishTextResizePreview();
+    } else if (session?.corner) {
       finishSelectionResizePreview();
       clearSelectionFrameVisualBounds(session.startBounds);
     } else if (session) {
@@ -6280,24 +6497,35 @@ function App() {
     clientY: number,
     session: SelectionTransformSession,
   ) {
-    const draggedCorner = {
-      x: (corner.includes("e") ? bounds.x + bounds.width : bounds.x) + (clientX - session.startClientX) / zoomLevelRef.current,
-      y: (corner.includes("s") ? bounds.y + bounds.height : bounds.y) + (clientY - session.startClientY) / zoomLevelRef.current,
-    };
-    const scale = getProportionalScale(bounds, corner, draggedCorner);
+    const scale = getSelectionResizeScale(bounds, corner, clientX, clientY, session);
     const anchor = getOppositeCorner(bounds, corner);
     const width = bounds.width * scale;
     const height = bounds.height * scale;
     const selectedIds = new Set(selectedBlockIdsRef.current);
+    const resizeSession = resizeLayerSessionRef.current;
+    const textSources = new Map(
+      resizeSession?.items
+        .filter((item) => item.element.type === "text")
+        .map((item) => [item.element.id, item.cloneElement]) ?? [],
+    );
+    const textSizes = getTextSelectionSizes(
+      dataRef.current.elements,
+      selectedIds,
+      scale,
+      textSources,
+    );
     const previewElements = scaleSelection(
       dataRef.current.elements,
       selectedIds,
       bounds,
       corner,
       scale,
+      textSizes,
     );
     return {
       scale,
+      textSizes,
+      elements: previewElements,
       bounds: getPreviewSelectionBounds(previewElements, selectedIds) ?? {
         x: corner.includes("e") ? anchor.x : anchor.x - width,
         y: corner.includes("s") ? anchor.y : anchor.y - height,
@@ -6318,6 +6546,7 @@ function App() {
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
     selectionTransformRef.current = {
+      captureTarget: event.currentTarget,
       corner,
       connectorEndpoint,
       didMove: false,
@@ -6325,6 +6554,9 @@ function App() {
       startBounds: bounds,
       startClientX: event.clientX,
       startClientY: event.clientY,
+      selectionScale: null,
+      textResize: false,
+      textSizes: null,
     };
     const selectedConnector = connectorEndpoint
       ? dataRef.current.elements.find((element): element is ConnectorElement =>
@@ -6332,6 +6564,41 @@ function App() {
       )
       : null;
     setIsConnectorEndpointRetargeting(selectedConnector?.style.endArrowhead === "arrow");
+  }
+
+  function startTextResizeInteraction(event: ReactPointerEvent<HTMLButtonElement>) {
+    const selectedId = selectedBlockIdsRef.current.length === 1
+      ? selectedBlockIdsRef.current[0]
+      : null;
+    const block = selectedId
+      ? dataRef.current.elements.find((element): element is TextElement =>
+        element.id === selectedId && element.type === "text" && !element.locked,
+      )
+      : null;
+    if (event.button !== 0 || !block || editingBlockIdRef.current) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!startTextResizePreview(block)) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    selectionTransformRef.current = {
+      captureTarget: event.currentTarget,
+      connectorEndpoint: null,
+      corner: null,
+      didMove: false,
+      pointerId: event.pointerId,
+      startBounds: getSelectionElementBounds(block) ?? {
+        height: block.height,
+        width: block.width,
+        x: block.x,
+        y: block.y,
+      },
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      selectionScale: null,
+      textResize: true,
+      textSizes: null,
+    };
+    setActiveMode("resizing");
   }
 
   function getConnectorEndpointPreview(
@@ -6369,6 +6636,23 @@ function App() {
     event.preventDefault();
     session.didMove = true;
 
+    if (session.textResize) {
+      const textResize = textResizeSessionRef.current;
+      if (!textResize) return;
+      const preview = updateTextResizePreview(
+        textResize,
+        session.startClientX,
+        session.startClientY,
+        event.clientX,
+        event.clientY,
+      );
+      session.didMove = Math.abs(preview.width - textResize.block.width) > 0.01 ||
+        Math.abs(preview.height - textResize.block.height) > 0.01 ||
+        Math.abs(preview.x - textResize.block.x) > 0.01 ||
+        Math.abs(preview.y - textResize.block.y) > 0.01;
+      return;
+    }
+
     if (session.connectorEndpoint) {
       const preview = getConnectorEndpointPreview(session.connectorEndpoint, event.clientX, event.clientY);
       if (!preview) return;
@@ -6382,9 +6666,11 @@ function App() {
     }
 
     if (session.corner) {
+      if (!startSelectionResizePreview()) return;
       const preview = selectionResizePreview(session.startBounds, session.corner, event.clientX, event.clientY, session);
-      if (!startSelectionResizePreview(session.startBounds, session.corner)) return;
-      updateSelectionResizePreview(preview.scale, session.startBounds, session.corner);
+      session.selectionScale = preview.scale;
+      session.textSizes = preview.textSizes;
+      updateSelectionResizePreview(preview.scale, preview.elements);
       previewSelectionFrameVisualBounds(preview.bounds);
       return;
     }
@@ -6403,10 +6689,12 @@ function App() {
     const session = selectionTransformRef.current;
     if (!session || session.pointerId !== event.pointerId) return;
     selectionTransformRef.current = null;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    releaseSelectionPointerCapture(session);
 
     if (cancelled) {
-      if (session.corner) {
+      if (session.textResize) {
+        finishTextResizePreview();
+      } else if (session.corner) {
         finishSelectionResizePreview();
         clearSelectionFrameVisualBounds(session.startBounds);
       } else if (!session.connectorEndpoint) {
@@ -6426,13 +6714,43 @@ function App() {
           element.id === preview.id ? { ...preview, updatedAt: Date.now() } : element,
         ));
       }
+    } else if (session.textResize) {
+      const textResize = textResizeSessionRef.current;
+      if (textResize && session.didMove) {
+        const preview = updateTextResizePreview(
+          textResize,
+          session.startClientX,
+          session.startClientY,
+          event.clientX,
+          event.clientY,
+        );
+        const didResize = Math.abs(preview.width - textResize.block.width) > 0.01 ||
+          Math.abs(preview.height - textResize.block.height) > 0.01 ||
+          Math.abs(preview.x - textResize.block.x) > 0.01 ||
+          Math.abs(preview.y - textResize.block.y) > 0.01;
+        finishTextResizePreview();
+        if (didResize) commitTextResize(preview);
+      }
     } else if (session.corner && session.didMove) {
-      const preview = selectionResizePreview(session.startBounds, session.corner, event.clientX, event.clientY, session);
       const selectedIds = new Set(selectedBlockIdsRef.current);
+      const scale = session.selectionScale ?? getSelectionResizeScale(
+        session.startBounds,
+        session.corner,
+        event.clientX,
+        event.clientY,
+        session,
+      );
       finishSelectionResizePreview();
       clearSelectionFrameVisualBounds();
       setBlocksWithHistory((currentBlocks) =>
-        scaleSelection(currentBlocks, selectedIds, session.startBounds, session.corner!, preview.scale),
+        scaleSelection(
+          currentBlocks,
+          selectedIds,
+          session.startBounds,
+          session.corner!,
+          scale,
+          session.textSizes ?? new Map(),
+        ),
       );
     } else if (!session.corner && session.didMove) {
       endVisualDrag(event.clientX, event.clientY);
@@ -6484,9 +6802,40 @@ function App() {
       event.stopPropagation();
       const scale = getProportionalScale(bounds, corner, draggedCorner);
       const selectedIds = new Set(selectedBlockIdsRef.current);
-      setBlocksWithHistory((currentBlocks) => scaleSelection(currentBlocks, selectedIds, bounds, corner, scale));
+      const textSizes = getTextSelectionSizes(dataRef.current.elements, selectedIds, scale);
+      setBlocksWithHistory((currentBlocks) =>
+        scaleSelection(currentBlocks, selectedIds, bounds, corner, scale, textSizes),
+      );
       setActiveMode("selected");
     };
+  }
+
+  function getSelectionResizeScale(
+    bounds: SelectionRect,
+    corner: SelectionCorner,
+    clientX: number,
+    clientY: number,
+    session: SelectionTransformSession,
+  ) {
+    const draggedCorner = {
+      x: (corner.includes("e") ? bounds.x + bounds.width : bounds.x) + (clientX - session.startClientX) / zoomLevelRef.current,
+      y: (corner.includes("s") ? bounds.y + bounds.height : bounds.y) + (clientY - session.startClientY) / zoomLevelRef.current,
+    };
+    return getProportionalScale(bounds, corner, draggedCorner);
+  }
+
+  function resizeTextWidthByKeyboard(
+    blockId: string,
+    direction: -1 | 1,
+    zoom: number,
+  ) {
+    const block = dataRef.current.elements.find((element): element is TextElement =>
+      element.id === blockId && element.type === "text" && !element.locked,
+    );
+    if (!block) return;
+    const size = measureTextReflowSize(block, block.width + direction * 10 / zoom);
+    commitTextResize(getEastResizedTextPreview(block, size));
+    setActiveMode("selected");
   }
 
   function moveConnectorEndpointByKeyboard(endpoint: "start" | "end") {
@@ -7629,7 +7978,7 @@ function App() {
                 isEditing={block.id === editingBlockId}
                 isDragSourceHidden={false}
                 interactionCancellationKey={`${activeTool}:${selectedPageId ?? ""}`}
-                isMultiSelected={selectedBlockIds.length > 1 && !selectionContainsOnlyText}
+                isMultiSelected={selectedBlockIds.length > 1}
                 isSelected={selectedBlockIds.includes(block.id)}
                 key={block.id}
                 onDelete={deleteBlock}
@@ -7643,6 +7992,7 @@ function App() {
                 onActiveEditorChange={setActiveTextEditor}
                 onBlockElementChange={registerBlockElement}
                 onKeyboardMove={moveCanvasElementByKeyboard}
+                onKeyboardResize={resizeTextWidthByKeyboard}
                 onSelect={selectBlock}
                 onUpdate={updateBlock}
                 onVisualDragCancel={cancelVisualDrag}
@@ -7714,6 +8064,35 @@ function App() {
           <CanvasInteractionOverlay
             marqueeRef={selectionRectRef}
             selectionFrameRef={selectionFrameRef}
+            textResizeHandle={(() => {
+              const selectedId = selectedBlockIds.length === 1 ? selectedBlockIds[0] : null;
+              const selected = selectedId
+                ? visibleCanvasElements.find((element): element is TextElement =>
+                  element.id === selectedId && element.type === "text" && !element.locked,
+                )
+                : null;
+              if (!selected || activeTool !== "select" || editingBlockId) return undefined;
+              const point = getTextEastResizeHandlePoint(selected);
+              return {
+                onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+                  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  resizeTextWidthByKeyboard(
+                    selected.id,
+                    event.key === "ArrowLeft" ? -1 : 1,
+                    zoomLevelRef.current,
+                  );
+                },
+                onLostPointerCapture: (event: ReactPointerEvent<HTMLButtonElement>) => finishSelectionFrameInteraction(event, true),
+                onPointerCancel: (event: ReactPointerEvent<HTMLButtonElement>) => finishSelectionFrameInteraction(event, true),
+                onPointerDown: startTextResizeInteraction,
+                onPointerMove: moveSelectionFrameInteraction,
+                onPointerUp: finishSelectionFrameInteraction,
+                x: panOffset.x + point.x * zoomLevel,
+                y: panOffset.y + point.y * zoomLevel,
+              };
+            })()}
             selectionFrame={(() => {
               const bounds = selectionFramePreview ?? selectionWorldBounds;
               const isKeyboardArrowEndpointAccess = activeTool === "arrow"
@@ -7723,7 +8102,6 @@ function App() {
                 (activeTool !== "select" && !isKeyboardArrowEndpointAccess)
                 || !bounds
                 || selectedBlockIds.length === 0
-                || selectionContainsOnlyText
                 || editingBlockId
               ) return undefined;
               const selected = selectedBlockIds.length === 1
@@ -7731,6 +8109,7 @@ function App() {
                   ? connectorEndpointPreview
                   : visibleCanvasElements.find((block) => block.id === selectedBlockIds[0])
                 : undefined;
+              if (selectedBlockIds.length === 1 && selected?.type === "text") return undefined;
               const usesNativeSingleElementInteraction = Boolean(
                 selected && (selected.type === "text" || selected.type === "image"),
               );
@@ -7742,12 +8121,6 @@ function App() {
                   : selected?.type === "shape"
                     ? ["nw", "ne", "se", "sw"]
                     : [];
-              const selectionIncludesText = selectedBlockIds.some((blockId) =>
-                visibleCanvasElements.some((element) => element.id === blockId && element.type === "text"),
-              );
-              const selectionIncludesNonText = selectedBlockIds.some((blockId) =>
-                visibleCanvasElements.some((element) => element.id === blockId && element.type !== "text"),
-              );
               const connectorEndpointPoints = selected?.type === "connector"
                 ? {
                     start: resolveConnectorEndpoint(selected.start, renderedCanvasElementsById, selected.pageId),
@@ -7792,8 +8165,8 @@ function App() {
                 onResizeKeyDown: resizeSelectionByKeyboard,
                 onResizePointerDown: (corner: SelectionCorner) => (event: ReactPointerEvent<HTMLButtonElement>) => startSelectionFrameInteraction(event, corner),
                 preserveNativeSoutheastHandle: selected?.type === "ink",
-                resizeLabel: (corner: SelectionCorner) => selectionIncludesText && selectionIncludesNonText
-                  ? `Resize non-text geometry from ${corner}; text blocks reposition without resizing`
+                resizeLabel: (corner: SelectionCorner) => selectionHasLockedElements
+                  ? `Resize unlocked selected elements from ${corner}`
                   : `Resize selected elements from ${corner}`,
                 resizeCorners,
                 showMoveSurface: activeTool === "select" && selectionHasUnlockedElements && !usesNativeSingleElementInteraction,

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   arrowheadPoints,
   roughOptions,
+  roundedDiamondPath,
   roundedRectanglePath,
   shapeRenderPadding,
 } from "../../src/canvas/components/PrimitiveElementView";
@@ -47,6 +48,8 @@ describe("primitive rendering", () => {
       stroke: "var(--canvas-tool-text)",
       strokeLineDash: [8, 5],
       strokeWidth: 4,
+      disableMultiStroke: true,
+      disableMultiStrokeFill: true,
     });
   });
 
@@ -64,6 +67,15 @@ describe("primitive rendering", () => {
     expect(roundedRectanglePath(100, 60, 0)).toBe("M 0 0 H 100 V 60 H 0 Z");
     expect(roundedRectanglePath(100, 60, 0.5)).toContain("Q 100 0 100 15");
     expect(roundedRectanglePath(100, 60, 2)).toContain("Q 100 0 100 30");
+  });
+
+  it("rounds diamond corners while retaining all four exact model anchors", () => {
+    const path = roundedDiamondPath(100, 60);
+    expect(path).toMatch(/^M 5\d\.\d+ 2\.\d+ /);
+    expect(path).toContain("Q 100 30");
+    expect(path).toContain("Q 50 60");
+    expect(path).toContain("Q 0 30");
+    expect(path).toContain("Q 50 0");
   });
 
   it("adds render-only padding for rough outlines without changing model geometry", () => {

@@ -184,7 +184,7 @@ test("keeps live primitive previews solid and fully opaque", async ({ page }) =>
   await page.mouse.down();
   await page.mouse.move(bounds.x + 490, bounds.y + 400, { steps: 3 });
 
-  const preview = canvas.getByTestId("canvas-live-draft-layer").locator("g");
+  const preview = canvas.getByTestId("canvas-live-draft-layer").locator(".primitive-authoring-preview");
   await expect(preview).toHaveAttribute("opacity", "1");
   await expect(preview).not.toHaveAttribute("stroke-dasharray", /./);
   await page.mouse.up();

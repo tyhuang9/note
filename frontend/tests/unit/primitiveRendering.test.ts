@@ -50,6 +50,16 @@ describe("primitive rendering", () => {
     });
   });
 
+  it.each([
+    [0.5, [4, 2.5], [14, -2.5]],
+    [2, [16, 10], [11, -10]],
+  ])("scales connector dash and arrowhead visual geometry at %s zoom", (zoom, dash, arrowheadBase) => {
+    expect(roughOptions(style, zoom).strokeLineDash).toEqual(dash);
+    const points = arrowheadPoints({ x: 0, y: 0 }, { x: 20, y: 0 }, 12 * zoom, 5 * zoom);
+    expect(points?.[1]).toEqual(arrowheadBase);
+    expect(roughOptions(style, zoom)).toMatchObject({ roughness: style.roughness, strokeWidth: style.strokeWidth });
+  });
+
   it("creates sharp and rounded rectangle paths from the persisted roundness", () => {
     expect(roundedRectanglePath(100, 60, 0)).toBe("M 0 0 H 100 V 60 H 0 Z");
     expect(roundedRectanglePath(100, 60, 0.5)).toContain("Q 100 0 100 15");

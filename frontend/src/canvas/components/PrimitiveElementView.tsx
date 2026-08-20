@@ -18,16 +18,17 @@ function createPrimitiveRootRef(elementId: string, onElementChange?: PrimitiveEl
   return (element) => onElementChange?.(elementId, element);
 }
 
-export function roughOptions(style: ShapeElement["style"]): Options {
+export function roughOptions(style: ShapeElement["style"], visualScale = 1): Options {
+  const dashScale = Number.isFinite(visualScale) && visualScale > 0 ? visualScale : 1;
   return {
     fill: style.fillColor ? canvasColorToCss(style.fillColor) : "none",
     roughness: style.roughness,
     seed: style.seed,
     stroke: canvasColorToCss(style.strokeColor),
     strokeLineDash: style.strokeStyle === "dashed"
-      ? [8, 5]
+      ? [8 * dashScale, 5 * dashScale]
       : style.strokeStyle === "dotted"
-        ? [2, 4]
+        ? [2 * dashScale, 4 * dashScale]
         : undefined,
     strokeWidth: style.strokeWidth,
   };
@@ -217,13 +218,15 @@ export function renderConnectorRoughSvg(
   style: ConnectorElement["style"],
   start: Readonly<{ x: number; y: number }>,
   end: Readonly<{ x: number; y: number }>,
+  visualScale = 1,
 ) {
   svg.replaceChildren();
   const draw = new RoughSVG(svg);
-  const options = roughOptions(style);
+  const safeVisualScale = Number.isFinite(visualScale) && visualScale > 0 ? visualScale : 1;
+  const options = roughOptions(style, safeVisualScale);
   svg.append(draw.line(start.x, start.y, end.x, end.y, options));
   if (style.endArrowhead === "arrow") {
-    const points = arrowheadPoints(start, end);
+    const points = arrowheadPoints(start, end, 12 * safeVisualScale, 5 * safeVisualScale);
     if (points) svg.append(draw.polygon(points, {
       ...options,
       fill: canvasColorToCss(style.strokeColor),

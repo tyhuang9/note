@@ -5745,7 +5745,7 @@ function App() {
       }, {
         x: (points.end.x * zoom - minX) + padding,
         y: (points.end.y * zoom - minY) + padding,
-      });
+      }, zoom);
     }
   }
 

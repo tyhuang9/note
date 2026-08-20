@@ -236,6 +236,12 @@ test("candidate announcements use unique labels and only repeat on meaningful tr
   await expect(page.locator(".canvas-accessibility-status[role='status']")).toHaveText(
     "Snapped to Rectangle 1 (center 310, 280), target-relative right anchor.",
   );
+  const far = { x: bounds.x + 40, y: bounds.y + bounds.height - 40 };
+  await page.mouse.move(far.x, far.y);
+  await page.mouse.move(far.x + 1, far.y, { steps: 4 });
+  await expect(page.locator(".canvas-accessibility-status[role='status']")).toHaveText(
+    "No binding target. Endpoint will remain free.",
+  );
   const announcements = await page.evaluate(() => {
     const runtime = window as unknown as { __candidateAnnouncements: string[]; __candidateObserver: MutationObserver };
     runtime.__candidateObserver.disconnect();
@@ -243,6 +249,7 @@ test("candidate announcements use unique labels and only repeat on meaningful tr
   });
   expect(announcements.filter((message) => message.startsWith("Near Rectangle 1"))).toHaveLength(1);
   expect(announcements.filter((message) => message.startsWith("Snapped to Rectangle 1"))).toHaveLength(1);
+  expect(announcements.filter((message) => message === "No binding target. Endpoint will remain free.")).toHaveLength(1);
 });
 
 test("one direct or nearby target exposes screen-constant anchors and binding wins over Shift", async ({ page }) => {

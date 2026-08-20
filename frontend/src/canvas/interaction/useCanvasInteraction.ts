@@ -247,13 +247,16 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
     const announcementKey = next
       ? `${next.targetId}:${next.activeAnchorName}:${next.isSnapped ? "snapped" : "near"}`
       : null;
-    if (announcementKey !== lastArrowCandidateAnnouncementRef.current) {
+    const previousAnnouncementKey = lastArrowCandidateAnnouncementRef.current;
+    if (announcementKey !== previousAnnouncementKey) {
       lastArrowCandidateAnnouncementRef.current = announcementKey;
       if (candidate) {
         const targetLabel = optionsRef.current.getArrowTargetLabel(candidate.target);
         optionsRef.current.onArrowStatusChange(candidate.endpoint.kind === "element"
           ? `Snapped to ${targetLabel}, target-relative ${candidate.activeAnchor.name} anchor.`
           : `Near ${targetLabel}, target-relative ${candidate.activeAnchor.name} anchor; move closer to snap.`);
+      } else if (previousAnnouncementKey !== null) {
+        optionsRef.current.onArrowStatusChange("No binding target. Endpoint will remain free.");
       }
     }
     setArrowAuthoringVisual((current) =>

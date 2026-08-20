@@ -1,6 +1,7 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type { AppData, AppSessionState, Folder, Page } from "../../types";
 import type { CanvasElement, ConnectorElement, RoughStyle, ShapeElement } from "../model/elements";
+import { normalizeTextBackgroundMode } from "../model/textPreferences";
 import {
   isSafeCanvasCoordinate,
   isSafeCanvasDimension,
@@ -101,6 +102,14 @@ export function createSceneRepository(invoke: Invoke = tauriInvoke): SceneReposi
 
 /** Fills style fields that predate primitive styling without weakening write validation. */
 export function normalizeLoadedCanvasElement(element: CanvasElement): CanvasElement {
+  if (element.type === "text") {
+    return {
+      ...element,
+      backgroundMode: normalizeTextBackgroundMode(
+        (element as typeof element & { backgroundMode?: unknown }).backgroundMode,
+      ),
+    };
+  }
   if (element.type === "shape") {
     const style = (element as ShapeElement & { style?: Partial<RoughStyle> }).style;
     return { ...element, style: normalizeRoughStyle(style, element.id) };

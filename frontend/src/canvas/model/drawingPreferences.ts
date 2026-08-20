@@ -5,7 +5,10 @@ import type {
   InkElement,
   RoughStyle,
   ShapeElement,
+  TextBackgroundMode,
+  TextElement,
 } from "./elements";
+import type { TextPreferences } from "./textPreferences";
 
 export type DrawingPreferenceTool =
   | "pen"
@@ -30,6 +33,7 @@ export type DrawingPreferences = Readonly<Record<DrawingPreferenceTool, DrawingT
 
 export type DrawingProperty =
   | "backgroundColor"
+  | "backgroundMode"
   | "opacity"
   | "roughness"
   | "roundness"
@@ -39,6 +43,7 @@ export type DrawingProperty =
 
 export type DrawingPropertyUpdate =
   | { property: "backgroundColor"; value: CanvasColor | null }
+  | { property: "backgroundMode"; value: TextBackgroundMode }
   | { property: "opacity"; value: number }
   | { property: "roughness"; value: number }
   | { property: "roundness"; value: number }
@@ -53,6 +58,7 @@ export type PropertyValue<T> =
 
 export type DrawingPropertyValues = Readonly<{
   backgroundColor: PropertyValue<CanvasColor | null>;
+  backgroundMode: PropertyValue<TextBackgroundMode>;
   opacity: PropertyValue<number>;
   roughness: PropertyValue<number>;
   roundness: PropertyValue<number>;
@@ -168,6 +174,7 @@ export function isPropertySupportedByTool(tool: DrawingPreferenceTool, property:
 export function readDrawingProperties(elements: readonly CanvasElement[]): DrawingPropertyValues {
   return {
     backgroundColor: readCompatible(elements, "backgroundColor"),
+    backgroundMode: readCompatible(elements, "backgroundMode"),
     opacity: readCompatible(elements, "opacity"),
     roughness: readCompatible(elements, "roughness"),
     roundness: readCompatible(elements, "roundness"),
@@ -180,6 +187,7 @@ export function readDrawingProperties(elements: readonly CanvasElement[]): Drawi
 export function drawingPropertiesFromPreference(preference: DrawingToolPreference): DrawingPropertyValues {
   return {
     backgroundColor: { kind: "value", value: preference.backgroundColor },
+    backgroundMode: { kind: "unavailable" },
     opacity: { kind: "value", value: preference.opacity },
     roughness: { kind: "value", value: preference.roughness },
     roundness: { kind: "value", value: preference.roundness },
@@ -206,6 +214,7 @@ function readCompatible<P extends DrawingProperty>(
 
 type PropertyType<P extends DrawingProperty> =
   P extends "backgroundColor" ? CanvasColor | null :
+  P extends "backgroundMode" ? TextBackgroundMode :
   P extends "strokeColor" ? CanvasColor :
   P extends "strokeStyle" ? RoughStyle["strokeStyle"] : number;
 
@@ -216,6 +225,9 @@ function readElementProperty<P extends DrawingProperty>(
   property: P,
 ): PropertyType<P> | typeof unavailable {
   if (property === "opacity") return element.opacity as PropertyType<P>;
+  if (element.type === "text" && property === "backgroundMode") {
+    return element.backgroundMode as PropertyType<P>;
+  }
   if (element.type === "ink") {
     if (property === "strokeColor") return element.brush.color as PropertyType<P>;
     if (property === "strokeWidth") return element.brush.size as PropertyType<P>;
@@ -253,11 +265,34 @@ export function applyDrawingPropertyUpdate(
     if (update.property === "opacity") {
       return element.opacity === update.value ? element : { ...element, opacity: update.value, updatedAt };
     }
+    if (element.type === "text") return updateText(element, update, updatedAt);
     if (element.type === "ink") return updateInk(element, update, updatedAt);
     if (element.type === "shape") return updateShape(element, update, updatedAt);
     if (element.type === "connector") return updateConnector(element, update, updatedAt);
     return element;
   });
+}
+
+export function drawingPropertiesFromTextPreferences(
+  preferences: TextPreferences,
+): DrawingPropertyValues {
+  return {
+    backgroundColor: { kind: "unavailable" },
+    backgroundMode: { kind: "value", value: preferences.backgroundMode },
+    opacity: { kind: "unavailable" },
+    roughness: { kind: "unavailable" },
+    roundness: { kind: "unavailable" },
+    strokeColor: { kind: "unavailable" },
+    strokeStyle: { kind: "unavailable" },
+    strokeWidth: { kind: "unavailable" },
+  };
+}
+
+function updateText(element: TextElement, update: DrawingPropertyUpdate, updatedAt: number): TextElement {
+  if (update.property !== "backgroundMode" || element.backgroundMode === update.value) {
+    return element;
+  }
+  return { ...element, backgroundMode: update.value, updatedAt };
 }
 
 function updateInk(element: InkElement, update: DrawingPropertyUpdate, updatedAt: number): InkElement {

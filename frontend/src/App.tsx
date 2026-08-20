@@ -159,6 +159,10 @@ import {
   type DrawingPropertyUpdate,
   type DrawingPreferences,
 } from "./canvas/model/drawingPreferences";
+import {
+  DEFAULT_TEXT_PREFERENCES,
+  normalizeTextPreferences,
+} from "./canvas/model/textPreferences";
 import { reorderLayers, type LayerAction } from "./canvas/model/layerOrdering";
 import {
   getProportionalScale,
@@ -1124,6 +1128,7 @@ function App() {
   const [drawingPreferences, setDrawingPreferences] = useState<DrawingPreferences>(
     createDefaultDrawingPreferences,
   );
+  const [textPreferences, setTextPreferences] = useState(DEFAULT_TEXT_PREFERENCES);
   const [isPropertiesPanelOpen, setIsPropertiesPanelOpen] = useState(false);
   const [isDrawingPropertyPreviewing, setIsDrawingPropertyPreviewing] = useState(false);
   const [pendingImagePlacement, setPendingImagePlacement] =
@@ -1253,6 +1258,7 @@ function App() {
   const isToolLockedRef = useRef(isToolLocked);
   const isCanvasKeyboardActiveRef = useRef(isCanvasKeyboardActive);
   const drawingPreferencesRef = useRef(drawingPreferences);
+  const textPreferencesRef = useRef(textPreferences);
   const isTemporaryHandActiveRef = useRef(false);
   const pendingImagePlacementRef = useRef<PendingImagePlacement | null>(null);
   const imagePickerRequestRef = useRef(0);
@@ -1275,6 +1281,7 @@ function App() {
   isToolLockedRef.current = isToolLocked;
   isCanvasKeyboardActiveRef.current = isCanvasKeyboardActive;
   drawingPreferencesRef.current = drawingPreferences;
+  textPreferencesRef.current = textPreferences;
   pendingImagePlacementRef.current = pendingImagePlacement;
   isSnapToGridEnabledRef.current = isGridVisible && isSnapToGridEnabled;
   editingBlockIdRef.current = editingBlockId;
@@ -2058,6 +2065,7 @@ function App() {
           setIsDarkMode(legacy.data.isDarkMode ?? true);
           setIsToolLocked(legacy.data.sessionState?.isDrawingToolLocked ?? true);
           setDrawingPreferences(normalizeDrawingPreferences(legacy.data.sessionState?.drawingPreferences));
+          setTextPreferences(normalizeTextPreferences(legacy.data.sessionState?.textPreferences));
           const legacyPageIds = new Set(
             legacy.data.pages
               .filter((page) => !isTemplatePage(page))
@@ -2268,6 +2276,7 @@ function App() {
   }, [
     data,
     drawingPreferences,
+    textPreferences,
     isAssistantOpen,
     isDarkMode,
     isDrawingPropertyPreviewing,
@@ -2400,6 +2409,7 @@ function App() {
 
     return {
       drawingPreferences: drawingPreferencesRef.current,
+      textPreferences: textPreferencesRef.current,
       isAssistantOpen,
       isDrawingToolLocked: isToolLockedRef.current,
       isExplorerCollapsed: isSidebarCollapsed,
@@ -2735,6 +2745,16 @@ function App() {
 
   function updateDrawingProperty(update: DrawingPropertyUpdate) {
     const selectedIds = new Set(selectedBlockIdsRef.current);
+    if (update.property === "backgroundMode") {
+      const hasUnlockedSelectedText = [...selectedIds].some((id) =>
+        dataRef.current.elements.some(
+          (element) => element.id === id && isTextElement(element) && !element.locked,
+        ),
+      );
+      if (hasUnlockedSelectedText) {
+        setTextPreferences({ backgroundMode: update.value });
+      }
+    }
     if (selectedIds.size > 0) {
       const transaction = drawingPropertyPreviewRef.current;
       if (transaction) {
@@ -2756,6 +2776,10 @@ function App() {
       return;
     }
     const tool = activeToolRef.current;
+    if (tool === "text" && update.property === "backgroundMode") {
+      setTextPreferences({ backgroundMode: update.value });
+      return;
+    }
     if (!isDrawingPreferenceTool(tool)) return;
     setDrawingPreferences((current) => updateDrawingPreference(current, tool, update));
   }
@@ -4116,6 +4140,7 @@ function App() {
     );
     const timestamp = Date.now();
     const block: TextElement = {
+      backgroundMode: textPreferencesRef.current.backgroundMode,
       createdAt: timestamp,
       id: blockId,
       pageId: page.id,
@@ -5278,6 +5303,7 @@ function App() {
     setBlocksWithHistory((currentBlocks) => [
       ...currentBlocks,
       {
+        backgroundMode: textPreferencesRef.current.backgroundMode,
         createdAt: timestamp,
         id: blockId,
         locked: false,

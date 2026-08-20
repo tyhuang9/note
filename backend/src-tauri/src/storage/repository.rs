@@ -399,8 +399,15 @@ fn validate_element(value: &Value, page_id: &str) -> Result<(), String> {
         return Err("box element geometry is incomplete".into());
     }
     match kind {
-        "text" if value.get("content").and_then(Value::as_str).is_none() => {
-            return Err("text element.content must be a string".into())
+        "text" => {
+            if value.get("content").and_then(Value::as_str).is_none() {
+                return Err("text element.content must be a string".into());
+            }
+            if let Some(background_mode) = value.get("backgroundMode") {
+                if !matches!(background_mode.as_str(), Some("surface" | "transparent")) {
+                    return Err("text element.backgroundMode is invalid".into());
+                }
+            }
         }
         "image"
             if value
@@ -987,58 +994,70 @@ fn validate_session_state(state: &Value) -> Result<(), String> {
             return Err("session state.isDrawingToolLocked must be boolean".into());
         }
     }
-    let Some(preferences) = session.get("drawingPreferences") else {
-        return Ok(());
-    };
-    let preferences = preferences
-        .as_object()
-        .ok_or("session state.drawingPreferences must be an object")?;
-    for tool in [
-        "pen",
-        "highlighter",
-        "rectangle",
-        "ellipse",
-        "diamond",
-        "line",
-        "arrow",
-    ] {
-        let context = format!("session state.drawingPreferences.{tool}");
-        let preference = preferences
-            .get(tool)
-            .and_then(Value::as_object)
-            .ok_or_else(|| format!("{context} must be an object"))?;
-        validate_ink_color(
-            preference
-                .get("strokeColor")
-                .ok_or_else(|| format!("{context}.strokeColor is required"))?,
-        )?;
-        if let Some(background) = preference.get("backgroundColor") {
-            if !background.is_null() {
-                validate_ink_color(background)?;
-            }
-        } else {
-            return Err(format!("{context}.backgroundColor is required"));
-        }
-        for (key, minimum, maximum, allow_zero) in [
-            ("opacity", 0.0, 1.0, true),
-            ("roughness", 0.0, 10.0, true),
-            ("roundness", 0.0, 1.0, true),
-            ("strokeWidth", 0.0, 512.0, false),
-        ] {
-            let number = preference
-                .get(key)
-                .and_then(Value::as_f64)
-                .filter(|number| number.is_finite())
-                .ok_or_else(|| format!("{context}.{key} must be finite"))?;
-            if !(minimum..=maximum).contains(&number) || (!allow_zero && number == 0.0) {
-                return Err(format!("{context}.{key} is out of range"));
-            }
-        }
+    if let Some(text_preferences) = session.get("textPreferences") {
+        let text_preferences = text_preferences
+            .as_object()
+            .ok_or("session state.textPreferences must be an object")?;
         if !matches!(
-            preference.get("strokeStyle").and_then(Value::as_str),
-            Some("solid" | "dashed" | "dotted")
+            text_preferences
+                .get("backgroundMode")
+                .and_then(Value::as_str),
+            Some("surface" | "transparent")
         ) {
-            return Err(format!("{context}.strokeStyle is invalid"));
+            return Err("session state.textPreferences.backgroundMode is invalid".into());
+        }
+    }
+    if let Some(preferences) = session.get("drawingPreferences") {
+        let preferences = preferences
+            .as_object()
+            .ok_or("session state.drawingPreferences must be an object")?;
+        for tool in [
+            "pen",
+            "highlighter",
+            "rectangle",
+            "ellipse",
+            "diamond",
+            "line",
+            "arrow",
+        ] {
+            let context = format!("session state.drawingPreferences.{tool}");
+            let preference = preferences
+                .get(tool)
+                .and_then(Value::as_object)
+                .ok_or_else(|| format!("{context} must be an object"))?;
+            validate_ink_color(
+                preference
+                    .get("strokeColor")
+                    .ok_or_else(|| format!("{context}.strokeColor is required"))?,
+            )?;
+            if let Some(background) = preference.get("backgroundColor") {
+                if !background.is_null() {
+                    validate_ink_color(background)?;
+                }
+            } else {
+                return Err(format!("{context}.backgroundColor is required"));
+            }
+            for (key, minimum, maximum, allow_zero) in [
+                ("opacity", 0.0, 1.0, true),
+                ("roughness", 0.0, 10.0, true),
+                ("roundness", 0.0, 1.0, true),
+                ("strokeWidth", 0.0, 512.0, false),
+            ] {
+                let number = preference
+                    .get(key)
+                    .and_then(Value::as_f64)
+                    .filter(|number| number.is_finite())
+                    .ok_or_else(|| format!("{context}.{key} must be finite"))?;
+                if !(minimum..=maximum).contains(&number) || (!allow_zero && number == 0.0) {
+                    return Err(format!("{context}.{key} is out of range"));
+                }
+            }
+            if !matches!(
+                preference.get("strokeStyle").and_then(Value::as_str),
+                Some("solid" | "dashed" | "dotted")
+            ) {
+                return Err(format!("{context}.strokeStyle is invalid"));
+            }
         }
     }
     Ok(())
@@ -1199,6 +1218,43 @@ mod tests {
                 .unwrap_err()
                 .contains("must be boolean")
         );
+    }
+
+    #[test]
+    fn text_background_modes_accept_legacy_omission_and_reject_invalid_values() {
+        let legacy_text = element("legacy-text", 1);
+        assert!(validate_element(&legacy_text, "p").is_ok());
+
+        let mut transparent_text = element("transparent-text", 1);
+        transparent_text["backgroundMode"] = json!("transparent");
+        assert!(validate_element(&transparent_text, "p").is_ok());
+
+        let mut invalid_text = element("invalid-text", 1);
+        invalid_text["backgroundMode"] = json!("gradient");
+        assert!(validate_element(&invalid_text, "p")
+            .unwrap_err()
+            .contains("backgroundMode"));
+
+        assert!(validate_session_state(&json!({})).is_ok());
+        assert!(validate_session_state(&json!({
+            "textPreferences":{"backgroundMode":"surface"}
+        }))
+        .is_ok());
+        assert!(validate_session_state(&json!({
+            "textPreferences":{"backgroundMode":"transparent"}
+        }))
+        .is_ok());
+        assert!(validate_session_state(&json!({"textPreferences":null}))
+            .unwrap_err()
+            .contains("textPreferences"));
+        assert!(validate_session_state(&json!({
+            "textPreferences":{"backgroundMode":"gradient"}
+        }))
+        .unwrap_err()
+        .contains("backgroundMode"));
+        assert!(validate_session_state(&json!({"textPreferences":{}}))
+            .unwrap_err()
+            .contains("backgroundMode"));
     }
 
     #[test]
@@ -2011,7 +2067,7 @@ mod tests {
     #[test]
     fn legacy_import_creates_backup_preserves_mixed_content_and_is_idempotent() {
         let directory = root();
-        let legacy = json!({"folders":[{"id":"f","name":"F"}],"pages":[{"id":"p","folderId":"f","title":"P"}],"blocks":[{"id":"b","pageId":"p","x":1,"y":2,"width":3,"height":4,"content":"text","richContent":{"type":"doc","content":[{"type":"paragraph"}]},"imageData":format!("data:image/png;base64,{}",STANDARD.encode(b"image")),"imageName":"x.png"}],"isDarkMode":true,"sessionState":{"selectedPageId":"p","pageViewports":{"p":{"panOffset":{"x":1,"y":2},"zoomLevel":1.5}}}});
+        let legacy = json!({"folders":[{"id":"f","name":"F"}],"pages":[{"id":"p","folderId":"f","title":"P"}],"blocks":[{"id":"b","pageId":"p","x":1,"y":2,"width":3,"height":4,"content":"text","backgroundMode":"transparent","richContent":{"type":"doc","content":[{"type":"paragraph"}]},"imageData":format!("data:image/png;base64,{}",STANDARD.encode(b"image")),"imageName":"x.png"}],"isDarkMode":true,"sessionState":{"selectedPageId":"p","textPreferences":{"backgroundMode":"transparent"},"pageViewports":{"p":{"panOffset":{"x":1,"y":2},"zoomLevel":1.5}}}});
         let path = directory.path().join("note-data.json");
         fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
         let original = fs::read(&path).unwrap();
@@ -2025,6 +2081,11 @@ mod tests {
         assert_eq!(
             loaded.elements[0]["richContent"],
             legacy["blocks"][0]["richContent"]
+        );
+        assert_eq!(loaded.elements[0]["backgroundMode"], "transparent");
+        assert_eq!(
+            loaded.session_state.unwrap()["textPreferences"]["backgroundMode"],
+            "transparent"
         );
         let second = initialize_storage_at(directory.path()).unwrap();
         assert!(!second.imported_legacy_data);

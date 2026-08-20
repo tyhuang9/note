@@ -42,6 +42,7 @@ struct TextBlock {
     width: f64,
     height: f64,
     content: String,
+    background_mode: Option<String>,
     rich_content: Option<serde_json::Value>,
     is_width_manually_resized: Option<bool>,
     image_data: Option<String>,
@@ -52,6 +53,7 @@ struct TextBlock {
 #[serde(rename_all = "camelCase")]
 struct AppSessionState {
     drawing_preferences: Option<serde_json::Value>,
+    text_preferences: Option<serde_json::Value>,
     is_assistant_open: Option<bool>,
     is_drawing_tool_locked: Option<bool>,
     is_explorer_collapsed: Option<bool>,

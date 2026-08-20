@@ -54,6 +54,7 @@ struct LegacyBlock {
     height: f64,
     #[serde(default)]
     content: String,
+    background_mode: Option<String>,
     rich_content: Option<Value>,
     is_width_manually_resized: Option<bool>,
     image_data: Option<String>,
@@ -205,7 +206,11 @@ pub fn import_if_needed(
             let timestamp = now_ms();
             let has_text = meaningful_text(b);
             if has_text || b.image_data.is_none() {
-                let payload = json!({"id":b.id,"pageId":b.page_id,"type":"text","x":b.x,"y":b.y,"width":b.width,"height":b.height,"rotation":0.0,"zIndex":z as i64,"opacity":1.0,"locked":false,"createdAt":timestamp,"updatedAt":timestamp,"content":b.content,"richContent":b.rich_content,"isWidthManuallyResized":b.is_width_manually_resized});
+                let background_mode = match b.background_mode.as_deref() {
+                    Some("transparent") => "transparent",
+                    _ => "surface",
+                };
+                let payload = json!({"id":b.id,"pageId":b.page_id,"type":"text","x":b.x,"y":b.y,"width":b.width,"height":b.height,"rotation":0.0,"zIndex":z as i64,"opacity":1.0,"locked":false,"createdAt":timestamp,"updatedAt":timestamp,"backgroundMode":background_mode,"content":b.content,"richContent":b.rich_content,"isWidthManuallyResized":b.is_width_manually_resized});
                 insert_element(&tx, &payload)?;
             }
             if let Some(data) = &b.image_data {

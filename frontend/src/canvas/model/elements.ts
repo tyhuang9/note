@@ -7,6 +7,7 @@ export type CanvasElementType = "text" | "image" | "ink" | "shape" | "connector"
 export type CanvasColor =
   | { kind: "theme"; token: "foreground" | "muted" }
   | { kind: "fixed"; value: string };
+export type TextBackgroundMode = "surface" | "transparent";
 
 export type ElementBase<TType extends CanvasElementType> = {
   id: ElementId; pageId: PageId; type: TType; zIndex: number; opacity: number;
@@ -14,7 +15,12 @@ export type ElementBase<TType extends CanvasElementType> = {
 };
 export type BoxGeometry = { x: number; y: number; width: number; height: number; rotation: number };
 export type BoxCanvasElement = ElementBase<CanvasElementType> & BoxGeometry;
-export type TextElement = ElementBase<"text"> & BoxGeometry & { content: string; richContent?: JSONContent; isWidthManuallyResized?: boolean };
+export type TextElement = ElementBase<"text"> & BoxGeometry & {
+  backgroundMode: TextBackgroundMode;
+  content: string;
+  richContent?: JSONContent;
+  isWidthManuallyResized?: boolean;
+};
 export type ImageElement = ElementBase<"image"> & BoxGeometry & { assetId: string; fileName?: string; altText?: string; naturalWidth: number; naturalHeight: number; fit: "contain" };
 export type InkPoint = [x: number, y: number, pressure: number];
 export type InkElement = ElementBase<"ink"> & BoxGeometry & { points: InkPoint[]; brush: { kind: "pen" | "highlighter"; color: CanvasColor; size: number; opacity: number; thinning: number; smoothing: number; streamline: number; simulatePressure: boolean } };

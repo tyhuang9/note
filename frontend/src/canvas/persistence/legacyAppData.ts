@@ -1,9 +1,11 @@
 import type { JSONContent } from "@tiptap/core";
 import type { AppData, AppSessionState, Folder, Page } from "../../types";
 import type { CanvasElement, ImageElement, TextElement } from "../model/elements";
+import { normalizeTextBackgroundMode } from "../model/textPreferences";
 
 export type LegacyTextBlock = {
   content: string;
+  backgroundMode?: "surface" | "transparent";
   height: number;
   id: string;
   imageData?: string;
@@ -46,6 +48,7 @@ function textElementFromLegacy(
   timestamp: number,
 ): TextElement {
   return {
+    backgroundMode: normalizeTextBackgroundMode(block.backgroundMode),
     content: block.content,
     createdAt: timestamp,
     height: block.height,
@@ -170,6 +173,7 @@ export function toLegacyAppData(
   for (const element of [...data.elements].sort((first, second) => first.zIndex - second.zIndex)) {
     if (element.type === "text") {
       blocks.push({
+        backgroundMode: element.backgroundMode,
         content: element.content,
         height: element.height,
         id: element.id,

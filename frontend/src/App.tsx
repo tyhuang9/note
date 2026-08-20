@@ -176,6 +176,7 @@ import {
   translateSelection,
   type SelectionCorner,
 } from "./canvas/model/selectionBounds";
+import { getDrawingToolLockPreference } from "./canvas/state/drawingToolLock";
 import {
   detachConnectorEndpointsForDeletedTargets,
   getDefaultKeyboardArrowEndpoints,
@@ -1134,7 +1135,7 @@ function App() {
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
   const [activeMode, setActiveMode] = useState<InteractionMode>("canvas");
   const [activeTool, setActiveTool] = useState<DrawingTool>("select");
-  const [isToolLocked, setIsToolLocked] = useState(true);
+  const [isToolLocked, setIsToolLocked] = useState(false);
   const [drawingPreferences, setDrawingPreferences] = useState<DrawingPreferences>(
     createDefaultDrawingPreferences,
   );
@@ -2050,7 +2051,7 @@ function App() {
         setIsDarkMode(savedData.isDarkMode ?? true);
         setIsSidebarCollapsed(savedSessionState?.isExplorerCollapsed ?? false);
         setIsAssistantOpen(savedSessionState?.isAssistantOpen ?? false);
-        setIsToolLocked(savedSessionState?.isDrawingToolLocked ?? true);
+        setIsToolLocked(getDrawingToolLockPreference(savedSessionState));
         setDrawingPreferences(normalizeDrawingPreferences(savedSessionState?.drawingPreferences));
         setTextPreferences(normalizeTextPreferences(savedSessionState?.textPreferences));
         pageViewportsRef.current = normalizePageViewports(
@@ -2094,7 +2095,7 @@ function App() {
           imageSourcesByAssetIdRef.current = legacy.imageSourcesByAssetId;
           setData(legacy.data);
           setIsDarkMode(legacy.data.isDarkMode ?? true);
-          setIsToolLocked(legacy.data.sessionState?.isDrawingToolLocked ?? true);
+          setIsToolLocked(getDrawingToolLockPreference(legacy.data.sessionState));
           setDrawingPreferences(normalizeDrawingPreferences(legacy.data.sessionState?.drawingPreferences));
           setTextPreferences(normalizeTextPreferences(legacy.data.sessionState?.textPreferences));
           const legacyPageIds = new Set(

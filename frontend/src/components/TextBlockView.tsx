@@ -222,6 +222,7 @@ export const TextBlockView = memo(function TextBlockView({
   const hasManualWidth = useRef(Boolean(block.isWidthManuallyResized));
   const pendingCaretOffset = useRef<number | null>(null);
   const pendingCaretPoint = useRef<CaretPoint | null>(null);
+  const suppressModifierClickRef = useRef(false);
   const draftContentRef = useRef(block.content);
   const draftRichContentRef = useRef<JSONContent>(
     getTipTapContent(block),
@@ -582,6 +583,21 @@ export const TextBlockView = memo(function TextBlockView({
     return draftContentRef.current.length;
   }
 
+  function cacheCaretFromPoint(clientX: number, clientY: number) {
+    pendingCaretOffset.current = getCaretOffsetFromPoint(clientX, clientY);
+    pendingCaretPoint.current = { clientX, clientY };
+  }
+
+  function selectTextBlock(additive = false) {
+    leaveEditorForBlockSelection(additive);
+  }
+
+  function editTextBlockAtCachedCaret(clientX: number, clientY: number) {
+    cacheCaretFromPoint(clientX, clientY);
+    selectTextBlock();
+    onEdit(block.id);
+  }
+
   function handleEditorChange(editor: Editor) {
     if (isContentSelected) {
       setIsContentSelected(false);
@@ -705,6 +721,8 @@ export const TextBlockView = memo(function TextBlockView({
     if (event.ctrlKey || event.metaKey) {
       event.preventDefault();
       event.stopPropagation();
+      suppressModifierClickRef.current = true;
+      cacheCaretFromPoint(event.clientX, event.clientY);
       leaveEditorForBlockSelection(true);
       return;
     }
@@ -715,6 +733,7 @@ export const TextBlockView = memo(function TextBlockView({
 
     event.preventDefault();
     event.stopPropagation();
+    cacheCaretFromPoint(event.clientX, event.clientY);
     leaveEditorForBlockSelection();
 
     if (block.locked) {
@@ -798,6 +817,7 @@ export const TextBlockView = memo(function TextBlockView({
   }
 
   function cancelDrag(pointerId?: number) {
+    suppressModifierClickRef.current = false;
     const currentDrag = dragState.current;
     if (!currentDrag) {
       return;
@@ -867,8 +887,11 @@ export const TextBlockView = memo(function TextBlockView({
       if (event.key === "Escape") cancelPendingDrag();
     }
 
-    function handleCapturedDragCancellation(event: PointerEvent) {
-      if (!dragState.current || dragState.current.isStarting) return;
+  function handleCapturedDragCancellation(event: PointerEvent) {
+      if (!dragState.current || dragState.current.isStarting) {
+        suppressModifierClickRef.current = false;
+        return;
+      }
       event.preventDefault();
       event.stopPropagation();
       cancelDrag(event.pointerId);
@@ -915,11 +938,15 @@ export const TextBlockView = memo(function TextBlockView({
       return;
     }
 
+    suppressModifierClickRef.current = false;
     handleRootPointerEnd(event);
   }
 
   function handleLostPointerCapture(event: ReactPointerEvent<HTMLDivElement>) {
-    if (!dragState.current || dragState.current.isStarting) return;
+    if (!dragState.current || dragState.current.isStarting) {
+      suppressModifierClickRef.current = false;
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     cancelDrag(event.pointerId);
@@ -939,10 +966,15 @@ export const TextBlockView = memo(function TextBlockView({
       }`}
       onClick={(event) => {
         event.stopPropagation();
+        if (!isEditing) {
+          selectTextBlock(event.ctrlKey || event.metaKey);
+        }
       }}
       onDoubleClick={(event) => {
         event.stopPropagation();
-        onEdit(block.id);
+        if (!isEditing) {
+          editTextBlockAtCachedCaret(event.clientX, event.clientY);
+        }
       }}
       onPointerDown={(event) => {
         if (event.button === 2) {
@@ -960,6 +992,7 @@ export const TextBlockView = memo(function TextBlockView({
 
         event.preventDefault();
         event.stopPropagation();
+        cacheCaretFromPoint(event.clientX, event.clientY);
         leaveEditorForBlockSelection(event.ctrlKey || event.metaKey);
       }}
       ref={setBlockElement}
@@ -1001,6 +1034,9 @@ export const TextBlockView = memo(function TextBlockView({
         }}
         onDoubleClick={(event) => {
           event.stopPropagation();
+          if (!isEditing) {
+            editTextBlockAtCachedCaret(event.clientX, event.clientY);
+          }
         }}
         onPointerDown={startDrag}
         onKeyDown={handleHeaderKeyDown}
@@ -1044,44 +1080,23 @@ export const TextBlockView = memo(function TextBlockView({
         <div
           className="text-block-display text-block-rich-content"
           onClick={(event) => {
-            event.preventDefault();
             event.stopPropagation();
-
-            if (event.ctrlKey || event.metaKey) {
+            const suppressModifierClick = suppressModifierClickRef.current;
+            suppressModifierClickRef.current = false;
+            if ((event.ctrlKey || event.metaKey) && suppressModifierClick) {
               return;
             }
-
-            onEdit(block.id);
+            if (!isEditing) {
+              selectTextBlock(event.ctrlKey || event.metaKey);
+            }
           }}
-          onPointerDown={(event) => {
-            if (event.button === 2) {
-              onCanvasPanStart(event);
-              return;
-            }
-
-            if (event.button !== 0) {
-              return;
-            }
-
-            event.preventDefault();
+          onDoubleClick={(event) => {
             event.stopPropagation();
-
-            if (event.ctrlKey || event.metaKey) {
-              pendingCaretOffset.current = null;
-              pendingCaretPoint.current = null;
-              onSelect(block.id, true);
-              return;
+            if (!isEditing) {
+              editTextBlockAtCachedCaret(event.clientX, event.clientY);
             }
-
-            pendingCaretOffset.current = getCaretOffsetFromPoint(
-              event.clientX,
-              event.clientY,
-            );
-            pendingCaretPoint.current = {
-              clientX: event.clientX,
-              clientY: event.clientY,
-            };
           }}
+          onPointerDown={startDrag}
           onPointerMove={(event) => {
             if (event.buttons !== 2) {
               event.stopPropagation();

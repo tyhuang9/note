@@ -43,16 +43,24 @@ test("SQLite bridge reconciles structure before scene changes and reloads text",
   const properties = page.getByRole("complementary", { name: "Drawing properties" });
   await properties.getByRole("button", { name: "Stroke color #e03131" }).click();
   const toolLock = page.locator("[data-tool-lock]");
-  await expect(toolLock).toHaveAccessibleName("Turn off drawing tool lock");
-  await expect(toolLock).toHaveAttribute("aria-pressed", "true");
-  await toolLock.click();
   await expect(toolLock).toHaveAccessibleName("Turn on drawing tool lock");
   await expect(toolLock).toHaveAttribute("aria-pressed", "false");
+  await toolLock.click();
+  await expect(toolLock).toHaveAccessibleName("Turn off drawing tool lock");
+  await expect(toolLock).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".persistence-status")).toHaveText("Saved");
 
   await page.reload();
   await expect(page.locator(".text-block-display")).toContainText("Persisted text");
   await expect(page.locator('[data-canvas-element-type="ink"]')).toHaveCount(1);
+  await expect(page.locator("[data-tool-lock]")).toHaveAccessibleName("Turn off drawing tool lock");
+  await expect(page.locator("[data-tool-lock]")).toHaveAttribute("aria-pressed", "true");
+  await page.locator("[data-tool-lock]").click();
+  await expect(page.locator("[data-tool-lock]")).toHaveAccessibleName("Turn on drawing tool lock");
+  await expect(page.locator("[data-tool-lock]")).toHaveAttribute("aria-pressed", "false");
+  await expect(page.locator(".persistence-status")).toHaveText("Saved");
+
+  await page.reload();
   await expect(page.locator("[data-tool-lock]")).toHaveAccessibleName("Turn on drawing tool lock");
   await expect(page.locator("[data-tool-lock]")).toHaveAttribute("aria-pressed", "false");
   await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import boundaryVectors from "../../../tests/fixtures/connector-boundary-golden-vectors.json";
 import type { ConnectorElement, RoughStyle, ShapeElement, TextElement } from "../../src/canvas/model/elements";
 import {
   CONNECTOR_BINDING_SNAP_RADIUS_PX,
@@ -6,6 +7,7 @@ import {
   detachConnectorEndpointsForDeletedTargets,
   getDefaultKeyboardArrowEndpoints,
   getConnectorAuthoringCandidate,
+  getNearbyBindableTargets,
   getNearestBindableBoundaryAnchor,
   getShapeAnchorPoint,
   getShapeBindingAnchors,
@@ -72,6 +74,39 @@ function arrow(start: ConnectorElement["start"], end: ConnectorElement["end"]): 
 }
 
 describe("connector shape binding", () => {
+  it("matches the shared persisted boundary vectors", () => {
+    for (const vector of boundaryVectors.vectors) {
+      const target = vector.kind === "text"
+        ? text({
+          id: vector.name,
+          x: vector.x,
+          y: vector.y,
+          width: vector.width,
+          height: vector.height,
+          rotation: vector.rotation,
+        })
+        : shape(vector.shape as ShapeElement["shape"], {
+          id: vector.name,
+          x: vector.x,
+          y: vector.y,
+          width: vector.width,
+          height: vector.height,
+          rotation: vector.rotation,
+          style: { ...style, roundness: vector.roundness },
+        });
+      const endpoint = { kind: "element" as const, targetElementId: target.id, anchor: { t: vector.t }, gap: vector.gap };
+      const resolved = resolveConnectorEndpoint(endpoint, { [target.id]: target });
+      if (!vector.accepted) {
+        expect(Math.abs(vector.expected.x)).toBeGreaterThan(MAX_CANVAS_VALUE);
+        expect(resolved, vector.name).toBeNull();
+        continue;
+      }
+      expect(resolved, vector.name).not.toBeNull();
+      expect(resolved!.x, vector.name).toBeCloseTo(vector.expected.x, 9);
+      expect(resolved!.y, vector.name).toBeCloseTo(vector.expected.y, 9);
+    }
+  });
+
   it("inverts rotated rectangle, text, and diamond boundaries to continuous canonical anchors", () => {
     const rectangle = shape("rectangle", { rotation: 31, width: 180, height: 60 });
     const diamond = shape("diamond", { rotation: -27, width: 160, height: 80 });
@@ -165,14 +200,18 @@ describe("connector shape binding", () => {
     expect(getConnectorAuthoringCandidate({ x: 300, y: 300 }, [low], 1, "low")?.endpoint).toEqual({ kind: "free", x: 300, y: 300 });
   });
 
-  it("rejects a large scene outside the inverse-rotated reveal bounds", () => {
+  it("broad-phases large proximity candidate sets while preserving deep direct hover", () => {
     const distant = Array.from({ length: 500 }, (_, index) => shape("ellipse", {
       id: `distant-${index}`,
       x: 10_000 + index * 300,
       y: 10_000,
     }));
+    expect(getNearbyBindableTargets({ x: 0, y: 0 }, distant, CONNECTOR_BINDING_REVEAL_RADIUS_PX)).toEqual([]);
     expect(getConnectorAuthoringCandidate({ x: 0, y: 0 }, distant, 1)).toBeNull();
     expect(snapConnectorEndpoint({ x: 0, y: 0 }, distant, 1, true)).toEqual({ kind: "free", x: 0, y: 0 });
+    const direct = shape("rectangle", { id: "deep-direct", width: 400, height: 300, x: 5_000, y: 5_000 });
+    expect(getNearbyBindableTargets({ x: 0, y: 0 }, [direct], CONNECTOR_BINDING_REVEAL_RADIUS_PX)).toEqual([]);
+    expect(getConnectorAuthoringCandidate({ x: 0, y: 0 }, [direct], 1, direct.id)?.target.id).toBe(direct.id);
   });
 
   it("supports text and locked targets and snaps free endpoints to 45 degrees", () => {

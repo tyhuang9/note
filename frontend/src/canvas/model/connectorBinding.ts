@@ -308,9 +308,11 @@ export function getConnectorAuthoringCandidate(
     distancePx: number;
     index: number;
   }> | null = null;
-  for (let index = 0; index < elements.length; index += 1) {
-    const element = elements[index];
-    if (!isBindableElement(element)) continue;
+  for (const { element, index } of getNearbyBindableTargets(
+    point,
+    elements,
+    CONNECTOR_BINDING_REVEAL_RADIUS_PX / safeZoom,
+  )) {
     const candidate = buildAuthoringCandidate(point, element, safeZoom);
     if (!candidate) continue;
     const distancePx = pointDistance(point, candidate.activeAnchor.point) * safeZoom;
@@ -391,6 +393,18 @@ function buildAuthoringCandidate(
       : { kind: "free", ...point },
     target,
   };
+}
+
+/** Filters proximity candidates before their expensive boundary projection. */
+export function getNearbyBindableTargets(
+  point: CanvasPoint,
+  elements: readonly CanvasElement[],
+  radius: number,
+): readonly Readonly<{ element: BindableElement; index: number }>[] {
+  return elements.flatMap((element, index) => isBindableElement(element)
+    && isPointNearBindableBounds(point, element, radius)
+    ? [{ element, index }]
+    : []);
 }
 
 function canonicalAnchorT(value: number): number {

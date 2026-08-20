@@ -17,6 +17,10 @@ const MAX_INK_BRUSH_SIZE: f64 = 512.0;
 const MAX_SCENE_BATCH_BYTES: usize = 32 * 1024 * 1024;
 const MAX_SCENE_BATCH_UPSERTS: usize = 5_000;
 const MAX_SCENE_BATCH_DELETES: usize = 20_000;
+const MIN_VISUAL_RECTANGLE_ROUNDNESS: f64 = 0.06;
+const DIAMOND_CORNER_INSET: f64 = 0.08;
+const DIAMOND_CORNER_CONTROL: f64 = 0.45;
+const RAY_INTERSECTION_TOLERANCE: f64 = 1e-12;
 
 struct PayloadLimitWriter {
     bytes_written: usize,
@@ -573,7 +577,7 @@ fn validate_bound_connector_resolution(
     context: &str,
 ) -> Result<(), String> {
     let shape = if target_type == "text" {
-        "rectangle"
+        "text"
     } else {
         target
             .get("shape")
@@ -591,6 +595,16 @@ fn validate_bound_connector_resolution(
         return Err(format!("{context}.targetElementId has invalid dimensions"));
     }
     validate_canvas_rotation(rotation, &format!("{context}.targetElementId.rotation"))?;
+    let roundness = if target_type == "shape" && shape == "rectangle" {
+        target
+            .get("style")
+            .and_then(Value::as_object)
+            .and_then(|style| style.get("roundness"))
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0)
+    } else {
+        0.0
+    };
 
     let endpoint = endpoint
         .as_object()
@@ -602,7 +616,7 @@ fn validate_bound_connector_resolution(
         .and_then(Value::as_f64)
         .ok_or_else(|| format!("{context}.anchor must be within 0 and 1"))?;
     let gap = required_finite_object(endpoint, "gap", context)?;
-    let resolved = resolve_shape_anchor(shape, x, y, width, height, rotation, t, gap)
+    let resolved = resolve_shape_anchor(shape, x, y, width, height, rotation, roundness, t, gap)
         .ok_or_else(|| format!("{context} resolves to an invalid point"))?;
     validate_canvas_coordinate(resolved.0, &format!("{context}.resolved.x"))?;
     validate_canvas_coordinate(resolved.1, &format!("{context}.resolved.y"))?;
@@ -616,46 +630,23 @@ fn resolve_shape_anchor(
     width: f64,
     height: f64,
     rotation: f64,
+    roundness: f64,
     t: f64,
     gap: f64,
 ) -> Option<(f64, f64)> {
+    if !(width > 0.0 && height > 0.0) {
+        return None;
+    }
     let t = t.rem_euclid(1.0);
     let radians = t * std::f64::consts::TAU;
     let direction_x = zero_small(radians.sin());
     let direction_y = zero_small(-radians.cos());
     let radius_x = width / 2.0;
     let radius_y = height / 2.0;
-    let perimeter_distance = match shape {
-        "ellipse" => 1.0,
-        "diamond" => {
-            1.0 / f64::EPSILON.max(
-                direction_x.abs() / radius_x.max(f64::EPSILON)
-                    + direction_y.abs() / radius_y.max(f64::EPSILON),
-            )
-        }
-        "rectangle" => {
-            let horizontal = if direction_x == 0.0 {
-                f64::INFINITY
-            } else {
-                radius_x / direction_x.abs()
-            };
-            let vertical = if direction_y == 0.0 {
-                f64::INFINITY
-            } else {
-                radius_y / direction_y.abs()
-            };
-            horizontal.min(vertical)
-        }
-        _ => return None,
-    };
-    let (local_x, local_y) = if shape == "ellipse" {
-        (direction_x * radius_x, direction_y * radius_y)
-    } else {
-        (
-            direction_x * perimeter_distance,
-            direction_y * perimeter_distance,
-        )
-    };
+    let (boundary_x, boundary_y) =
+        shape_boundary_point(shape, width, height, roundness, (direction_x, direction_y))?;
+    let local_x = boundary_x - radius_x;
+    let local_y = boundary_y - radius_y;
     let rotation = rotation.to_radians();
     let (sin, cos) = rotation.sin_cos();
     let rotated_direction_x = zero_small(direction_x * cos - direction_y * sin);
@@ -665,6 +656,263 @@ fn resolve_shape_anchor(
     let resolved_x = x + radius_x + rotated_local_x + rotated_direction_x * gap;
     let resolved_y = y + radius_y + rotated_local_y + rotated_direction_y * gap;
     (resolved_x.is_finite() && resolved_y.is_finite()).then_some((resolved_x, resolved_y))
+}
+
+type Point = (f64, f64);
+
+enum BoundarySegment {
+    Line {
+        start: Point,
+        end: Point,
+    },
+    Quadratic {
+        start: Point,
+        control: Point,
+        end: Point,
+    },
+}
+
+fn shape_boundary_point(
+    shape: &str,
+    width: f64,
+    height: f64,
+    roundness: f64,
+    direction: Point,
+) -> Option<Point> {
+    let center = (width / 2.0, height / 2.0);
+    if shape == "ellipse" {
+        return Some((
+            center.0 + direction.0 * center.0,
+            center.1 + direction.1 * center.1,
+        ));
+    }
+    let segments = boundary_segments(shape, width, height, roundness)?;
+    ray_intersection_on_segments(center, direction, &segments)
+}
+
+fn boundary_segments(
+    shape: &str,
+    width: f64,
+    height: f64,
+    roundness: f64,
+) -> Option<Vec<BoundarySegment>> {
+    if matches!(shape, "rectangle" | "text") {
+        let radius = if shape == "text" {
+            0.0
+        } else {
+            width.min(height) * roundness.clamp(MIN_VISUAL_RECTANGLE_ROUNDNESS, 1.0) / 2.0
+        };
+        return Some(chain_segments(
+            vec![
+                Segment::Line((width - radius, 0.0)),
+                Segment::Quadratic((width, 0.0), (width, radius)),
+                Segment::Line((width, height - radius)),
+                Segment::Quadratic((width, height), (width - radius, height)),
+                Segment::Line((radius, height)),
+                Segment::Quadratic((0.0, height), (0.0, height - radius)),
+                Segment::Line((0.0, radius)),
+                Segment::Quadratic((0.0, 0.0), (radius, 0.0)),
+            ],
+            (radius, 0.0),
+        ));
+    }
+    if shape != "diamond" {
+        return None;
+    }
+    let corner_inset = width.min(height) * DIAMOND_CORNER_INSET;
+    let diagonal = width.hypot(height).max(1.0);
+    let horizontal_inset = corner_inset * width / diagonal;
+    let vertical_inset = corner_inset * height / diagonal;
+    let center_x = width / 2.0;
+    let center_y = height / 2.0;
+    Some(chain_segments(
+        vec![
+            Segment::Quadratic(
+                (center_x + horizontal_inset * DIAMOND_CORNER_CONTROL, 0.0),
+                (center_x + horizontal_inset, vertical_inset),
+            ),
+            Segment::Line((width - horizontal_inset, center_y - vertical_inset)),
+            Segment::Quadratic(
+                (width, center_y - vertical_inset * DIAMOND_CORNER_CONTROL),
+                (width, center_y),
+            ),
+            Segment::Quadratic(
+                (width, center_y + vertical_inset * DIAMOND_CORNER_CONTROL),
+                (width - horizontal_inset, center_y + vertical_inset),
+            ),
+            Segment::Line((center_x + horizontal_inset, height - vertical_inset)),
+            Segment::Quadratic(
+                (center_x + horizontal_inset * DIAMOND_CORNER_CONTROL, height),
+                (center_x, height),
+            ),
+            Segment::Quadratic(
+                (center_x - horizontal_inset * DIAMOND_CORNER_CONTROL, height),
+                (center_x - horizontal_inset, height - vertical_inset),
+            ),
+            Segment::Line((horizontal_inset, center_y + vertical_inset)),
+            Segment::Quadratic(
+                (0.0, center_y + vertical_inset * DIAMOND_CORNER_CONTROL),
+                (0.0, center_y),
+            ),
+            Segment::Quadratic(
+                (0.0, center_y - vertical_inset * DIAMOND_CORNER_CONTROL),
+                (horizontal_inset, center_y - vertical_inset),
+            ),
+            Segment::Line((center_x - horizontal_inset, vertical_inset)),
+            Segment::Quadratic(
+                (center_x - horizontal_inset * DIAMOND_CORNER_CONTROL, 0.0),
+                (center_x, 0.0),
+            ),
+        ],
+        (center_x, 0.0),
+    ))
+}
+
+enum Segment {
+    Line(Point),
+    Quadratic(Point, Point),
+}
+
+fn chain_segments(segments: Vec<Segment>, start: Point) -> Vec<BoundarySegment> {
+    let mut current = start;
+    segments
+        .into_iter()
+        .map(|segment| match segment {
+            Segment::Line(end) => {
+                let segment = BoundarySegment::Line {
+                    start: current,
+                    end,
+                };
+                current = end;
+                segment
+            }
+            Segment::Quadratic(control, end) => {
+                let segment = BoundarySegment::Quadratic {
+                    start: current,
+                    control,
+                    end,
+                };
+                current = end;
+                segment
+            }
+        })
+        .collect()
+}
+
+fn ray_intersection_on_segments(
+    center: Point,
+    direction: Point,
+    segments: &[BoundarySegment],
+) -> Option<Point> {
+    segments
+        .iter()
+        .flat_map(|segment| match segment {
+            BoundarySegment::Line { start, end } => {
+                ray_segment_intersection(center, direction, *start, *end)
+                    .into_iter()
+                    .collect()
+            }
+            BoundarySegment::Quadratic {
+                start,
+                control,
+                end,
+            } => ray_quadratic_intersections(center, direction, *start, *control, *end),
+        })
+        .min_by(|first, second| {
+            distance_squared(center, *first).total_cmp(&distance_squared(center, *second))
+        })
+}
+
+fn ray_segment_intersection(
+    origin: Point,
+    direction: Point,
+    start: Point,
+    end: Point,
+) -> Option<Point> {
+    let edge = subtract(end, start);
+    let denominator = cross(direction, edge);
+    if denominator.abs() < RAY_INTERSECTION_TOLERANCE {
+        return None;
+    }
+    let delta = subtract(start, origin);
+    let ray = cross(delta, edge) / denominator;
+    let segment = cross(delta, direction) / denominator;
+    (ray >= 0.0
+        && segment >= -RAY_INTERSECTION_TOLERANCE
+        && segment <= 1.0 + RAY_INTERSECTION_TOLERANCE)
+        .then_some((origin.0 + direction.0 * ray, origin.1 + direction.1 * ray))
+}
+
+fn ray_quadratic_intersections(
+    origin: Point,
+    direction: Point,
+    start: Point,
+    control: Point,
+    end: Point,
+) -> Vec<Point> {
+    let a = add(subtract(start, scale(control, 2.0)), end);
+    let b = scale(subtract(control, start), 2.0);
+    let c = subtract(start, origin);
+    quadratic_roots(
+        cross(a, direction),
+        cross(b, direction),
+        cross(c, direction),
+    )
+    .into_iter()
+    .filter(|ratio| {
+        *ratio >= -RAY_INTERSECTION_TOLERANCE && *ratio <= 1.0 + RAY_INTERSECTION_TOLERANCE
+    })
+    .map(|ratio| quadratic_point(start, control, end, ratio))
+    .filter(|point| dot(subtract(*point, origin), direction) >= -RAY_INTERSECTION_TOLERANCE)
+    .collect()
+}
+
+fn quadratic_roots(a: f64, b: f64, c: f64) -> Vec<f64> {
+    if a.abs() < RAY_INTERSECTION_TOLERANCE {
+        return (b.abs() >= RAY_INTERSECTION_TOLERANCE)
+            .then_some(-c / b)
+            .into_iter()
+            .collect();
+    }
+    let discriminant = b * b - 4.0 * a * c;
+    if discriminant < -RAY_INTERSECTION_TOLERANCE {
+        return Vec::new();
+    }
+    let root = discriminant.max(0.0).sqrt();
+    vec![(-b - root) / (2.0 * a), (-b + root) / (2.0 * a)]
+}
+
+fn quadratic_point(start: Point, control: Point, end: Point, ratio: f64) -> Point {
+    let reverse = 1.0 - ratio;
+    (
+        reverse * reverse * start.0 + 2.0 * reverse * ratio * control.0 + ratio * ratio * end.0,
+        reverse * reverse * start.1 + 2.0 * reverse * ratio * control.1 + ratio * ratio * end.1,
+    )
+}
+
+fn add(first: Point, second: Point) -> Point {
+    (first.0 + second.0, first.1 + second.1)
+}
+
+fn subtract(first: Point, second: Point) -> Point {
+    (first.0 - second.0, first.1 - second.1)
+}
+
+fn scale(point: Point, factor: f64) -> Point {
+    (point.0 * factor, point.1 * factor)
+}
+
+fn cross(first: Point, second: Point) -> f64 {
+    first.0 * second.1 - first.1 * second.0
+}
+
+fn dot(first: Point, second: Point) -> f64 {
+    first.0 * second.0 + first.1 * second.1
+}
+
+fn distance_squared(first: Point, second: Point) -> f64 {
+    let delta = subtract(first, second);
+    dot(delta, delta)
 }
 
 fn zero_small(value: f64) -> f64 {
@@ -1390,6 +1638,57 @@ mod tests {
     }
 
     #[test]
+    fn boundary_resolver_matches_shared_golden_vectors() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/connector-boundary-golden-vectors.json"
+        ))
+        .unwrap();
+        for vector in fixture["vectors"].as_array().unwrap() {
+            let number = |key: &str| vector[key].as_f64().unwrap();
+            let shape = if vector["kind"].as_str() == Some("text") {
+                "text"
+            } else {
+                vector["shape"].as_str().unwrap()
+            };
+            let resolved = resolve_shape_anchor(
+                shape,
+                number("x"),
+                number("y"),
+                number("width"),
+                number("height"),
+                number("rotation"),
+                number("roundness"),
+                number("t"),
+                number("gap"),
+            )
+            .unwrap();
+            let expected = vector["expected"].as_object().unwrap();
+            let expected_x = expected["x"].as_f64().unwrap();
+            let expected_y = expected["y"].as_f64().unwrap();
+            assert!(
+                (resolved.0 - expected_x).abs() < 1e-8,
+                "{} resolved x={} instead of {}",
+                vector["name"],
+                resolved.0,
+                expected_x
+            );
+            assert!(
+                (resolved.1 - expected_y).abs() < 1e-8,
+                "{} resolved y={} instead of {}",
+                vector["name"],
+                resolved.1,
+                expected_y
+            );
+            assert_eq!(
+                resolved.0.abs() <= MAX_CANVAS_VALUE && resolved.1.abs() <= MAX_CANVAS_VALUE,
+                vector["accepted"].as_bool().unwrap(),
+                "{} acceptance diverged from the persisted canvas boundary",
+                vector["name"]
+            );
+        }
+    }
+
+    #[test]
     fn bound_connector_endpoints_require_final_same_page_arrow_targets() {
         let directory = root();
         seed_page(directory.path());
@@ -1731,6 +2030,69 @@ mod tests {
             load_workspace_data_at(directory.path()).unwrap().pages[0].revision,
             0
         );
+    }
+
+    #[test]
+    fn rounded_boundary_acceptance_and_unsafe_resolution_are_atomic() {
+        let directory = root();
+        seed_page(directory.path());
+        let mut rounded_shape = shape_element("rounded-shape", "p");
+        rounded_shape["x"] = json!(999_900.25);
+        rounded_shape["y"] = json!(20.0);
+        rounded_shape["width"] = json!(100.0);
+        rounded_shape["height"] = json!(60.0);
+        rounded_shape["style"] = json!({"roundness":0.6});
+        let rounded_connector = connector_element_on_page(
+            "rounded-connector",
+            "p",
+            json!({"kind":"element","targetElementId":"rounded-shape","anchor":{"t":0.2},"gap":0.0}),
+            json!({"kind":"free","x":1.0,"y":1.0}),
+            true,
+        );
+        assert_eq!(
+            apply_scene_changes_at(
+                directory.path(),
+                SceneChangeBatch {
+                    page_id: "p".into(),
+                    base_revision: 0,
+                    upserts: vec![rounded_shape, rounded_connector],
+                    deleted_element_ids: vec![],
+                },
+            )
+            .unwrap()
+            .new_revision,
+            1
+        );
+        let before = load_workspace_data_at(directory.path()).unwrap();
+        assert_eq!(before.elements.len(), 2);
+
+        let mut unsafe_shape = shape_element("unsafe-shape", "p");
+        unsafe_shape["x"] = json!(MAX_CANVAS_VALUE - 1.0);
+        unsafe_shape["y"] = json!(20.0);
+        unsafe_shape["width"] = json!(1.0);
+        unsafe_shape["height"] = json!(1.0);
+        let unsafe_connector = connector_element_on_page(
+            "unsafe-connector",
+            "p",
+            json!({"kind":"element","targetElementId":"unsafe-shape","anchor":{"t":0.25},"gap":1.0}),
+            json!({"kind":"free","x":1.0,"y":1.0}),
+            true,
+        );
+        let error = apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 1,
+                upserts: vec![unsafe_shape, unsafe_connector],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("connector unsafe-connector.start.resolved.x"));
+
+        let after = load_workspace_data_at(directory.path()).unwrap();
+        assert_eq!(after.pages[0].revision, 1);
+        assert_eq!(after.elements, before.elements);
     }
 
     #[test]

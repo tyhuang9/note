@@ -116,6 +116,9 @@ test("all-text header Arrow movement moves unlocked selected text and preserves 
   await unlockedHeader.click();
   await lockedHeader.click({ modifiers: ["Control"] });
   await expect(page.locator(".selection-frame")).toHaveCount(1);
+  await lockedHeader.focus();
+  await lockedHeader.press("F2");
+  await expect(locked.locator(".text-block-editor-content")).toHaveCount(0);
 
   const beforeUnlocked = await readWorldPosition(unlocked);
   const beforeLocked = await readWorldPosition(locked);

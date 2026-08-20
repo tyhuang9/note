@@ -385,8 +385,9 @@ type TextResizeSession = {
   connectorPreviewElements: Map<string, HTMLDivElement>;
   connectorSourceElements: HTMLElement[];
   originalHeight: string;
+  originalLeft: string;
+  originalTop: string;
   originalWidth: string;
-  preview: TextElement;
   sourceElement: HTMLElement;
 };
 
@@ -6223,6 +6224,20 @@ function App() {
     };
   }
 
+  function getRenderedTextResizeBlock(block: TextElement, sourceElement: HTMLElement): TextElement {
+    const fromStyle = (property: "height" | "left" | "top" | "width", fallback: number) => {
+      const value = Number.parseFloat(sourceElement.style[property]);
+      return Number.isFinite(value) ? value : fallback;
+    };
+    return {
+      ...block,
+      height: fromStyle("height", block.height),
+      width: fromStyle("width", block.width),
+      x: fromStyle("left", block.x),
+      y: fromStyle("top", block.y),
+    };
+  }
+
   function startTextResizePreview(block: TextElement): boolean {
     if (textResizeSessionRef.current) return textResizeSessionRef.current.block.id === block.id;
     const sourceElement = blockElementsRef.current.get(block.id);
@@ -6232,15 +6247,16 @@ function App() {
       new Set([block.id]),
     );
     const session: TextResizeSession = {
-      block,
+      block: getRenderedTextResizeBlock(block, sourceElement),
       connectorPreviewElements: new Map(),
       connectorSourceElements: Array.from(affectedConnectorIds).flatMap((id) => {
         const element = blockElementsRef.current.get(id);
         return element ? [element] : [];
       }),
       originalHeight: sourceElement.style.height,
+      originalLeft: sourceElement.style.left,
+      originalTop: sourceElement.style.top,
       originalWidth: sourceElement.style.width,
-      preview: block,
       sourceElement,
     };
     textResizeSessionRef.current = session;
@@ -6271,7 +6287,8 @@ function App() {
       session.sourceElement,
     );
     const preview = getEastResizedTextPreview(session.block, size);
-    session.preview = preview;
+    session.sourceElement.style.left = `${preview.x}px`;
+    session.sourceElement.style.top = `${preview.y}px`;
     session.sourceElement.style.width = `${preview.width}px`;
     session.sourceElement.style.height = `${preview.height}px`;
     const previewElements = dataRef.current.elements.map((element) =>
@@ -6289,6 +6306,8 @@ function App() {
     session.sourceElement.classList.remove("is-resizing");
     session.sourceElement.style.width = session.originalWidth;
     session.sourceElement.style.height = session.originalHeight;
+    session.sourceElement.style.left = session.originalLeft;
+    session.sourceElement.style.top = session.originalTop;
     for (const connectorElement of session.connectorSourceElements) {
       connectorElement.classList.remove("is-drag-source-hidden");
     }
@@ -6704,6 +6723,8 @@ function App() {
       setSelectionFramePreview(null);
       setConnectorEndpointChooser(null);
       setIsConnectorEndpointRetargeting(false);
+      setIsCanvasKeyboardActive(true);
+      setActiveMode(selectedBlockIdsRef.current.length > 0 ? "selected" : "canvas");
       return;
     }
 

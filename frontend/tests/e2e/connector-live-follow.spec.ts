@@ -2,6 +2,52 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 
 type Bounds = { x: number; y: number; width: number; height: number };
 
+test("a 30 degree text east resize keeps its west midpoint fixed through preview, connector follow, and commit", async ({ page }) => {
+  await installLiveFollowWorkspace(page, 30);
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await page.goto("/");
+
+  const text = page.locator('[data-block-id="target-text"]');
+  const arrow = page.getByRole("button", { name: "Select locked arrow connector" });
+  await text.locator(".text-block-display").click();
+  const handle = page.getByRole("button", { name: "Resize text width" });
+  const handleBounds = await requiredBounds(handle, "rotated text resize handle");
+  const originalWest = await rotatedWestMidpoint(text);
+  await page.waitForTimeout(650);
+  await resetPersistenceCounts(page);
+  const callsBefore = await persistenceCounts(page);
+  const originalArrow = await roundedBounds(arrow, "original rotated connector");
+  const start = {
+    x: handleBounds.x + handleBounds.width / 2,
+    y: handleBounds.y + handleBounds.height / 2,
+  };
+  const localAxis = { x: Math.cos(Math.PI / 6), y: Math.sin(Math.PI / 6) };
+
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x + 80 * localAxis.x, start.y + 80 * localAxis.y, { steps: 6 });
+
+  const previewBounds = await roundedBounds(text, "rotated text resize preview");
+  const previewWest = await rotatedWestMidpoint(text);
+  expect(previewWest.x).toBeCloseTo(originalWest.x, 1);
+  expect(previewWest.y).toBeCloseTo(originalWest.y, 1);
+  const connectorPreviews = page.locator(".connector-transform-preview");
+  await expect(connectorPreviews).toHaveCount(1);
+  await expect(arrow).not.toBeVisible();
+  await expect.poll(() => roundedBounds(connectorPreviews, "rotated connector preview")).not.toEqual(originalArrow);
+  expect(await persistenceCounts(page)).toEqual(callsBefore);
+
+  await page.mouse.up();
+  await expect(connectorPreviews).toHaveCount(0);
+  await expect(arrow).toBeVisible();
+  await expect.poll(() => roundedBounds(text, "committed rotated text")).toEqual(previewBounds);
+  const committedWest = await rotatedWestMidpoint(text);
+  expect(committedWest.x).toBeCloseTo(originalWest.x, 1);
+  expect(committedWest.y).toBeCloseTo(originalWest.y, 1);
+  await expect.poll(async () => (await persistenceCounts(page)).apply).toBe(callsBefore.apply + 1);
+  expect((await persistenceCounts(page)).session).toBe(callsBefore.session + 1);
+});
+
 for (const zoom of [50, 100, 200]) {
   test(`locked bound arrows live-follow a group resize at ${zoom}% and persist exactly once`, async ({ page }) => {
     await installLiveFollowWorkspace(page);
@@ -163,6 +209,20 @@ function round(bounds: Bounds) {
 
 async function roundedBounds(locator: Locator, label: string) {
   return round(await requiredBounds(locator, label));
+}
+
+async function rotatedWestMidpoint(locator: Locator) {
+  return locator.evaluate((element) => {
+    const block = element as HTMLElement;
+    const bounds = block.getBoundingClientRect();
+    const rotation = Number.parseFloat(block.style.transform.match(/rotate\(([-\d.]+)deg\)/)?.[1] ?? "0");
+    const width = Number.parseFloat(block.style.width);
+    const angle = rotation * Math.PI / 180;
+    return {
+      x: bounds.x + bounds.width / 2 - width / 2 * Math.cos(angle),
+      y: bounds.y + bounds.height / 2 - width / 2 * Math.sin(angle),
+    };
+  });
 }
 
 async function connectorPreviewPathSignature(locator: Locator) {

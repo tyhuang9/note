@@ -100,6 +100,22 @@ test("a cancelled modifier body pointer does not suppress the next additive clic
   await expect(second).toHaveClass(/is-selected/);
 });
 
+test("F2 edits an existing unlocked text selection", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /create new note/i }).click();
+  const canvas = page.getByRole("tabpanel");
+  const bounds = await canvas.boundingBox();
+  if (!bounds) throw new Error("Canvas bounds were not available.");
+  const block = await createTextBlock(page, bounds.x + 300, bounds.y + 240, "Keyboard edit target");
+  await block.locator(".text-block-display").click();
+  const header = block.locator(".text-block-header");
+  await header.focus();
+  await expect(header).toHaveAttribute("aria-keyshortcuts", "F2 Alt+Shift+ArrowLeft Alt+Shift+ArrowRight");
+  await header.press("F2");
+  await expect(block.locator(".text-block-editor-content")).toBeVisible();
+  await expect(block.locator(".ProseMirror")).toBeFocused();
+});
+
 test("single selected text narrows with reflow and commits its last preview", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: /create new note/i }).click();
@@ -144,6 +160,79 @@ test("single selected text narrows with reflow and commits its last preview", as
   await expect.poll(() => readBlockSize(block)).toMatchObject(afterPointer);
 });
 
+for (const cancelPath of ["Escape", "tool change", "page change", "window blur", "pointer cancel", "lost pointer capture"] as const) {
+  test(`east text resize restores DOM and capture on ${cancelPath}`, async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: /create new note/i }).click();
+    const canvas = page.getByRole("tabpanel");
+    const canvasBounds = await canvas.boundingBox();
+    if (!canvasBounds) throw new Error("Canvas bounds were not available.");
+
+    let originalTab: Locator | null = null;
+    let alternateTab: Locator | null = null;
+    if (cancelPath === "page change") {
+      await page.getByRole("button", { name: "Create root page" }).click();
+      const tabs = page.getByRole("tablist", { name: "Open pages" }).getByRole("tab");
+      await expect(tabs).toHaveCount(2);
+      originalTab = tabs.first();
+      alternateTab = tabs.nth(1);
+      await originalTab.click();
+    }
+
+    const block = await createTextBlock(
+      page,
+      canvasBounds.x + 300,
+      canvasBounds.y + 240,
+      "One two three four five six\nOne two three four five six\nOne two three four five six",
+    );
+    await block.locator(".text-block-display").click();
+    const handle = page.getByRole("button", { name: "Resize text width" });
+    const handleBounds = await handle.boundingBox();
+    if (!handleBounds) throw new Error("Text resize handle was not available.");
+    const before = await readBlockGeometry(block);
+    const start = {
+      x: handleBounds.x + handleBounds.width / 2,
+      y: handleBounds.y + handleBounds.height / 2,
+    };
+
+    await page.evaluate(() => {
+      document.addEventListener("pointerdown", (event) => {
+        document.body.dataset.textResizePointerId = String(event.pointerId);
+      }, { capture: true, once: true });
+    });
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(start.x - 72, start.y, { steps: 5 });
+    const pointerId = Number(await page.locator("body").getAttribute("data-text-resize-pointer-id"));
+    await page.locator("body").evaluate((element) => delete (element as HTMLElement).dataset.textResizePointerId);
+    expect(Number.isFinite(pointerId)).toBe(true);
+    await expect(block).toHaveClass(/is-resizing/);
+    await expect(page.locator("body")).toHaveClass(/is-interacting/);
+    expect(await hasPointerCapture(page, pointerId)).toBe(true);
+
+    if (cancelPath === "Escape") {
+      await page.keyboard.press("Escape");
+    } else if (cancelPath === "tool change") {
+      await page.getByRole("button", { name: /Pen \(P/ }).dispatchEvent("click");
+    } else if (cancelPath === "page change") {
+      await alternateTab!.dispatchEvent("click");
+      await originalTab!.dispatchEvent("click");
+    } else if (cancelPath === "window blur") {
+      await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+    } else if (cancelPath === "pointer cancel") {
+      await dispatchCapturedPointerCancel(page, pointerId, start.x - 72, start.y);
+    } else {
+      await releaseCapturedPointer(page, pointerId);
+    }
+
+    await expect(block).not.toHaveClass(/is-resizing/);
+    await expect(page.locator("body")).not.toHaveClass(/is-interacting/);
+    await expect.poll(() => readBlockGeometry(block)).toEqual(before);
+    await expect.poll(() => hasPointerCapture(page, pointerId)).toBe(false);
+    await page.mouse.up();
+  });
+}
+
 async function createTextBlock(page: Page, x: number, y: number, text: string) {
   await page.getByRole("button", { name: "Text (T / 8)" }).click();
   await page.mouse.click(x, y);
@@ -169,4 +258,46 @@ async function readBlockSize(block: Locator) {
     height: Number.parseFloat((element as HTMLElement).style.height),
     width: Number.parseFloat((element as HTMLElement).style.width),
   }));
+}
+
+async function readBlockGeometry(block: Locator) {
+  return block.evaluate((element) => {
+    const style = element as HTMLElement;
+    return {
+      height: Number.parseFloat(style.style.height),
+      width: Number.parseFloat(style.style.width),
+      x: Number.parseFloat(style.style.left),
+      y: Number.parseFloat(style.style.top),
+    };
+  });
+}
+
+async function hasPointerCapture(page: Page, pointerId: number) {
+  return page.evaluate((id) => Array.from(document.querySelectorAll<HTMLElement>("*"))
+    .some((element) => element.hasPointerCapture(id)), pointerId);
+}
+
+async function dispatchCapturedPointerCancel(page: Page, pointerId: number, clientX: number, clientY: number) {
+  await page.evaluate(({ id, x, y }) => {
+    const target = Array.from(document.querySelectorAll<HTMLElement>("*"))
+      .find((element) => element.hasPointerCapture(id));
+    if (!target) throw new Error("Text resize capture target was unavailable.");
+    target.dispatchEvent(new PointerEvent("pointercancel", {
+      bubbles: true,
+      button: 0,
+      clientX: x,
+      clientY: y,
+      pointerId: id,
+    }));
+  }, { id: pointerId, x: clientX, y: clientY });
+}
+
+async function releaseCapturedPointer(page: Page, pointerId: number) {
+  await page.evaluate((id) => {
+    const target = Array.from(document.querySelectorAll<HTMLElement>("*"))
+      .find((element) => element.hasPointerCapture(id));
+    if (!target) throw new Error("Text resize capture target was unavailable.");
+    target.releasePointerCapture(id);
+    target.dispatchEvent(new PointerEvent("lostpointercapture", { bubbles: true, pointerId: id }));
+  }, pointerId);
 }

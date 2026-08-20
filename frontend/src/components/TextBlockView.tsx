@@ -832,6 +832,14 @@ export const TextBlockView = memo(function TextBlockView({
   }
 
   function handleHeaderKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key === "F2") {
+      if (!block.locked && isSelected) {
+        event.preventDefault();
+        event.stopPropagation();
+        onEdit(block.id);
+      }
+      return;
+    }
     if (
       event.altKey &&
       event.shiftKey &&
@@ -1008,11 +1016,11 @@ export const TextBlockView = memo(function TextBlockView({
       }}
     >
       <div
-        aria-keyshortcuts={!block.locked && isSelected ? "Alt+Shift+ArrowLeft Alt+Shift+ArrowRight" : undefined}
+        aria-keyshortcuts={!block.locked && isSelected ? "F2 Alt+Shift+ArrowLeft Alt+Shift+ArrowRight" : undefined}
         aria-label={block.locked
           ? "Select locked text block"
           : isSelected
-            ? "Select and move text block; resize width with Alt+Shift+Left or Right Arrow"
+            ? "Select and move text block; press F2 to edit; resize width with Alt+Shift+Left or Right Arrow"
             : "Select and move text block"}
         aria-pressed={isSelected}
         className="text-block-header"

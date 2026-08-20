@@ -123,6 +123,7 @@ test("desktop dark endpoint chooser traps focus, stays below the toolbar, and bi
     canvasBounds.y + 140,
   );
   const arrow = page.getByRole("button", { name: "Select and move arrow connector" });
+  await selectTool(page, "select");
   await arrow.focus();
   await page.keyboard.press("Enter");
   const startHandle = page.getByRole("button", { name: "Move connector start endpoint" });
@@ -138,6 +139,9 @@ test("desktop dark endpoint chooser traps focus, stays below the toolbar, and bi
   await expect(dialog).toHaveAttribute("aria-modal", "true");
   await expect(page.locator("#root")).toHaveAttribute("inert", "");
   await expect(page.locator(".connector-endpoint-chooser-layer")).toHaveAttribute("data-theme", "dark");
+  await page.keyboard.press("r");
+  await expect(dialog).toBeVisible();
+  await expect(page.getByRole("button", { name: "Select (V / 1)" })).toHaveAttribute("aria-pressed", "true");
   const toolbarBounds = await requiredBounds(page.locator(".canvas-tool-palette"), "drawing toolbar");
   const dialogBounds = await requiredBounds(dialog, "endpoint chooser");
   expect(dialogBounds.y).toBeGreaterThanOrEqual(toolbarBounds.y + toolbarBounds.height);

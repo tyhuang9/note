@@ -17,14 +17,16 @@ test("creates primitives, applies tool lock, supports temporary hand, and erases
   if (!bounds) throw new Error("Canvas bounds were not available.");
   const select = page.getByRole("button", { name: "Select (V / 1)" });
   const rectangleTool = page.getByRole("button", { name: "Rectangle (R / 2)" });
-  const lock = page.getByRole("button", { name: "Keep drawing tool active" });
+  const lock = page.locator("[data-tool-lock]");
 
-  await expect(lock).toHaveAttribute("aria-pressed", "false");
+  await expect(lock).toHaveAccessibleName("Turn off drawing tool lock");
+  await expect(lock).toHaveAttribute("aria-pressed", "true");
   await rectangleTool.click();
   await page.mouse.click(bounds.x + 300, bounds.y + 320);
   const rectangle = page.getByLabel("rectangle shape");
   await expect(rectangle).toHaveCount(1);
-  await expect(select).toHaveAttribute("aria-pressed", "true");
+  await expect(rectangleTool).toHaveAttribute("aria-pressed", "true");
+  await select.click();
   await expect(page.getByLabel("Move selected elements")).toBeVisible();
   await expect(page.getByRole("button", { name: /Resize selected elements from/ })).toHaveCount(4);
 
@@ -39,6 +41,8 @@ test("creates primitives, applies tool lock, supports temporary hand, and erases
   await expect.poll(async () => (await rectangle.boundingBox())?.width ?? 0).toBeGreaterThan(firstRectangleBounds.width + 40);
 
   await lock.click();
+  await expect(lock).toHaveAccessibleName("Turn on drawing tool lock");
+  await expect(lock).toHaveAttribute("aria-pressed", "false");
   await rectangleTool.click();
   await page.mouse.move(bounds.x + 520, bounds.y + 330);
   await page.keyboard.down("Shift");
@@ -49,9 +53,10 @@ test("creates primitives, applies tool lock, supports temporary hand, and erases
   await page.keyboard.up("Alt");
   await page.keyboard.up("Shift");
   await expect(rectangle).toHaveCount(2);
-  await expect(rectangleTool).toHaveAttribute("aria-pressed", "true");
+  await expect(select).toHaveAttribute("aria-pressed", "true");
 
   await lock.click();
+  await expect(lock).toHaveAccessibleName("Turn off drawing tool lock");
   await select.click();
   const beforePan = await page.locator(".canvas-content").evaluate((element) =>
     (element as HTMLElement).style.transform,
@@ -73,6 +78,97 @@ test("creates primitives, applies tool lock, supports temporary hand, and erases
   await page.getByRole("button", { name: "Eraser (E / 0)" }).click();
   await page.mouse.click(targetBounds.x + targetBounds.width / 2, targetBounds.y + 1);
   await expect(rectangle).toHaveCount(1);
+});
+
+test("routes drawing shortcuts from canvas contexts without stealing editable control typing", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  const bounds = await canvas.boundingBox();
+  if (!bounds) throw new Error("Canvas bounds were not available.");
+  const rectangleTool = page.getByRole("button", { name: "Rectangle (R / 2)" });
+  const selectTool = page.getByRole("button", { name: "Select (V / 1)" });
+  const arrowTool = page.getByRole("button", { name: "Arrow (A / 5)" });
+  const textTool = page.getByRole("button", { name: "Text (T / 8)" });
+
+  await canvas.focus();
+  await page.keyboard.press("r");
+  await expect(rectangleTool).toHaveAttribute("aria-pressed", "true");
+
+  for (const [key, tool] of [["r", rectangleTool], ["a", arrowTool], ["t", textTool]] as const) {
+    await selectTool.click();
+    await page.mouse.click(bounds.x + 240, bounds.y + 220);
+    await page.keyboard.press(key);
+    await expect(tool).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator(".text-block-editor-content")).toHaveCount(0);
+  }
+
+  await selectTool.click();
+  await page.mouse.click(bounds.x + 270, bounds.y + 250);
+  await page.keyboard.press("q");
+  const editor = page.locator(".text-block-editor-content");
+  await expect(editor).toBeFocused();
+  await expect(editor).toContainText("q");
+
+  await editor.press("Control+A");
+  await editor.press("Backspace");
+  await editor.pressSequentially("/");
+  await expect(page.locator(".slash-command-popup")).toBeVisible();
+  await page.keyboard.press("r");
+  await expect(editor).toContainText("/r");
+  await expect(rectangleTool).toHaveAttribute("aria-pressed", "false");
+
+  await page.keyboard.press("Escape");
+  await selectTool.click();
+  await page.mouse.click(bounds.x + 360, bounds.y + 260);
+  await page.evaluate(() => {
+    document.body.tabIndex = -1;
+    document.body.focus();
+  });
+  await page.keyboard.press("r");
+  await expect(rectangleTool).toHaveAttribute("aria-pressed", "true");
+
+  await page.mouse.click(bounds.x + 450, bounds.y + 330);
+  const selectedRectangle = page.getByRole("button", { name: "Select and move rectangle element" });
+  await selectedRectangle.focus();
+  await page.keyboard.press("o");
+  await expect(page.getByRole("button", { name: "Ellipse (O / 4)" })).toHaveAttribute("aria-pressed", "true");
+
+  const properties = page.getByRole("complementary", { name: "Drawing properties" });
+  await properties.getByRole("button", { name: "Stroke color #1b1b1f" }).focus();
+  await page.keyboard.press("d");
+  await expect(page.getByRole("button", { name: "Diamond (D / 3)" })).toHaveAttribute("aria-pressed", "true");
+
+  await selectTool.click();
+  await page.getByRole("button", { name: "Search files" }).click();
+  const search = page.getByRole("searchbox", { name: "Search files and notes" });
+  await search.fill("");
+  await search.press("r");
+  await expect(search).toHaveValue("r");
+  await expect(selectTool).toHaveAttribute("aria-pressed", "true");
+
+  await page.evaluate(() => {
+    const controls = document.createElement("div");
+    controls.id = "shortcut-editable-controls";
+    controls.innerHTML = [
+      '<input aria-label="Shortcut test input">',
+      '<textarea aria-label="Shortcut test textarea"></textarea>',
+      '<select aria-label="Shortcut test select"><option>One</option><option>Two</option></select>',
+      '<div aria-label="Shortcut test editor" contenteditable="true" role="textbox"></div>',
+    ].join("");
+    document.body.append(controls);
+  });
+  for (const name of ["Shortcut test input", "Shortcut test textarea", "Shortcut test editor"]) {
+    const control = page.getByLabel(name);
+    await control.focus();
+    await page.keyboard.press("r");
+    if (name.includes("editor")) await expect(control).toContainText("r");
+    else await expect(control).toHaveValue("r");
+    await expect(selectTool).toHaveAttribute("aria-pressed", "true");
+  }
+  const nativeSelect = page.getByLabel("Shortcut test select");
+  await nativeSelect.focus();
+  await page.keyboard.press("r");
+  await expect(selectTool).toHaveAttribute("aria-pressed", "true");
+  await page.locator("#shortcut-editable-controls").evaluate((element) => element.remove());
 });
 
 test("keeps live primitive previews solid and fully opaque", async ({ page }) => {

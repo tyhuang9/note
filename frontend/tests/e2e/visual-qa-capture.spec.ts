@@ -45,35 +45,46 @@ test("captures drawing editor visual QA states", async ({ page }) => {
   if (!firstId || !secondId) throw new Error("Ellipse identifiers were unavailable for visual QA.");
 
   await page.getByRole("button", { name: "Arrow (A / 5)" }).click();
+  const firstEllipseBounds = await requiredBounds(firstEllipse, "first ellipse");
+  await page.mouse.click(
+    firstEllipseBounds.x + firstEllipseBounds.width - 1,
+    firstEllipseBounds.y + firstEllipseBounds.height / 2,
+  );
   const firstAnchors = page.locator(`[data-connector-target-id="${firstId}"]`);
   const secondAnchors = page.locator(`[data-connector-target-id="${secondId}"]`);
   await expect(firstAnchors).toHaveCount(4);
-  await expect(secondAnchors).toHaveCount(4);
+  await expect(secondAnchors).toHaveCount(0);
   await expect(firstAnchors.first()).toBeVisible();
-  await expect(secondAnchors.last()).toBeVisible();
   await page.screenshot({ path: `${evidenceRoot}/implementation-arrow-anchors-dark-1069x598.png` });
 
   const firstRight = await requiredBounds(
     page.locator(`[data-connector-target-id="${firstId}"][data-connector-anchor="right"]`),
     "first ellipse right anchor",
   );
+  const secondEllipseBounds = await requiredBounds(secondEllipse, "second ellipse");
+  await page.mouse.move(
+    secondEllipseBounds.x + 1,
+    secondEllipseBounds.y + secondEllipseBounds.height / 2,
+    { steps: 6 },
+  );
+  await expect(firstAnchors).toHaveCount(0);
+  await expect(secondAnchors).toHaveCount(4);
   const secondLeft = await requiredBounds(
     page.locator(`[data-connector-target-id="${secondId}"][data-connector-anchor="left"]`),
     "second ellipse left anchor",
   );
   const start = center(firstRight);
   const end = center(secondLeft);
-  await page.mouse.move(start.x, start.y);
-  await page.mouse.down();
   await page.mouse.move(end.x, end.y, { steps: 6 });
-  const preview = canvas.getByTestId("canvas-live-draft-layer").locator("g");
+  const preview = canvas.getByTestId("canvas-live-draft-layer").locator(".arrow-authoring-preview");
   await expect(preview).toHaveAttribute("opacity", "1");
   await expect(preview).not.toHaveAttribute("stroke-dasharray", /./);
   await page.screenshot({ path: `${evidenceRoot}/implementation-arrow-preview-dark-1069x598.png` });
-  await page.mouse.up();
+  await page.mouse.click(end.x, end.y);
 
   const arrow = page.getByRole("button", { name: "Select and move arrow connector" });
   await expect(arrow).toBeVisible();
+  await page.getByRole("button", { name: "Select (V / 1)" }).click();
   const startHandle = page.getByRole("button", { name: "Move connector start endpoint" });
   const endHandle = page.getByRole("button", { name: "Move connector end endpoint" });
   await expect(startHandle).toBeVisible();

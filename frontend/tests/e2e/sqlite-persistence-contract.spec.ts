@@ -70,6 +70,7 @@ test("SQLite bridge reconciles structure before scene changes and reloads text",
   });
 
   const opacity = restoredProperties.getByRole("slider", { name: "Opacity" });
+  await opacity.scrollIntoViewIfNeeded();
   const opacityBounds = await opacity.boundingBox();
   if (!opacityBounds) throw new Error("Opacity slider was not visible.");
   await page.mouse.move(opacityBounds.x + opacityBounds.width - 2, opacityBounds.y + opacityBounds.height / 2);
@@ -118,13 +119,17 @@ test("persists a bound arrow endpoint and resolves it from the current target af
   if (!targetId) throw new Error("Rectangle target id was unavailable.");
 
   await page.getByRole("button", { name: "Arrow (A / 5)" }).click();
+  const rectangleBounds = await rectangleControl.boundingBox();
+  if (!rectangleBounds) throw new Error("Rectangle target bounds were unavailable.");
+  await page.mouse.click(
+    rectangleBounds.x + rectangleBounds.width - 1,
+    rectangleBounds.y + rectangleBounds.height / 2,
+  );
   const rightAnchor = page.locator(`[data-connector-target-id="${targetId}"][data-connector-anchor="right"]`);
   const anchorBounds = await rightAnchor.boundingBox();
   if (!anchorBounds) throw new Error("Connector anchor was not available.");
-  await page.mouse.move(anchorBounds.x + anchorBounds.width / 2, anchorBounds.y + anchorBounds.height / 2);
-  await page.mouse.down();
   await page.mouse.move(canvasBounds.x + 800, anchorBounds.y + anchorBounds.height / 2, { steps: 5 });
-  await page.mouse.up();
+  await page.mouse.click(canvasBounds.x + 800, anchorBounds.y + anchorBounds.height / 2);
   const arrow = page.getByRole("button", { name: "Select and move arrow connector" });
   await expect(arrow).toBeVisible();
   await expect(page.locator(".persistence-status")).toHaveText("Saved");

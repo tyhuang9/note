@@ -118,7 +118,7 @@ test("routes drawing shortcuts from canvas contexts without stealing editable co
 
   await page.keyboard.press("Escape");
   await selectTool.click();
-  await page.mouse.click(bounds.x + 360, bounds.y + 260);
+  await page.mouse.click(bounds.x + 600, bounds.y + 450);
   await page.evaluate(() => {
     document.body.tabIndex = -1;
     document.body.focus();
@@ -237,10 +237,10 @@ test("renders every geometric primitive and moves connectors with a composite se
   await page.mouse.up();
 
   await page.getByRole("button", { name: "Arrow (A / 5)" }).click();
-  await page.mouse.move(bounds.x + 620, bounds.y + 520);
-  await page.mouse.down();
+  await page.mouse.click(bounds.x + 620, bounds.y + 520);
   await page.mouse.move(bounds.x + 790, bounds.y + 590, { steps: 4 });
-  await page.mouse.up();
+  await page.mouse.click(bounds.x + 790, bounds.y + 590);
+  await page.getByRole("button", { name: "Select (V / 1)" }).click();
 
   await expect(page.getByLabel("diamond shape")).toHaveCount(1);
   await expect(page.getByLabel("ellipse shape")).toHaveCount(1);
@@ -297,6 +297,7 @@ test("selects, moves, and deletes shapes and connectors from the keyboard", asyn
   await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
   await page.mouse.click(bounds.x + 420, bounds.y + 320);
   const shape = page.getByRole("button", { name: "Select and move rectangle element" });
+  await page.getByRole("button", { name: "Select (V / 1)" }).click();
   await page.mouse.click(bounds.x + 850, bounds.y + 650);
   await shape.focus();
   await page.keyboard.press("Enter");
@@ -314,6 +315,7 @@ test("selects, moves, and deletes shapes and connectors from the keyboard", asyn
   await page.mouse.move(bounds.x + 600, bounds.y + 540, { steps: 4 });
   await page.mouse.up();
   const connector = page.getByRole("button", { name: "Select and move line connector" });
+  await page.getByRole("button", { name: "Select (V / 1)" }).click();
   await page.mouse.click(bounds.x + 850, bounds.y + 650);
   await connector.focus();
   await page.keyboard.press(" ");
@@ -331,6 +333,7 @@ test("creates editable text and places a picked image only on the next canvas cl
   const bounds = await canvas.boundingBox();
   if (!bounds) throw new Error("Canvas bounds were not available.");
   const select = page.getByRole("button", { name: "Select (V / 1)" });
+  await page.locator("[data-tool-lock]").click();
 
   await page.getByRole("button", { name: "Text (T / 8)" }).click();
   await page.mouse.click(bounds.x + 300, bounds.y + 300);

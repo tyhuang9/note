@@ -16,6 +16,8 @@ test("arrow binding exposes visual-only anchors, follows target transforms, and 
   if (!targetId) throw new Error("Rectangle target id was unavailable.");
 
   await page.getByRole("button", { name: "Arrow (A / 5)" }).click();
+  const rectangleBounds = await requiredBounds(rectangleControl, "rectangle target");
+  await page.mouse.click(rectangleBounds.x + rectangleBounds.width - 1, rectangleBounds.y + rectangleBounds.height / 2);
   const anchors = page.locator(`[data-connector-target-id="${targetId}"]`);
   await expect(anchors).toHaveCount(4);
   await expect(anchors.first()).not.toHaveAttribute("tabindex");
@@ -25,9 +27,11 @@ test("arrow binding exposes visual-only anchors, follows target transforms, and 
     "right anchor",
   );
 
-  await draw(page, rightAnchor.x + rightAnchor.width / 2, rightAnchor.y + rightAnchor.height / 2, canvasBounds.x + 800, rightAnchor.y + rightAnchor.height / 2);
+  await page.mouse.move(canvasBounds.x + 800, rightAnchor.y + rightAnchor.height / 2, { steps: 5 });
+  await page.mouse.click(canvasBounds.x + 800, rightAnchor.y + rightAnchor.height / 2);
   const arrow = page.getByRole("button", { name: "Select and move arrow connector" });
   await expect(arrow).toBeVisible();
+  await selectTool(page, "select");
   await expect(page.getByRole("button", { name: "Move connector start endpoint" })).toBeVisible();
 
   await rectangleControl.focus();
@@ -72,9 +76,13 @@ test("lines stay free while arrows detach and rebind through real endpoint contr
     if (!targetId) throw new Error("Rectangle target id was unavailable.");
 
     await page.getByRole("button", { name: "Arrow (A / 5)" }).click();
+    const rectangleBounds = await requiredBounds(rectangleControl, "rectangle target");
+    await page.mouse.click(rectangleBounds.x + rectangleBounds.width - 1, rectangleBounds.y + rectangleBounds.height / 2);
     const rightAnchor = await requiredBounds(page.locator(`[data-connector-target-id="${targetId}"][data-connector-anchor="right"]`), "right anchor");
-    await draw(page, rightAnchor.x + 5, rightAnchor.y + 5, canvasBounds.x + 900, rightAnchor.y + 5);
+    await page.mouse.move(canvasBounds.x + 900, rightAnchor.y + rightAnchor.height / 2, { steps: 5 });
+    await page.mouse.click(canvasBounds.x + 900, rightAnchor.y + rightAnchor.height / 2);
     const arrow = page.getByRole("button", { name: "Select and move arrow connector" }).last();
+    await selectTool(page, "select");
     const startHandle = page.getByRole("button", { name: "Move connector start endpoint" });
     await expect(startHandle).toBeVisible();
 
@@ -117,8 +125,11 @@ for (const zoom of [50, 100, 200]) {
     const targetId = await rectangleControl.getAttribute("data-canvas-element-id");
     if (!targetId) throw new Error("Rectangle target id was unavailable.");
     await selectTool(page, "arrow");
+    const rectangleBounds = await requiredBounds(rectangleControl, "rectangle target");
+    await page.mouse.click(rectangleBounds.x + rectangleBounds.width - 1, rectangleBounds.y + rectangleBounds.height / 2);
     const rightAnchor = await requiredBounds(page.locator(`[data-connector-target-id="${targetId}"][data-connector-anchor="right"]`), "right anchor");
-    await draw(page, rightAnchor.x + 5, rightAnchor.y + 5, canvasBounds.x + 820, rightAnchor.y + 5);
+    await page.mouse.move(canvasBounds.x + 820, rightAnchor.y + rightAnchor.height / 2, { steps: 5 });
+    await page.mouse.click(canvasBounds.x + 820, rightAnchor.y + rightAnchor.height / 2);
     const arrow = page.getByRole("button", { name: "Select and move arrow connector" }).last();
     const originalArrow = await roundedBounds(arrow);
 
@@ -151,16 +162,17 @@ test("desktop dark endpoint chooser traps focus, stays below the toolbar, and bi
   await createRectangleWithTool(page, canvasBounds.x + 500, canvasBounds.y + 300);
   await selectTool(page, "text");
   await page.mouse.click(canvasBounds.x + 720, canvasBounds.y + 220);
+  await expect(page.locator(".text-block-editor-content")).toBeFocused();
   await page.keyboard.type("Text binding target");
   await page.keyboard.press("Escape");
 
   await selectTool(page, "arrow");
-  await draw(
+  await authorArrow(
     page,
-    canvasBounds.x + 300,
-    canvasBounds.y + 100,
-    canvasBounds.x + 630,
-    canvasBounds.y + 140,
+    canvasBounds.x + canvasBounds.width * 0.62,
+    canvasBounds.y + canvasBounds.height * 0.72,
+    canvasBounds.x + canvasBounds.width * 0.84,
+    canvasBounds.y + canvasBounds.height * 0.82,
   );
   const arrow = page.getByRole("button", { name: "Select and move arrow connector" });
   await selectTool(page, "select");
@@ -186,7 +198,9 @@ test("desktop dark endpoint chooser traps focus, stays below the toolbar, and bi
   const dialogBounds = await requiredBounds(dialog, "endpoint chooser");
   expect(dialogBounds.y).toBeGreaterThanOrEqual(toolbarBounds.y + toolbarBounds.height);
   expect(dialogBounds.x + dialogBounds.width / 2).toBeCloseTo(toolbarBounds.x + toolbarBounds.width / 2, 0);
-  const firstTarget = dialog.getByRole("button", { name: /Rectangle 1 \(center \d+, \d+\)/ });
+  const firstTarget = dialog.locator('[data-connector-target="true"]').filter({
+    hasText: /^Rectangle 1 \(center \d+, \d+\)$/,
+  });
   await expect(dialog.getByRole("button", { name: /Text 1 \(Text binding target\)/ })).toBeVisible();
   await expect(firstTarget).toHaveAttribute("aria-pressed", "true");
   await expect(firstTarget).toBeFocused();
@@ -239,8 +253,9 @@ test("compact light endpoint chooser is an in-viewport sheet and Escape restores
   const canvasBounds = await requiredBounds(canvas, "canvas");
   await createRectangleWithTool(page, canvasBounds.x + 36, canvasBounds.y + 150);
   await selectTool(page, "arrow");
-  await draw(page, canvasBounds.x + 32, canvasBounds.y + 280, canvasBounds.x + 220, canvasBounds.y + 280);
+  await authorArrow(page, canvasBounds.x + 32, canvasBounds.y + 280, canvasBounds.x + 220, canvasBounds.y + 280);
   const arrow = page.getByRole("button", { name: "Select and move arrow connector" });
+  await selectTool(page, "select");
   await arrow.focus();
   await page.keyboard.press("Enter");
   const startHandle = page.getByRole("button", { name: "Move connector start endpoint" });
@@ -266,8 +281,9 @@ test("free arrow with no shapes announces that binding targets are unavailable",
   const canvas = page.getByRole("tabpanel");
   const canvasBounds = await requiredBounds(canvas, "canvas");
   await selectTool(page, "arrow");
-  await draw(page, canvasBounds.x + 280, canvasBounds.y + 260, canvasBounds.x + 720, canvasBounds.y + 260);
+  await authorArrow(page, canvasBounds.x + 280, canvasBounds.y + 260, canvasBounds.x + 720, canvasBounds.y + 260);
   const arrow = page.getByRole("button", { name: "Select and move arrow connector" });
+  await selectTool(page, "select");
   await arrow.focus();
   await page.keyboard.press("Enter");
   const startHandle = page.getByRole("button", { name: "Move connector start endpoint" });
@@ -307,6 +323,12 @@ async function draw(page: Page, startX: number, startY: number, endX: number, en
   await page.mouse.down();
   await page.mouse.move(endX, endY, { steps: 5 });
   await page.mouse.up();
+}
+
+async function authorArrow(page: Page, startX: number, startY: number, endX: number, endY: number) {
+  await page.mouse.click(startX, startY);
+  await page.mouse.move(endX, endY, { steps: 5 });
+  await page.mouse.click(endX, endY);
 }
 
 async function setZoom(page: Page, canvas: Locator, percent: number) {

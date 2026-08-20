@@ -13,7 +13,7 @@ import type {
   SelectionState,
 } from "../../appTypes";
 import { getSelectionRect, rectsIntersect } from "../../editorUtils";
-import type { CanvasElement, ConnectorElement, ConnectorEndpoint } from "../model/elements";
+import type { CanvasElement, ConnectorElement, ConnectorEndpoint, RoughStyle, ShapeElement } from "../model/elements";
 import {
   getConnectorAuthoringCandidate,
   normalizeFreeConnectorEndpoint,
@@ -23,7 +23,7 @@ import {
 } from "../model/connectorBinding";
 import { screenToleranceToWorld } from "../model/geometry";
 import { getElementBounds, getTopmostElementAtPoint } from "../model/hitTesting";
-import { renderConnectorRoughSvg } from "../components/PrimitiveElementView";
+import { renderConnectorRoughSvg, renderShapeRoughSvg, shapeRenderPadding } from "../components/PrimitiveElementView";
 import {
   primitiveGeometryFromSession,
   type PrimitiveGeometry,
@@ -35,9 +35,12 @@ import type { DrawingTool } from "./useInkInteraction";
 type PrimitiveSession = {
   current: CanvasPoint;
   didMove: boolean;
+  elementId: string;
   modifiers: PrimitiveModifiers;
+  opacity: number;
   pointerId: number;
   start: CanvasPoint;
+  style: RoughStyle;
   tool: PrimitiveTool;
 };
 
@@ -63,6 +66,7 @@ type CanvasInteractionOptions = {
   canvasRef: RefObject<HTMLElement | null>;
   cleanupMarquee: () => void;
   createArrowId: () => string;
+  createPrimitiveId: (tool: PrimitiveTool) => string;
   hasPendingImage: () => boolean;
   isTemporaryHandActiveRef: RefObject<boolean>;
   interactionCancellationKey: string;
@@ -71,10 +75,11 @@ type CanvasInteractionOptions = {
   maxZoom: number;
   minZoom: number;
   getArrowPreviewStyle: (elementId: string) => ConnectorElement["style"];
+  getPrimitivePreviewAppearance: (tool: PrimitiveTool, elementId: string) => Readonly<{ opacity: number; style: RoughStyle }>;
   getArrowCreatedStatus: () => string;
   getArrowTargetLabel: (target: BindableElement) => string;
   onCreateArrow: (elementId: string, start: ConnectorEndpoint, end: ConnectorEndpoint) => boolean;
-  onCreatePrimitive: (tool: PrimitiveTool, geometry: PrimitiveGeometry) => void;
+  onCreatePrimitive: (elementId: string, tool: PrimitiveTool, geometry: PrimitiveGeometry, appearance: Readonly<{ opacity: number; style: RoughStyle }>) => void;
   onArrowStatusChange: (message: string) => void;
   onCreateText: (point: CanvasPoint) => void;
   onImagePreviewPointChange: (point: CanvasPoint | null) => void;
@@ -141,7 +146,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
   const panState = useRef<PanState | null>(null);
   const selectionState = useRef<SelectionState | null>(null);
   const primitiveSession = useRef<PrimitiveSession | null>(null);
-  const primitivePreviewRef = useRef<SVGGElement | null>(null);
+  const primitivePreviewRef = useRef<SVGSVGElement | null>(null);
   const arrowSession = useRef<ArrowAuthoringSession | null>(null);
   const arrowPreviewRef = useRef<SVGSVGElement | null>(null);
   const ignoredLostCapturePointerIdRef = useRef<number | null>(null);
@@ -278,50 +283,39 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       session.modifiers,
       session.didMove,
     );
-    const group = primitivePreviewRef.current ?? document.createElementNS("http://www.w3.org/2000/svg", "g");
-    primitivePreviewRef.current = group;
-    group.replaceChildren();
-    group.setAttribute("fill", "none");
-    group.setAttribute("opacity", "1");
-    group.setAttribute("pointer-events", "none");
-    group.setAttribute("stroke", "currentColor");
-    group.removeAttribute("stroke-dasharray");
-    group.setAttribute("stroke-width", "2");
+    const svg = primitivePreviewRef.current ?? document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    primitivePreviewRef.current = svg;
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("class", "primitive-authoring-preview");
+    svg.setAttribute("data-element-id", session.elementId);
+    svg.setAttribute("data-seed", String(session.style.seed));
+    svg.setAttribute("opacity", String(session.opacity));
+    svg.setAttribute("overflow", "visible");
+    svg.setAttribute("pointer-events", "none");
 
     if (geometry.kind === "connector") {
-      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-      line.setAttribute("x1", String(geometry.start.x));
-      line.setAttribute("y1", String(geometry.start.y));
-      line.setAttribute("x2", String(geometry.end.x));
-      line.setAttribute("y2", String(geometry.end.y));
-      group.append(line);
+      const padding = Math.max(8, session.style.strokeWidth * 2);
+      const minX = Math.min(geometry.start.x, geometry.end.x);
+      const minY = Math.min(geometry.start.y, geometry.end.y);
+      const x1 = geometry.start.x - minX + padding;
+      const y1 = geometry.start.y - minY + padding;
+      const x2 = geometry.end.x - minX + padding;
+      const y2 = geometry.end.y - minY + padding;
+      svg.setAttribute("x", String(minX - padding));
+      svg.setAttribute("y", String(minY - padding));
+      svg.setAttribute("width", String(Math.max(1, Math.abs(x2 - x1) + padding * 2)));
+      svg.setAttribute("height", String(Math.max(1, Math.abs(y2 - y1) + padding * 2)));
+      renderConnectorRoughSvg(svg, { ...session.style, endArrowhead: "none", startArrowhead: "none" }, { x: x1, y: y1 }, { x: x2, y: y2 });
     } else {
       const { rect } = geometry;
-      const node = document.createElementNS(
-        "http://www.w3.org/2000/svg",
-        session.tool === "ellipse" ? "ellipse" : session.tool === "diamond" ? "polygon" : "rect",
-      );
-      if (session.tool === "ellipse") {
-        node.setAttribute("cx", String(rect.x + rect.width / 2));
-        node.setAttribute("cy", String(rect.y + rect.height / 2));
-        node.setAttribute("rx", String(rect.width / 2));
-        node.setAttribute("ry", String(rect.height / 2));
-      } else if (session.tool === "diamond") {
-        node.setAttribute("points", [
-          `${rect.x + rect.width / 2},${rect.y}`,
-          `${rect.x + rect.width},${rect.y + rect.height / 2}`,
-          `${rect.x + rect.width / 2},${rect.y + rect.height}`,
-          `${rect.x},${rect.y + rect.height / 2}`,
-        ].join(" "));
-      } else {
-        node.setAttribute("x", String(rect.x));
-        node.setAttribute("y", String(rect.y));
-        node.setAttribute("width", String(rect.width));
-        node.setAttribute("height", String(rect.height));
-      }
-      group.append(node);
+      const padding = shapeRenderPadding(session.style);
+      svg.setAttribute("x", String(rect.x - padding));
+      svg.setAttribute("y", String(rect.y - padding));
+      svg.setAttribute("width", String(Math.max(1, rect.width) + padding * 2));
+      svg.setAttribute("height", String(Math.max(1, rect.height) + padding * 2));
+      renderShapeRoughSvg(svg, session.tool as ShapeElement["shape"], session.style, rect.width, rect.height, padding);
     }
-    if (group.parentNode !== draftLayer) draftLayer.append(group);
+    if (svg.parentNode !== draftLayer) draftLayer.append(svg);
   }, []);
 
   const getCanvasPoint = useCallback(
@@ -485,12 +479,17 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       current.setSelectedElementIds([]);
       current.setIsCanvasKeyboardActive(true);
       current.setActiveMode("canvas");
+      const elementId = current.createPrimitiveId(tool);
+      const appearance = current.getPrimitivePreviewAppearance(tool, elementId);
       primitiveSession.current = {
         current: point,
         didMove: false,
+        elementId,
         modifiers: { alt: event.altKey, shift: event.shiftKey },
+        opacity: appearance.opacity,
         pointerId: event.pointerId,
         start: point,
+        style: appearance.style,
         tool,
       };
       paintPrimitivePreview(primitiveSession.current);
@@ -666,6 +665,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
           event.currentTarget.releasePointerCapture(event.pointerId);
         }
         optionsRef.current.onCreatePrimitive(
+          currentPrimitive.elementId,
           currentPrimitive.tool,
           primitiveGeometryFromSession(
             currentPrimitive.tool,
@@ -674,6 +674,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
             currentPrimitive.modifiers,
             currentPrimitive.didMove,
           ),
+          { opacity: currentPrimitive.opacity, style: currentPrimitive.style },
         );
         event.preventDefault();
         event.stopPropagation();

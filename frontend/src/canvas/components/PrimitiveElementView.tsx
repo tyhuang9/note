@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, type KeyboardEvent, type RefCallback } from "react";
 import { RoughSVG } from "roughjs/bin/svg";
 import type { Options } from "roughjs/bin/core";
-import type { CanvasElement, ConnectorElement, ElementId, ShapeElement } from "../model/elements";
+import type { CanvasElement, ConnectorElement, ElementId, RoughStyle, ShapeElement } from "../model/elements";
 import { resolveConnectorPoints } from "../model/connectorBinding";
 import { canvasColorToCss } from "../rendering/canvasColor";
 
@@ -22,6 +22,9 @@ export function roughOptions(style: ShapeElement["style"], visualScale = 1): Opt
   const dashScale = Number.isFinite(visualScale) && visualScale > 0 ? visualScale : 1;
   return {
     fill: style.fillColor ? canvasColorToCss(style.fillColor) : "none",
+    curveFitting: 0.9,
+    disableMultiStroke: true,
+    disableMultiStrokeFill: true,
     roughness: style.roughness,
     seed: style.seed,
     stroke: canvasColorToCss(style.strokeColor),
@@ -32,6 +35,12 @@ export function roughOptions(style: ShapeElement["style"], visualScale = 1): Opt
         : undefined,
     strokeWidth: style.strokeWidth,
   };
+}
+
+function finishRoughNode(node: SVGElement): SVGElement {
+  node.setAttribute("stroke-linecap", "round");
+  node.setAttribute("stroke-linejoin", "round");
+  return node;
 }
 
 /** Extra SVG-only space for RoughJS's imperfect outline; model geometry stays untouched. */
@@ -56,6 +65,54 @@ export function roundedRectanglePath(width: number, height: number, roundness: n
     `Q 0 0 ${radius} 0`,
     "Z",
   ].join(" ");
+}
+
+/** A visually softened diamond whose four model anchors and bounds remain exact. */
+export function roundedDiamondPath(width: number, height: number): string {
+  const safeWidth = Math.max(1, width);
+  const safeHeight = Math.max(1, height);
+  const centerX = safeWidth / 2;
+  const centerY = safeHeight / 2;
+  const cornerInset = Math.min(safeWidth, safeHeight) * 0.08;
+  const horizontalInset = cornerInset * safeWidth / Math.max(1, Math.hypot(safeWidth, safeHeight));
+  const verticalInset = cornerInset * safeHeight / Math.max(1, Math.hypot(safeWidth, safeHeight));
+  return [
+    `M ${centerX + horizontalInset} ${verticalInset}`,
+    `L ${safeWidth - horizontalInset} ${centerY - verticalInset}`,
+    `Q ${safeWidth} ${centerY} ${safeWidth - horizontalInset} ${centerY + verticalInset}`,
+    `L ${centerX + horizontalInset} ${safeHeight - verticalInset}`,
+    `Q ${centerX} ${safeHeight} ${centerX - horizontalInset} ${safeHeight - verticalInset}`,
+    `L ${horizontalInset} ${centerY + verticalInset}`,
+    `Q 0 ${centerY} ${horizontalInset} ${centerY - verticalInset}`,
+    `L ${centerX - horizontalInset} ${verticalInset}`,
+    `Q ${centerX} 0 ${centerX + horizontalInset} ${verticalInset}`,
+    "Z",
+  ].join(" ");
+}
+
+/** Shared seeded shape painter used by committed elements and live previews. */
+export function renderShapeRoughSvg(
+  svg: SVGSVGElement,
+  shape: ShapeElement["shape"],
+  style: RoughStyle,
+  width: number,
+  height: number,
+  padding = 0,
+) {
+  svg.replaceChildren();
+  const draw = new RoughSVG(svg);
+  const safeWidth = Math.max(1, width);
+  const safeHeight = Math.max(1, height);
+  const options = roughOptions(style);
+  const node = shape === "rectangle"
+    ? draw.path(roundedRectanglePath(safeWidth, safeHeight, style.roundness), options)
+    : shape === "ellipse"
+      ? draw.ellipse(safeWidth / 2, safeHeight / 2, safeWidth, safeHeight, options)
+      : draw.path(roundedDiamondPath(safeWidth, safeHeight), options);
+  finishRoughNode(node);
+  if (padding !== 0) node.setAttribute("transform", `translate(${padding} ${padding})`);
+  svg.append(node);
+  return node;
 }
 
 export function arrowheadPoints(
@@ -115,19 +172,7 @@ export function ShapeElementView({ element, isDragSourceHidden = false, isSelect
     const svg = ref.current;
     if (!svg) return;
     svg.replaceChildren();
-    const draw = new RoughSVG(svg);
-    const options = roughOptions(element.style);
-    const width = Math.max(1, element.width);
-    const height = Math.max(1, element.height);
-    const node = element.shape === "rectangle"
-      ? element.style.roundness > 0
-        ? draw.path(roundedRectanglePath(width, height, element.style.roundness), options)
-        : draw.rectangle(0, 0, width, height, options)
-      : element.shape === "ellipse"
-        ? draw.ellipse(width / 2, height / 2, width, height, options)
-        : draw.polygon([[width / 2, 0], [width, height / 2], [width / 2, height], [0, height / 2]], options);
-    node.setAttribute("transform", `translate(${renderPadding} ${renderPadding})`);
-    svg.append(node);
+    renderShapeRoughSvg(svg, element.shape, element.style, element.width, element.height, renderPadding);
   }, [element, renderPadding]);
   return (
     <div
@@ -145,6 +190,7 @@ export function ShapeElementView({ element, isDragSourceHidden = false, isSelect
       <svg
         aria-label={`${element.shape} shape`}
         className="primitive-shape"
+        data-seed={element.style.seed}
         height={`calc(100% + ${renderPadding * 2}px)`}
         overflow="visible"
         ref={ref}
@@ -207,7 +253,7 @@ function FreeConnectorElementView({ element, isDragSourceHidden = false, isSelec
       style={{ height, left: minX - padding, opacity: element.opacity, position: "absolute", top: minY - padding, width, zIndex: element.zIndex }}
       tabIndex={0}
     >
-      <svg aria-label="Connector" className="primitive-connector" height="100%" overflow="visible" ref={ref} width="100%" />
+      <svg aria-label="Connector" className="primitive-connector" data-seed={element.style.seed} height="100%" overflow="visible" ref={ref} width="100%" />
     </div>
   );
 }
@@ -224,15 +270,15 @@ export function renderConnectorRoughSvg(
   const draw = new RoughSVG(svg);
   const safeVisualScale = Number.isFinite(visualScale) && visualScale > 0 ? visualScale : 1;
   const options = roughOptions(style, safeVisualScale);
-  svg.append(draw.line(start.x, start.y, end.x, end.y, options));
+  svg.append(finishRoughNode(draw.line(start.x, start.y, end.x, end.y, options)));
   if (style.endArrowhead === "arrow") {
     const points = arrowheadPoints(start, end, 12 * safeVisualScale, 5 * safeVisualScale);
-    if (points) svg.append(draw.polygon(points, {
+    if (points) svg.append(finishRoughNode(draw.polygon(points, {
       ...options,
       fill: canvasColorToCss(style.strokeColor),
       fillStyle: "solid",
       seed: ((style.seed + 1) >>> 0) || 1,
       strokeLineDash: undefined,
-    }));
+    })));
   }
 }

@@ -135,6 +135,7 @@ import {
   type BoxCanvasElement,
   type CanvasElement,
   type InkElement,
+  type RoughStyle,
   type ConnectorElement,
   type ConnectorEndpoint,
   type ShapeElement,
@@ -3366,6 +3367,7 @@ function App() {
       ) {
         event.preventDefault();
         isTemporaryHandActiveRef.current = true;
+        canvasRef.current?.setAttribute("data-temporary-hand", "true");
         return;
       }
 
@@ -3564,6 +3566,7 @@ function App() {
     function handleKeyUp(event: KeyboardEvent) {
       if (event.code === "Space") {
         isTemporaryHandActiveRef.current = false;
+        canvasRef.current?.removeAttribute("data-temporary-hand");
       }
     }
 
@@ -3574,6 +3577,7 @@ function App() {
       document.removeEventListener("keydown", handleKeyboard);
       document.removeEventListener("keyup", handleKeyUp);
       isTemporaryHandActiveRef.current = false;
+      canvasRef.current?.removeAttribute("data-temporary-hand");
     };
   }, [
     activeWorkbenchOverlay,
@@ -6880,21 +6884,11 @@ function App() {
   }
 
   const completePrimitiveCreation = useCallback(
-    (tool: PrimitiveTool, geometry: PrimitiveGeometry) => {
+    (elementId: string, tool: PrimitiveTool, geometry: PrimitiveGeometry, appearance: Readonly<{ opacity: number; style: RoughStyle }>) => {
       const pageId = selectedPageIdRef.current;
       if (!pageId) return;
-      const elementId = createId(tool === "line" ? "connector" : "shape");
       const timestamp = Date.now();
-      const preference = drawingPreferencesRef.current[tool];
-      const style = {
-        fillColor: tool === "line" ? null : preference.backgroundColor,
-        roughness: preference.roughness,
-        roundness: tool === "rectangle" ? preference.roundness : 0,
-        seed: deterministicSeed(elementId),
-        strokeColor: preference.strokeColor,
-        strokeStyle: preference.strokeStyle,
-        strokeWidth: preference.strokeWidth,
-      };
+      const { opacity, style } = appearance;
 
       setBlocksWithHistory((currentElements) => {
         if (geometry.kind === "connector") {
@@ -6903,7 +6897,7 @@ function App() {
             end: { kind: "free", ...geometry.end },
             id: elementId,
             locked: false,
-            opacity: preference.opacity,
+            opacity,
             pageId,
             routing: "straight",
             start: { kind: "free", ...geometry.start },
@@ -6924,7 +6918,7 @@ function App() {
           createdAt: timestamp,
           id: elementId,
           locked: false,
-          opacity: preference.opacity,
+          opacity,
           pageId,
           rotation: 0,
           shape: tool as ShapeElement["shape"],
@@ -7012,6 +7006,7 @@ function App() {
     canvasRef,
     cleanupMarquee: clearMarquee,
     createArrowId: () => createId("connector"),
+    createPrimitiveId: (tool) => createId(tool === "line" ? "connector" : "shape"),
     getArrowCreatedStatus: () => isToolLockedRef.current
       ? "Arrow created. Tool lock kept Arrow active. Use the endpoint handles to bind or move it."
       : "Arrow created. Switched to Select. Use the endpoint handles to bind or move it.",
@@ -7030,6 +7025,21 @@ function App() {
       };
     },
     getArrowTargetLabel: getBindableTargetLabel,
+    getPrimitivePreviewAppearance: (tool, elementId) => {
+      const preference = drawingPreferencesRef.current[tool];
+      return {
+        opacity: preference.opacity,
+        style: {
+          fillColor: tool === "line" ? null : preference.backgroundColor,
+          roughness: preference.roughness,
+          roundness: tool === "rectangle" ? preference.roundness : 0,
+          seed: deterministicSeed(elementId),
+          strokeColor: preference.strokeColor,
+          strokeStyle: preference.strokeStyle,
+          strokeWidth: preference.strokeWidth,
+        },
+      };
+    },
     hasPendingImage: () => pendingImagePlacementRef.current !== null,
     interactionCancellationKey: `${activeTool}:${selectedPageId ?? ""}`,
     isTemporaryHandActiveRef,
@@ -7404,6 +7414,7 @@ function App() {
             selectedPageId ? getWorkspaceTabId(selectedPageId) : undefined
           }
           activeMode={activeMode}
+          activeTool={activeTool}
           id={WORKSPACE_PAGE_PANEL_ID}
           onLostPointerCapture={canvasInteraction.handlePointerCancel}
           onPointerCancel={canvasInteraction.handlePointerCancel}

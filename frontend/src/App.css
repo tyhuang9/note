@@ -2272,7 +2272,27 @@ h2 {
   min-height: 0;
   overflow: clip;
   background: #f5f7fa;
-  cursor: text;
+  cursor: default;
+}
+
+.canvas[data-active-tool="hand"],
+.canvas[data-temporary-hand="true"] { cursor: grab; }
+.canvas[data-active-tool="text"] { cursor: text; }
+.canvas[data-active-tool="rectangle"],
+.canvas[data-active-tool="ellipse"],
+.canvas[data-active-tool="diamond"],
+.canvas[data-active-tool="line"],
+.canvas[data-active-tool="arrow"],
+.canvas[data-active-tool="pen"],
+.canvas[data-active-tool="highlighter"] { cursor: crosshair; }
+.canvas[data-active-tool="eraser"] { cursor: cell; }
+.canvas[data-active-tool="image"] { cursor: copy; }
+
+.canvas:not([data-active-tool="select"]) .canvas-content [data-canvas-element-id],
+.canvas:not([data-active-tool="select"]) .canvas-content [data-canvas-element-id] *,
+.canvas[data-temporary-hand="true"] .canvas-content [data-canvas-element-id],
+.canvas[data-temporary-hand="true"] .canvas-content [data-canvas-element-id] * {
+  cursor: inherit !important;
 }
 
 .canvas::after {
@@ -2522,8 +2542,12 @@ h2 {
 }
 
 .canvas:focus-visible {
+  outline: none;
+}
+
+.canvas:focus-visible .canvas-tool-palette button[aria-pressed="true"] {
   outline: 3px solid var(--canvas-focus);
-  outline-offset: -3px;
+  outline-offset: 1px;
 }
 
 .canvas-interaction-overlay {

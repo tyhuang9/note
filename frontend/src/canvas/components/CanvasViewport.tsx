@@ -3,9 +3,11 @@ import type {
   PointerEventHandler,
   WheelEventHandler,
 } from "react";
+import type { DrawingTool } from "../interaction/useInkInteraction";
 
 type CanvasViewportProps = {
   activeMode: "canvas" | "selected" | "editing" | "dragging" | "resizing" | "selecting" | "panning";
+  activeTool: DrawingTool;
   labelledBy?: string;
   children: ReactNode;
   id: string;
@@ -26,6 +28,7 @@ export const CanvasViewport = forwardRef<HTMLElement, CanvasViewportProps>(
   function CanvasViewport(
     {
       activeMode,
+      activeTool,
       labelledBy,
       children,
       id,
@@ -47,6 +50,7 @@ export const CanvasViewport = forwardRef<HTMLElement, CanvasViewportProps>(
         aria-label={labelledBy ? undefined : "Canvas workspace"}
         aria-labelledby={labelledBy}
         className={`canvas ${activeMode === "canvas" ? "is-canvas-selected" : ""} ${activeMode === "panning" ? "is-panning" : ""} ${activeMode === "selecting" ? "is-selecting" : ""}`}
+        data-active-tool={activeTool}
         id={id}
         onContextMenu={(event) => event.preventDefault()}
         onPointerCancel={onPointerCancel}

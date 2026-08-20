@@ -11,6 +11,8 @@ import type { CanvasPoint } from "./geometry";
 
 /** The screen-space capture radius stays constant as the canvas zooms. */
 export const CONNECTOR_BINDING_SNAP_RADIUS_PX = 18;
+/** A nearby compatible target reveals its anchors before endpoint snapping begins. */
+export const CONNECTOR_BINDING_REVEAL_RADIUS_PX = 28;
 /** Mirrors the persistence boundary limit in the Rust repository. */
 export const MAX_CANVAS_VALUE = 1_000_000;
 export const MAX_CANVAS_ROTATION_DEGREES = 360;
@@ -36,6 +38,13 @@ const CARDINAL_ANCHORS: readonly Readonly<{ name: ShapeAnchorName; t: number }>[
 ];
 
 export type BindableElement = ShapeElement | TextElement;
+
+export type ConnectorAuthoringCandidate = Readonly<{
+  activeAnchor: ShapeBindingAnchor;
+  anchors: readonly ShapeBindingAnchor[];
+  endpoint: ConnectorEndpoint;
+  target: BindableElement;
+}>;
 
 export function isBindableShape(element: CanvasElement | undefined): element is ShapeElement {
   return element?.type === "shape" && (
@@ -205,6 +214,67 @@ export function snapConnectorEndpoint(
 }
 
 /**
+ * Resolves the one target shown while an arrow endpoint is being authored.
+ * A directly hovered compatible target wins. Proximity candidates are ordered
+ * deterministically by nearest anchor, then visual stacking, then source order.
+ */
+export function getConnectorAuthoringCandidate(
+  point: CanvasPoint,
+  elements: readonly CanvasElement[],
+  zoom: number,
+  directHoveredElementId?: ElementId | null,
+): ConnectorAuthoringCandidate | null {
+  if (!isSafeResolvedPoint(point)) return null;
+  const safeZoom = Math.max(Number.EPSILON, Number.isFinite(zoom) ? zoom : 1);
+  const directTarget = directHoveredElementId
+    ? elements.find((element) => element.id === directHoveredElementId)
+    : undefined;
+  if (isBindableElement(directTarget)) {
+    return buildAuthoringCandidate(point, directTarget, safeZoom);
+  }
+
+  let closest: Readonly<{
+    candidate: ConnectorAuthoringCandidate;
+    distancePx: number;
+    index: number;
+  }> | null = null;
+  for (let index = 0; index < elements.length; index += 1) {
+    const element = elements[index];
+    if (!isBindableElement(element)) continue;
+    const candidate = buildAuthoringCandidate(point, element, safeZoom);
+    if (!candidate) continue;
+    const distancePx = pointDistance(point, candidate.activeAnchor.point) * safeZoom;
+    if (distancePx > CONNECTOR_BINDING_REVEAL_RADIUS_PX) continue;
+    if (
+      !closest
+      || distancePx < closest.distancePx
+      || (distancePx === closest.distancePx && element.zIndex > closest.candidate.target.zIndex)
+      || (
+        distancePx === closest.distancePx
+        && element.zIndex === closest.candidate.target.zIndex
+        && index < closest.index
+      )
+    ) {
+      closest = { candidate, distancePx, index };
+    }
+  }
+  return closest?.candidate ?? null;
+}
+
+/** Snaps a free endpoint to 45-degree increments around the armed start. */
+export function snapConnectorPointToAngle(start: CanvasPoint, point: CanvasPoint): CanvasPoint {
+  if (!isSafeResolvedPoint(start) || !isSafeResolvedPoint(point)) return point;
+  const delta = { x: point.x - start.x, y: point.y - start.y };
+  const length = Math.hypot(delta.x, delta.y);
+  if (length === 0) return point;
+  const snappedAngle = Math.round(Math.atan2(delta.y, delta.x) / (Math.PI / 4)) * (Math.PI / 4);
+  return {
+    x: zeroSmall(start.x + Math.cos(snappedAngle) * length),
+    y: zeroSmall(start.y + Math.sin(snappedAngle) * length),
+  };
+}
+
+/**
  * Converts only endpoints whose live target is being removed. The caller uses
  * this before filtering targets so the final free coordinate is exact and the
  * entire delete remains one history/persistence transaction.
@@ -233,6 +303,36 @@ function normalizeAnchorT(t: number): number {
   if (!Number.isFinite(t)) return 0;
   const normalized = t % 1;
   return normalized < 0 ? normalized + 1 : normalized;
+}
+
+function buildAuthoringCandidate(
+  point: CanvasPoint,
+  target: BindableElement,
+  zoom: number,
+): ConnectorAuthoringCandidate | null {
+  const anchors = getBindableBindingAnchors(target);
+  let activeAnchor: ShapeBindingAnchor | null = null;
+  let activeDistance = Number.POSITIVE_INFINITY;
+  for (const anchor of anchors) {
+    const distance = pointDistance(point, anchor.point);
+    if (distance < activeDistance) {
+      activeAnchor = anchor;
+      activeDistance = distance;
+    }
+  }
+  if (!activeAnchor) return null;
+  return {
+    activeAnchor,
+    anchors,
+    endpoint: activeDistance * zoom <= CONNECTOR_BINDING_SNAP_RADIUS_PX
+      ? { kind: "element", targetElementId: target.id, anchor: activeAnchor.anchor, gap: 0 }
+      : { kind: "free", ...point },
+    target,
+  };
+}
+
+function pointDistance(first: CanvasPoint, second: CanvasPoint): number {
+  return Math.hypot(first.x - second.x, first.y - second.y);
 }
 
 function hasSafeShapeGeometry(shape: ShapeElement): boolean {

@@ -2,13 +2,16 @@ import { describe, expect, it } from "vitest";
 import type { ConnectorElement, RoughStyle, ShapeElement, TextElement } from "../../src/canvas/model/elements";
 import {
   CONNECTOR_BINDING_SNAP_RADIUS_PX,
+  CONNECTOR_BINDING_REVEAL_RADIUS_PX,
   detachConnectorEndpointsForDeletedTargets,
+  getConnectorAuthoringCandidate,
   getShapeAnchorPoint,
   getShapeBindingAnchors,
   getTextAnchorPoint,
   MAX_CANVAS_VALUE,
   resolveConnectorEndpoint,
   snapConnectorEndpoint,
+  snapConnectorPointToAngle,
 } from "../../src/canvas/model/connectorBinding";
 import { canvasElementContainsPoint, getElementBounds } from "../../src/canvas/model/hitTesting";
 import { getSelectionElementBounds, scaleSelection, translateSelection } from "../../src/canvas/model/selectionBounds";
@@ -66,6 +69,47 @@ function arrow(start: ConnectorElement["start"], end: ConnectorElement["end"]): 
 }
 
 describe("connector shape binding", () => {
+  it("reveals and snaps one authoring target using screen-space radii", () => {
+    const rectangle = shape("rectangle");
+    expect(getConnectorAuthoringCandidate({ x: 130, y: 50 }, [rectangle], 1)).toMatchObject({
+      activeAnchor: { name: "right" },
+      endpoint: { kind: "free", x: 130, y: 50 },
+      target: { id: rectangle.id },
+    });
+    expect(getConnectorAuthoringCandidate({ x: 128, y: 50 }, [rectangle], 1)).toMatchObject({
+      endpoint: { kind: "element", targetElementId: rectangle.id, anchor: { t: 0.25 } },
+    });
+    expect(getConnectorAuthoringCandidate({ x: 139, y: 50 }, [rectangle], 1)).toBeNull();
+    expect(getConnectorAuthoringCandidate({ x: 124, y: 50 }, [rectangle], 2)).toMatchObject({
+      endpoint: { kind: "free", x: 124, y: 50 },
+    });
+    expect(CONNECTOR_BINDING_REVEAL_RADIUS_PX).toBe(28);
+    expect(CONNECTOR_BINDING_SNAP_RADIUS_PX).toBe(18);
+  });
+
+  it("prioritizes direct hover, then distance, z-index, and stable source order", () => {
+    const low = shape("rectangle", { id: "low", zIndex: 1 });
+    const high = shape("rectangle", { id: "high", zIndex: 5 });
+    const nearer = shape("rectangle", { id: "nearer", x: 14, zIndex: 0 });
+    expect(getConnectorAuthoringCandidate({ x: 115, y: 50 }, [low, nearer, high], 1)?.target.id).toBe("nearer");
+    expect(getConnectorAuthoringCandidate({ x: 110, y: 50 }, [low, high], 1)?.target.id).toBe("high");
+    expect(getConnectorAuthoringCandidate({ x: 110, y: 50 }, [low, { ...low, id: "later" }], 1)?.target.id).toBe("low");
+    expect(getConnectorAuthoringCandidate({ x: 110, y: 50 }, [low, high], 1, "low")?.target.id).toBe("low");
+    expect(getConnectorAuthoringCandidate({ x: 300, y: 300 }, [low], 1, "low")?.endpoint).toEqual({ kind: "free", x: 300, y: 300 });
+  });
+
+  it("supports text and locked targets and snaps free endpoints to 45 degrees", () => {
+    const lockedText = text({ locked: true });
+    expect(getConnectorAuthoringCandidate({ x: 90, y: 50 }, [lockedText], 1, lockedText.id)).toMatchObject({
+      endpoint: { kind: "element", targetElementId: lockedText.id },
+      target: { locked: true, type: "text" },
+    });
+    const snapped = snapConnectorPointToAngle({ x: 0, y: 0 }, { x: 10, y: 7 });
+    expect(snapped.x).toBeCloseTo(Math.hypot(10, 7) / Math.sqrt(2));
+    expect(snapped.y).toBeCloseTo(Math.hypot(10, 7) / Math.sqrt(2));
+    expect(snapConnectorPointToAngle({ x: 5, y: 5 }, { x: 5, y: 5 })).toEqual({ x: 5, y: 5 });
+  });
+
   it.each(["rectangle", "ellipse", "diamond"] as const)("exposes the cardinal anchors for a %s", (shapeName) => {
     const anchors = getShapeBindingAnchors(shape(shapeName));
     expect(anchors.map(({ name, point }) => ({ name, point }))).toEqual([

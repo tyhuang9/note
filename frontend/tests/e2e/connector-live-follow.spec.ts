@@ -207,13 +207,13 @@ test("keyboard endpoint chooser describes rotated text targets and binds a targe
   const endHandle = page.getByRole("button", { name: "Move connector end endpoint" });
   const description = page.locator("#connector-end-endpoint-description");
   await expect(endHandle).toBeVisible();
-  await expect(description).toContainText("Currently free. Press Enter to choose a target shape or text block and a target-relative cardinal anchor.");
+  await expect(description).toContainText("Currently free. Press Enter to choose a target shape or text block and a target-relative boundary position.");
 
   await endHandle.focus();
   await page.keyboard.press("Space");
   const dialog = page.getByRole("dialog", { name: "Choose end endpoint target" });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByText("Anchor names are relative to the selected target and rotate with it.")).toBeVisible();
+  await expect(dialog.getByText("Cardinal presets and the one-degree range rotate with the target.")).toBeVisible();
 
   const textTarget = dialog.getByRole("button", { name: /Text 1 \(Resizable text target\)/ });
   await textTarget.focus();
@@ -221,6 +221,8 @@ test("keyboard endpoint chooser describes rotated text targets and binds a targe
   const rightAnchor = dialog.getByRole("button", { name: /Right anchor on Text 1 \(Resizable text target\).*target rotated 38 degrees/ });
   await rightAnchor.focus();
   await expect(rightAnchor).toBeFocused();
+  await page.keyboard.press("Space");
+  await dialog.getByRole("button", { name: "Bind end endpoint" }).focus();
   await page.keyboard.press("Space");
 
   await expect(description).toContainText("Currently bound to Text 1 (Resizable text target)");

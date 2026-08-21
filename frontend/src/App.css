@@ -3465,7 +3465,8 @@ h2 {
   opacity: 0.55;
 }
 
-.canvas-accessibility-status {
+.canvas-accessibility-status,
+.connector-endpoint-chooser-status {
   position: absolute;
   width: 1px;
   height: 1px;

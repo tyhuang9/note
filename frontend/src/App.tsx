@@ -7122,9 +7122,18 @@ function App() {
     const nextEndpoint = candidate?.endpoint ?? snapConnectorEndpoint(
       point, eligibleTargets, zoomLevelRef.current, connector.style.endArrowhead === "arrow",
     );
-    return endpoint === "start"
+    const preview = endpoint === "start"
       ? { ...connector, start: nextEndpoint }
       : { ...connector, end: nextEndpoint };
+    if (!isLiveConnectorBindingPersistable(preview)) {
+      connectorEndpointRetargetAnnouncementRef.current = null;
+      setConnectorBindingAnnouncement(
+        `Could not bind ${endpoint} endpoint because the connector's visible stroke would exceed the safe canvas boundary.`,
+      );
+      setConnectorEndpointRetargetVisual(null);
+      return null;
+    }
+    return preview;
   }
 
   function applySelectionFrameInteractionMove(
@@ -7232,26 +7241,39 @@ function App() {
     if (session.connectorEndpoint && session.didMove) {
       const preview = getConnectorEndpointPreview(session.connectorEndpoint, event.clientX, event.clientY);
       if (preview) {
-        setBlocksWithHistory((currentBlocks) => {
-          const liveConnector = currentBlocks.find((element): element is ConnectorElement =>
-            element.id === preview.id && element.type === "connector",
+        if (!isLiveConnectorBindingPersistable(preview)) {
+          connectorEndpointRetargetAnnouncementRef.current = null;
+          setConnectorBindingAnnouncement(
+            `Could not bind ${session.connectorEndpoint} endpoint because the connector's visible stroke would exceed the safe canvas boundary.`,
           );
-          if (!liveConnector || liveConnector.style.endArrowhead !== "arrow") return currentBlocks;
-          const proposedEndpoint = preview[session.connectorEndpoint!];
-          const oppositeEndpoint = liveConnector[session.connectorEndpoint === "start" ? "end" : "start"];
-          if (
-            proposedEndpoint.kind === "element"
-            && oppositeEndpoint.kind === "element"
-            && proposedEndpoint.targetElementId === oppositeEndpoint.targetElementId
-          ) return currentBlocks;
-          const candidate = session.connectorEndpoint === "start"
-            ? { ...liveConnector, start: proposedEndpoint }
-            : { ...liveConnector, end: proposedEndpoint };
-          if (!isLiveConnectorBindingPersistable(candidate, currentBlocks)) return currentBlocks;
-          return currentBlocks.map((element) => element.id === candidate.id
-            ? { ...candidate, updatedAt: Date.now() }
-            : element);
-        });
+        } else {
+          setBlocksWithHistory((currentBlocks) => {
+            const liveConnector = currentBlocks.find((element): element is ConnectorElement =>
+              element.id === preview.id && element.type === "connector",
+            );
+            if (!liveConnector || liveConnector.style.endArrowhead !== "arrow") return currentBlocks;
+            const proposedEndpoint = preview[session.connectorEndpoint!];
+            const oppositeEndpoint = liveConnector[session.connectorEndpoint === "start" ? "end" : "start"];
+            if (
+              proposedEndpoint.kind === "element"
+              && oppositeEndpoint.kind === "element"
+              && proposedEndpoint.targetElementId === oppositeEndpoint.targetElementId
+            ) return currentBlocks;
+            const candidate = session.connectorEndpoint === "start"
+              ? { ...liveConnector, start: proposedEndpoint }
+              : { ...liveConnector, end: proposedEndpoint };
+            if (!isLiveConnectorBindingPersistable(candidate, currentBlocks)) {
+              connectorEndpointRetargetAnnouncementRef.current = null;
+              setConnectorBindingAnnouncement(
+                `Could not bind ${session.connectorEndpoint} endpoint because the connector's visible stroke would exceed the safe canvas boundary.`,
+              );
+              return currentBlocks;
+            }
+            return currentBlocks.map((element) => element.id === candidate.id
+              ? { ...candidate, updatedAt: Date.now() }
+              : element);
+          });
+        }
       }
     } else if (session.textResize) {
       const textResize = textResizeSessionRef.current;
@@ -8962,6 +8984,7 @@ function App() {
                 onSelectTarget={(targetElementId) => setConnectorEndpointChooser((current) =>
                   current ? { ...current, targetElementId } : current,
                 )}
+                statusMessage={connectorBindingAnnouncement}
                 targets={targets}
                 targetElementId={connectorEndpointChooser.targetElementId}
               />

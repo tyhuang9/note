@@ -9,6 +9,7 @@ type ConnectorEndpointChooserProps = {
   onClose: () => void;
   onDetach: () => void;
   onSelectTarget: (targetElementId: string) => void;
+  statusMessage: string;
   targets: readonly Readonly<{ id: string; label: string }>[];
   targetElementId: string | null;
 };
@@ -24,6 +25,7 @@ export function ConnectorEndpointChooser({
   onClose,
   onDetach,
   onSelectTarget,
+  statusMessage,
   targets,
   targetElementId,
 }: ConnectorEndpointChooserProps) {
@@ -158,6 +160,9 @@ export function ConnectorEndpointChooser({
               {label}
             </button>
           ))}
+        </div>
+        <div aria-atomic="true" aria-live="polite" className="connector-endpoint-chooser-status" role="status">
+          {statusMessage}
         </div>
         <div className="connector-endpoint-chooser-actions">
           <button disabled={!selectedTarget} onClick={onBind} type="button">Bind {endpoint} endpoint</button>

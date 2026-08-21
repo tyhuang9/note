@@ -49,13 +49,33 @@ test("two-click creation and chooser binding reject post-clearance maximum-envel
   await resetCounts(page);
   await dialog.getByRole("button", { name: "Bind start endpoint" }).click();
 
-  await expect(status).toHaveText(
+  const chooserStatus = dialog.getByRole("status");
+  await expect(chooserStatus).toHaveText(
     "Could not bind start endpoint because the connector's visible stroke would exceed the safe canvas boundary.",
   );
+  expect(await chooserStatus.evaluate((element) => !element.closest("[inert]"))).toBe(true);
   await expect(dialog).toBeVisible();
   await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
   await expect.poll(() => currentConnector(page)).toEqual(before);
   await dialog.press("Escape");
+  await expect(startHandle).toBeFocused();
+
+  const startHandleBounds = await requiredBounds(startHandle, "free start endpoint");
+  await page.waitForTimeout(650);
+  await resetCounts(page);
+  await page.mouse.move(startHandleBounds.x + startHandleBounds.width / 2, startHandleBounds.y + startHandleBounds.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(targetCenter.x, targetCenter.y, { steps: 4 });
+  await expect(status).toHaveText(
+    "Could not bind start endpoint because the connector's visible stroke would exceed the safe canvas boundary.",
+  );
+  await page.mouse.up();
+
+  await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
+  await expect.poll(() => currentConnector(page)).toEqual(before);
+  await expect(status).toHaveText(
+    "Could not bind start endpoint because the connector's visible stroke would exceed the safe canvas boundary.",
+  );
   await canvas.focus();
   await page.keyboard.press("Control+z");
   await expect.poll(() => currentConnector(page)).toEqual(before);

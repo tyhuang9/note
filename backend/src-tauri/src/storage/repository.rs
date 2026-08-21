@@ -1,4 +1,5 @@
 use super::{assets, database, legacy_import, models::*};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 use serde_json::Value;
 use std::{io::Write, path::Path};
@@ -17,6 +18,11 @@ const MAX_INK_BRUSH_SIZE: f64 = 512.0;
 const MAX_SCENE_BATCH_BYTES: usize = 32 * 1024 * 1024;
 const MAX_SCENE_BATCH_UPSERTS: usize = 5_000;
 const MAX_SCENE_BATCH_DELETES: usize = 20_000;
+const MAX_RICH_TEXT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_RICH_TEXT_DEPTH: usize = 64;
+const MAX_RICH_TEXT_NODES: usize = 20_000;
+const MAX_RICH_TEXT_PLAIN_BYTES: usize = 4 * 1024 * 1024;
+const MAX_EMBEDDED_RICH_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 const MIN_VISUAL_RECTANGLE_ROUNDNESS: f64 = 0.06;
 const DIAMOND_CORNER_INSET: f64 = 0.08;
 const DIAMOND_CORNER_CONTROL: f64 = 0.45;
@@ -254,6 +260,386 @@ fn validate_primitive_style(value: &Value, context: &str) -> Result<(), String> 
     Ok(())
 }
 
+fn validate_rich_text_value(value: &Value, context: &str) -> Result<(), String> {
+    let value = value
+        .as_object()
+        .ok_or_else(|| format!("{context} must be an object"))?;
+    let content = value
+        .get("content")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{context}.content must be a string"))?;
+    if content.len() > MAX_RICH_TEXT_PLAIN_BYTES {
+        return Err(format!(
+            "{context}.content exceeds the {MAX_RICH_TEXT_PLAIN_BYTES} byte limit"
+        ));
+    }
+    if let Some(rich_content) = value.get("richContent") {
+        validate_rich_text_document(rich_content, &format!("{context}.richContent"))?;
+    }
+    Ok(())
+}
+
+fn validate_rich_text_document(value: &Value, context: &str) -> Result<(), String> {
+    let bytes = serde_json::to_vec(value)
+        .map_err(|error| format!("{context} cannot be serialized: {error}"))?;
+    if bytes.len() > MAX_RICH_TEXT_BYTES {
+        return Err(format!(
+            "{context} exceeds the {MAX_RICH_TEXT_BYTES} byte limit"
+        ));
+    }
+    if value.get("type").and_then(Value::as_str) != Some("doc") {
+        return Err(format!("{context} root type must be doc"));
+    }
+    let mut node_count = 0;
+    validate_rich_text_node(value, None, context, 0, &mut node_count)
+}
+
+fn validate_rich_text_node(
+    value: &Value,
+    parent_type: Option<&str>,
+    context: &str,
+    depth: usize,
+    node_count: &mut usize,
+) -> Result<(), String> {
+    if depth > MAX_RICH_TEXT_DEPTH {
+        return Err(format!(
+            "{context} exceeds the {MAX_RICH_TEXT_DEPTH} level depth limit"
+        ));
+    }
+    *node_count += 1;
+    if *node_count > MAX_RICH_TEXT_NODES {
+        return Err(format!(
+            "{context} exceeds the {MAX_RICH_TEXT_NODES} node limit"
+        ));
+    }
+    let node = value
+        .as_object()
+        .ok_or_else(|| format!("{context} node must be an object"))?;
+    let node_type = node
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{context}.type must be a string"))?;
+    if !is_allowed_rich_text_child(parent_type, node_type) {
+        return Err(format!(
+            "{context}.type '{node_type}' is not supported here"
+        ));
+    }
+    validate_known_keys(
+        node,
+        &["type", "attrs", "content", "marks", "text"],
+        context,
+    )?;
+    validate_rich_text_node_attrs(node_type, node.get("attrs"), context)?;
+    if node_type == "text" {
+        let text = node
+            .get("text")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("{context}.text must be a string"))?;
+        if text.len() > MAX_RICH_TEXT_PLAIN_BYTES {
+            return Err(format!("{context}.text exceeds the text byte limit"));
+        }
+        if node.get("content").is_some() {
+            return Err(format!("{context}.content is not allowed"));
+        }
+    } else if node.get("text").is_some() {
+        return Err(format!("{context}.text is only valid on text nodes"));
+    }
+    if let Some(marks) = node.get("marks") {
+        if node_type != "text" {
+            return Err(format!("{context}.marks is only valid on text nodes"));
+        }
+        let marks = marks
+            .as_array()
+            .ok_or_else(|| format!("{context}.marks must be an array"))?;
+        if marks.len() > 32 {
+            return Err(format!("{context}.marks exceeds the 32 mark limit"));
+        }
+        for (index, mark) in marks.iter().enumerate() {
+            validate_rich_text_mark(mark, &format!("{context}.marks[{index}]"))?;
+        }
+    }
+    let leaf = matches!(node_type, "text" | "image" | "hardBreak" | "horizontalRule");
+    if let Some(children) = node.get("content") {
+        if leaf {
+            return Err(format!("{context}.content is not allowed"));
+        }
+        let children = children
+            .as_array()
+            .ok_or_else(|| format!("{context}.content must be an array"))?;
+        for (index, child) in children.iter().enumerate() {
+            validate_rich_text_node(
+                child,
+                Some(node_type),
+                &format!("{context}.content[{index}]"),
+                depth + 1,
+                node_count,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn is_allowed_rich_text_child(parent: Option<&str>, child: &str) -> bool {
+    match parent {
+        None => child == "doc",
+        Some("doc" | "blockquote") => is_rich_text_block(child),
+        Some("bulletList" | "orderedList") => child == "listItem",
+        Some("listItem") => child == "paragraph" || is_rich_text_block(child),
+        Some("paragraph" | "heading") => matches!(child, "text" | "hardBreak"),
+        Some("codeBlock") => child == "text",
+        _ => false,
+    }
+}
+
+fn is_rich_text_block(node_type: &str) -> bool {
+    matches!(
+        node_type,
+        "paragraph"
+            | "heading"
+            | "bulletList"
+            | "orderedList"
+            | "blockquote"
+            | "codeBlock"
+            | "horizontalRule"
+            | "image"
+    )
+}
+
+fn validate_known_keys(
+    value: &serde_json::Map<String, Value>,
+    allowed: &[&str],
+    context: &str,
+) -> Result<(), String> {
+    if let Some(key) = value.keys().find(|key| !allowed.contains(&key.as_str())) {
+        return Err(format!("{context}.{key} is not supported"));
+    }
+    Ok(())
+}
+
+fn validate_rich_text_node_attrs(
+    node_type: &str,
+    attrs: Option<&Value>,
+    context: &str,
+) -> Result<(), String> {
+    let attrs = match attrs {
+        Some(value) => Some(
+            value
+                .as_object()
+                .ok_or_else(|| format!("{context}.attrs must be an object"))?,
+        ),
+        None => None,
+    };
+    let allowed: &[&str] = match node_type {
+        "heading" => &["level"],
+        "orderedList" => &["start", "type"],
+        "codeBlock" => &["language"],
+        "image" => &["alt", "height", "src", "title", "width"],
+        _ => &[],
+    };
+    if let Some(attrs) = attrs {
+        validate_known_keys(attrs, allowed, &format!("{context}.attrs"))?;
+    }
+    match node_type {
+        "heading" => {
+            let level = attrs
+                .and_then(|attrs| attrs.get("level"))
+                .and_then(Value::as_u64);
+            if !matches!(level, Some(1..=6)) {
+                return Err(format!("{context}.attrs.level must be between 1 and 6"));
+            }
+        }
+        "orderedList" => {
+            if let Some(attrs) = attrs {
+                if attrs
+                    .get("start")
+                    .is_some_and(|value| value.as_u64().filter(|start| *start > 0).is_none())
+                {
+                    return Err(format!("{context}.attrs.start must be a positive integer"));
+                }
+                if attrs
+                    .get("type")
+                    .is_some_and(|value| !value.is_null() && value.as_str().is_none())
+                {
+                    return Err(format!("{context}.attrs.type must be a string or null"));
+                }
+            }
+        }
+        "codeBlock" => {
+            if attrs
+                .and_then(|attrs| attrs.get("language"))
+                .is_some_and(|value| {
+                    !value.is_null() && value.as_str().is_none_or(|text| text.len() > 100)
+                })
+            {
+                return Err(format!(
+                    "{context}.attrs.language must be a bounded string or null"
+                ));
+            }
+        }
+        "image" => validate_rich_image_attrs(attrs, context)?,
+        _ => {}
+    }
+    Ok(())
+}
+
+fn validate_rich_image_attrs(
+    attrs: Option<&serde_json::Map<String, Value>>,
+    context: &str,
+) -> Result<(), String> {
+    let attrs = attrs.ok_or_else(|| format!("{context}.attrs must be an object"))?;
+    let src = attrs
+        .get("src")
+        .and_then(Value::as_str)
+        .filter(|src| !src.is_empty())
+        .ok_or_else(|| format!("{context}.attrs.src must be a non-empty string"))?;
+    validate_rich_image_source(src, &format!("{context}.attrs.src"))?;
+    for key in ["alt", "title"] {
+        if attrs.get(key).is_some_and(|value| {
+            !value.is_null() && value.as_str().is_none_or(|text| text.len() > 16_384)
+        }) {
+            return Err(format!("{context}.attrs.{key} must be a bounded string"));
+        }
+    }
+    for key in ["width", "height"] {
+        if let Some(value) = attrs.get(key) {
+            if !value.is_null()
+                && value
+                    .as_f64()
+                    .filter(|number| {
+                        number.is_finite() && (0.0 < *number && *number <= MAX_CANVAS_VALUE)
+                    })
+                    .is_none()
+            {
+                return Err(format!(
+                    "{context}.attrs.{key} must be a positive finite number"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_rich_image_source(src: &str, context: &str) -> Result<(), String> {
+    if is_safe_absolute_url(src, &["http", "https"]) {
+        return Ok(());
+    }
+    let Some((header, payload)) = src.split_once(',') else {
+        return Err(format!(
+            "{context} must use http(s) or a supported raster data URL"
+        ));
+    };
+    if !matches!(
+        header.to_ascii_lowercase().as_str(),
+        "data:image/png;base64"
+            | "data:image/jpeg;base64"
+            | "data:image/gif;base64"
+            | "data:image/webp;base64"
+    ) {
+        return Err(format!(
+            "{context} must use http(s) or a supported raster data URL"
+        ));
+    }
+    let decoded = STANDARD
+        .decode(payload)
+        .map_err(|_| format!("{context} must contain valid base64"))?;
+    if decoded.len() > MAX_EMBEDDED_RICH_IMAGE_BYTES {
+        return Err(format!(
+            "{context} exceeds the {MAX_EMBEDDED_RICH_IMAGE_BYTES} decoded byte limit"
+        ));
+    }
+    Ok(())
+}
+
+fn is_safe_absolute_url(value: &str, prefixes: &[&str]) -> bool {
+    value.len() <= 8_192
+        && !value
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
+        && url::Url::parse(value)
+            .ok()
+            .is_some_and(|url| prefixes.contains(&url.scheme()))
+}
+
+fn validate_rich_text_mark(value: &Value, context: &str) -> Result<(), String> {
+    let mark = value
+        .as_object()
+        .ok_or_else(|| format!("{context} must be an object"))?;
+    let mark_type = mark
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{context}.type must be a string"))?;
+    if !matches!(
+        mark_type,
+        "bold" | "italic" | "strike" | "underline" | "code" | "textStyle" | "link"
+    ) {
+        return Err(format!("{context}.type '{mark_type}' is not supported"));
+    }
+    validate_known_keys(mark, &["type", "attrs"], context)?;
+    let allowed_attrs: &[&str] = match mark_type {
+        "textStyle" => &["fontFamily", "fontSize"],
+        "link" => &["href", "target", "rel", "class"],
+        _ => &[],
+    };
+    let attrs = match mark.get("attrs") {
+        Some(value) => Some(
+            value
+                .as_object()
+                .ok_or_else(|| format!("{context}.attrs must be an object"))?,
+        ),
+        None => None,
+    };
+    if let Some(attrs) = attrs {
+        validate_known_keys(attrs, allowed_attrs, &format!("{context}.attrs"))?;
+    }
+    if mark_type == "textStyle" {
+        let attrs = attrs.ok_or_else(|| format!("{context}.attrs must be an object"))?;
+        if attrs.get("fontFamily").is_some_and(|value| {
+            !value.is_null() && value.as_str().is_none_or(|text| text.len() > 256)
+        }) {
+            return Err(format!(
+                "{context}.attrs.fontFamily must be a bounded string or null"
+            ));
+        }
+        if attrs.get("fontSize").is_some_and(|value| {
+            !value.is_null() && value.as_str().is_none_or(|text| !is_safe_font_size(text))
+        }) {
+            return Err(format!(
+                "{context}.attrs.fontSize must be between 8px and 96px or null"
+            ));
+        }
+    }
+    if mark_type == "link" {
+        let attrs = attrs.ok_or_else(|| format!("{context}.attrs must be an object"))?;
+        let href = attrs
+            .get("href")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("{context}.attrs.href must be a string"))?;
+        if !is_safe_absolute_url(href, &["http", "https", "mailto", "tel"]) {
+            return Err(format!("{context}.attrs.href uses an unsafe URL"));
+        }
+        for key in ["target", "rel", "class"] {
+            if attrs.get(key).is_some_and(|value| {
+                !value.is_null() && value.as_str().is_none_or(|text| text.len() > 512)
+            }) {
+                return Err(format!(
+                    "{context}.attrs.{key} must be a bounded string or null"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_safe_font_size(value: &str) -> bool {
+    let Some(number) = value
+        .strip_suffix("px")
+        .and_then(|number| number.parse::<u8>().ok())
+    else {
+        return false;
+    };
+    (8..=96).contains(&number) && value == format!("{number}px")
+}
+
 fn validate_connector_endpoint(value: &Value, context: &str) -> Result<(), String> {
     let endpoint = value
         .as_object()
@@ -404,9 +790,7 @@ fn validate_element(value: &Value, page_id: &str) -> Result<(), String> {
     }
     match kind {
         "text" => {
-            if value.get("content").and_then(Value::as_str).is_none() {
-                return Err("text element.content must be a string".into());
-            }
+            validate_rich_text_value(value, "text element")?;
             if let Some(background_mode) = value.get("backgroundMode") {
                 if !matches!(background_mode.as_str(), Some("surface" | "transparent")) {
                     return Err("text element.backgroundMode is invalid".into());
@@ -431,6 +815,9 @@ fn validate_element(value: &Value, page_id: &str) -> Result<(), String> {
                 return Err("shape element.shape is invalid".into());
             }
             validate_primitive_style(value, "shape")?;
+            if let Some(text) = value.get("text") {
+                validate_rich_text_value(text, "shape element.text")?;
+            }
         }
         "connector" => {
             validate_connector_endpoint(
@@ -1541,6 +1928,199 @@ mod tests {
             load_workspace_data_at(directory.path()).unwrap().pages[0].revision,
             1
         );
+    }
+
+    #[test]
+    fn shape_owned_rich_text_round_trips_without_changing_legacy_omission() {
+        let directory = root();
+        seed_page(directory.path());
+        let legacy_shape = shape_element("legacy-shape", "p");
+        let mut labeled_shape = shape_element("labeled-shape", "p");
+        labeled_shape["x"] = json!(40.0);
+        labeled_shape["text"] = json!({
+            "content":"Heading\nImportant",
+            "richContent":{
+                "type":"doc",
+                "content":[
+                    {"type":"heading","attrs":{"level":2},"content":[{"type":"text","text":"Heading"}]},
+                    {"type":"bulletList","content":[{"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"Important","marks":[{"type":"bold"},{"type":"textStyle","attrs":{"fontFamily":"Inter","fontSize":"18px"}}]}]}]}]},
+                    {"type":"image","attrs":{"src":"data:image/png;base64,AA==","alt":"Diagram","width":24,"height":12}}
+                ]
+            }
+        });
+
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![legacy_shape.clone(), labeled_shape.clone()],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+
+        let loaded = load_workspace_data_at(directory.path()).unwrap();
+        let legacy = loaded
+            .elements
+            .iter()
+            .find(|element| element["id"] == "legacy-shape")
+            .unwrap();
+        let labeled = loaded
+            .elements
+            .iter()
+            .find(|element| element["id"] == "labeled-shape")
+            .unwrap();
+        assert!(legacy.get("text").is_none());
+        assert_eq!(labeled["text"], labeled_shape["text"]);
+    }
+
+    #[test]
+    fn malformed_or_excessive_shape_rich_text_is_rejected_atomically() {
+        let directory = root();
+        seed_page(directory.path());
+        let baseline = shape_element("baseline", "p");
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![baseline],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+        let before = load_workspace_data_at(directory.path()).unwrap();
+
+        for invalid_text in [
+            json!("label"),
+            json!({"content":1}),
+            json!({"content":"label","richContent":{"type":"paragraph"}}),
+            json!({"content":"label","richContent":{"type":"doc","content":[{"type":"script","text":"bad"}]}}),
+            json!({"content":"label","richContent":{"type":"doc","content":[{"type":"heading","attrs":{"level":9}}]}}),
+        ] {
+            let mut invalid = shape_element("invalid", "p");
+            invalid["text"] = invalid_text;
+            let error = apply_scene_changes_at(
+                directory.path(),
+                SceneChangeBatch {
+                    page_id: "p".into(),
+                    base_revision: 1,
+                    upserts: vec![invalid],
+                    deleted_element_ids: vec!["baseline".into()],
+                },
+            )
+            .unwrap_err();
+            assert!(
+                error.contains("shape element.text"),
+                "unexpected validation error: {error}"
+            );
+            let after = load_workspace_data_at(directory.path()).unwrap();
+            assert_eq!(after.pages[0].revision, 1);
+            assert_eq!(after.elements, before.elements);
+        }
+
+        let mut nested = json!({"type":"paragraph"});
+        for _ in 0..=MAX_RICH_TEXT_DEPTH {
+            nested = json!({"type":"blockquote","content":[nested]});
+        }
+        let mut invalid_depth = shape_element("deep", "p");
+        invalid_depth["text"] =
+            json!({"content":"deep","richContent":{"type":"doc","content":[nested]}});
+        let error = apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 1,
+                upserts: vec![invalid_depth],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("depth limit"));
+        let after = load_workspace_data_at(directory.path()).unwrap();
+        assert_eq!(after.pages[0].revision, 1);
+        assert_eq!(after.elements, before.elements);
+    }
+
+    #[test]
+    fn standalone_text_uses_the_shared_rich_document_validator() {
+        let mut valid = element("rich-text", 1);
+        valid["richContent"] = json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"ok","marks":[{"type":"italic"}]}]}]});
+        assert!(validate_element(&valid, "p").is_ok());
+
+        valid["richContent"] = json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"no","marks":[{"type":"blink"}]}]}]});
+        assert!(validate_element(&valid, "p")
+            .unwrap_err()
+            .contains("not supported"));
+    }
+
+    #[test]
+    fn rich_text_security_vectors_match_frontend_policy() {
+        let vectors: Value = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/rich-text-security-vectors.json"
+        ))
+        .unwrap();
+        for vector in vectors["valid"].as_array().unwrap() {
+            assert!(
+                validate_rich_text_document(&vector["doc"], "vector").is_ok(),
+                "valid vector failed: {}",
+                vector["name"]
+            );
+        }
+        for vector in vectors["invalid"].as_array().unwrap() {
+            assert!(
+                validate_rich_text_document(&vector["doc"], "vector").is_err(),
+                "invalid vector passed: {}",
+                vector["name"]
+            );
+        }
+    }
+
+    #[test]
+    fn embedded_rich_image_decoded_limit_is_exact_and_atomic() {
+        let directory = root();
+        seed_page(directory.path());
+        let mut at_limit = shape_element("at-limit", "p");
+        at_limit["text"] = json!({
+            "content":"image",
+            "richContent":{"type":"doc","content":[{"type":"image","attrs":{
+                "src":format!("data:image/png;base64,{}", STANDARD.encode(vec![0; MAX_EMBEDDED_RICH_IMAGE_BYTES]))
+            }}]}
+        });
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![at_limit],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+        let before = load_workspace_data_at(directory.path()).unwrap();
+
+        let mut over_limit = shape_element("over-limit", "p");
+        over_limit["text"] = json!({
+            "content":"image",
+            "richContent":{"type":"doc","content":[{"type":"image","attrs":{
+                "src":format!("data:image/png;base64,{}", STANDARD.encode(vec![0; MAX_EMBEDDED_RICH_IMAGE_BYTES + 1]))
+            }}]}
+        });
+        let error = apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 1,
+                upserts: vec![over_limit],
+                deleted_element_ids: vec!["at-limit".into()],
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("decoded byte limit"));
+        let after = load_workspace_data_at(directory.path()).unwrap();
+        assert_eq!(after.pages[0].revision, 1);
+        assert_eq!(after.elements, before.elements);
     }
 
     #[test]

@@ -3,6 +3,14 @@ import { Mark, Node as TiptapNode, mergeAttributes, type JSONContent } from "@ti
 import StarterKit from "@tiptap/starter-kit";
 import type { RichTextValue } from "../canvas/model/elements";
 
+export const MAX_RICH_TEXT_BYTES = 16 * 1024 * 1024;
+export const MAX_RICH_TEXT_DEPTH = 64;
+export const MAX_RICH_TEXT_NODES = 20_000;
+export const MAX_RICH_TEXT_PLAIN_BYTES = 4 * 1024 * 1024;
+export const MAX_EMBEDDED_RICH_IMAGE_BYTES = 8 * 1024 * 1024;
+const SAFE_LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:", "tel:"]);
+const SAFE_DATA_IMAGE_PATTERN = /^data:image\/(png|jpeg|gif|webp);base64,([a-z\d+/]*={0,2})$/i;
+
 const TextStyle = Mark.create({
   name: "textStyle",
 
@@ -63,11 +71,19 @@ const RichImage = TiptapNode.create({
   },
 
   parseHTML() {
-    return [{ tag: "img[src]" }];
+    return [{
+      tag: "img[src]",
+      getAttrs: (node) => node instanceof HTMLElement && isSafeRichImageSource(node.getAttribute("src") ?? "")
+        ? null
+        : false,
+    }];
   },
 
   renderHTML({ HTMLAttributes }) {
-    return ["img", mergeAttributes(HTMLAttributes)];
+    const src = typeof HTMLAttributes.src === "string" && isSafeRichImageSource(HTMLAttributes.src)
+      ? HTMLAttributes.src
+      : undefined;
+    return ["img", mergeAttributes(HTMLAttributes, { src })];
   },
 });
 
@@ -76,7 +92,178 @@ function positiveNumberAttribute(element: HTMLElement, name: string) {
   return Number.isFinite(value) && value > 0 ? value : null;
 }
 
-export const richTextExtensions = [StarterKit, TextStyle, RichImage];
+export const richTextExtensions = [
+  StarterKit.configure({
+    link: {
+      isAllowedUri: isSafeLinkHref,
+      openOnClick: false,
+      HTMLAttributes: { rel: "noopener noreferrer" },
+    },
+  }),
+  TextStyle,
+  RichImage,
+];
+
+export function isSafeLinkHref(href: string): boolean {
+  if (!href || href.length > 8_192) return false;
+  try {
+    return SAFE_LINK_PROTOCOLS.has(new URL(href).protocol);
+  } catch {
+    return false;
+  }
+}
+
+export function isSafeRichImageSource(src: string): boolean {
+  if (!src || src.length > MAX_RICH_TEXT_BYTES) return false;
+  if (/^https?:\/\//i.test(src)) {
+    try {
+      const url = new URL(src);
+      return url.protocol === "http:" || url.protocol === "https:";
+    } catch {
+      return false;
+    }
+  }
+  const match = SAFE_DATA_IMAGE_PATTERN.exec(src);
+  if (!match || match[2].length % 4 !== 0) return false;
+  const padding = match[2].endsWith("==") ? 2 : match[2].endsWith("=") ? 1 : 0;
+  const decodedBytes = match[2].length / 4 * 3 - padding;
+  return decodedBytes <= MAX_EMBEDDED_RICH_IMAGE_BYTES;
+}
+
+export function validateRichTextDocument(value: unknown): string | null {
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    return "richContent cannot be serialized";
+  }
+  if (new TextEncoder().encode(serialized).length > MAX_RICH_TEXT_BYTES) {
+    return "richContent exceeds the byte limit";
+  }
+  if (!isRecord(value) || value.type !== "doc") return "richContent root type must be doc";
+  const count = { value: 0 };
+  return validateRichTextNode(value, null, 0, count, "richContent");
+}
+
+function validateRichTextNode(
+  node: Record<string, unknown>,
+  parentType: string | null,
+  depth: number,
+  count: { value: number },
+  context: string,
+): string | null {
+  if (depth > MAX_RICH_TEXT_DEPTH) return `${context} exceeds the depth limit`;
+  count.value += 1;
+  if (count.value > MAX_RICH_TEXT_NODES) return `${context} exceeds the node limit`;
+  const type = typeof node.type === "string" ? node.type : "";
+  if (!isAllowedChild(parentType, type)) return `${context}.type '${type}' is not supported here`;
+  const allowedKeys = new Set(["type", "attrs", "content", "marks", "text"]);
+  if (Object.keys(node).some((key) => !allowedKeys.has(key))) return `${context} has an unknown field`;
+  const attrsError = validateNodeAttrs(type, node.attrs, context);
+  if (attrsError) return attrsError;
+  if (type === "text") {
+    if (typeof node.text !== "string") return `${context}.text must be a string`;
+    if (new TextEncoder().encode(node.text).length > MAX_RICH_TEXT_PLAIN_BYTES) return `${context}.text exceeds the byte limit`;
+    if (node.content !== undefined) return `${context}.content is not allowed`;
+  } else if (node.text !== undefined) return `${context}.text is only valid on text nodes`;
+  const marks = node.marks;
+  if (marks !== undefined) {
+    if (!Array.isArray(marks) || marks.length > 32) return `${context}.marks is invalid`;
+    for (let index = 0; index < marks.length; index += 1) {
+      const error = validateRichTextMark(marks[index], `${context}.marks[${index}]`);
+      if (error) return error;
+    }
+  }
+  if (isLeafNode(type)) {
+    if (node.content !== undefined) return `${context}.content is not allowed`;
+    return null;
+  }
+  if (node.content !== undefined && !Array.isArray(node.content)) return `${context}.content must be an array`;
+  const children = (node.content ?? []) as unknown[];
+  for (let index = 0; index < children.length; index += 1) {
+    const child = children[index];
+    if (!isRecord(child)) return `${context}.content[${index}] must be an object`;
+    const error = validateRichTextNode(child, type, depth + 1, count, `${context}.content[${index}]`);
+    if (error) return error;
+  }
+  return null;
+}
+
+function isAllowedChild(parent: string | null, child: string) {
+  if (parent === null) return child === "doc";
+  if (parent === "doc" || parent === "blockquote") return isBlockNode(child);
+  if (parent === "bulletList" || parent === "orderedList") return child === "listItem";
+  if (parent === "listItem") return child === "paragraph" || isBlockNode(child);
+  if (parent === "paragraph" || parent === "heading") return child === "text" || child === "hardBreak";
+  if (parent === "codeBlock") return child === "text";
+  return false;
+}
+
+function isBlockNode(type: string) {
+  return ["paragraph", "heading", "bulletList", "orderedList", "blockquote", "codeBlock", "horizontalRule", "image"].includes(type);
+}
+
+function isLeafNode(type: string) {
+  return type === "text" || type === "image" || type === "hardBreak" || type === "horizontalRule";
+}
+
+function validateNodeAttrs(type: string, value: unknown, context: string): string | null {
+  const attrs = value === undefined ? undefined : isRecord(value) ? value : null;
+  if (attrs === null) return `${context}.attrs must be an object`;
+  const allowed = type === "heading" ? ["level"]
+    : type === "orderedList" ? ["start", "type"]
+      : type === "codeBlock" ? ["language"]
+        : type === "image" ? ["alt", "height", "src", "title", "width"]
+          : [];
+  if (attrs && Object.keys(attrs).some((key) => !allowed.includes(key))) return `${context}.attrs has an unknown field`;
+  if (type === "heading" && (!attrs || !Number.isInteger(attrs.level) || Number(attrs.level) < 1 || Number(attrs.level) > 6)) return `${context}.attrs.level is invalid`;
+  if (type === "orderedList" && attrs) {
+    if (attrs.start !== undefined && (!Number.isInteger(attrs.start) || Number(attrs.start) < 1)) return `${context}.attrs.start is invalid`;
+    if (attrs.type !== undefined && attrs.type !== null && typeof attrs.type !== "string") return `${context}.attrs.type is invalid`;
+  }
+  if (type === "codeBlock" && attrs?.language !== undefined && attrs.language !== null && (typeof attrs.language !== "string" || attrs.language.length > 100)) return `${context}.attrs.language is invalid`;
+  if (type === "image") {
+    if (!attrs || typeof attrs.src !== "string" || !isSafeRichImageSource(attrs.src)) return `${context}.attrs.src is unsafe`;
+    for (const key of ["alt", "title"] as const) {
+      const field = attrs[key];
+      if (field !== undefined && field !== null && (typeof field !== "string" || field.length > 16_384)) return `${context}.attrs.${key} is invalid`;
+    }
+    for (const key of ["width", "height"] as const) {
+      const field = attrs[key];
+      if (field !== undefined && field !== null && (typeof field !== "number" || !Number.isFinite(field) || field <= 0 || field > 1_000_000)) return `${context}.attrs.${key} is invalid`;
+    }
+  }
+  return null;
+}
+
+function validateRichTextMark(value: unknown, context: string): string | null {
+  if (!isRecord(value) || typeof value.type !== "string") return `${context} must be a typed object`;
+  if (Object.keys(value).some((key) => key !== "type" && key !== "attrs")) return `${context} has an unknown field`;
+  if (!["bold", "italic", "strike", "underline", "code", "textStyle", "link"].includes(value.type)) return `${context}.type is not supported`;
+  const attrs = value.attrs === undefined ? undefined : isRecord(value.attrs) ? value.attrs : null;
+  if (attrs === null) return `${context}.attrs must be an object`;
+  const allowed = value.type === "textStyle" ? ["fontFamily", "fontSize"]
+    : value.type === "link" ? ["href", "target", "rel", "class"] : [];
+  if (attrs && Object.keys(attrs).some((key) => !allowed.includes(key))) return `${context}.attrs has an unknown field`;
+  if (value.type === "textStyle" && attrs) {
+    const family = attrs.fontFamily;
+    if (family !== undefined && family !== null && (typeof family !== "string" || family.length > 256)) return `${context}.attrs.fontFamily is invalid`;
+    const size = attrs.fontSize;
+    if (size !== undefined && size !== null && (typeof size !== "string" || !/^(?:[8-9]|[1-8]\d|9[0-6])px$/.test(size))) return `${context}.attrs.fontSize is invalid`;
+  }
+  if (value.type === "link") {
+    if (!attrs || typeof attrs.href !== "string" || !isSafeLinkHref(attrs.href)) return `${context}.attrs.href is unsafe`;
+    for (const key of ["target", "rel", "class"] as const) {
+      const field = attrs[key];
+      if (field !== undefined && field !== null && (typeof field !== "string" || field.length > 512)) return `${context}.attrs.${key} is invalid`;
+    }
+  }
+  return null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
 
 export function cloneRichTextValue(value: RichTextValue): RichTextValue {
   return {
@@ -103,7 +290,11 @@ export function hasTipTapRenderableContent(content: JSONContent): boolean {
 }
 
 export function getCanonicalRichTextDocument(value: RichTextValue): JSONContent {
-  if (value.richContent && (!value.content.trim() || hasTipTapRenderableContent(value.richContent))) {
+  if (
+    value.richContent
+    && validateRichTextDocument(value.richContent) === null
+    && (!value.content.trim() || hasTipTapRenderableContent(value.richContent))
+  ) {
     return value.richContent;
   }
   return plainTextToTipTapDoc(value.content);
@@ -170,7 +361,7 @@ function renderTipTapContent(content: JSONContent, key: string): ReactNode {
     }
     case "image": {
       const src = typeof content.attrs?.src === "string" ? content.attrs.src : "";
-      if (!src) return null;
+      if (!isSafeRichImageSource(src)) return null;
       const alt = typeof content.attrs?.alt === "string" ? content.attrs.alt : "Pasted image";
       const title = typeof content.attrs?.title === "string" ? content.attrs.title : undefined;
       const width = Number(content.attrs?.width);
@@ -197,6 +388,12 @@ function renderTextMarks(text: string, marks: NonNullable<JSONContent["marks"]>,
         if (typeof mark.attrs?.fontFamily === "string") style.fontFamily = mark.attrs.fontFamily;
         if (typeof mark.attrs?.fontSize === "string") style.fontSize = mark.attrs.fontSize;
         return <span key={markKey} style={style}>{node}</span>;
+      }
+      case "link": {
+        const href = typeof mark.attrs?.href === "string" ? mark.attrs.href : "";
+        return isSafeLinkHref(href)
+          ? <a href={href} key={markKey} rel="noopener noreferrer">{node}</a>
+          : node;
       }
       default: return node;
     }

@@ -4,7 +4,10 @@ import {
   getCanonicalRichTextDocument,
   hasTipTapRenderableContent,
   richTextToPlainText,
+  MAX_EMBEDDED_RICH_IMAGE_BYTES,
+  validateRichTextDocument,
 } from "../../src/editor/richText";
+import vectors from "../../../tests/fixtures/rich-text-security-vectors.json";
 
 describe("shared rich text model", () => {
   it("canonicalizes plain text without mutating its owner", () => {
@@ -54,5 +57,30 @@ describe("shared rich text model", () => {
     expect(clone).not.toBe(original);
     expect(clone.richContent).not.toBe(original.richContent);
     expect(clone.richContent?.content?.[0]).not.toBe(original.richContent.content?.[0]);
+  });
+
+  it("matches the shared security grammar vectors", () => {
+    for (const vector of vectors.valid) {
+      expect(validateRichTextDocument(vector.doc), vector.name).toBeNull();
+    }
+    for (const vector of vectors.invalid) {
+      expect(validateRichTextDocument(vector.doc), vector.name).not.toBeNull();
+    }
+  });
+
+  it("accepts the decoded embedded-image boundary and rejects one byte over", () => {
+    const zeroBytesAsBase64 = (bytes: number) => {
+      const remainder = bytes % 3;
+      return `${"AAAA".repeat(Math.floor(bytes / 3))}${remainder === 1 ? "AA==" : remainder === 2 ? "AAA=" : ""}`;
+    };
+    const documentForBytes = (bytes: number) => ({
+      type: "doc",
+      content: [{
+        type: "image",
+        attrs: { src: `data:image/png;base64,${zeroBytesAsBase64(bytes)}` },
+      }],
+    });
+    expect(validateRichTextDocument(documentForBytes(MAX_EMBEDDED_RICH_IMAGE_BYTES))).toBeNull();
+    expect(validateRichTextDocument(documentForBytes(MAX_EMBEDDED_RICH_IMAGE_BYTES + 1))).not.toBeNull();
   });
 });

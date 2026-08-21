@@ -23,7 +23,6 @@ import {
   resolveConnectorPoints,
   snapConnectorPointToAngle,
   type BindableElement,
-  type ShapeBindingAnchor,
 } from "../model/connectorBinding";
 import { screenToleranceToWorld } from "../model/geometry";
 import { getDirectBindableTargetAtPoint, getElementBounds, getTopmostElementAtPoint } from "../model/hitTesting";
@@ -64,9 +63,8 @@ type ArrowAuthoringSession = {
 };
 
 export type ArrowAuthoringVisual = Readonly<{
-  anchor: ShapeBindingAnchor;
   isSnapped: boolean;
-  targetId: string;
+  target: BindableElement;
 }>;
 
 type CanvasInteractionOptions = {
@@ -277,7 +275,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
     );
     const endpoint = candidate?.endpoint ?? { kind: "free" as const, ...point };
     if (endpoint.kind === "element") {
-      return { adjustedEndpoint: endpoint, adjustedPoint: candidate!.activeAnchor.point, candidate };
+      return { adjustedEndpoint: endpoint, adjustedPoint: point, candidate };
     }
     const proposedPoint = shiftKey && startPoint
       ? snapConnectorPointToAngle(startPoint, point)
@@ -291,9 +289,8 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
   const updateArrowVisual = useCallback((candidate: ReturnType<typeof getConnectorAuthoringCandidate>) => {
     const next = candidate
       ? {
-          anchor: candidate.activeAnchor,
           isSnapped: candidate.endpoint.kind === "element",
-          targetId: candidate.target.id,
+          target: candidate.target,
         }
       : null;
     const announcementKey = getConnectorCandidateAnnouncementKey(candidate);
@@ -308,8 +305,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       }
     }
     setArrowAuthoringVisual((current) =>
-      current?.targetId === next?.targetId
-      && current?.anchor.anchor.t === next?.anchor.anchor.t
+      current?.target === next?.target
       && current?.isSnapped === next?.isSnapped
         ? current
         : next,

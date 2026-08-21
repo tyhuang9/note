@@ -16,7 +16,7 @@ import {
 
 /** The screen-space capture radius stays constant as the canvas zooms. */
 export const CONNECTOR_BINDING_SNAP_RADIUS_PX = 18;
-/** A nearby compatible target reveals its anchors before endpoint snapping begins. */
+/** A nearby compatible target reveals a whole-object highlight before endpoint snapping begins. */
 export const CONNECTOR_BINDING_REVEAL_RADIUS_PX = 28;
 /** Mirrors the persistence boundary limit in the Rust repository. */
 export const MAX_CANVAS_VALUE = 1_000_000;
@@ -25,41 +25,12 @@ const DEFAULT_KEYBOARD_ARROW_LENGTH = 160;
 export const CONNECTOR_ARROWHEAD_LENGTH = 12;
 export const CONNECTOR_ARROWHEAD_HALF_WIDTH = 5;
 
-export type ShapeAnchorName = "top" | "right" | "bottom" | "left";
-
-export type ShapeBindingAnchor = Readonly<{
-  anchor: PerimeterAnchor;
-  name: ShapeAnchorName | "perimeter";
-  point: CanvasPoint;
-}>;
-
-/**
- * `t` is a clockwise angular fraction around a shape, beginning at its top.
- * This keeps the four persisted cardinal anchors meaningful for every shape
- * family and after a shape is rotated.
- */
-const CARDINAL_ANCHORS: readonly Readonly<{ name: ShapeAnchorName; t: number }>[] = [
-  { name: "top", t: 0 },
-  { name: "right", t: 0.25 },
-  { name: "bottom", t: 0.5 },
-  { name: "left", t: 0.75 },
-];
-
 export type BindableElement = ShapeElement | TextElement;
 
 export type ConnectorAuthoringCandidate = Readonly<{
-  activeAnchor: ShapeBindingAnchor;
-  anchors: readonly ShapeBindingAnchor[];
   endpoint: ConnectorEndpoint;
   target: BindableElement;
 }>;
-
-/** Converts a perimeter fraction to the spoken integer degree, with the seam at 0°. */
-export function getConnectorBoundaryDegrees(anchorT: number): number {
-  if (!Number.isFinite(anchorT)) return 0;
-  const rounded = Math.round(anchorT * 360);
-  return ((rounded % 360) + 360) % 360;
-}
 
 /** Stable key and wording shared by arrow authoring and endpoint retargeting. */
 export function getConnectorCandidateAnnouncementKey(candidate: ConnectorAuthoringCandidate | null): string | null {
@@ -75,7 +46,7 @@ export function getConnectorCandidateAnnouncement(
   if (!candidate) return "No binding target. Endpoint will remain free.";
   const label = targetLabel ?? candidate.target.id;
   return candidate.endpoint.kind === "element"
-    ? `Snapped to ${label}. The connector will follow its nearest visible boundary.`
+    ? `Snapped to ${label}. The connector will follow its nearest facing visible boundary.`
     : `Near ${label}; move closer to bind the whole object.`;
 }
 
@@ -217,20 +188,6 @@ function areCoincidentCanonicalBindings(
     ));
 }
 
-/** Returns the four visible/persisted binding positions for a compatible shape. */
-export function getShapeBindingAnchors(shape: ShapeElement): readonly ShapeBindingAnchor[] {
-  return getBindableBindingAnchors(shape);
-}
-
-/** Shared shape/text anchor list so snapping, overlays, and chooser agree. */
-export function getBindableBindingAnchors(target: BindableElement): readonly ShapeBindingAnchor[] {
-  if (!hasSafeBoxGeometry(target)) return [];
-  return CARDINAL_ANCHORS.flatMap(({ name, t }) => {
-    const point = getBindableAnchorPoint(target, { t });
-    return point ? [{ anchor: { t }, name, point }] : [];
-  });
-}
-
 export function getBindableAnchorPoint(
   target: BindableElement,
   anchor: PerimeterAnchor,
@@ -249,7 +206,7 @@ export function getBindableAnchorPoint(
 export function getNearestBindableBoundaryAnchor(
   target: BindableElement,
   point: CanvasPoint,
-): ShapeBindingAnchor | null {
+): Readonly<{ anchor: PerimeterAnchor; point: CanvasPoint }> | null {
   if (!hasSafeBoxGeometry(target) || !isSafeResolvedPoint(point)) return null;
   const local = unrotatePoint(point, target);
   const width = Math.max(0, target.width);
@@ -275,7 +232,7 @@ export function getNearestBindableBoundaryAnchor(
   // any small differences between the inverse and persisted forward geometry.
   const resolved = getBindableAnchorPoint(target, anchor);
   if (!resolved) return null;
-  return { anchor, name: anchorNameForT(t), point: resolved };
+  return { anchor, point: resolved };
 }
 
 /**
@@ -347,9 +304,9 @@ export function snapConnectorEndpoint(
     const element = elements[index];
     if (!isBindableElement(element)) continue;
     if (!isPointNearBindableBounds(point, element, worldRadius)) continue;
-    const candidate = getNearestBindableBoundaryAnchor(element, point);
-    if (!candidate) continue;
-    const distance = Math.hypot(candidate.point.x - point.x, candidate.point.y - point.y);
+    const boundaryPoint = getNearestBindableBoundaryPoint(element, point);
+    if (!boundaryPoint) continue;
+    const distance = Math.hypot(boundaryPoint.x - point.x, boundaryPoint.y - point.y);
     if (distance <= worldRadius && (!closest || distance < closest.distance || (
       distance === closest.distance && (element.zIndex > closest.zIndex || (
         element.zIndex === closest.zIndex && index < closest.index
@@ -364,9 +321,9 @@ export function snapConnectorEndpoint(
 }
 
 /**
- * Resolves the one target shown while an arrow endpoint is being authored.
+ * Resolves the one whole-object target shown while an arrow endpoint is being authored.
  * A directly hovered compatible target wins. Proximity candidates are ordered
- * deterministically by nearest anchor, then visual stacking, then source order.
+ * deterministically by nearest boundary distance, then visual stacking, then source order.
  */
 export function getConnectorAuthoringCandidate(
   point: CanvasPoint,
@@ -380,7 +337,7 @@ export function getConnectorAuthoringCandidate(
     ? elements.find((element) => element.id === directHoveredElementId)
     : undefined;
   if (isBindableElement(directTarget)) {
-    return buildAuthoringCandidate(point, directTarget, safeZoom);
+    return buildAuthoringCandidate(point, directTarget, safeZoom, true)?.candidate ?? null;
   }
 
   let closest: Readonly<{
@@ -393,9 +350,9 @@ export function getConnectorAuthoringCandidate(
     elements,
     CONNECTOR_BINDING_REVEAL_RADIUS_PX / safeZoom,
   )) {
-    const candidate = buildAuthoringCandidate(point, element, safeZoom);
-    if (!candidate) continue;
-    const distancePx = pointDistance(point, candidate.activeAnchor.point) * safeZoom;
+    const built = buildAuthoringCandidate(point, element, safeZoom);
+    if (!built) continue;
+    const { candidate, distancePx } = built;
     if (distancePx > CONNECTOR_BINDING_REVEAL_RADIUS_PX) continue;
     if (
       !closest
@@ -682,17 +639,19 @@ function buildAuthoringCandidate(
   point: CanvasPoint,
   target: BindableElement,
   zoom: number,
-): ConnectorAuthoringCandidate | null {
-  const activeAnchor = getNearestBindableBoundaryAnchor(target, point);
-  if (!activeAnchor) return null;
-  const activeDistance = pointDistance(point, activeAnchor.point);
+  forceSnap = false,
+): Readonly<{ candidate: ConnectorAuthoringCandidate; distancePx: number }> | null {
+  const nearestBoundary = getNearestBindableBoundaryPoint(target, point);
+  if (!nearestBoundary) return null;
+  const distancePx = pointDistance(point, nearestBoundary) * zoom;
   return {
-    activeAnchor,
-    anchors: [activeAnchor],
-    endpoint: activeDistance * zoom <= CONNECTOR_BINDING_SNAP_RADIUS_PX
-      ? { kind: "element", targetElementId: target.id, gap: 0 }
-      : { kind: "free", ...point },
-    target,
+    candidate: {
+      endpoint: forceSnap || distancePx <= CONNECTOR_BINDING_SNAP_RADIUS_PX
+        ? { kind: "element", targetElementId: target.id, gap: 0 }
+        : { kind: "free", ...point },
+      target,
+    },
+    distancePx,
   };
 }
 
@@ -713,9 +672,33 @@ function canonicalAnchorT(value: number): number {
   return normalized === 0 || normalized === 1 ? 0 : normalized;
 }
 
-function anchorNameForT(t: number): ShapeBindingAnchor["name"] {
-  const cardinal = CARDINAL_ANCHORS.find((candidate) => Math.abs(t - candidate.t) < 1e-8);
-  return cardinal?.name ?? "perimeter";
+/** Point-only clean-boundary projection for normal whole-object authoring and retargeting. */
+function getNearestBindableBoundaryPoint(
+  target: BindableElement,
+  point: CanvasPoint,
+): CanvasPoint | null {
+  if (!hasSafeBoxGeometry(target) || !isSafeResolvedPoint(point)) return null;
+  const local = unrotatePoint(point, target);
+  const center = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+  const projected = target.type === "shape"
+    ? projectPointToShapeBoundary(target.shape, target.width, target.height, target.style.roundness, {
+      x: local.x - target.x,
+      y: local.y - target.y,
+    })
+    : closestRectanglePoint(local, center, target.width / 2, target.height / 2);
+  if (!projected) return null;
+  const unrotatedWorldPoint = target.type === "shape"
+    ? { x: target.x + projected.x, y: target.y + projected.y }
+    : projected;
+  const rotated = rotateVector({
+    x: unrotatedWorldPoint.x - center.x,
+    y: unrotatedWorldPoint.y - center.y,
+  }, target.rotation);
+  const resolved = {
+    x: cleanCoordinate(center.x + rotated.x),
+    y: cleanCoordinate(center.y + rotated.y),
+  };
+  return isSafeResolvedPoint(resolved) ? resolved : null;
 }
 
 function unrotatePoint(

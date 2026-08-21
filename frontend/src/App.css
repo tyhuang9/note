@@ -2591,36 +2591,30 @@ h2 {
   text-underline-offset: 2px;
 }
 
-.connector-binding-anchors {
+.connector-binding-target-highlight {
   position: absolute;
-  inset: 0;
   z-index: 20;
+  overflow: visible;
   pointer-events: none;
-}
-
-.connector-binding-anchor {
-  position: absolute;
-  width: 10px;
-  height: 10px;
-  box-sizing: border-box;
-  border: 2px solid var(--canvas-selection, var(--accent-purple));
-  border-radius: 999px;
-  background: var(--canvas-tool-bg, #fff);
-  box-shadow: 0 0 0 2px var(--canvas-selection-soft, rgba(139, 92, 246, 0.16));
   transform-origin: center;
-  transition: width 150ms ease, height 150ms ease, border-color 150ms ease, background-color 150ms ease;
 }
 
-.connector-binding-anchor.is-active {
-  width: 14px;
-  height: 14px;
-  border-color: var(--canvas-focus, #6d28d9);
-  background: var(--canvas-selection-soft, #ede9fe);
+.connector-binding-target-highlight > * {
+  vector-effect: non-scaling-stroke;
+  stroke: var(--canvas-selection, var(--accent-purple));
+  stroke-width: 2px;
+  fill: var(--canvas-selection-soft, rgba(139, 92, 246, 0.16));
+  transition: fill 150ms ease, stroke 150ms ease;
 }
 
-.connector-binding-anchor.is-snapped {
-  background: var(--canvas-selection, #7c3aed);
-  box-shadow: 0 0 0 3px var(--canvas-selection-soft, rgba(124, 58, 237, 0.2));
+.connector-binding-target-highlight.is-near > * {
+  stroke-dasharray: 6 4;
+}
+
+.connector-binding-target-highlight.is-snapped > * {
+  stroke: var(--canvas-focus, #6d28d9);
+  stroke-width: 3px;
+  fill: color-mix(in srgb, var(--canvas-selection, #7c3aed) 20%, transparent);
 }
 
 .primitive-element[role="button"]:focus-visible,

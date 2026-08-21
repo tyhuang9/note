@@ -7,7 +7,7 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByRole("tabpanel")).toBeVisible();
 });
 
-test("arrow binding exposes visual-only anchors, follows target transforms, and detaches before target deletion", async ({ page }) => {
+test("arrow binding exposes a whole-object highlight, follows target transforms, and detaches before target deletion", async ({ page }) => {
   const canvas = page.getByRole("tabpanel");
   const canvasBounds = await requiredBounds(canvas, "canvas");
   const rectangle = await createRectangle(page, canvasBounds.x + 360, canvasBounds.y + 300);
@@ -18,14 +18,15 @@ test("arrow binding exposes visual-only anchors, follows target transforms, and 
   await page.getByRole("button", { name: "Arrow (A / 5)" }).click();
   const rectangleBounds = await requiredBounds(rectangleControl, "rectangle target");
   await page.mouse.click(rectangleBounds.x + rectangleBounds.width - 1, rectangleBounds.y + rectangleBounds.height / 2);
-  const anchors = page.locator(`[data-connector-target-id="${targetId}"]`);
-  await expect(anchors).toHaveCount(1);
-  await expect(anchors).not.toHaveAttribute("tabindex");
-  await expect(page.locator(".connector-binding-anchors")).toHaveAttribute("aria-hidden", "true");
-  const rightAnchor = await requiredBounds(anchors, "right perimeter marker");
+  const highlight = page.locator(`[data-connector-target-id="${targetId}"]`);
+  await expect(highlight).toHaveCount(1);
+  await expect(highlight).not.toHaveAttribute("tabindex");
+  await expect(highlight).toHaveAttribute("aria-hidden", "true");
+  await expect(highlight).toHaveAttribute("data-connector-binding-state", "snapped");
+  const targetHighlight = await requiredBounds(highlight, "whole-object target highlight");
 
-  await page.mouse.move(canvasBounds.x + 800, rightAnchor.y + rightAnchor.height / 2, { steps: 5 });
-  await page.mouse.click(canvasBounds.x + 800, rightAnchor.y + rightAnchor.height / 2);
+  await page.mouse.move(canvasBounds.x + 800, targetHighlight.y + targetHighlight.height / 2, { steps: 5 });
+  await page.mouse.click(canvasBounds.x + 800, targetHighlight.y + targetHighlight.height / 2);
   const arrow = page.getByRole("button", { name: "Select and move arrow connector" });
   await expect(arrow).toBeVisible();
   await selectTool(page, "select");
@@ -75,9 +76,9 @@ test("lines stay free while arrows remain bound through keyboard movement and re
     await page.getByRole("button", { name: "Arrow (A / 5)" }).click();
     const rectangleBounds = await requiredBounds(rectangleControl, "rectangle target");
     await page.mouse.click(rectangleBounds.x + rectangleBounds.width - 1, rectangleBounds.y + rectangleBounds.height / 2);
-    const rightAnchor = await requiredBounds(page.locator(`[data-connector-target-id="${targetId}"]`), "right perimeter marker");
-    await page.mouse.move(canvasBounds.x + 900, rightAnchor.y + rightAnchor.height / 2, { steps: 5 });
-    await page.mouse.click(canvasBounds.x + 900, rightAnchor.y + rightAnchor.height / 2);
+    const targetHighlight = await requiredBounds(page.locator(`[data-connector-target-id="${targetId}"]`), "whole-object target highlight");
+    await page.mouse.move(canvasBounds.x + 900, targetHighlight.y + targetHighlight.height / 2, { steps: 5 });
+    await page.mouse.click(canvasBounds.x + 900, targetHighlight.y + targetHighlight.height / 2);
     const arrow = page.getByRole("button", { name: "Select and move arrow connector" }).last();
     await selectTool(page, "select");
     const startHandle = page.getByRole("button", { name: "Move connector start endpoint" });
@@ -86,22 +87,19 @@ test("lines stay free while arrows remain bound through keyboard movement and re
     await startHandle.focus();
     await page.keyboard.press("ArrowUp");
     await expect(page.locator(".canvas-accessibility-status[role='status']")).toHaveText(
-      /Moved start endpoint along Rectangle \d+ \(center \d+, \d+\) at target-relative boundary position \d+ degrees\./,
+      "Detached and moved start endpoint. It is now free.",
     );
 
     const boundHandle = await requiredBounds(startHandle, "bound start endpoint after keyboard movement");
     await page.mouse.move(boundHandle.x + boundHandle.width / 2, boundHandle.y + boundHandle.height / 2);
     await page.mouse.down();
     await page.mouse.move(boundHandle.x + boundHandle.width / 2, boundHandle.y + boundHandle.height / 2 + 36, { steps: 3 });
-    await page.mouse.move(rightAnchor.x + rightAnchor.width / 2, rightAnchor.y + rightAnchor.height / 2, { steps: 4 });
+    await page.mouse.move(rectangleBounds.x + rectangleBounds.width / 2, rectangleBounds.y + rectangleBounds.height / 2, { steps: 4 });
     await page.mouse.up();
-    const reboundHandle = await requiredBounds(startHandle, "rebound start endpoint");
-    expect(Math.abs(
-      reboundHandle.x + reboundHandle.width / 2 - (rightAnchor.x + rightAnchor.width / 2),
-    )).toBeLessThanOrEqual(2);
+    await expect(page.locator("#connector-start-endpoint-description")).toContainText(`Currently bound to Rectangle`);
 
     await page.getByRole("button", { name: "Line (L / 6)" }).click();
-    await draw(page, rightAnchor.x + rightAnchor.width / 2, rightAnchor.y + rightAnchor.height / 2 + 45, canvasBounds.x + 900, rightAnchor.y + rightAnchor.height / 2 + 45);
+    await draw(page, rectangleBounds.x + rectangleBounds.width / 2, rectangleBounds.y + rectangleBounds.height + 45, canvasBounds.x + 900, rectangleBounds.y + rectangleBounds.height + 45);
     const line = page.getByRole("button", { name: "Select and move line connector" }).last();
     const lineBeforeTargetMove = await requiredBounds(line, "line");
     await rectangleControl.focus();
@@ -124,9 +122,9 @@ for (const zoom of [50, 100, 200]) {
     await selectTool(page, "arrow");
     const rectangleBounds = await requiredBounds(rectangleControl, "rectangle target");
     await page.mouse.click(rectangleBounds.x + rectangleBounds.width - 1, rectangleBounds.y + rectangleBounds.height / 2);
-    const rightAnchor = await requiredBounds(page.locator(`[data-connector-target-id="${targetId}"]`), "right perimeter marker");
-    await page.mouse.move(canvasBounds.x + 820, rightAnchor.y + rightAnchor.height / 2, { steps: 5 });
-    await page.mouse.click(canvasBounds.x + 820, rightAnchor.y + rightAnchor.height / 2);
+    const targetHighlight = await requiredBounds(page.locator(`[data-connector-target-id="${targetId}"]`), "whole-object target highlight");
+    await page.mouse.move(canvasBounds.x + 820, targetHighlight.y + targetHighlight.height / 2, { steps: 5 });
+    await page.mouse.click(canvasBounds.x + 820, targetHighlight.y + targetHighlight.height / 2);
     const arrow = page.getByRole("button", { name: "Select and move arrow connector" }).last();
     const originalArrow = await roundedBounds(arrow);
 
@@ -217,6 +215,8 @@ test("desktop dark endpoint chooser traps focus, stays below the toolbar, and bi
   await expect(dialog.getByRole("button", { name: /Text 1 \(Text binding target\)/ })).toBeVisible();
   await expect(firstTarget).toHaveAttribute("aria-pressed", "true");
   await expect(firstTarget).toBeFocused();
+  await expect(dialog.getByRole("slider")).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: /anchor/i })).toHaveCount(0);
   const desktopTargetMetrics = await firstTarget.evaluate((element) => {
     const style = getComputedStyle(element);
     const bounds = element.getBoundingClientRect();
@@ -251,12 +251,9 @@ test("desktop dark endpoint chooser traps focus, stays below the toolbar, and bi
 
   await firstTarget.focus();
   await page.keyboard.press("Space");
-  const rightAnchor = page.getByRole("button", { name: "Right anchor" });
-  await rightAnchor.focus();
-  await page.keyboard.press("Space");
   await dialog.getByRole("button", { name: "Bind start endpoint" }).focus();
   await page.keyboard.press("Space");
-  await expect(status).toHaveText(/Bound start endpoint to Rectangle 1 \(center \d+, \d+\) at the right anchor\./);
+  await expect(status).toHaveText(/Bound start endpoint to Rectangle 1 \(center \d+, \d+\)\. The connector will follow the nearest facing visible boundaries automatically\./);
   await expect(startHandle).toBeFocused();
   await expect(description).toContainText("Currently bound to Rectangle 1 (center");
 
@@ -265,12 +262,9 @@ test("desktop dark endpoint chooser traps focus, stays below the toolbar, and bi
   const secondTarget = page.getByRole("button", { name: /Rectangle 2 \(center \d+, \d+\)/ });
   await secondTarget.focus();
   await page.keyboard.press("Space");
-  const topAnchor = page.getByRole("button", { name: "Top anchor" });
-  await topAnchor.focus();
-  await page.keyboard.press("Space");
   await page.getByRole("dialog", { name: "Choose start endpoint target" }).getByRole("button", { name: "Bind start endpoint" }).focus();
   await page.keyboard.press("Space");
-  await expect(status).toHaveText(/Rebound start endpoint to Rectangle 2 \(center \d+, \d+\) at the top anchor\./);
+  await expect(status).toHaveText(/Rebound start endpoint to Rectangle 2 \(center \d+, \d+\)\. The connector will follow the nearest facing visible boundaries automatically\./);
   await expect(startHandle).toBeFocused();
   await expect(description).toContainText("Currently bound to Rectangle 2 (center");
 
@@ -358,6 +352,30 @@ test("endpoint chooser ignores an immediate endpoint Arrow without a history or 
   await expect.poll(() => endpointCounts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
 });
 
+test("target-only chooser bind, rebind, and detach each persist exactly one scene change", async ({ page }) => {
+  await installEndpointChooserWorkspace(page);
+  await page.goto("/");
+  const arrow = page.getByRole("button", { name: "Select and move arrow connector" });
+  await arrow.focus();
+  await page.keyboard.press("Enter");
+  const startHandle = page.getByRole("button", { name: "Move connector start endpoint" });
+
+  for (const action of ["bind", "rebind", "detach"] as const) {
+    await page.waitForTimeout(650);
+    await resetEndpointCounts(page);
+    await startHandle.focus();
+    await page.keyboard.press("Enter");
+    const dialog = page.getByRole("dialog", { name: "Choose start endpoint target" });
+    if (action === "detach") {
+      await dialog.getByRole("button", { name: "Detach start endpoint" }).click();
+    } else {
+      await dialog.getByRole("button", { name: /^Rectangle 1 / }).click();
+      await dialog.getByRole("button", { name: "Bind start endpoint" }).click();
+    }
+    await expect.poll(() => endpointCounts(page)).toEqual({ apply: 1, persistence: 2, session: 1 });
+  }
+});
+
 test("compact light endpoint chooser is an in-viewport sheet and Escape restores focus", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 598 });
   await page.getByRole("button", { name: "Dark mode" }).click();
@@ -375,10 +393,10 @@ test("compact light endpoint chooser is an in-viewport sheet and Escape restores
   await selectTool(page, "select");
   await arrow.focus();
   await page.keyboard.press("Enter");
-  const startHandle = page.getByRole("button", { name: "Move connector start endpoint" });
-  await startHandle.focus();
+  const endHandle = page.getByRole("button", { name: "Move connector end endpoint" });
+  await endHandle.focus();
   await page.keyboard.press("Space");
-  const dialog = page.getByRole("dialog", { name: "Choose start endpoint target" });
+  const dialog = page.getByRole("dialog", { name: "Choose end endpoint target" });
   await expect(dialog).toBeVisible();
   await expect(page.locator(".connector-endpoint-chooser-layer")).toHaveAttribute("data-theme", "light");
   const dialogBounds = await requiredBounds(dialog, "compact endpoint chooser");
@@ -417,7 +435,7 @@ test("compact light endpoint chooser is an in-viewport sheet and Escape restores
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await expect(page.locator("#root")).not.toHaveAttribute("inert", "");
-  await expect(startHandle).toBeFocused();
+  await expect(endHandle).toBeFocused();
 });
 
 test("free arrow with no shapes announces that binding targets are unavailable", async ({ page }) => {

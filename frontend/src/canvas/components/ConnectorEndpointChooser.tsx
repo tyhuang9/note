@@ -1,38 +1,23 @@
 import { createPortal } from "react-dom";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { getConnectorBoundaryDegrees, type ShapeAnchorName } from "../model/connectorBinding";
 
 type ConnectorEndpointChooserProps = {
-  anchorT: number;
   endpoint: "start" | "end";
   isBound: boolean;
   isDarkMode: boolean;
-  onBind: (anchorT: number) => void;
+  onBind: () => void;
   onClose: () => void;
   onDetach: () => void;
   onSelectTarget: (targetElementId: string) => void;
-  targets: readonly Readonly<{ id: string; label: string; rotation: number }>[];
+  targets: readonly Readonly<{ id: string; label: string }>[];
   targetElementId: string | null;
 };
 
-const CARDINAL_ANCHORS: readonly Readonly<{ name: ShapeAnchorName; label: string }>[] = [
-  { name: "top", label: "Top" },
-  { name: "right", label: "Right" },
-  { name: "bottom", label: "Bottom" },
-  { name: "left", label: "Left" },
-];
-
 const FOCUSABLE_SELECTOR = 'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-function targetRotationDescription(rotation: number): string {
-  const roundedRotation = Math.round(rotation);
-  return roundedRotation === 0 ? "" : `, target rotated ${roundedRotation} degrees`;
-}
-
-/** Keyboard-focused binding controls that intentionally complement visual-only anchors. */
+/** Target-only keyboard binding controls with modal focus containment and restoration. */
 export function ConnectorEndpointChooser({
   endpoint,
-  anchorT,
   isBound,
   isDarkMode,
   onBind,
@@ -45,10 +30,7 @@ export function ConnectorEndpointChooser({
   const dialogRef = useRef<HTMLElement | null>(null);
   const focusMovedInsideDialogRef = useRef(false);
   const [toolbarPosition, setToolbarPosition] = useState({ left: 0, top: 0 });
-  const [anchorDegrees, setAnchorDegrees] = useState(getConnectorBoundaryDegrees(anchorT));
   const selectedTarget = targets.find(({ id }) => id === targetElementId) ?? null;
-
-  useEffect(() => setAnchorDegrees(getConnectorBoundaryDegrees(anchorT)), [anchorT]);
 
   useLayoutEffect(() => {
     function updateToolbarPosition() {
@@ -160,7 +142,7 @@ export function ConnectorEndpointChooser({
           <div>
             <h2 id="connector-endpoint-chooser-title">Choose {endpoint} endpoint target</h2>
             <p id="connector-endpoint-chooser-instructions">
-              Choose a shape or text block, then a target-relative boundary position. Cardinal presets and the one-degree range rotate with the target. Bind commits the choice.
+              Choose one shape or text block. The connector automatically follows the nearest facing visible boundaries as objects change. Bind commits the target.
             </p>
           </div>
         </header>
@@ -177,41 +159,8 @@ export function ConnectorEndpointChooser({
             </button>
           ))}
         </div>
-        <div aria-label="Cardinal anchor" className="connector-endpoint-chooser-group" role="group">
-          {CARDINAL_ANCHORS.map(({ name, label }) => (
-            <button
-              aria-label={selectedTarget
-                ? `${label} anchor on ${selectedTarget.label}${targetRotationDescription(selectedTarget.rotation)}`
-                : `${label} anchor`}
-              disabled={!selectedTarget}
-              key={name}
-              aria-pressed={anchorDegrees === CARDINAL_ANCHORS.findIndex((anchor) => anchor.name === name) * 90}
-              onClick={() => setAnchorDegrees(CARDINAL_ANCHORS.findIndex((anchor) => anchor.name === name) * 90)}
-              type="button"
-            >
-              {label} anchor
-            </button>
-          ))}
-        </div>
-        <label className="connector-endpoint-chooser-range" htmlFor="connector-boundary-position">
-          Boundary position: {anchorDegrees} degrees{selectedTarget ? `${targetRotationDescription(selectedTarget.rotation)}` : ""}
-          <input
-            aria-label={selectedTarget ? `Target-relative boundary position on ${selectedTarget.label}${targetRotationDescription(selectedTarget.rotation)}` : "Target-relative boundary position"}
-            aria-valuetext={selectedTarget
-              ? `${anchorDegrees} degrees target-relative boundary position on ${selectedTarget.label}${targetRotationDescription(selectedTarget.rotation)}`
-              : `${anchorDegrees} degrees target-relative boundary position; select a target`}
-            disabled={!selectedTarget}
-            id="connector-boundary-position"
-            max="359"
-            min="0"
-            onChange={(event) => setAnchorDegrees(Number(event.target.value))}
-            step="1"
-            type="range"
-            value={anchorDegrees}
-          />
-        </label>
         <div className="connector-endpoint-chooser-actions">
-          <button disabled={!selectedTarget} onClick={() => onBind(anchorDegrees / 360)} type="button">Bind {endpoint} endpoint</button>
+          <button disabled={!selectedTarget} onClick={onBind} type="button">Bind {endpoint} endpoint</button>
           <button disabled={!isBound} onClick={onDetach} type="button">Detach {endpoint} endpoint</button>
           <button aria-label="Close endpoint chooser" onClick={onClose} type="button">Close</button>
         </div>

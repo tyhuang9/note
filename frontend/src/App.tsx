@@ -35,7 +35,7 @@ import { CanvasViewport } from "./canvas/components/CanvasViewport";
 import { CanvasWorldLayer } from "./canvas/components/CanvasWorldLayer";
 import { InkElementView } from "./canvas/components/InkElementView";
 import { ConnectorElementView, renderConnectorRoughSvg, ShapeElementView, type ShapeTextEditSession } from "./canvas/components/PrimitiveElementView";
-import { ShapeBindingAnchors } from "./canvas/components/ShapeBindingAnchors";
+import { ConnectorBindingTargetHighlight } from "./canvas/components/ConnectorBindingTargetHighlight";
 import { useCanvasInteraction, type ArrowAuthoringVisual } from "./canvas/interaction/useCanvasInteraction";
 import { cleanupMarquee } from "./canvas/interaction/marqueeCleanup";
 import {
@@ -198,7 +198,6 @@ import {
   getConnectorCandidateAnnouncementKey,
   getDefaultKeyboardArrowEndpoints,
   getConnectorAuthoringCandidate,
-  getConnectorBoundaryDegrees,
   isBindableElement,
   normalizeFreeConnectorEndpoint,
   resolveConnectorPoints,
@@ -6883,9 +6882,8 @@ function App() {
       : null;
     announceConnectorEndpointRetargetCandidate(candidate);
     setConnectorEndpointRetargetVisual(candidate ? {
-      anchor: candidate.activeAnchor,
       isSnapped: candidate.endpoint.kind === "element",
-      targetId: candidate.target.id,
+      target: candidate.target,
     } : null);
     const nextEndpoint = candidate?.endpoint ?? snapConnectorEndpoint(
       point, targets, zoomLevelRef.current, connector.style.endArrowhead === "arrow",
@@ -7205,11 +7203,14 @@ function App() {
       ?? `${target.type === "text" ? "Text" : `${target.shape[0].toUpperCase()}${target.shape.slice(1)}`} (center ${Math.round(target.x + target.width / 2)}, ${Math.round(target.y + target.height / 2)})`;
   }
 
-  function getAnchorLabel(anchor: { t: number }): string {
-    const anchorName = (["top", "right", "bottom", "left"] as const).find(
-      (_name, index) => Math.abs(anchor.t - index / 4) < 1e-8,
-    );
-    return anchorName ? `${anchorName} anchor` : `boundary position ${getConnectorBoundaryDegrees(anchor.t)} degrees`;
+  function getConnectorBindingTargetsForEndpoint(
+    connector: ConnectorElement,
+    endpoint: "start" | "end",
+  ) {
+    const opposite = connector[endpoint === "start" ? "end" : "start"];
+    return getConnectorBindingTargets(connector.pageId).filter(({ element }) => (
+      opposite.kind !== "element" || element.id !== opposite.targetElementId
+    ));
   }
 
   function getConnectorEndpointDescription(
@@ -7221,19 +7222,19 @@ function App() {
       return `Currently free. This line endpoint cannot bind to elements. Arrow keys move it.`;
     }
     if (current.kind !== "element") {
-      return `Currently free. Press Enter to choose a target shape or text block and a target-relative boundary position. Arrow keys move the endpoint.`;
+      return `Currently free. Press Enter to choose a target shape or text block. Arrow keys move the endpoint.`;
     }
     const target = dataRef.current.elements.find((element): element is ShapeElement | TextElement =>
       element.id === current.targetElementId && element.pageId === connector.pageId && isBindableElement(element),
     );
     const targetLabel = target ? getBindableTargetLabel(target) : "an unavailable target";
-    return `Currently bound to ${targetLabel}. The endpoint follows the nearest visible boundary automatically. Press Enter to rebind or detach. Arrow keys detach and move the endpoint.`;
+    return `Currently bound to ${targetLabel}. The endpoint follows the nearest facing visible boundary automatically. Press Enter to rebind or detach. Arrow keys detach and move the endpoint.`;
   }
 
   function openConnectorEndpointChooser(endpoint: "start" | "end", origin: HTMLButtonElement) {
     const connector = getSelectedArrowConnector();
     if (!connector || connector.locked) return;
-    const targets = getConnectorBindingTargets(connector.pageId);
+    const targets = getConnectorBindingTargetsForEndpoint(connector, endpoint);
     if (targets.length === 0) {
       setConnectorBindingAnnouncement(`No compatible shapes or text blocks are available to bind the ${endpoint} endpoint.`);
       return;
@@ -7274,7 +7275,7 @@ function App() {
     });
   }
 
-  function bindSelectedConnectorEndpoint(anchorT: number) {
+  function bindSelectedConnectorEndpoint() {
     const chooser = connectorEndpointChooser;
     const connector = getSelectedArrowConnector();
     if (!chooser || !connector || !chooser.targetElementId) return;
@@ -7283,13 +7284,16 @@ function App() {
         && element.pageId === connector.pageId
         && isBindableElement(element),
     );
-    const anchor = Number.isFinite(anchorT) && anchorT >= 0 && anchorT < 1 ? { t: anchorT } : undefined;
-    if (!target || !anchor) return;
+    if (!target) return;
+    const opposite = connector[chooser.endpoint === "start" ? "end" : "start"];
+    if (opposite.kind === "element" && opposite.targetElementId === target.id) {
+      setConnectorBindingAnnouncement("Choose a different target for each connector endpoint.");
+      return;
+    }
     const previous = connector[chooser.endpoint];
     const next = {
       kind: "element" as const,
       targetElementId: target.id,
-      anchor,
       gap: 0,
     };
     setBlocksWithHistory((currentBlocks) => currentBlocks.map((element) => {
@@ -7299,7 +7303,7 @@ function App() {
         : { ...element, end: next, updatedAt: Date.now() };
     }));
     setConnectorBindingAnnouncement(
-      `${previous.kind === "element" ? "Rebound" : "Bound"} ${chooser.endpoint} endpoint to ${getBindableTargetLabel(target)} at the ${getAnchorLabel(anchor)}.`,
+      `${previous.kind === "element" ? "Rebound" : "Bound"} ${chooser.endpoint} endpoint to ${getBindableTargetLabel(target)}. The connector will follow the nearest facing visible boundaries automatically.`,
     );
     closeConnectorEndpointChooser();
   }
@@ -8485,18 +8489,14 @@ function App() {
               />
             ))}
             {canvasInteraction.arrowAuthoringVisual ? (
-              <ShapeBindingAnchors
-                anchor={canvasInteraction.arrowAuthoringVisual.anchor}
+              <ConnectorBindingTargetHighlight
                 isSnapped={canvasInteraction.arrowAuthoringVisual.isSnapped}
-                targetId={canvasInteraction.arrowAuthoringVisual.targetId}
-                zoom={zoomLevel}
+                target={canvasInteraction.arrowAuthoringVisual.target}
               />
             ) : isConnectorEndpointRetargeting && connectorEndpointRetargetVisual ? (
-              <ShapeBindingAnchors
-                anchor={connectorEndpointRetargetVisual.anchor}
+              <ConnectorBindingTargetHighlight
                 isSnapped={connectorEndpointRetargetVisual.isSnapped}
-                targetId={connectorEndpointRetargetVisual.targetId}
-                zoom={zoomLevel}
+                target={connectorEndpointRetargetVisual.target}
               />
             ) : null}
             {pendingImagePlacement?.point ? (
@@ -8642,13 +8642,10 @@ function App() {
             );
             if (!connector) return null;
             const chooserEndpoint = connector[connectorEndpointChooser.endpoint];
-            const targets = getConnectorBindingTargets(connector.pageId)
-              .map(({ element, label }) => ({ id: element.id, label, rotation: element.rotation }));
+            const targets = getConnectorBindingTargetsForEndpoint(connector, connectorEndpointChooser.endpoint)
+              .map(({ element, label }) => ({ id: element.id, label }));
             return (
               <ConnectorEndpointChooser
-                anchorT={chooserEndpoint.kind === "element"
-                  ? chooserEndpoint.anchor?.t ?? 0
-                  : 0}
                 endpoint={connectorEndpointChooser.endpoint}
                 isBound={chooserEndpoint.kind === "element"}
                 isDarkMode={isDarkMode}

@@ -91,9 +91,6 @@ test("keyboard Arrow creates once, focuses endpoint controls, and binds without 
   await page.keyboard.press("Enter");
   expect((await counts(page)).apply).toBe(1);
   await page.keyboard.press("Space");
-  const leftAnchor = dialog.getByRole("button", { name: /^Left anchor on Text 1 / });
-  await leftAnchor.focus();
-  await page.keyboard.press("Space");
   await dialog.getByRole("button", { name: "Bind start endpoint" }).focus();
   await page.keyboard.press("Space");
   await expect(startHandle).toBeFocused();
@@ -112,9 +109,6 @@ test("keyboard Arrow creates once, focuses endpoint controls, and binds without 
   const shapeTarget = page.getByRole("dialog", { name: "Choose start endpoint target" })
     .locator('[data-connector-target="true"]').filter({ hasText: /^Rectangle 1 / });
   await shapeTarget.focus();
-  await page.keyboard.press("Space");
-  const rightAnchor = page.getByRole("button", { name: /^Right anchor on Rectangle 1 / });
-  await rightAnchor.focus();
   await page.keyboard.press("Space");
   await page.getByRole("dialog", { name: "Choose start endpoint target" }).getByRole("button", { name: "Bind start endpoint" }).focus();
   await page.keyboard.press("Space");
@@ -234,13 +228,13 @@ test("candidate announcements use unique labels and only repeat on meaningful tr
   await page.mouse.move(near.x, near.y);
   await page.mouse.move(near.x + 1, near.y, { steps: 4 });
   await expect(page.locator(".canvas-accessibility-status[role='status']")).toHaveText(
-    "Near Rectangle 1 (center 310, 280) at target-relative boundary position 90 degrees; move closer to snap.",
+    "Near Rectangle 1 (center 310, 280); move closer to bind the whole object.",
   );
   const snapped = { x: shapeBounds.x + shapeBounds.width + 16, y: near.y };
   await page.mouse.move(snapped.x, snapped.y);
   await page.mouse.move(snapped.x - 1, snapped.y, { steps: 4 });
   await expect(page.locator(".canvas-accessibility-status[role='status']")).toHaveText(
-    "Snapped to Rectangle 1 (center 310, 280) at target-relative boundary position 90 degrees.",
+    "Snapped to Rectangle 1 (center 310, 280). The connector will follow its nearest facing visible boundary.",
   );
   const far = { x: bounds.x + 40, y: bounds.y + bounds.height - 40 };
   await page.mouse.move(far.x, far.y);
@@ -258,7 +252,7 @@ test("candidate announcements use unique labels and only repeat on meaningful tr
   expect(announcements.filter((message) => message === "No binding target. Endpoint will remain free.")).toHaveLength(1);
 });
 
-test("one direct or nearby target exposes screen-constant anchors and binding wins over Shift", async ({ page }) => {
+test("one direct or nearby target exposes a whole-object highlight and binding wins over Shift", async ({ page }) => {
   const canvas = page.getByRole("tabpanel");
   const shape = page.locator('[data-canvas-element-id="target-shape"]');
   const lockedText = page.locator('[data-canvas-element-id="locked-text"]');
@@ -270,17 +264,17 @@ test("one direct or nearby target exposes screen-constant anchors and binding wi
     await page.mouse.click(bounds.x + bounds.width * 0.82, bounds.y + bounds.height * 0.82);
     const shapeBounds = await requiredBounds(shape, "shape");
     await page.mouse.move(shapeBounds.x + shapeBounds.width + 24, shapeBounds.y + shapeBounds.height / 2);
-    const anchors = page.locator('[data-connector-target-id="target-shape"]');
-    await expect(anchors).toHaveCount(1);
-    await expect(anchors).not.toHaveClass(/is-active/);
-    expect(Math.round((await requiredBounds(anchors, "near perimeter marker")).width)).toBe(10);
+    const highlight = page.locator('[data-connector-target-id="target-shape"]');
+    await expect(highlight).toHaveCount(1);
+    await expect(highlight).toHaveAttribute("data-connector-binding-state", "near");
+    const nearBounds = await requiredBounds(highlight, "near whole-object highlight");
+    expect(nearBounds.width).toBeGreaterThan(40);
+    expect(nearBounds.height).toBeGreaterThan(20);
     await page.mouse.move(shapeBounds.x + shapeBounds.width + 16, shapeBounds.y + shapeBounds.height / 2);
-    const active = page.locator('[data-connector-target-id="target-shape"].is-active');
-    await expect(active).toHaveCount(1);
-    await expect.poll(async () => Math.round((await requiredBounds(active, "active anchor")).width)).toBe(14);
-    await expect(active).toHaveClass(/is-snapped/);
+    await expect(highlight).toHaveAttribute("data-connector-binding-state", "snapped");
+    await expect(highlight).toHaveClass(/is-snapped/);
     await page.keyboard.press("Escape");
-    await expect(page.locator(".connector-binding-anchor")).toHaveCount(0);
+    await expect(page.locator(".connector-binding-target-highlight")).toHaveCount(0);
   }
 
   await setZoom(page, canvas, 100);
@@ -291,15 +285,12 @@ test("one direct or nearby target exposes screen-constant anchors and binding wi
   expect(await page.evaluate(({ x, y }) =>
     document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-canvas-element-id]")?.dataset.canvasElementId ?? null,
   { x: textBounds.x + textBounds.width / 2, y: textBounds.y + textBounds.height / 2 })).toBe("locked-text");
-  await expect(page.locator('[data-connector-target-id="locked-text"]')).toHaveCount(1);
+  const textHighlight = page.locator('[data-connector-target-id="locked-text"]');
+  await expect(textHighlight).toHaveCount(1);
+  await expect(textHighlight).toHaveAttribute("data-connector-binding-state", "snapped");
   await expect(page.locator('[data-connector-target-id="overlap-low"]')).toHaveCount(0);
-  const textPerimeterMarker = page.locator('[data-connector-target-id="locked-text"][data-connector-anchor="perimeter"]');
-  const textMarkerBounds = await requiredBounds(textPerimeterMarker, "locked text perimeter marker");
-  const textMarkerPoint = { x: textMarkerBounds.x + textMarkerBounds.width / 2, y: textMarkerBounds.y + textMarkerBounds.height / 2 };
-  await page.mouse.move(textMarkerPoint.x, textMarkerPoint.y);
-  await expect(textPerimeterMarker).toHaveClass(/is-snapped/);
   await page.keyboard.down("Shift");
-  await page.mouse.click(textMarkerPoint.x, textMarkerPoint.y);
+  await page.mouse.click(textBounds.x + textBounds.width / 2, textBounds.y + textBounds.height / 2);
   await page.keyboard.up("Shift");
   await expect.poll(async () => newestConnector(page)).toMatchObject({
     end: { kind: "element", targetElementId: "locked-text" },
@@ -318,7 +309,7 @@ test("zero length, cancellation paths, Space pan, and Line regression do not cre
   const point = { x: bounds.x + bounds.width * 0.75, y: bounds.y + bounds.height * 0.75 };
   await page.mouse.click(point.x, point.y);
   await page.mouse.click(point.x, point.y);
-  await expect(page.locator(".arrow-authoring-preview")).toHaveCount(1);
+  await expect(page.locator(".arrow-authoring-preview")).toHaveCount(0);
   await expect(page.locator(".canvas-accessibility-status[role='status']")).toHaveText("Arrow needs two different endpoints.");
   expect((await counts(page)).apply).toBe(0);
 

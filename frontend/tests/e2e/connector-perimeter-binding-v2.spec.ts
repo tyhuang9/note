@@ -7,7 +7,7 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByRole("tabpanel")).toBeVisible();
 });
 
-test("pointer two-click authoring snaps a rotated rounded rectangle at an arbitrary perimeter position and commits the preview point", async ({ page }) => {
+test("pointer two-click authoring selects a whole rotated rounded rectangle and commits the paired preview route", async ({ page }) => {
   const canvas = page.getByRole("tabpanel");
   const start = await modelToScreen(page, { x: 900, y: 650 });
   const expectedEnd = seededRoundedRectangleBoundaryPoint(0.18);
@@ -16,41 +16,34 @@ test("pointer two-click authoring snaps a rotated rounded rectangle at an arbitr
   await selectTool(page, "arrow");
   await page.mouse.click(start.x, start.y);
   await page.mouse.move(targetPoint.x + 23, targetPoint.y, { steps: 4 });
-  const revealedMarker = page.locator('[data-connector-target-id="rounded-rectangle"]');
-  await expect(revealedMarker).toHaveCount(1);
-  await expect(revealedMarker).not.toHaveClass(/is-snapped/);
-  await expect.poll(() => markerCssWidth(revealedMarker)).toBe(10);
+  const highlight = page.locator('[data-connector-target-id="rounded-rectangle"]');
+  await expect(highlight).toHaveCount(1);
+  await expect(highlight).toHaveAttribute("data-connector-binding-state", "near");
   await page.mouse.move(targetPoint.x, targetPoint.y, { steps: 6 });
 
-  const marker = page.locator('[data-connector-target-id="rounded-rectangle"].is-active');
-  await expect(marker).toHaveCount(1);
-  await expect(marker).toHaveAttribute("data-connector-anchor", "perimeter");
-  await expect.poll(() => markerCssWidth(marker)).toBe(14);
+  await expect(highlight).toHaveAttribute("data-connector-binding-state", "snapped");
+  await expect(highlight).toHaveClass(/is-snapped/);
 
   const preview = page.locator(".arrow-authoring-preview");
   const previewEnd = {
     x: Number(await preview.getAttribute("data-end-x")),
     y: Number(await preview.getAttribute("data-end-y")),
   };
-  expect(Math.abs(previewEnd.x - expectedEnd.x)).toBeLessThanOrEqual(0.01);
-  expect(Math.abs(previewEnd.y - expectedEnd.y)).toBeLessThanOrEqual(0.01);
   await page.mouse.click(targetPoint.x, targetPoint.y);
 
   await expect.poll(() => newestConnector(page)).toMatchObject({
     end: { kind: "element", targetElementId: "rounded-rectangle" },
   });
   const connector = await newestConnector(page);
-  const committedT = (connector?.end as { anchor?: { t?: number } } | undefined)?.anchor?.t;
-  expect(committedT).toBeCloseTo(0.18, 5);
-  const committedEnd = seededRoundedRectangleBoundaryPoint(committedT ?? Number.NaN);
-  const committedEndScreen = await modelToScreen(page, committedEnd);
+  expect(connector?.end).toEqual({ kind: "element", targetElementId: "rounded-rectangle", gap: 0 });
+  const committedEndScreen = await modelToScreen(page, previewEnd);
   const endHandle = page.getByRole("button", { name: "Move connector end endpoint" });
   const endHandleBounds = await requiredBounds(endHandle, "committed end endpoint");
   expect(Math.abs(endHandleBounds.x + endHandleBounds.width / 2 - committedEndScreen.x)).toBeLessThanOrEqual(1.5);
   expect(Math.abs(endHandleBounds.y + endHandleBounds.height / 2 - committedEndScreen.y)).toBeLessThanOrEqual(1.5);
 });
 
-test("keyboard chooser commits an arbitrary one-degree perimeter binding", async ({ page }) => {
+test("keyboard chooser commits and rebinds whole-object targets without perimeter controls", async ({ page }) => {
   const canvas = page.getByRole("tabpanel");
   await canvas.focus();
   await page.keyboard.press("a");
@@ -61,10 +54,11 @@ test("keyboard chooser commits an arbitrary one-degree perimeter binding", async
   await page.keyboard.press("Enter");
   const dialog = page.getByRole("dialog", { name: "Choose start endpoint target" });
   await dialog.getByRole("button", { name: /^Rectangle 1 / }).click();
-  await dialog.getByRole("button", { name: /^Right anchor/ }).click();
+  await expect(dialog.getByRole("slider")).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: /anchor/i })).toHaveCount(0);
   await dialog.getByRole("button", { name: "Bind start endpoint" }).click();
-  await expect.poll(() => newestConnector(page)).toMatchObject({
-    start: { kind: "element", targetElementId: "rounded-rectangle", anchor: { t: 0.25 } },
+  await expect.poll(async () => (await newestConnector(page))?.start).toEqual({
+    kind: "element", targetElementId: "rounded-rectangle", gap: 0,
   });
 
   await startHandle.focus();
@@ -76,22 +70,6 @@ test("keyboard chooser commits an arbitrary one-degree perimeter binding", async
     await page.keyboard.press("Tab");
     await expect(targets.nth(index)).toBeFocused();
   }
-  const top = arbitraryDialog.getByRole("button", { name: /^Top anchor/ });
-  const right = arbitraryDialog.getByRole("button", { name: /^Right anchor/ });
-  const bottom = arbitraryDialog.getByRole("button", { name: /^Bottom anchor/ });
-  const left = arbitraryDialog.getByRole("button", { name: /^Left anchor/ });
-  await page.keyboard.press("Tab");
-  await expect(top).toBeFocused();
-  await page.keyboard.press("Tab");
-  await expect(right).toBeFocused();
-  await page.keyboard.press("Tab");
-  await expect(bottom).toBeFocused();
-  await page.keyboard.press("Tab");
-  await expect(left).toBeFocused();
-  const range = arbitraryDialog.getByRole("slider", { name: /Target-relative boundary position/ });
-  await page.keyboard.press("Tab");
-  await expect(range).toBeFocused();
-  await expect(range).toHaveAttribute("aria-valuetext", /0 degrees target-relative boundary position on Rectangle 1/);
   const bind = arbitraryDialog.getByRole("button", { name: "Bind start endpoint" });
   const detach = arbitraryDialog.getByRole("button", { name: "Detach start endpoint" });
   const close = arbitraryDialog.getByRole("button", { name: "Close endpoint chooser" });
@@ -111,26 +89,19 @@ test("keyboard chooser commits an arbitrary one-degree perimeter binding", async
   await startHandle.focus();
   await page.keyboard.press("Enter");
   const reopenedDialog = page.getByRole("dialog", { name: "Choose start endpoint target" });
-  await reopenedDialog.getByRole("button", { name: /^Top anchor/ }).click();
-  const reopenedRange = reopenedDialog.getByRole("slider", { name: /Target-relative boundary position/ });
-  await reopenedRange.focus();
-  for (let index = 0; index < 37; index += 1) await page.keyboard.press("ArrowRight");
-  await expect(reopenedRange).toHaveAttribute("aria-valuetext", /37 degrees target-relative boundary position on Rectangle 1/);
+  await reopenedDialog.getByRole("button", { name: /^Ellipse 1 / }).click();
   await reopenedDialog.getByRole("button", { name: "Bind start endpoint" }).click();
   await expect(startHandle).toBeFocused();
 
-  await expect.poll(() => newestConnector(page)).toMatchObject({
-    start: { kind: "element", targetElementId: "rounded-rectangle", anchor: { t: 37 / 360 } },
+  await expect.poll(async () => (await newestConnector(page))?.start).toEqual({
+    kind: "element", targetElementId: "ellipse", gap: 0,
   });
 
   await startHandle.focus();
   await page.keyboard.press("Shift+ArrowRight");
-  await expect.poll(async () => {
-    const start = (await newestConnector(page))?.start as { anchor: { t: number }; kind: string; targetElementId: string };
-    return start?.kind === "element" && start.targetElementId === "rounded-rectangle" && start.anchor.t !== 37 / 360;
-  }).toBe(true);
+  await expect.poll(async () => (await newestConnector(page))?.start).toMatchObject({ kind: "free" });
   await expect(page.locator('[role="status"].canvas-accessibility-status')).toHaveText(
-    /Moved start endpoint along Rectangle 1 .*target-relative boundary position \d+ degrees\./,
+    "Detached and moved start endpoint. It is now free.",
   );
 });
 
@@ -142,50 +113,44 @@ test("retarget status announces each near, snap, loss, and cancellation transiti
   await selectTool(page, "select");
   const endHandle = page.getByRole("button", { name: "Move connector end endpoint" });
   const handle = await requiredBounds(endHandle, "free end endpoint");
-  const nearPerimeter = await modelToScreen(page, seededRoundedRectangleBoundaryPoint(0.18));
-  const nearPerimeterTwo = await modelToScreen(page, seededRoundedRectangleBoundaryPoint(0.22));
-  const snappedPerimeter = await modelToScreen(page, seededRoundedRectangleBoundaryPoint(0.18));
-  const snappedPerimeterTwo = await modelToScreen(page, seededRoundedRectangleBoundaryPoint(0.22));
-  const seamPerimeter = await modelToScreen(page, seededRoundedRectangleBoundaryPoint(0.999));
+  const nearBoundary = await modelToScreen(page, seededRoundedRectangleBoundaryPoint(0.18));
+  const nearBoundaryTwo = await modelToScreen(page, seededRoundedRectangleBoundaryPoint(0.22));
+  const snappedBoundary = await modelToScreen(page, seededRoundedRectangleBoundaryPoint(0.18));
+  const snappedBoundaryTwo = await modelToScreen(page, seededRoundedRectangleBoundaryPoint(0.22));
   const freePoint = await modelToScreen(page, { x: 100, y: 780 });
   const status = page.locator('[role="status"].canvas-accessibility-status');
   await observeConnectorStatus(page);
 
   await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
   await page.mouse.down();
-  await page.mouse.move(nearPerimeter.x + 23, nearPerimeter.y);
-  await expect(status).toHaveText(/Near Rectangle 1 .*target-relative boundary position/);
-  const nearMarker = page.locator('[data-connector-target-id="rounded-rectangle"]');
-  await expect(nearMarker).toHaveCount(1);
-  await expect(nearMarker).not.toHaveClass(/is-snapped/);
-  await expect.poll(() => markerCssWidth(nearMarker)).toBe(10);
-  await page.mouse.move(nearPerimeterTwo.x + 23, nearPerimeterTwo.y);
-  await expect(status).toHaveText(/Near Rectangle 1 .*target-relative boundary position/);
-  await page.mouse.move(snappedPerimeter.x, snappedPerimeter.y);
-  await expect(status).toHaveText(/Snapped to Rectangle 1 .*target-relative boundary position/);
-  const snappedMarker = page.locator('[data-connector-target-id="rounded-rectangle"].is-active');
-  await expect(snappedMarker).toHaveCount(1);
-  await expect(snappedMarker).toHaveClass(/is-snapped/);
-  await expect.poll(() => markerCssWidth(snappedMarker)).toBe(14);
-  await page.mouse.move(snappedPerimeterTwo.x, snappedPerimeterTwo.y);
-  await expect(status).toHaveText(/Snapped to Rectangle 1 .*target-relative boundary position/);
+  await page.mouse.move(nearBoundary.x + 23, nearBoundary.y);
+  await expect(status).toHaveText(/Near Rectangle 1 .*bind the whole object/);
+  const highlight = page.locator('[data-connector-target-id="rounded-rectangle"]');
+  await expect(highlight).toHaveCount(1);
+  await expect(highlight).toHaveAttribute("data-connector-binding-state", "near");
+  await page.mouse.move(nearBoundaryTwo.x + 23, nearBoundaryTwo.y);
+  await expect(status).toHaveText(/Near Rectangle 1 .*bind the whole object/);
+  await page.mouse.move(snappedBoundary.x, snappedBoundary.y);
+  await expect(status).toHaveText(/Snapped to Rectangle 1 .*nearest facing visible boundary/);
+  await expect(highlight).toHaveAttribute("data-connector-binding-state", "snapped");
+  await page.mouse.move(snappedBoundaryTwo.x, snappedBoundaryTwo.y);
+  await expect(status).toHaveText(/Snapped to Rectangle 1 .*nearest facing visible boundary/);
   await page.mouse.move(freePoint.x, freePoint.y);
   await expect(status).toHaveText("No binding target. Endpoint will remain free.");
-  await page.mouse.move(seamPerimeter.x, seamPerimeter.y);
-  await expect(status).toHaveText(/Snapped to Rectangle 1 .*target-relative boundary position 0 degrees\./);
+  await page.mouse.move(snappedBoundary.x, snappedBoundary.y);
+  await expect(status).toHaveText(/Snapped to Rectangle 1 .*nearest facing visible boundary/);
   await endHandle.dispatchEvent("pointercancel", { pointerId: 1 });
   await page.mouse.up();
   await expect(status).toHaveText("Endpoint retargeting canceled. Existing binding remains unchanged.");
 
   const announcements = await readConnectorStatus(page);
-  expect(announcements.filter((message) => message.startsWith("Near Rectangle 1") && message.includes("target-relative boundary position"))).toHaveLength(1);
-  expect(announcements.filter((message) => message.startsWith("Snapped to Rectangle 1") && message.includes("target-relative boundary position"))).toHaveLength(2);
-  expect(announcements.some((message) => message.includes("target-relative boundary position 360 degrees"))).toBe(false);
+  expect(announcements.filter((message) => message.startsWith("Near Rectangle 1"))).toHaveLength(1);
+  expect(announcements.filter((message) => message.startsWith("Snapped to Rectangle 1"))).toHaveLength(2);
   expect(announcements.filter((message) => message === "No binding target. Endpoint will remain free.")).toHaveLength(1);
   expect(announcements.filter((message) => message === "Endpoint retargeting canceled. Existing binding remains unchanged.")).toHaveLength(1);
 });
 
-test("continuous authoring binds one arbitrary perimeter target at 50%, 100%, and 200%", async ({ page }) => {
+test("continuous authoring binds one whole-object target at 50%, 100%, and 200%", async ({ page }) => {
   const canvas = page.getByRole("tabpanel");
   const targets = [
     { id: "rounded-rectangle", point: () => seededRoundedRectangleBoundaryPoint(0.18) },
@@ -202,9 +167,9 @@ test("continuous authoring binds one arbitrary perimeter target at 50%, 100%, an
       await selectTool(page, "arrow");
       await dispatchCanvasPointer(page, "pointerdown", start);
       await dispatchCanvasPointer(page, "pointermove", end);
-      const marker = page.locator(`[data-connector-target-id="${target.id}"].is-active`);
-      await expect(marker).toHaveCount(1);
-      await expect.poll(() => markerCssWidth(marker)).toBe(14);
+      const highlight = page.locator(`[data-connector-target-id="${target.id}"].is-snapped`);
+      await expect(highlight).toHaveCount(1);
+      await expect(highlight).toHaveAttribute("data-connector-binding-state", "snapped");
       const preview = page.locator(".arrow-authoring-preview");
       const previewEnd = { x: Number(await preview.getAttribute("data-end-x")), y: Number(await preview.getAttribute("data-end-y")) };
       await dispatchCanvasPointer(page, "pointerdown", end);
@@ -213,8 +178,7 @@ test("continuous authoring binds one arbitrary perimeter target at 50%, 100%, an
       const committedEnd = await screenToModel(page, { x: committedHandle.x + committedHandle.width / 2, y: committedHandle.y + committedHandle.height / 2 });
       expect(Math.abs(committedEnd.x - previewEnd.x)).toBeLessThanOrEqual(1.5 / (percent / 100));
       expect(Math.abs(committedEnd.y - previewEnd.y)).toBeLessThanOrEqual(1.5 / (percent / 100));
-      const t = ((await newestConnector(page))?.end as { anchor: { t: number } }).anchor.t;
-      expect([0, 0.25, 0.5, 0.75]).not.toContain(t);
+      expect((await newestConnector(page))?.end).toEqual({ kind: "element", targetElementId: target.id, gap: 0 });
     }
   }
 });
@@ -233,21 +197,28 @@ test("retargeting through a connector overlay binds, survives transforms and per
   await page.mouse.move(endHandleBounds.x + endHandleBounds.width / 2, endHandleBounds.y + endHandleBounds.height / 2);
   await page.mouse.down();
   await page.mouse.move(end.x, end.y, { steps: 5 });
-  await expect(page.locator('[data-connector-target-id="text-target"].is-active')).toHaveCount(1);
+  await expect(page.locator('[data-connector-target-id="text-target"].is-snapped')).toHaveCount(1);
   await page.mouse.up();
-  await expect.poll(() => newestConnector(page)).toMatchObject({ end: { kind: "element", targetElementId: "text-target" } });
-  const boundT = ((await newestConnector(page))?.end as { anchor: { t: number } }).anchor.t;
+  await expect.poll(async () => (await newestConnector(page))?.end).toEqual({
+    kind: "element", targetElementId: "text-target", gap: 0,
+  });
 
   const text = page.locator('[data-canvas-element-id="text-target"]');
   await text.focus();
   await page.keyboard.press("Shift+ArrowRight");
-  await expect.poll(async () => ((await newestConnector(page))?.end as { anchor: { t: number } }).anchor.t).toBe(boundT);
+  await expect.poll(async () => (await newestConnector(page))?.end).toEqual({
+    kind: "element", targetElementId: "text-target", gap: 0,
+  });
   await canvas.focus();
   await page.keyboard.press("Control+z");
   await page.keyboard.press("Control+y");
-  await expect.poll(() => newestConnector(page)).toMatchObject({ end: { kind: "element", targetElementId: "text-target", anchor: { t: boundT } } });
+  await expect.poll(async () => (await newestConnector(page))?.end).toEqual({
+    kind: "element", targetElementId: "text-target", gap: 0,
+  });
   await page.reload();
-  await expect.poll(() => newestConnector(page)).toMatchObject({ end: { kind: "element", targetElementId: "text-target", anchor: { t: boundT } } });
+  await expect.poll(async () => (await newestConnector(page))?.end).toEqual({
+    kind: "element", targetElementId: "text-target", gap: 0,
+  });
   const persistedArrow = page.getByRole("button", { name: "Select and move arrow connector" }).last();
   await persistedArrow.focus();
   await page.keyboard.press("Enter");
@@ -263,6 +234,8 @@ test("retargeting through a connector overlay binds, survives transforms and per
   expect(await counts(page)).toEqual({ apply: 0, session: 0 });
 
   await selectTool(page, "arrow");
+  await page.waitForTimeout(650);
+  await resetCounts(page);
   const start = await modelToScreen(page, { x: 980, y: 720 });
   await dispatchCanvasPointer(page, "pointerdown", start);
   await page.keyboard.press("Escape");
@@ -289,10 +262,6 @@ async function requiredBounds(locator: Locator, label: string) {
   const bounds = await locator.boundingBox();
   if (!bounds) throw new Error(`${label} bounds were unavailable.`);
   return bounds;
-}
-
-async function markerCssWidth(locator: Locator) {
-  return locator.evaluate((marker) => Number.parseFloat(getComputedStyle(marker).width));
 }
 
 async function newestConnector(page: Page) {

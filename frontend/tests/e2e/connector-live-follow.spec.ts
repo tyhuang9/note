@@ -203,7 +203,7 @@ test("edge auto-pan keeps locked bound arrows in a transient preview and cancel 
   await expect.poll(() => persistenceCounts(page)).toEqual(callsBefore);
 });
 
-test("keyboard endpoint chooser describes rotated text targets and binds a target-relative anchor", async ({ page }) => {
+test("keyboard endpoint chooser binds a rotated text target without perimeter controls", async ({ page }) => {
   await installLiveFollowWorkspace(page, 37.6);
   await page.setViewportSize({ width: 1500, height: 900 });
   await page.goto("/");
@@ -214,26 +214,24 @@ test("keyboard endpoint chooser describes rotated text targets and binds a targe
   const endHandle = page.getByRole("button", { name: "Move connector end endpoint" });
   const description = page.locator("#connector-end-endpoint-description");
   await expect(endHandle).toBeVisible();
-  await expect(description).toContainText("Currently free. Press Enter to choose a target shape or text block and a target-relative boundary position.");
+  await expect(description).toContainText("Currently free. Press Enter to choose a target shape or text block.");
 
   await endHandle.focus();
   await page.keyboard.press("Space");
   const dialog = page.getByRole("dialog", { name: "Choose end endpoint target" });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByText("Cardinal presets and the one-degree range rotate with the target.")).toBeVisible();
+  await expect(dialog).toContainText("The connector automatically follows the nearest facing visible boundaries as objects change.");
+  await expect(dialog.getByRole("slider")).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: /anchor/i })).toHaveCount(0);
 
   const textTarget = dialog.getByRole("button", { name: /Text 1 \(Resizable text target\)/ });
   await textTarget.focus();
-  await page.keyboard.press("Space");
-  const rightAnchor = dialog.getByRole("button", { name: /Right anchor on Text 1 \(Resizable text target\).*target rotated 38 degrees/ });
-  await rightAnchor.focus();
-  await expect(rightAnchor).toBeFocused();
   await page.keyboard.press("Space");
   await dialog.getByRole("button", { name: "Bind end endpoint" }).focus();
   await page.keyboard.press("Space");
 
   await expect(description).toContainText("Currently bound to Text 1 (Resizable text target)");
-  await expect(description).toContainText("target-relative right anchor, target rotated 38 degrees.");
+  await expect(description).toContainText("The endpoint follows the nearest facing visible boundary automatically.");
 });
 
 async function selectBothTargets(page: Page) {

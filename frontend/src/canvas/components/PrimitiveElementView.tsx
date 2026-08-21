@@ -147,6 +147,10 @@ export function ShapeElementView({ element, isDragSourceHidden = false, isEditin
   const ref = useRef<SVGSVGElement | null>(null);
   const rootRef = createPrimitiveRootRef(element.id, onElementChange);
   const renderPadding = shapeRenderPadding(element.style);
+  const accessibleName = useMemo(
+    () => shapeAccessibleName(element),
+    [element.locked, element.shape, element.text],
+  );
   useLayoutEffect(() => {
     const svg = ref.current;
     if (!svg) return;
@@ -155,7 +159,7 @@ export function ShapeElementView({ element, isDragSourceHidden = false, isEditin
   }, [element, renderPadding]);
   return (
     <div
-      aria-label={shapeAccessibleName(element)}
+      aria-label={accessibleName}
       aria-keyshortcuts="F2"
       aria-pressed={isEditing ? undefined : isSelected}
       className={`primitive-element shape-element ${isEditing ? "is-editing" : ""} ${isDragSourceHidden ? "is-drag-source-hidden" : ""}`}
@@ -200,7 +204,9 @@ export function ShapeElementView({ element, isDragSourceHidden = false, isEditin
           className="shape-contained-text shape-contained-text-display text-block-rich-content"
           style={shapeTextInsetStyle(element)}
         >
-          {renderShapeRichTextContent(element.text, `${element.id}-shape-text`)}
+          <div className="shape-contained-text-content">
+            {renderShapeRichTextContent(element.text, `${element.id}-shape-text`)}
+          </div>
         </div>
       ) : null}
     </div>
@@ -209,11 +215,12 @@ export function ShapeElementView({ element, isDragSourceHidden = false, isEditin
 
 function shapeAccessibleName(element: ShapeElement) {
   const action = element.locked ? "Select locked" : "Select and move";
-  const label = element.text
+  const label = (element.text
     ? element.text.content.trim()
       || (element.text.richContent ? richTextToPlainText(element.text.richContent).trim() : "")
-    : "";
-  return `${action} ${element.shape} element${label ? `: ${label}` : ""}; press F2 to edit contained text`;
+    : "").replace(/\s+/g, " ");
+  const excerpt = label.length > 120 ? `${label.slice(0, 117).trimEnd()}...` : label;
+  return `${action} ${element.shape} shape${excerpt ? `, text: ${excerpt}` : ""}. Press F2 to edit contained text.`;
 }
 
 function shapeTextInsetStyle(element: ShapeElement) {

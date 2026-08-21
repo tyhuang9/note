@@ -11,6 +11,8 @@ export const MAX_EMBEDDED_RICH_IMAGE_BYTES = 8 * 1024 * 1024;
 export const MAX_RICH_TEXT_ATTRIBUTE_BYTES = 12 * 1024 * 1024;
 const SAFE_LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:", "tel:"]);
 const SAFE_DATA_IMAGE_PATTERN = /^data:image\/(png|jpeg|gif|webp);base64,([a-z\d+/]*={0,2})$/i;
+const UNSAFE_URL_CHARACTER_PATTERN = /[\p{White_Space}\p{Cc}]/u;
+const shapeRichTextRenderCache = new WeakMap<RichTextValue, Map<string, ReactNode>>();
 
 const TextStyle = Mark.create({
   name: "textStyle",
@@ -111,7 +113,7 @@ export const shapeRichTextExtensions = [
 ];
 
 export function isSafeLinkHref(href: string): boolean {
-  if (!href || href.length > 8_192) return false;
+  if (!href || utf8Length(href) > 8_192 || UNSAFE_URL_CHARACTER_PATTERN.test(href)) return false;
   try {
     return SAFE_LINK_PROTOCOLS.has(new URL(href).protocol);
   } catch {
@@ -123,9 +125,22 @@ export function isSafeRichImageSource(src: string): boolean {
   if (!src || src.length > MAX_RICH_TEXT_BYTES) return false;
   const match = SAFE_DATA_IMAGE_PATTERN.exec(src);
   if (!match || match[2].length % 4 !== 0) return false;
-  const padding = match[2].endsWith("==") ? 2 : match[2].endsWith("=") ? 1 : 0;
-  const decodedBytes = match[2].length / 4 * 3 - padding;
+  const payload = match[2];
+  const padding = payload.endsWith("==") ? 2 : payload.endsWith("=") ? 1 : 0;
+  const lastDataCharacter = payload[payload.length - padding - 1];
+  const lastValue = lastDataCharacter ? base64CharacterValue(lastDataCharacter) : 0;
+  if (padding === 2 && (lastValue & 0b1111) !== 0) return false;
+  if (padding === 1 && (lastValue & 0b11) !== 0) return false;
+  const decodedBytes = payload.length / 4 * 3 - padding;
   return decodedBytes <= MAX_EMBEDDED_RICH_IMAGE_BYTES;
+}
+
+function base64CharacterValue(character: string) {
+  const code = character.charCodeAt(0);
+  if (code >= 65 && code <= 90) return code - 65;
+  if (code >= 97 && code <= 122) return code - 71;
+  if (code >= 48 && code <= 57) return code + 4;
+  return character === "+" ? 62 : 63;
 }
 
 export function validateRichTextDocument(value: unknown): string | null {
@@ -246,7 +261,7 @@ function validateNodeAttrs(type: string, value: unknown, context: string): strin
     if (!attrs || typeof attrs.src !== "string" || !isSafeRichImageSource(attrs.src)) return `${context}.attrs.src is unsafe`;
     for (const key of ["alt", "title"] as const) {
       const field = attrs[key];
-      if (field !== undefined && field !== null && (typeof field !== "string" || field.length > 16_384)) return `${context}.attrs.${key} is invalid`;
+      if (field !== undefined && field !== null && (typeof field !== "string" || utf8Length(field) > 16_384)) return `${context}.attrs.${key} is invalid`;
     }
     for (const key of ["width", "height"] as const) {
       const field = attrs[key];
@@ -265,9 +280,10 @@ function validateRichTextMark(value: unknown, context: string): string | null {
   const allowed = value.type === "textStyle" ? ["fontFamily", "fontSize"]
     : value.type === "link" ? ["href", "target", "rel", "class", "title"] : [];
   if (attrs && Object.keys(attrs).some((key) => !allowed.includes(key))) return `${context}.attrs has an unknown field`;
-  if (value.type === "textStyle" && attrs) {
+  if (value.type === "textStyle") {
+    if (!attrs) return `${context}.attrs must be an object`;
     const family = attrs.fontFamily;
-    if (family !== undefined && family !== null && (typeof family !== "string" || family.length > 256)) return `${context}.attrs.fontFamily is invalid`;
+    if (family !== undefined && family !== null && (typeof family !== "string" || utf8Length(family) > 256)) return `${context}.attrs.fontFamily is invalid`;
     const size = attrs.fontSize;
     if (size !== undefined && size !== null && (typeof size !== "string" || !/^(?:[8-9]|[1-8]\d|9[0-6])px$/.test(size))) return `${context}.attrs.fontSize is invalid`;
   }
@@ -275,7 +291,7 @@ function validateRichTextMark(value: unknown, context: string): string | null {
     if (!attrs || typeof attrs.href !== "string" || !isSafeLinkHref(attrs.href)) return `${context}.attrs.href is unsafe`;
     for (const key of ["target", "rel", "class", "title"] as const) {
       const field = attrs[key];
-      if (field !== undefined && field !== null && (typeof field !== "string" || field.length > 512)) return `${context}.attrs.${key} is invalid`;
+      if (field !== undefined && field !== null && (typeof field !== "string" || utf8Length(field) > 512)) return `${context}.attrs.${key} is invalid`;
     }
   }
   return null;
@@ -368,7 +384,15 @@ export function renderRichTextContent(value: RichTextValue, key = "root"): React
 }
 
 export function renderShapeRichTextContent(value: RichTextValue, key = "root"): ReactNode {
-  return renderTipTapContent(getCanonicalShapeRichTextDocument(value), key, "shape");
+  let cachedByKey = shapeRichTextRenderCache.get(value);
+  if (!cachedByKey) {
+    cachedByKey = new Map();
+    shapeRichTextRenderCache.set(value, cachedByKey);
+  }
+  if (!cachedByKey.has(key)) {
+    cachedByKey.set(key, renderTipTapContent(getCanonicalShapeRichTextDocument(value), key, "shape"));
+  }
+  return cachedByKey.get(key);
 }
 
 function renderTipTapContent(content: JSONContent, key: string, mode: "legacy" | "shape"): ReactNode {

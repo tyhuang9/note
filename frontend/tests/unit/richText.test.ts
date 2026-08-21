@@ -7,6 +7,7 @@ import {
   hasTipTapRenderableContent,
   richTextToPlainText,
   MAX_EMBEDDED_RICH_IMAGE_BYTES,
+  renderShapeRichTextContent,
   validateRichTextDocument,
   richTextExtensions,
 } from "../../src/editor/richText";
@@ -69,6 +70,19 @@ describe("shared rich text model", () => {
     for (const vector of vectors.invalid) {
       expect(validateRichTextDocument(vector.doc), vector.name).not.toBeNull();
     }
+  });
+
+  it("memoizes shape rendering by owner text reference and invalidates copied JSON", () => {
+    const value = {
+      content: "Memoized",
+      richContent: {
+        type: "doc",
+        content: [{ type: "paragraph", content: [{ type: "text", text: "Memoized" }] }],
+      },
+    };
+    const first = renderShapeRichTextContent(value, "shape-text");
+    expect(renderShapeRichTextContent(value, "shape-text")).toBe(first);
+    expect(renderShapeRichTextContent(cloneRichTextValue(value), "shape-text")).not.toBe(first);
   });
 
   it("preserves legacy standalone rich JSON while strict shape mode rejects it", () => {

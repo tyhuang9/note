@@ -2508,6 +2508,11 @@ h2 {
   user-select: none;
 }
 
+.shape-contained-text-content {
+  width: 100%;
+  min-width: 0;
+}
+
 .shape-contained-text-editor {
   align-items: stretch;
   justify-content: stretch;

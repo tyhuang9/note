@@ -130,6 +130,76 @@ test("rich structure clips and transforms with its composite shape through resiz
   await expect(restored).toHaveAttribute("data-canvas-element-id", "rich-shape");
 });
 
+for (const variant of [
+  { isDarkMode: false, rotation: 0, shape: "rectangle" },
+  { isDarkMode: true, rotation: -17, shape: "ellipse" },
+  { isDarkMode: false, rotation: 23, shape: "diamond" },
+] as const) {
+  test(`rich blocks flow vertically and stay centered in a clipped ${variant.shape} label`, async ({ page }) => {
+    await installShapeTextWorkspace(page, variant);
+    await page.goto("/");
+
+    await expect(page.locator(".app-shell")).toHaveClass(variant.isDarkMode ? /is-dark/ : /^(?!.*\bis-dark\b)/);
+    const shape = page.locator('[data-canvas-element-id="rich-shape"]');
+    const metrics = await shape.evaluate((root) => {
+      const container = root.querySelector<HTMLElement>(".shape-contained-text-display");
+      const content = root.querySelector<HTMLElement>(".shape-contained-text-content");
+      const heading = content?.querySelector<HTMLElement>("h2");
+      const list = content?.querySelector<HTMLElement>("ul");
+      const image = content?.querySelector<HTMLElement>("img");
+      if (!container || !content || !heading || !list || !image) throw new Error("Rich layout nodes are missing");
+      const bounds = (element: HTMLElement) => {
+        const rectangle = element.getBoundingClientRect();
+        return { bottom: rectangle.bottom, left: rectangle.left, right: rectangle.right, top: rectangle.top };
+      };
+      return {
+        containerBounds: bounds(container),
+        containerHeight: container.clientHeight,
+        contentHeight: content.offsetHeight,
+        contentTop: content.offsetTop,
+        contentWidth: content.offsetWidth,
+        containerWidth: container.clientWidth,
+        heading: { bottom: heading.offsetTop + heading.offsetHeight, top: heading.offsetTop },
+        image: { bottom: image.offsetTop + image.offsetHeight, top: image.offsetTop },
+        imageBounds: bounds(image),
+        list: { bottom: list.offsetTop + list.offsetHeight, top: list.offsetTop },
+        listBounds: bounds(list),
+        headingBounds: bounds(heading),
+        overflow: getComputedStyle(container).overflow,
+        transform: getComputedStyle(root).transform,
+      };
+    });
+
+    expect(metrics.heading.bottom).toBeLessThanOrEqual(metrics.list.top);
+    expect(metrics.list.bottom).toBeLessThanOrEqual(metrics.image.top);
+    expect(Math.abs(metrics.contentTop + metrics.contentHeight / 2 - metrics.containerHeight / 2)).toBeLessThanOrEqual(0.5);
+    expect(metrics.contentWidth).toBe(metrics.containerWidth);
+    expect(metrics.overflow).toBe("hidden");
+    expect(metrics.transform).toMatch(/^matrix\(/);
+    for (const child of [metrics.headingBounds, metrics.listBounds, metrics.imageBounds]) {
+      expect(child.top).toBeGreaterThanOrEqual(metrics.containerBounds.top - 1);
+      expect(child.bottom).toBeLessThanOrEqual(metrics.containerBounds.bottom + 1);
+      expect(child.left).toBeGreaterThanOrEqual(metrics.containerBounds.left - 1);
+      expect(child.right).toBeLessThanOrEqual(metrics.containerBounds.right + 1);
+    }
+  });
+}
+
+test("shape accessible names use a bounded text excerpt", async ({ page }) => {
+  await installShapeTextWorkspace(page);
+  await page.goto("/");
+
+  const shape = page.locator('[data-canvas-element-id="a11y-shape"]');
+  const label = await shape.getAttribute("aria-label");
+  expect(label).not.toBeNull();
+  expect(label?.length).toBeLessThanOrEqual(210);
+  expect(label).toContain("Accessible label");
+  expect(label).toContain("Press F2 to edit contained text");
+  await shape.focus();
+  await shape.press("F2");
+  await expect(shape.locator('[role="textbox"]')).toHaveText(/Accessible label label label/);
+});
+
 async function writeCount(page: Page) {
   return page.evaluate(() => (window as unknown as { __shapeTextWrites: number }).__shapeTextWrites);
 }
@@ -140,8 +210,11 @@ async function shapeRecord(page: Page, id: string) {
   }).__shapeTextWorkspace.elements.find((element) => element.id === shapeId), id);
 }
 
-async function installShapeTextWorkspace(page: Page) {
-  await page.addInitScript(() => {
+async function installShapeTextWorkspace(
+  page: Page,
+  richShapeLayout: { isDarkMode: boolean; rotation: number; shape: "rectangle" | "ellipse" | "diamond" } | null = null,
+) {
+  await page.addInitScript((layout) => {
     type ElementRecord = Record<string, unknown> & { id: string; pageId: string };
     const style = {
       fillColor: { kind: "fixed", value: "#fff4cc" },
@@ -194,13 +267,13 @@ async function installShapeTextWorkspace(page: Page) {
         },
         {
           createdAt: 1,
-          height: 220,
+          height: layout ? 360 : 220,
           id: "rich-shape",
           locked: false,
           opacity: 1,
           pageId: "page",
-          rotation: 18,
-          shape: "diamond",
+          rotation: layout?.rotation ?? 18,
+          shape: layout?.shape ?? "diamond",
           style: { ...style, fillColor: { kind: "fixed", value: "#e8e2ff" }, seed: 44 },
           text: {
             content: "Heading\nItem\nLink",
@@ -216,9 +289,29 @@ async function installShapeTextWorkspace(page: Page) {
           },
           type: "shape",
           updatedAt: 1,
-          width: 320,
-          x: 520,
-          y: 520,
+          width: layout ? 420 : 320,
+          x: layout ? 420 : 520,
+          y: layout ? 280 : 520,
+          zIndex: 3,
+        },
+        {
+          createdAt: 1,
+          height: 120,
+          id: "a11y-shape",
+          locked: false,
+          opacity: 1,
+          pageId: "page",
+          rotation: 0,
+          shape: "rectangle",
+          style: { ...style, seed: 46 },
+          text: {
+            content: `Accessible ${"label ".repeat(100)}`.trim(),
+          },
+          type: "shape",
+          updatedAt: 1,
+          width: 240,
+          x: 1200,
+          y: 800,
           zIndex: 3,
         },
         {
@@ -251,7 +344,7 @@ async function installShapeTextWorkspace(page: Page) {
         },
       ] as ElementRecord[],
       folders: [],
-      isDarkMode: false,
+      isDarkMode: layout?.isDarkMode ?? false,
       pages: [{ folderId: "", id: "page", isBookmarked: false, revision: 0, title: "Shape text" }],
       sessionState: { openPageTabIds: ["page"], selectedFolderId: "", selectedPageId: "page" },
       warnings: [],
@@ -290,5 +383,5 @@ async function installShapeTextWorkspace(page: Page) {
         return undefined;
       },
     };
-  });
+  }, richShapeLayout);
 }

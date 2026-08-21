@@ -2146,15 +2146,25 @@ mod tests {
         ))
         .unwrap();
         for vector in vectors["valid"].as_array().unwrap() {
+            let mut shape = shape_element("valid-vector", "p");
+            shape["text"] = json!({
+                "content":"vector",
+                "richContent":vector["doc"].clone()
+            });
             assert!(
-                validate_rich_text_document(&vector["doc"], "vector").is_ok(),
+                validate_element(&shape, "p").is_ok(),
                 "valid vector failed: {}",
                 vector["name"]
             );
         }
         for vector in vectors["invalid"].as_array().unwrap() {
+            let mut shape = shape_element("invalid-vector", "p");
+            shape["text"] = json!({
+                "content":"vector",
+                "richContent":vector["doc"].clone()
+            });
             assert!(
-                validate_rich_text_document(&vector["doc"], "vector").is_err(),
+                validate_element(&shape, "p").is_err(),
                 "invalid vector passed: {}",
                 vector["name"]
             );

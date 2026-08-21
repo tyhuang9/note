@@ -301,7 +301,7 @@ function serializeBoundarySegments(segments: readonly BoundarySegment[]): string
   if (!first) return "";
   return [`M ${first.start.x} ${first.start.y}`, ...segments.map((segment) => segment.kind === "line"
     ? `L ${segment.end.x} ${segment.end.y}`
-    : `Q ${segment.control.x} ${segment.control.y} ${segment.end.x} ${segment.end.y}`), "Z"].join(" ");
+    : `Q ${segment.control.x} ${segment.control.y} ${segment.end.x} ${segment.end.y}`)].join(" ");
 }
 
 function rayIntersectionOnSegments(center: CanvasPoint, direction: CanvasPoint, segments: readonly BoundarySegment[]) {

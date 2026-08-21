@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { RoughGenerator } from "roughjs/bin/generator";
 import {
   arrowheadPoints,
   roughOptions,
@@ -7,6 +8,7 @@ import {
   shapeTextInsetStyle,
   shapeTextSurfaceColors,
   shapeRenderPadding,
+  shapeRoughOptions,
   shouldRenderShapeTextSurface,
 } from "../../src/canvas/components/PrimitiveElementView";
 import { elementIdsBackToFront } from "../../src/canvas/interaction/useCanvasInteraction";
@@ -54,6 +56,8 @@ describe("primitive rendering", () => {
       disableMultiStroke: true,
       disableMultiStrokeFill: true,
     });
+    expect(roughOptions(style)).not.toHaveProperty("preserveVertices");
+    expect(shapeRoughOptions(style)).toMatchObject({ preserveVertices: true });
   });
 
   it.each([
@@ -70,6 +74,22 @@ describe("primitive rendering", () => {
     expect(roundedRectanglePath(100, 60, 0)).toMatch(/Q 100 0 100 1\.\d+/);
     expect(roundedRectanglePath(100, 60, 0.5)).toContain("Q 100 0 100 15");
     expect(roundedRectanglePath(100, 60, 2)).toContain("Q 100 0 100 30");
+  });
+
+  it.each([
+    ["rectangle", roundedRectanglePath(100, 60, 0.5)],
+    ["diamond", roundedDiamondPath(100, 60)],
+  ])("keeps every generated %s outline segment joined without a redundant closing stroke", (_shape, path) => {
+    const generator = new RoughGenerator();
+    const drawable = generator.path(path, shapeRoughOptions(style));
+    const outline = generator.toPaths(drawable).find((candidate) => candidate.stroke !== "none");
+
+    expect(path).not.toMatch(/\sZ$/);
+    expect(outline).toBeDefined();
+    const continuity = generatedPathContinuity(outline!.d);
+    expect(continuity.moves).toBeGreaterThan(1);
+    expect(continuity.maxJoinGap).toBe(0);
+    expect(continuity.closeGap).toBe(0);
   });
 
   it("rounds diamond corners while its rendered path reaches every model cardinal extent", () => {
@@ -199,6 +219,45 @@ function sampledPathExtents(path: string) {
     maxY: Math.max(...points.map((point) => point.y)),
     minX: Math.min(...points.map((point) => point.x)),
     minY: Math.min(...points.map((point) => point.y)),
+  };
+}
+
+function generatedPathContinuity(path: string) {
+  const tokens = path.match(/[MCL]|-?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?/gi) ?? [];
+  let index = 0;
+  let first: { x: number; y: number } | null = null;
+  let previous: { x: number; y: number } | null = null;
+  let maxJoinGap = 0;
+  let moves = 0;
+  const number = () => Number(tokens[index++]);
+  while (index < tokens.length) {
+    const command = tokens[index++];
+    if (command === "M") {
+      const next = { x: number(), y: number() };
+      if (!first) first = next;
+      if (previous) maxJoinGap = Math.max(maxJoinGap, Math.hypot(next.x - previous.x, next.y - previous.y));
+      previous = next;
+      moves += 1;
+      continue;
+    }
+    if (command === "L") {
+      previous = { x: number(), y: number() };
+      continue;
+    }
+    if (command === "C") {
+      number();
+      number();
+      number();
+      number();
+      previous = { x: number(), y: number() };
+      continue;
+    }
+    throw new Error(`Unexpected generated path command ${command}`);
+  }
+  return {
+    closeGap: first && previous ? Math.hypot(first.x - previous.x, first.y - previous.y) : Number.POSITIVE_INFINITY,
+    maxJoinGap,
+    moves,
   };
 }
 

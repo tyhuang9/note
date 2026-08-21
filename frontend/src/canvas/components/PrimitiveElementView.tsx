@@ -78,6 +78,11 @@ export function roughOptions(style: ShapeElement["style"], visualScale = 1): Opt
   };
 }
 
+/** Keep every intended shape vertex shared while RoughJS varies each segment's interior. */
+export function shapeRoughOptions(style: ShapeElement["style"]): Options {
+  return { ...roughOptions(style), preserveVertices: true };
+}
+
 function finishRoughNode(node: SVGElement): SVGElement {
   node.setAttribute("stroke-linecap", "round");
   node.setAttribute("stroke-linejoin", "round");
@@ -102,7 +107,7 @@ export function renderShapeRoughSvg(
   const draw = new RoughSVG(svg);
   const safeWidth = Math.max(1, width);
   const safeHeight = Math.max(1, height);
-  const options = roughOptions(style);
+  const options = shapeRoughOptions(style);
   const node = shape === "rectangle"
     ? draw.path(roundedRectanglePath(safeWidth, safeHeight, style.roundness), options)
     : shape === "ellipse"

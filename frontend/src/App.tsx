@@ -784,6 +784,19 @@ function areIdSelectionsEqual(firstIds: string[], secondIds: string[]) {
   );
 }
 
+function hasShapeContainedText(
+  element: CanvasElement,
+): element is ShapeElement & Required<Pick<ShapeElement, "text">> {
+  return element.type === "shape" && element.text !== undefined;
+}
+
+function hasShapeContainedTextDifference(first: CanvasElement[], second: CanvasElement[]) {
+  const firstText = new Map(first.filter(hasShapeContainedText).map((element) => [element.id, JSON.stringify(element.text)]));
+  const secondText = new Map(second.filter(hasShapeContainedText).map((element) => [element.id, JSON.stringify(element.text)]));
+  return firstText.size !== secondText.size
+    || [...firstText].some(([elementId, text]) => secondText.get(elementId) !== text);
+}
+
 function markToolbarInteraction() {
   document.body.dataset.noteToolbarInteraction = "true";
   window.setTimeout(() => {
@@ -1291,6 +1304,7 @@ function App() {
   const pageViewportsRef = useRef<Map<string, PageViewport>>(new Map());
   const isSnapToGridEnabledRef = useRef(isSnapToGridEnabled);
   const editingBlockIdRef = useRef<string | null>(editingBlockId);
+  const shapeTextEditSessionRef = useRef<{ elementId: string; finish: () => void } | null>(null);
   const selectedBlockIdsRef = useRef<string[]>(selectedBlockIds);
   const selectedFolderIdRef = useRef(selectedFolderId);
   const selectedPageIdRef = useRef(selectedPageId);
@@ -1499,6 +1513,9 @@ function App() {
   const isTextFormattingVisible = Boolean(
     activeTextEditor && !activeTextEditor.isDestroyed
   ) || selectedDrawingElements.some((element) => element.type === "text");
+  const isShapeTextEditing = Boolean(
+    editingBlockId && data.elements.some((element) => element.id === editingBlockId && element.type === "shape"),
+  );
   const selectionHasLockedElements = useMemo(
     () => selectedBlockIds.some((id) => data.elements.some((element) => element.id === id && element.locked)),
     [data.elements, selectedBlockIds],
@@ -2925,6 +2942,7 @@ function App() {
 
     const currentData = dataRef.current;
     const currentSnapshot = cloneBlocks(currentData.elements);
+    const changedShapeContainedText = hasShapeContainedTextDifference(currentData.elements, snapshot);
 
     if (direction === "undo") {
       redoBlockHistoryRef.current = [
@@ -2960,6 +2978,9 @@ function App() {
     setActiveMode(
       retainedSelectedBlockIds.length > 0 ? "selected" : "canvas",
     );
+    if (changedShapeContainedText) {
+      setConnectorBindingAnnouncement(`${direction === "undo" ? "Undid" : "Redid"} a shape-contained text change.`);
+    }
   }
 
   function copySelectedBlocks() {
@@ -2991,6 +3012,10 @@ function App() {
         } as CopiedBlock;
       });
     copiedContentKindRef.current = "blocks";
+    const copiedShapeTextCount = blocksToCopy.filter(hasShapeContainedText).length;
+    if (copiedShapeTextCount > 0) {
+      setConnectorBindingAnnouncement(`Copied ${copiedShapeTextCount === 1 ? "one shape" : `${copiedShapeTextCount} shapes`} with contained text.`);
+    }
 
     return true;
   }
@@ -3372,6 +3397,9 @@ function App() {
         .map((block) => block.id),
     );
     if (blockIdsToDelete.size === 0) return false;
+    const deletedShapeTextCount = dataRef.current.elements.filter(
+      (element) => blockIdsToDelete.has(element.id) && hasShapeContainedText(element),
+    ).length;
 
     setBlocksWithHistory((currentBlocks) =>
       detachConnectorEndpointsForDeletedTargets(currentBlocks, blockIdsToDelete)
@@ -3385,6 +3413,9 @@ function App() {
         ? null
         : currentBlockId,
     );
+    if (deletedShapeTextCount > 0) {
+      setConnectorBindingAnnouncement(`Deleted ${deletedShapeTextCount === 1 ? "one shape" : `${deletedShapeTextCount} shapes`} with contained text. Undo is available.`);
+    }
     return true;
   }, []);
 
@@ -5368,6 +5399,7 @@ function App() {
     if (!nextPage) {
       return;
     }
+    finishActiveShapeTextEdit();
 
     if (isMultiSelect) {
       toggleSidebarPageSelection(pageId);
@@ -5500,6 +5532,7 @@ function App() {
   }
 
   function selectDrawingTool(tool: DrawingTool) {
+    finishActiveShapeTextEdit();
     isCanvasKeyboardActiveRef.current = true;
     setIsCanvasKeyboardActive(true);
     if (tool === "image") {
@@ -7213,6 +7246,7 @@ function App() {
   }
 
   const selectBlock = useCallback((blockId: string, additive = false) => {
+    finishActiveShapeTextEdit();
     const isDeselectingOnlyBlock =
       additive &&
       selectedBlockIdsRef.current.length === 1 &&
@@ -7247,6 +7281,9 @@ function App() {
   }, []);
 
   const editBlock = useCallback((blockId: string) => {
+    const shape = dataRef.current.elements.find(
+      (element): element is ShapeElement => element.id === blockId && element.type === "shape",
+    );
     editingBlockIdRef.current = blockId;
     setSelectedBlockIds((currentBlockIds) =>
       currentBlockIds.length === 1 && currentBlockIds[0] === blockId
@@ -7257,9 +7294,12 @@ function App() {
     setInsertionPoint(null);
     setIsCanvasKeyboardActive(true);
     setActiveMode("editing");
+    if (shape) {
+      setConnectorBindingAnnouncement(`Editing text inside ${shape.shape} shape. Escape cancels; Control+Enter saves.`);
+    }
   }, []);
 
-  const endBlockEdit = useCallback((blockId: string) => {
+  const endBlockEdit = useCallback((blockId: string, outcome?: "canceled" | "committed" | "unchanged", restoreFocus = true) => {
     if (editingBlockIdRef.current !== blockId) {
       return;
     }
@@ -7269,12 +7309,36 @@ function App() {
     setActiveMode((currentMode) =>
       currentMode === "editing" ? "selected" : currentMode,
     );
-    if (dataRef.current.elements.some((element) => element.id === blockId && element.type === "shape")) {
+    const shape = dataRef.current.elements.find((element) => element.id === blockId && element.type === "shape");
+    if (shape && outcome) {
+      setConnectorBindingAnnouncement(outcome === "committed"
+        ? "Shape text saved."
+        : outcome === "unchanged"
+          ? "Shape text unchanged."
+          : "Shape text editing canceled.");
+    }
+    if (shape && restoreFocus) {
       window.requestAnimationFrame(() => {
         blockElementsRef.current.get(blockId)?.focus({ preventScroll: true });
       });
     }
   }, []);
+
+  const registerShapeTextEditSession = useCallback((elementId: string, finish: (() => void) | null) => {
+    if (finish) {
+      shapeTextEditSessionRef.current = { elementId, finish };
+    } else if (shapeTextEditSessionRef.current?.elementId === elementId) {
+      shapeTextEditSessionRef.current = null;
+    }
+  }, []);
+
+  function finishActiveShapeTextEdit() {
+    const session = shapeTextEditSessionRef.current;
+    if (!session) return false;
+    shapeTextEditSessionRef.current = null;
+    session.finish();
+    return true;
+  }
 
   const handleFocusEndHandled = useCallback(() => {
     setFocusEndBlockId(null);
@@ -7305,10 +7369,13 @@ function App() {
   }
 
   function leaveTextEditing() {
+    const finishedShapeSession = finishActiveShapeTextEdit();
     blurActiveTextEntry();
     window.getSelection()?.removeAllRanges();
-    setActiveTextEditor(null);
-    setEditingBlockId(null);
+    if (!finishedShapeSession) {
+      setActiveTextEditor(null);
+      setEditingBlockId(null);
+    }
   }
 
   function setTextFontFamily(fontFamily: TextFontFamily) {
@@ -7874,7 +7941,7 @@ function App() {
       />
 
       <section
-        className={`workspace ${isTextFormattingVisible ? "has-text-formatting" : ""} ${isPropertiesPanelOpen && availableDrawingPropertiesContext ? "has-compact-properties" : ""}`}
+        className={`workspace ${isTextFormattingVisible ? "has-text-formatting" : ""} ${isShapeTextEditing ? "is-shape-text-editing" : ""} ${isPropertiesPanelOpen && availableDrawingPropertiesContext ? "has-compact-properties" : ""}`}
         inert={
           isAssistantOverlayOpen || isExplorerOverlayOpen ? true : undefined
         }
@@ -8142,6 +8209,7 @@ function App() {
                     onActiveEditorChange={setActiveTextEditor}
                     onEdit={editBlock}
                     onEditEnd={endBlockEdit}
+                    onEditSessionChange={registerShapeTextEditSession}
                     onElementChange={registerBlockElement}
                     onKeyboardMove={moveCanvasElementByKeyboard}
                     onSelect={selectBlock}

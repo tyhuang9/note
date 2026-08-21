@@ -347,6 +347,14 @@ export function richTextToPlainText(content: JSONContent): string {
   return lines.join("\n").replace(/\n{3,}/g, "\n\n");
 }
 
+export function getShapeTextAccessibleExcerpt(value: RichTextValue, maximumLength = 120) {
+  const label = richTextToPlainText(getCanonicalShapeRichTextDocument(value))
+    .trim()
+    .replace(/\s+/g, " ");
+  if (label.length <= maximumLength) return label;
+  return `${label.slice(0, Math.max(0, maximumLength - 3)).trimEnd()}...`;
+}
+
 function collectPlainText(content: JSONContent, lines: string[]) {
   if (content.type === "text") {
     appendInline(lines, content.text ?? "");

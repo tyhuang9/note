@@ -15,11 +15,15 @@ test("locked shape edits contained text as one stable connector target and one h
   await shape.press("F2");
   const editor = shape.locator('.shape-contained-text-editor-content[role="textbox"]');
   await expect(editor).toBeFocused();
+  await expect(page.locator(".canvas-accessibility-status")).toContainText("Editing text inside rectangle shape");
+  await expect(shape).toHaveAttribute("aria-label", "Editing text inside rectangle shape. Escape cancels. Control+Enter saves.");
+  await expect(shape).not.toHaveAttribute("aria-label", /Select|F2/);
   await editor.fill("Discarded");
   await editor.press("Escape");
   await expect(shape).toContainText("Original label");
   await expect.poll(() => writeCount(page)).toBe(baselineWrites);
   await expect(shape).toBeFocused();
+  await expect(page.locator(".canvas-accessibility-status")).toContainText("Shape text editing canceled");
 
   await shape.press("F2");
   await expect(editor).toBeFocused();
@@ -28,6 +32,7 @@ test("locked shape edits contained text as one stable connector target and one h
   await expect(shape).toContainText("Committed label");
   await expect(shape).toBeFocused();
   await expect.poll(() => writeCount(page)).toBe(baselineWrites + 1);
+  await expect(page.locator(".canvas-accessibility-status")).toContainText("Shape text saved");
 
   const persisted = await page.evaluate(() => (window as unknown as {
     __shapeTextWorkspace: { elements: Array<Record<string, unknown>> };
@@ -64,6 +69,7 @@ test("double-click and blur preserve empty omission, then rich text survives rel
   await expect(editor).toBeFocused();
   await page.getByRole("tabpanel").click({ position: { x: 40, y: 80 } });
   await expect.poll(() => writeCount(page)).toBe(baselineWrites);
+  await expect(page.locator(".canvas-accessibility-status")).toContainText("Shape text unchanged");
   expect(await shapeRecord(page, "blank-shape")).not.toHaveProperty("text");
 
   await shape.focus();
@@ -82,6 +88,7 @@ test("double-click and blur preserve empty omission, then rich text survives rel
   await reloaded.focus();
   await reloaded.press("Enter");
   await reloaded.press("Control+c");
+  await expect(page.locator(".canvas-accessibility-status")).toContainText("Copied one shape with contained text");
   await reloaded.press("Control+v");
   await expect.poll(async () => page.locator('[data-canvas-element-type="shape"]', { hasText: "Rich label" }).count()).toBe(2);
   await expect.poll(() => page.evaluate(() => (window as unknown as {
@@ -100,7 +107,7 @@ test("rich structure clips and transforms with its composite shape through resiz
 
   const shape = page.locator('[data-canvas-element-id="rich-shape"]');
   const text = shape.locator(".shape-contained-text-display");
-  await expect(shape).toHaveAttribute("aria-label", /Heading\s+Item\s+Link/);
+  await expect(shape).toHaveAttribute("aria-label", /Heading\s+Item\s+PixelLink/);
   await expect(text.locator("h2")).toHaveText("Heading");
   await expect(text.locator("ul li")).toHaveText("Item");
   await expect(text.locator("img")).toHaveAttribute("alt", "Pixel");
@@ -123,11 +130,91 @@ test("rich structure clips and transforms with its composite shape through resiz
 
   await page.keyboard.press("Delete");
   await expect(shape).toHaveCount(0);
+  await expect(page.locator(".canvas-accessibility-status")).toContainText("Deleted one shape with contained text");
   await page.getByRole("tabpanel").focus();
   await page.keyboard.press("Control+z");
   const restored = page.locator('[data-canvas-element-id="rich-shape"]');
   await expect(restored.locator("h2")).toHaveText("Heading");
   await expect(restored).toHaveAttribute("data-canvas-element-id", "rich-shape");
+  await expect(page.locator(".canvas-accessibility-status")).toContainText("Undid a shape-contained text change");
+  await page.keyboard.press("Control+y");
+  await expect(restored).toHaveCount(0);
+  await expect(page.locator(".canvas-accessibility-status")).toContainText("Redid a shape-contained text change");
+});
+
+test("direct shape-root double-click edits locked and unlocked shapes but ignores click-drag", async ({ page }) => {
+  await installShapeTextWorkspace(page);
+  await page.goto("/");
+
+  const lockedShape = page.locator('[data-canvas-element-id="shape"]');
+  await lockedShape.dispatchEvent("dblclick", { button: 0, detail: 2 });
+  const lockedEditor = lockedShape.locator('[role="textbox"]');
+  await expect(lockedEditor).toBeFocused();
+  await lockedEditor.dispatchEvent("dblclick", { button: 0, detail: 2 });
+  await expect(lockedEditor).toBeFocused();
+  await lockedEditor.press("Escape");
+
+  const blankShape = page.locator('[data-canvas-element-id="blank-shape"]');
+  await blankShape.dispatchEvent("pointerdown", { button: 0, clientX: 20, clientY: 20, pointerId: 41 });
+  await blankShape.dispatchEvent("pointermove", { button: 0, clientX: 25, clientY: 20, pointerId: 41 });
+  await blankShape.dispatchEvent("pointerup", { button: 0, clientX: 25, clientY: 20, pointerId: 41 });
+  await blankShape.dispatchEvent("dblclick", { button: 0, detail: 2 });
+  await expect(blankShape.locator('[role="textbox"]')).toHaveCount(0);
+
+  await blankShape.dispatchEvent("dblclick", { button: 0, detail: 2 });
+  await expect(blankShape.locator('[role="textbox"]')).toBeFocused();
+  await blankShape.locator('[role="textbox"]').press("Escape");
+});
+
+for (const exit of ["canvas", "tool", "page", "selection"] as const) {
+  test(`live shape draft commits once after keyboard focus moves through toolbar to ${exit}`, async ({ page }) => {
+    await installShapeTextWorkspace(page);
+    await page.goto("/");
+    await observeShapeTextAnnouncements(page);
+
+    const shape = page.locator('[data-canvas-element-id="blank-shape"]');
+    await shape.focus();
+    await shape.press("F2");
+    const editor = shape.locator('[role="textbox"]');
+    await editor.fill(`Draft for ${exit}`);
+    const baselineWrites = await writeCount(page);
+    await editor.press("Tab");
+    await expect(page.getByRole("combobox", { name: "Font family" })).toBeFocused();
+    await expect.poll(() => writeCount(page)).toBe(baselineWrites);
+
+    if (exit === "canvas") {
+      await page.getByRole("tabpanel").focus();
+    } else if (exit === "tool") {
+      await page.locator('.canvas-tool-palette [data-tool="rectangle"]').focus();
+      await page.keyboard.press("Enter");
+    } else if (exit === "page") {
+      await page.getByRole("tab", { name: "Second page" }).focus();
+      await page.keyboard.press("Enter");
+    } else {
+      await page.locator('[data-canvas-element-id="shape"]').focus();
+      await page.keyboard.press("Enter");
+    }
+
+    await expect.poll(() => writeCount(page)).toBe(baselineWrites + 1);
+    await expect.poll(async () => (await shapeRecord(page, "blank-shape") as { text?: { content?: string } })?.text?.content).toBe(`Draft for ${exit}`);
+    expect((await shapeTextAnnouncements(page)).filter((message) => message === "Shape text saved.")).toHaveLength(1);
+  });
+}
+
+test("pointer exit commits the current shape draft once", async ({ page }) => {
+  await installShapeTextWorkspace(page);
+  await page.goto("/");
+  await observeShapeTextAnnouncements(page);
+
+  const shape = page.locator('[data-canvas-element-id="blank-shape"]');
+  await shape.focus();
+  await shape.press("F2");
+  await shape.locator('[role="textbox"]').fill("Pointer exit draft");
+  const baselineWrites = await writeCount(page);
+  await page.getByRole("tabpanel").click({ position: { x: 24, y: 190 } });
+  await expect.poll(() => writeCount(page)).toBe(baselineWrites + 1);
+  await expect.poll(async () => (await shapeRecord(page, "blank-shape") as { text?: { content?: string } })?.text?.content).toBe("Pointer exit draft");
+  expect((await shapeTextAnnouncements(page)).filter((message) => message === "Shape text saved.")).toHaveLength(1);
 });
 
 for (const variant of [
@@ -193,11 +280,96 @@ test("shape accessible names use a bounded text excerpt", async ({ page }) => {
   const label = await shape.getAttribute("aria-label");
   expect(label).not.toBeNull();
   expect(label?.length).toBeLessThanOrEqual(210);
-  expect(label).toContain("Accessible label");
+  expect(label).toContain("Canonical accessible label Diagram description");
+  expect(label).not.toContain("Stale fallback");
   expect(label).toContain("Press F2 to edit contained text");
   await shape.focus();
   await shape.press("F2");
-  await expect(shape.locator('[role="textbox"]')).toHaveText(/Accessible label label label/);
+  await expect(shape.locator('[role="textbox"]')).toHaveText(/Canonical accessible label.*Canonical detail/);
+  await expect(shape.locator('[role="textbox"] img')).toHaveAttribute("alt", "Diagram description");
+});
+
+const toolbarGeometryVariants = ([
+  { label: "desktop", viewport: { height: 720, width: 1280 } },
+  { label: "compact", viewport: { height: 700, width: 320 } },
+] as const).flatMap(({ label, viewport }) => ([false, true] as const).flatMap((isDarkMode) => ([0.5, 1, 2] as const).map((zoomLevel) => ({
+  isDarkMode,
+  label: `${label} ${isDarkMode ? "dark" : "light"} ${Math.round(zoomLevel * 100)}%`,
+  viewport,
+  zoomLevel,
+}))));
+
+for (const variant of toolbarGeometryVariants) {
+  test(`shape toolbar remains separate, contained, and touch sized at ${variant.label}`, async ({ page }) => {
+    await page.setViewportSize(variant.viewport);
+    await installShapeTextWorkspace(page, { isDarkMode: variant.isDarkMode, rotation: 0, shape: "rectangle", zoomLevel: variant.zoomLevel });
+    await page.goto("/");
+
+    const shape = page.locator('[data-canvas-element-id="shape"]');
+    await shape.focus();
+    if (variant.viewport.width === 320) {
+      await shape.press("Enter");
+      await page.getByRole("button", { name: "Drawing properties", exact: true }).click();
+      await shape.focus();
+    }
+    await shape.press("F2");
+    const textToolbar = page.getByRole("toolbar", { name: "Text formatting" });
+    const drawingToolbar = page.getByRole("toolbar", { name: "Drawing tools" });
+    await expect(textToolbar).toBeVisible();
+    const geometry = await page.evaluate(() => {
+      const bounds = (selector: string) => {
+        const element = document.querySelector<HTMLElement>(selector);
+        if (!element) throw new Error(`Missing ${selector}`);
+        const rectangle = element.getBoundingClientRect();
+        return { bottom: rectangle.bottom, height: rectangle.height, left: rectangle.left, right: rectangle.right, top: rectangle.top, width: rectangle.width };
+      };
+      const controls = [...document.querySelectorAll<HTMLElement>(".global-text-toolbar button, .global-text-toolbar select")]
+        .map((element) => {
+          const rectangle = element.getBoundingClientRect();
+          return { height: rectangle.height, width: rectangle.width };
+        });
+      return {
+        drawingToolbar: bounds(".canvas-tool-palette"),
+        propertiesPanel: bounds(".drawing-properties-panel"),
+        textToolbar: bounds(".global-text-toolbar"),
+        controls,
+        viewportHeight: document.documentElement.clientHeight,
+        viewportWidth: document.documentElement.clientWidth,
+      };
+    });
+    expect(geometry.textToolbar.top).toBeGreaterThanOrEqual(geometry.drawingToolbar.bottom);
+    expect(geometry.textToolbar.left).toBeGreaterThanOrEqual(0);
+    expect(geometry.textToolbar.right).toBeLessThanOrEqual(geometry.viewportWidth);
+    expect(geometry.propertiesPanel.top).toBeGreaterThanOrEqual(geometry.textToolbar.bottom);
+    expect(geometry.propertiesPanel.bottom).toBeLessThanOrEqual(geometry.viewportHeight);
+    for (const control of geometry.controls) {
+      expect(control.height).toBeGreaterThanOrEqual(44);
+      expect(control.width).toBeGreaterThanOrEqual(44);
+    }
+    await expect(page.locator(".zoom-indicator")).toHaveText(`${Math.round(variant.zoomLevel * 100)}%`);
+  });
+}
+
+test("dark shape code blocks retain readable contrast", async ({ page }) => {
+  await installShapeTextWorkspace(page, { isDarkMode: true, rotation: 0, shape: "rectangle", zoomLevel: 1 });
+  await page.goto("/");
+
+  const code = page.locator('[data-canvas-element-id="code-shape"] pre code');
+  await expect(code).toHaveText("const answer = 42;");
+  const ratio = await code.evaluate((element) => {
+    const parse = (value: string) => value.match(/[\d.]+/g)?.slice(0, 3).map(Number) ?? [0, 0, 0];
+    const luminance = (value: string) => {
+      const channels = parse(value).map((channel) => {
+        const normalized = channel / 255;
+        return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+      });
+      return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+    };
+    const foreground = luminance(getComputedStyle(element).color);
+    const background = luminance(getComputedStyle(element.parentElement!).backgroundColor);
+    return (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05);
+  });
+  expect(ratio).toBeGreaterThanOrEqual(4.5);
 });
 
 async function writeCount(page: Page) {
@@ -210,9 +382,27 @@ async function shapeRecord(page: Page, id: string) {
   }).__shapeTextWorkspace.elements.find((element) => element.id === shapeId), id);
 }
 
+async function observeShapeTextAnnouncements(page: Page) {
+  await page.evaluate(() => {
+    const runtime = window as unknown as { __shapeTextAnnouncements: string[] };
+    runtime.__shapeTextAnnouncements = [];
+    const status = document.querySelector<HTMLElement>(".canvas-accessibility-status");
+    if (!status) throw new Error("Shape text status region is missing");
+    const record = () => {
+      const message = status.textContent?.trim();
+      if (message) runtime.__shapeTextAnnouncements.push(message);
+    };
+    new MutationObserver(record).observe(status, { childList: true, characterData: true, subtree: true });
+  });
+}
+
+async function shapeTextAnnouncements(page: Page) {
+  return page.evaluate(() => (window as unknown as { __shapeTextAnnouncements: string[] }).__shapeTextAnnouncements);
+}
+
 async function installShapeTextWorkspace(
   page: Page,
-  richShapeLayout: { isDarkMode: boolean; rotation: number; shape: "rectangle" | "ellipse" | "diamond" } | null = null,
+  richShapeLayout: { isDarkMode: boolean; rotation: number; shape: "rectangle" | "ellipse" | "diamond"; zoomLevel?: number } | null = null,
 ) {
   await page.addInitScript((layout) => {
     type ElementRecord = Record<string, unknown> & { id: string; pageId: string };
@@ -296,6 +486,27 @@ async function installShapeTextWorkspace(
         },
         {
           createdAt: 1,
+          height: 140,
+          id: "code-shape",
+          locked: false,
+          opacity: 1,
+          pageId: "page",
+          rotation: 0,
+          shape: "rectangle",
+          style: { ...style, seed: 47 },
+          text: {
+            content: "const answer = 42;",
+            richContent: { type: "doc", content: [{ type: "codeBlock", content: [{ type: "text", text: "const answer = 42;" }] }] },
+          },
+          type: "shape",
+          updatedAt: 1,
+          width: 300,
+          x: 920,
+          y: 1020,
+          zIndex: 3,
+        },
+        {
+          createdAt: 1,
           height: 120,
           id: "a11y-shape",
           locked: false,
@@ -305,7 +516,15 @@ async function installShapeTextWorkspace(
           shape: "rectangle",
           style: { ...style, seed: 46 },
           text: {
-            content: `Accessible ${"label ".repeat(100)}`.trim(),
+            content: `Stale fallback ${"label ".repeat(100)}`.trim(),
+            richContent: {
+              type: "doc",
+              content: [
+                { type: "paragraph", content: [{ type: "text", text: "Canonical accessible label" }] },
+                { type: "image", attrs: { src: "data:image/png;base64,AA==", alt: "Diagram description", title: null, width: 24, height: 24 } },
+                { type: "paragraph", content: [{ type: "text", text: `Canonical ${"detail ".repeat(100)}`.trim() }] },
+              ],
+            },
           },
           type: "shape",
           updatedAt: 1,
@@ -345,8 +564,16 @@ async function installShapeTextWorkspace(
       ] as ElementRecord[],
       folders: [],
       isDarkMode: layout?.isDarkMode ?? false,
-      pages: [{ folderId: "", id: "page", isBookmarked: false, revision: 0, title: "Shape text" }],
-      sessionState: { openPageTabIds: ["page"], selectedFolderId: "", selectedPageId: "page" },
+      pages: [
+        { folderId: "", id: "page", isBookmarked: false, revision: 0, title: "Shape text" },
+        { folderId: "", id: "page-2", isBookmarked: false, revision: 0, title: "Second page" },
+      ],
+      sessionState: {
+        openPageTabIds: ["page", "page-2"],
+        pageViewports: { page: { panOffset: { x: 0, y: 0 }, zoomLevel: layout?.zoomLevel ?? 1 } },
+        selectedFolderId: "",
+        selectedPageId: "page",
+      },
       warnings: [],
     };
     const savedElements = window.localStorage.getItem("shape-text-elements");

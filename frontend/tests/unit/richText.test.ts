@@ -4,6 +4,7 @@ import {
   cloneRichTextValue,
   getCanonicalRichTextDocument,
   getCanonicalShapeRichTextDocument,
+  getShapeTextAccessibleExcerpt,
   hasTipTapRenderableContent,
   richTextToPlainText,
   MAX_EMBEDDED_RICH_IMAGE_BYTES,
@@ -43,6 +44,25 @@ describe("shared rich text model", () => {
     expect(getCanonicalRichTextDocument({ content: "Important", richContent })).toBe(richContent);
     expect(hasTipTapRenderableContent(richContent)).toBe(true);
     expect(richTextToPlainText(richContent)).toBe("Important\n");
+  });
+
+  it("builds a bounded accessible excerpt from canonical rich text and image alt", () => {
+    const value = {
+      content: "stale fallback that must not be announced",
+      richContent: {
+        type: "doc",
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: "Canonical label" }] },
+          { type: "image", attrs: { src: "data:image/png;base64,AA==", alt: "Diagram description" } },
+          { type: "paragraph", content: [{ type: "text", text: "x".repeat(200) }] },
+        ],
+      },
+    };
+    const excerpt = getShapeTextAccessibleExcerpt(value);
+    expect(excerpt).toContain("Canonical label Diagram description");
+    expect(excerpt).not.toContain("stale fallback");
+    expect(excerpt).toHaveLength(120);
+    expect(excerpt.endsWith("...")).toBe(true);
   });
 
   it("deep-clones nested documents while preserving optional omission", () => {

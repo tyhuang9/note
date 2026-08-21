@@ -11,9 +11,9 @@ import { canvasColorToCss } from "../rendering/canvasColor";
 import { createSlashCommandExtension } from "../../editor/SlashCommandExtension";
 import {
   getCanonicalShapeRichTextDocument,
+  getShapeTextAccessibleExcerpt,
   hasTipTapRenderableContent,
   renderShapeRichTextContent,
-  richTextToPlainText,
   shapeRichTextExtensions,
   validateRichTextDocument,
 } from "../../editor/richText";
@@ -31,9 +31,12 @@ type ShapeElementViewProps = PrimitiveElementViewProps<ShapeElement> & {
   isEditing: boolean;
   onActiveEditorChange: (editor: Editor | null) => void;
   onEdit: (elementId: string) => void;
-  onEditEnd: (elementId: string) => void;
+  onEditEnd: (elementId: string, outcome?: ShapeTextEditOutcome, restoreFocus?: boolean) => void;
+  onEditSessionChange: (elementId: string, finish: (() => void) | null) => void;
   onTextCommit: (elementId: string, text: RichTextValue | undefined) => void;
 };
+
+export type ShapeTextEditOutcome = "canceled" | "committed" | "unchanged";
 
 function createPrimitiveRootRef(elementId: string, onElementChange?: PrimitiveElementViewProps<ShapeElement>["onElementChange"]): RefCallback<HTMLDivElement> {
   return (element) => onElementChange?.(elementId, element);
@@ -143,8 +146,10 @@ function primitiveKeyDown(
   onKeyboardMove(element.id, delta);
 }
 
-export function ShapeElementView({ element, isDragSourceHidden = false, isEditing, isSelected, onActiveEditorChange, onEdit, onEditEnd, onElementChange, onKeyboardMove, onSelect, onTextCommit }: ShapeElementViewProps) {
+export function ShapeElementView({ element, isDragSourceHidden = false, isEditing, isSelected, onActiveEditorChange, onEdit, onEditEnd, onEditSessionChange, onElementChange, onKeyboardMove, onSelect, onTextCommit }: ShapeElementViewProps) {
   const ref = useRef<SVGSVGElement | null>(null);
+  const pointerGesture = useRef<{ didMove: boolean; pointerId: number; x: number; y: number } | null>(null);
+  const previousPointerGestureWasDrag = useRef(false);
   const rootRef = createPrimitiveRootRef(element.id, onElementChange);
   const renderPadding = shapeRenderPadding(element.style);
   const accessibleName = useMemo(
@@ -159,12 +164,22 @@ export function ShapeElementView({ element, isDragSourceHidden = false, isEditin
   }, [element, renderPadding]);
   return (
     <div
-      aria-label={accessibleName}
-      aria-keyshortcuts="F2"
+      aria-label={isEditing ? shapeEditingAccessibleName(element) : accessibleName}
+      aria-keyshortcuts={isEditing ? "Escape Control+Enter" : "F2"}
       aria-pressed={isEditing ? undefined : isSelected}
       className={`primitive-element shape-element ${isEditing ? "is-editing" : ""} ${isDragSourceHidden ? "is-drag-source-hidden" : ""}`}
       data-canvas-element-id={element.id}
       data-canvas-element-type="shape"
+      onDoubleClick={(event) => {
+        if (isEditing) return;
+        if (previousPointerGestureWasDrag.current) {
+          previousPointerGestureWasDrag.current = false;
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        onEdit(element.id);
+      }}
       onKeyDown={(event) => {
         if (event.key === "F2") {
           event.preventDefault();
@@ -173,6 +188,25 @@ export function ShapeElementView({ element, isDragSourceHidden = false, isEditin
           return;
         }
         primitiveKeyDown(event, element, onKeyboardMove, onSelect);
+      }}
+      onPointerCancel={() => {
+        previousPointerGestureWasDrag.current = Boolean(pointerGesture.current?.didMove);
+        pointerGesture.current = null;
+      }}
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        pointerGesture.current = { didMove: false, pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+      }}
+      onPointerMove={(event) => {
+        const gesture = pointerGesture.current;
+        if (!gesture || gesture.pointerId !== event.pointerId) return;
+        if (Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) >= 4) gesture.didMove = true;
+      }}
+      onPointerUp={(event) => {
+        const gesture = pointerGesture.current;
+        if (!gesture || gesture.pointerId !== event.pointerId) return;
+        previousPointerGestureWasDrag.current = gesture.didMove;
+        pointerGesture.current = null;
       }}
       ref={rootRef}
       role={isEditing ? "group" : "button"}
@@ -192,11 +226,12 @@ export function ShapeElementView({ element, isDragSourceHidden = false, isEditin
         <ShapeContainedTextEditor
           element={element}
           onActiveEditorChange={onActiveEditorChange}
-          onCancel={() => onEditEnd(element.id)}
-          onCommit={(text) => {
+          onCancel={(restoreFocus) => onEditEnd(element.id, "canceled", restoreFocus)}
+          onCommit={(text, outcome, restoreFocus) => {
             onTextCommit(element.id, text);
-            onEditEnd(element.id);
+            onEditEnd(element.id, outcome, restoreFocus);
           }}
+          onEditSessionChange={onEditSessionChange}
         />
       ) : element.text ? (
         <div
@@ -215,12 +250,12 @@ export function ShapeElementView({ element, isDragSourceHidden = false, isEditin
 
 function shapeAccessibleName(element: ShapeElement) {
   const action = element.locked ? "Select locked" : "Select and move";
-  const label = (element.text
-    ? element.text.content.trim()
-      || (element.text.richContent ? richTextToPlainText(element.text.richContent).trim() : "")
-    : "").replace(/\s+/g, " ");
-  const excerpt = label.length > 120 ? `${label.slice(0, 117).trimEnd()}...` : label;
+  const excerpt = element.text ? getShapeTextAccessibleExcerpt(element.text) : "";
   return `${action} ${element.shape} shape${excerpt ? `, text: ${excerpt}` : ""}. Press F2 to edit contained text.`;
+}
+
+function shapeEditingAccessibleName(element: ShapeElement) {
+  return `Editing text inside ${element.shape} shape. Escape cancels. Control+Enter saves.`;
 }
 
 function shapeTextInsetStyle(element: ShapeElement) {
@@ -242,11 +277,12 @@ function shapeTextInsetStyle(element: ShapeElement) {
 type ShapeContainedTextEditorProps = {
   element: ShapeElement;
   onActiveEditorChange: (editor: Editor | null) => void;
-  onCancel: () => void;
-  onCommit: (text: RichTextValue | undefined) => void;
+  onCancel: (restoreFocus: boolean) => void;
+  onCommit: (text: RichTextValue | undefined, outcome: Exclude<ShapeTextEditOutcome, "canceled">, restoreFocus: boolean) => void;
+  onEditSessionChange: ShapeElementViewProps["onEditSessionChange"];
 };
 
-function ShapeContainedTextEditor({ element, onActiveEditorChange, onCancel, onCommit }: ShapeContainedTextEditorProps) {
+function ShapeContainedTextEditor({ element, onActiveEditorChange, onCancel, onCommit, onEditSessionChange }: ShapeContainedTextEditorProps) {
   const initialText = useMemo(() => element.text ?? { content: "" }, [element.id]);
   const baselineDocument = useRef(getCanonicalShapeRichTextDocument(initialText));
   const finalized = useRef(false);
@@ -255,12 +291,13 @@ function ShapeContainedTextEditor({ element, onActiveEditorChange, onCancel, onC
     [element.id],
   );
 
-  function finish(editor: Editor, cancel: boolean) {
+  function finish(editor: Editor, cancel: boolean, restoreFocus: boolean) {
     if (finalized.current) return;
     finalized.current = true;
+    onEditSessionChange(element.id, null);
     onActiveEditorChange(null);
     if (cancel) {
-      onCancel();
+      onCancel(restoreFocus);
       return;
     }
     const richContent = editor.getJSON();
@@ -269,18 +306,18 @@ function ShapeContainedTextEditor({ element, onActiveEditorChange, onCancel, onC
     const didChange = content !== initialText.content
       || JSON.stringify(richContent) !== JSON.stringify(baselineDocument.current);
     if (!didChange) {
-      onCommit(element.text);
+      onCommit(element.text, "unchanged", restoreFocus);
       return;
     }
     if (isEmpty) {
-      onCommit(undefined);
+      onCommit(undefined, "committed", restoreFocus);
       return;
     }
     if (validateRichTextDocument(richContent) !== null) {
-      onCancel();
+      onCancel(restoreFocus);
       return;
     }
-    onCommit({ content, richContent });
+    onCommit({ content, richContent }, "committed", restoreFocus);
   }
 
   const editor = useEditor({
@@ -297,14 +334,25 @@ function ShapeContainedTextEditor({ element, onActiveEditorChange, onCancel, onC
         if (event.key === "Escape") {
           event.preventDefault();
           event.stopPropagation();
-          if (editor) finish(editor, true);
+          if (editor) finish(editor, true, true);
           return true;
         }
         if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
           event.preventDefault();
           event.stopPropagation();
-          if (editor) finish(editor, false);
+          if (editor) finish(editor, false, true);
           return true;
+        }
+        if (event.key === "Tab") {
+          const toolbarControls = [...document.querySelectorAll<HTMLElement>(
+            ".global-text-toolbar button:not(:disabled), .global-text-toolbar select:not(:disabled)",
+          )];
+          const nextControl = event.shiftKey ? toolbarControls[toolbarControls.length - 1] : toolbarControls[0];
+          if (nextControl) {
+            event.preventDefault();
+            nextControl.focus();
+            return true;
+          }
         }
         return false;
       },
@@ -318,16 +366,33 @@ function ShapeContainedTextEditor({ element, onActiveEditorChange, onCancel, onC
         onActiveEditorChange(blurredEditor);
         return;
       }
-      finish(blurredEditor, false);
+      finish(blurredEditor, false, false);
     },
     onCreate: ({ editor: createdEditor }) => {
-      onActiveEditorChange(createdEditor);
       queueMicrotask(() => createdEditor.commands.focus("end"));
     },
-    onDestroy: () => onActiveEditorChange(null),
   });
 
-  useEffect(() => () => onActiveEditorChange(null), [onActiveEditorChange]);
+  useEffect(() => {
+    if (!editor) return;
+    const finishCurrentDraft = () => finish(editor, false, false);
+    const finishWhenFocusLeavesSession = (event: FocusEvent) => {
+      const target = event.target;
+      if (
+        target instanceof HTMLElement
+        && (target.closest(".shape-contained-text-editor") || target.closest(".global-text-toolbar"))
+      ) return;
+      finishCurrentDraft();
+    };
+    onActiveEditorChange(editor);
+    onEditSessionChange(element.id, finishCurrentDraft);
+    document.addEventListener("focusin", finishWhenFocusLeavesSession);
+    return () => {
+      document.removeEventListener("focusin", finishWhenFocusLeavesSession);
+      onActiveEditorChange(null);
+      onEditSessionChange(element.id, null);
+    };
+  }, [editor, element.id, onActiveEditorChange, onEditSessionChange]);
 
   return (
     <div className="shape-contained-text shape-contained-text-editor" style={shapeTextInsetStyle(element)}>

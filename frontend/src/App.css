@@ -4436,6 +4436,16 @@ h2 {
   background: transparent;
 }
 
+.app-shell.is-dark .shape-contained-text pre,
+.app-shell.is-dark .shape-contained-text code {
+  color: #f2f2f2;
+  background: #18171d;
+}
+
+.app-shell.is-dark .shape-contained-text pre code {
+  background: transparent;
+}
+
 .app-shell.is-dark .text-block-editor .ProseMirror hr,
 .app-shell.is-dark .text-block-display hr {
   background: #554b66;
@@ -5400,6 +5410,34 @@ h2 {
   .rail-button {
     transition: none;
   }
+}
+
+/* Shape text editing keeps both canvas toolbars separate and touch accessible. */
+.workspace.is-shape-text-editing .global-text-toolbar {
+  top: 112px;
+  height: 54px;
+}
+
+.workspace.is-shape-text-editing .global-text-toolbar button,
+.workspace.is-shape-text-editing .text-toolbar-select {
+  height: 44px;
+  min-height: 44px;
+}
+
+.workspace.is-shape-text-editing .global-text-toolbar button {
+  flex-basis: 44px;
+  width: 44px;
+  min-width: 44px;
+}
+
+.workspace.is-shape-text-editing .text-toolbar-select {
+  line-height: 44px;
+}
+
+.workspace.is-shape-text-editing.has-text-formatting .drawing-properties-panel,
+.workspace.is-shape-text-editing.has-text-formatting .drawing-properties-panel.is-compact-open {
+  top: 184px;
+  max-height: calc(100% - 200px);
 }
 
 /* Contextual drawing controls */

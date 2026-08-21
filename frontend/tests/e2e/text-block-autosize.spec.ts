@@ -28,7 +28,7 @@ test("automatic textboxes expand to the intrinsic width of rich text", async ({
   await expect.poll(() => getRenderedLineCount(editor)).toBe(1);
 });
 
-test("manually resized textboxes keep their width, wrap, and retain click-to-caret", async ({
+test("manually resized textboxes keep their width, wrap, and retain double-click-to-caret", async ({
   page,
 }) => {
   const { block, editor } = await createTextbox(page, "seed");
@@ -38,7 +38,7 @@ test("manually resized textboxes keep their width, wrap, and retain click-to-car
   const text =
     "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda";
 
-  await block.locator(".text-block-display").click();
+  await block.locator(".text-block-display").dblclick();
   await expect(editor).toBeFocused();
   await page.keyboard.press("Control+A");
   await page.keyboard.insertText(text);
@@ -57,7 +57,7 @@ test("manually resized textboxes keep their width, wrap, and retain click-to-car
     text.indexOf("epsilon"),
   );
 
-  await page.mouse.click(caretPoint.x, caretPoint.y);
+  await page.mouse.dblclick(caretPoint.x, caretPoint.y);
   await expect(editor).toBeFocused();
   await page.keyboard.type("|");
 

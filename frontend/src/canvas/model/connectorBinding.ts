@@ -8,7 +8,11 @@ import type {
   TextElement,
 } from "./elements";
 import type { CanvasPoint } from "./geometry";
-import { getShapeBoundaryPoint, projectPointToShapeBoundary } from "./shapeBoundary";
+import {
+  getShapeBoundaryPoint,
+  getShapeSupportPoint,
+  projectPointToShapeBoundary,
+} from "./shapeBoundary";
 
 /** The screen-space capture radius stays constant as the canvas zooms. */
 export const CONNECTOR_BINDING_SNAP_RADIUS_PX = 18;
@@ -18,6 +22,8 @@ export const CONNECTOR_BINDING_REVEAL_RADIUS_PX = 28;
 export const MAX_CANVAS_VALUE = 1_000_000;
 export const MAX_CANVAS_ROTATION_DEGREES = 360;
 const DEFAULT_KEYBOARD_ARROW_LENGTH = 160;
+export const CONNECTOR_ARROWHEAD_LENGTH = 12;
+export const CONNECTOR_ARROWHEAD_HALF_WIDTH = 5;
 
 export type ShapeAnchorName = "top" | "right" | "bottom" | "left";
 
@@ -68,10 +74,9 @@ export function getConnectorCandidateAnnouncement(
 ): string {
   if (!candidate) return "No binding target. Endpoint will remain free.";
   const label = targetLabel ?? candidate.target.id;
-  const degrees = getConnectorBoundaryDegrees(candidate.activeAnchor.anchor.t);
   return candidate.endpoint.kind === "element"
-    ? `Snapped to ${label} at target-relative boundary position ${degrees} degrees.`
-    : `Near ${label} at target-relative boundary position ${degrees} degrees; move closer to snap.`;
+    ? `Snapped to ${label}. The connector will follow its nearest visible boundary.`
+    : `Near ${label}; move closer to bind the whole object.`;
 }
 
 export function isBindableShape(element: CanvasElement | undefined): element is ShapeElement {
@@ -146,7 +151,7 @@ export function resolveConnectorEndpoint(
   }
   if (endpoint.kind !== "element") return null;
   const target = elementsById[endpoint.targetElementId];
-  if (!isBindableElement(target) || !isValidPerimeterAnchor(endpoint.anchor) || !isSafeGap(endpoint.gap)) {
+  if (!isBindableElement(target) || !endpoint.anchor || !isValidPerimeterAnchor(endpoint.anchor) || !isSafeGap(endpoint.gap)) {
     return null;
   }
   if (sourcePageId && target.pageId !== sourcePageId) return null;
@@ -158,9 +163,58 @@ export function resolveConnectorPoints(
   connector: ConnectorElement,
   elementsById: Readonly<Record<ElementId, CanvasElement>>,
 ): Readonly<{ start: CanvasPoint; end: CanvasPoint }> | null {
-  const start = resolveConnectorEndpoint(connector.start, elementsById, connector.pageId);
-  const end = resolveConnectorEndpoint(connector.end, elementsById, connector.pageId);
+  const startReference = getEndpointReferencePoint(connector.start, elementsById, connector.pageId);
+  const endReference = getEndpointReferencePoint(connector.end, elementsById, connector.pageId);
+  if (!startReference || !endReference) return null;
+
+  if (
+    connector.start.kind === "element"
+    && connector.end.kind === "element"
+    && connector.start.targetElementId === connector.end.targetElementId
+  ) {
+    if (!connector.start.anchor || !connector.end.anchor) return null;
+    const start = resolveConnectorEndpoint(connector.start, elementsById, connector.pageId);
+    const end = resolveConnectorEndpoint(connector.end, elementsById, connector.pageId);
+    return start && end ? { start, end } : null;
+  }
+  if (areCoincidentCanonicalBindings(connector.start, connector.end, elementsById)) return null;
+
+  const fallbackDirection = deterministicCoincidentDirection(connector);
+  const closest = getClosestEndpointBoundaryPair(
+    connector.start,
+    connector.end,
+    elementsById,
+    connector.pageId,
+    normalizedDirection(startReference, endReference, fallbackDirection),
+  );
+  if (!closest || closest.kind === "overlap") return null;
+  const cleanStart = closest.start;
+  const cleanEnd = closest.end;
+  const direction = normalizedDirection(cleanStart, cleanEnd, fallbackDirection);
+  const start = applyEndpointClearance(connector.start, cleanStart, direction, connector.style.strokeWidth, elementsById);
+  const end = applyEndpointClearance(connector.end, cleanEnd, { x: -direction.x, y: -direction.y }, connector.style.strokeWidth, elementsById);
   return start && end ? { start, end } : null;
+}
+
+function areCoincidentCanonicalBindings(
+  start: ConnectorEndpoint,
+  end: ConnectorEndpoint,
+  elementsById: Readonly<Record<ElementId, CanvasElement>>,
+): boolean {
+  if (start.kind !== "element" || end.kind !== "element" || start.anchor || end.anchor) return false;
+  const first = elementsById[start.targetElementId];
+  const second = elementsById[end.targetElementId];
+  if (!isBindableElement(first) || !isBindableElement(second)) return false;
+  return first.type === second.type
+    && first.x === second.x
+    && first.y === second.y
+    && first.width === second.width
+    && first.height === second.height
+    && first.rotation === second.rotation
+    && (first.type === "text" || second.type === "text" || (
+      first.shape === second.shape
+      && first.style.roundness === second.style.roundness
+    ));
 }
 
 /** Returns the four visible/persisted binding positions for a compatible shape. */
@@ -288,7 +342,7 @@ export function snapConnectorEndpoint(
     return { kind: "free", ...point };
   }
   const worldRadius = radiusPx / Math.max(zoom, Number.EPSILON);
-  let closest: Readonly<{ elementId: ElementId; anchor: PerimeterAnchor; distance: number; index: number; zIndex: number }> | null = null;
+  let closest: Readonly<{ elementId: ElementId; distance: number; index: number; zIndex: number }> | null = null;
   for (let index = 0; index < elements.length; index += 1) {
     const element = elements[index];
     if (!isBindableElement(element)) continue;
@@ -301,11 +355,11 @@ export function snapConnectorEndpoint(
         element.zIndex === closest.zIndex && index < closest.index
       ))
     ))) {
-      closest = { anchor: candidate.anchor, distance, elementId: element.id, index, zIndex: element.zIndex };
+      closest = { distance, elementId: element.id, index, zIndex: element.zIndex };
     }
   }
   return closest
-    ? { kind: "element", targetElementId: closest.elementId, anchor: closest.anchor, gap: 0 }
+    ? { kind: "element", targetElementId: closest.elementId, gap: 0 }
     : { kind: "free", ...point };
 }
 
@@ -397,6 +451,221 @@ export function detachConnectorEndpointsForDeletedTargets(
   });
 }
 
+type SupportVertex = Readonly<{
+  difference: CanvasPoint;
+  start: CanvasPoint;
+  end: CanvasPoint;
+}>;
+
+type ClosestSimplex = Readonly<{
+  closest: CanvasPoint;
+  overlap: boolean;
+  simplex: readonly SupportVertex[];
+  weights: readonly number[];
+}>;
+
+/** Exact convex support/GJK distance; center rays are used only for zero-distance degeneracies. */
+function getClosestEndpointBoundaryPair(
+  start: ConnectorEndpoint,
+  end: ConnectorEndpoint,
+  elementsById: Readonly<Record<ElementId, CanvasElement>>,
+  sourcePageId: string,
+  initialDirection: CanvasPoint,
+): Readonly<{ kind: "overlap" } | { kind: "separated"; start: CanvasPoint; end: CanvasPoint }> | null {
+  const support = (direction: CanvasPoint): SupportVertex | null => {
+    const startPoint = getEndpointSupportPoint(start, direction, elementsById, sourcePageId);
+    const endPoint = getEndpointSupportPoint(end, { x: -direction.x, y: -direction.y }, elementsById, sourcePageId);
+    return startPoint && endPoint ? {
+      difference: { x: startPoint.x - endPoint.x, y: startPoint.y - endPoint.y },
+      start: startPoint,
+      end: endPoint,
+    } : null;
+  };
+  const first = support(initialDirection);
+  if (!first) return null;
+  let state = closestSimplexToOrigin([first]);
+  for (let iteration = 0; iteration < 64; iteration += 1) {
+    const distanceSquared = dotPoint(state.closest, state.closest);
+    if (state.overlap || distanceSquared <= 1e-20) return { kind: "overlap" };
+    const direction = { x: -state.closest.x, y: -state.closest.y };
+    const next = support(direction);
+    if (!next) return null;
+    const improvement = distanceSquared - dotPoint(state.closest, next.difference);
+    if (improvement <= 1e-12 * Math.max(1, distanceSquared)) {
+      const witnesses = witnessPoints(state);
+      return witnesses ? { kind: "separated", ...witnesses } : null;
+    }
+    if (state.simplex.some((vertex) => pointDistance(vertex.difference, next.difference) <= 1e-12)) return null;
+    state = closestSimplexToOrigin([...state.simplex, next]);
+  }
+  const witnesses = witnessPoints(state);
+  return witnesses ? { kind: "separated", ...witnesses } : null;
+}
+
+function getEndpointSupportPoint(
+  endpoint: ConnectorEndpoint,
+  direction: CanvasPoint,
+  elementsById: Readonly<Record<ElementId, CanvasElement>>,
+  sourcePageId: string,
+): CanvasPoint | null {
+  if (endpoint.kind === "free") return isSafeResolvedPoint(endpoint) ? endpoint : null;
+  if (endpoint.kind !== "element" || !isSafeGap(endpoint.gap)) return null;
+  const target = elementsById[endpoint.targetElementId];
+  if (!isBindableElement(target) || target.pageId !== sourcePageId) return null;
+  const localDirection = rotateVector(direction, -target.rotation);
+  const local = target.type === "shape"
+    ? getShapeSupportPoint(target.shape, target.width, target.height, target.style.roundness, localDirection)
+    : getRectangleSupportPoint(target.width, target.height, localDirection);
+  if (!local) return null;
+  const center = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+  const rotated = rotateVector({ x: local.x - target.width / 2, y: local.y - target.height / 2 }, target.rotation);
+  const point = { x: center.x + rotated.x, y: center.y + rotated.y };
+  return isSafeResolvedPoint(point) ? point : null;
+}
+
+function getRectangleSupportPoint(width: number, height: number, direction: CanvasPoint): CanvasPoint {
+  return {
+    x: direction.x >= 0 ? width : 0,
+    y: direction.y >= 0 ? height : 0,
+  };
+}
+
+function closestSimplexToOrigin(simplex: readonly SupportVertex[]): ClosestSimplex {
+  if (simplex.length === 1) {
+    return { closest: simplex[0].difference, overlap: false, simplex, weights: [1] };
+  }
+  if (simplex.length === 2) return closestSegmentSimplex(simplex[0], simplex[1]);
+  const triangle = simplex.slice(-3);
+  if (originInsideTriangle(triangle[0].difference, triangle[1].difference, triangle[2].difference)) {
+    return { closest: { x: 0, y: 0 }, overlap: true, simplex: triangle, weights: [0, 0, 0] };
+  }
+  const edges = [
+    closestSegmentSimplex(triangle[0], triangle[1]),
+    closestSegmentSimplex(triangle[1], triangle[2]),
+    closestSegmentSimplex(triangle[2], triangle[0]),
+  ];
+  return edges.reduce((best, candidate) =>
+    dotPoint(candidate.closest, candidate.closest) < dotPoint(best.closest, best.closest) - 1e-16 ? candidate : best,
+  );
+}
+
+function closestSegmentSimplex(first: SupportVertex, second: SupportVertex): ClosestSimplex {
+  const edge = {
+    x: second.difference.x - first.difference.x,
+    y: second.difference.y - first.difference.y,
+  };
+  const size = dotPoint(edge, edge);
+  const ratio = size <= 1e-24
+    ? 0
+    : Math.max(0, Math.min(1, -dotPoint(first.difference, edge) / size));
+  if (ratio <= 1e-14) return { closest: first.difference, overlap: false, simplex: [first], weights: [1] };
+  if (ratio >= 1 - 1e-14) return { closest: second.difference, overlap: false, simplex: [second], weights: [1] };
+  return {
+    closest: {
+      x: first.difference.x + edge.x * ratio,
+      y: first.difference.y + edge.y * ratio,
+    },
+    overlap: false,
+    simplex: [first, second],
+    weights: [1 - ratio, ratio],
+  };
+}
+
+function originInsideTriangle(first: CanvasPoint, second: CanvasPoint, third: CanvasPoint): boolean {
+  const firstCross = crossPoint(
+    { x: second.x - first.x, y: second.y - first.y },
+    { x: -first.x, y: -first.y },
+  );
+  const secondCross = crossPoint(
+    { x: third.x - second.x, y: third.y - second.y },
+    { x: -second.x, y: -second.y },
+  );
+  const thirdCross = crossPoint(
+    { x: first.x - third.x, y: first.y - third.y },
+    { x: -third.x, y: -third.y },
+  );
+  return (firstCross >= -1e-12 && secondCross >= -1e-12 && thirdCross >= -1e-12)
+    || (firstCross <= 1e-12 && secondCross <= 1e-12 && thirdCross <= 1e-12);
+}
+
+function witnessPoints(state: ClosestSimplex): Readonly<{ start: CanvasPoint; end: CanvasPoint }> | null {
+  if (state.overlap || state.simplex.length !== state.weights.length) return null;
+  const result = state.simplex.reduce((points, vertex, index) => ({
+    start: {
+      x: points.start.x + vertex.start.x * state.weights[index],
+      y: points.start.y + vertex.start.y * state.weights[index],
+    },
+    end: {
+      x: points.end.x + vertex.end.x * state.weights[index],
+      y: points.end.y + vertex.end.y * state.weights[index],
+    },
+  }), { start: { x: 0, y: 0 }, end: { x: 0, y: 0 } });
+  return isSafeResolvedPoint(result.start) && isSafeResolvedPoint(result.end) ? result : null;
+}
+
+function applyEndpointClearance(
+  endpoint: ConnectorEndpoint,
+  point: CanvasPoint,
+  outwardDirection: CanvasPoint,
+  connectorStrokeWidth: number,
+  elementsById: Readonly<Record<ElementId, CanvasElement>>,
+): CanvasPoint | null {
+  if (endpoint.kind === "free") return point;
+  if (endpoint.kind !== "element") return null;
+  const target = elementsById[endpoint.targetElementId];
+  if (!isBindableElement(target) || !isSafeGap(endpoint.gap)) return null;
+  const targetStrokeWidth = target.type === "shape" ? target.style.strokeWidth : 0;
+  const clearance = endpoint.gap + targetStrokeWidth / 2 + Math.max(0, connectorStrokeWidth) / 2;
+  const cleared = {
+    x: cleanCoordinate(point.x + outwardDirection.x * clearance),
+    y: cleanCoordinate(point.y + outwardDirection.y * clearance),
+  };
+  return isSafeResolvedPoint(cleared) ? cleared : null;
+}
+
+function dotPoint(first: CanvasPoint, second: CanvasPoint): number {
+  return first.x * second.x + first.y * second.y;
+}
+
+function crossPoint(first: CanvasPoint, second: CanvasPoint): number {
+  return first.x * second.y - first.y * second.x;
+}
+
+function getEndpointReferencePoint(
+  endpoint: ConnectorEndpoint,
+  elementsById: Readonly<Record<ElementId, CanvasElement>>,
+  sourcePageId: string,
+): CanvasPoint | null {
+  if (endpoint.kind === "free") {
+    return isSafeResolvedPoint(endpoint) ? endpoint : null;
+  }
+  if (endpoint.kind !== "element" || !isSafeGap(endpoint.gap)) return null;
+  const target = elementsById[endpoint.targetElementId];
+  if (!isBindableElement(target) || target.pageId !== sourcePageId) return null;
+  return {
+    x: target.x + target.width / 2,
+    y: target.y + target.height / 2,
+  };
+}
+
+function normalizedDirection(from: CanvasPoint, to: CanvasPoint, fallback: CanvasPoint): CanvasPoint {
+  const delta = { x: to.x - from.x, y: to.y - from.y };
+  const length = Math.hypot(delta.x, delta.y);
+  return length > 1e-12 && Number.isFinite(length)
+    ? { x: delta.x / length, y: delta.y / length }
+    : fallback;
+}
+
+function deterministicCoincidentDirection(connector: ConnectorElement): CanvasPoint {
+  let hash = 2_166_136_261;
+  for (let index = 0; index < connector.id.length; index += 1) {
+    hash ^= connector.id.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  const angle = (hash >>> 0) / 0x1_0000_0000 * Math.PI * 2;
+  return { x: Math.cos(angle), y: Math.sin(angle) };
+}
+
 function normalizeAnchorT(t: number): number {
   if (!Number.isFinite(t)) return 0;
   const normalized = t % 1;
@@ -415,7 +684,7 @@ function buildAuthoringCandidate(
     activeAnchor,
     anchors: [activeAnchor],
     endpoint: activeDistance * zoom <= CONNECTOR_BINDING_SNAP_RADIUS_PX
-      ? { kind: "element", targetElementId: target.id, anchor: activeAnchor.anchor, gap: 0 }
+      ? { kind: "element", targetElementId: target.id, gap: 0 }
       : { kind: "free", ...point },
     target,
   };

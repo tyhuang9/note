@@ -45,7 +45,7 @@ export type ShapeElement = ElementBase<"shape"> & BoxGeometry & {
 export type PerimeterAnchor = { t: number };
 export type ConnectorEndpoint =
   | { kind: "free"; x: number; y: number }
-  | { kind: "element"; targetElementId: ElementId; anchor: PerimeterAnchor; gap: number }
+  | { kind: "element"; targetElementId: ElementId; gap: number; anchor?: PerimeterAnchor }
   | { kind: "group"; targetGroupId: GroupId; anchor: PerimeterAnchor; gap: number }
   | { kind: "connector"; targetConnectorId: ElementId; pathT: number; gap: number };
 export type ConnectorElement = ElementBase<"connector"> & { start: ConnectorEndpoint; end: ConnectorEndpoint; routing: "straight"; style: RoughStyle & { startArrowhead: "none" | "arrow"; endArrowhead: "none" | "arrow" }; semantic?: { relationshipType?: string; label?: string } };

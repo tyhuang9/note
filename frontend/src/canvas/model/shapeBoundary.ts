@@ -39,6 +39,143 @@ export function getShapeBoundaryPoint(
   return rayIntersectionOnSegments(center, direction, boundarySegments(shape, safeWidth, safeHeight, roundness));
 }
 
+/** Ray intersection from the local center toward an arbitrary local direction. */
+export function getShapeBoundaryPointAlongRay(
+  shape: ShapeBoundaryKind,
+  width: number,
+  height: number,
+  roundness: number,
+  direction: CanvasPoint,
+): CanvasPoint | null {
+  const safeWidth = Math.max(0, width);
+  const safeHeight = Math.max(0, height);
+  const length = Math.hypot(direction.x, direction.y);
+  if (safeWidth <= 0 || safeHeight <= 0 || !Number.isFinite(length) || length <= 0) return null;
+  const unit = { x: direction.x / length, y: direction.y / length };
+  const center = { x: safeWidth / 2, y: safeHeight / 2 };
+  if (shape === "ellipse") {
+    const distance = 1 / Math.sqrt(
+      (unit.x / center.x) ** 2 + (unit.y / center.y) ** 2,
+    );
+    return { x: center.x + unit.x * distance, y: center.y + unit.y * distance };
+  }
+  return rayIntersectionOnSegments(
+    center,
+    unit,
+    boundarySegments(shape, safeWidth, safeHeight, roundness),
+  );
+}
+
+/** Exact local support point for the convex clean boundary in `direction`. */
+export function getShapeSupportPoint(
+  shape: ShapeBoundaryKind,
+  width: number,
+  height: number,
+  roundness: number,
+  direction: CanvasPoint,
+): CanvasPoint | null {
+  if (!(width > 0 && height > 0) || !Number.isFinite(direction.x) || !Number.isFinite(direction.y)) return null;
+  const center = { x: width / 2, y: height / 2 };
+  if (shape === "ellipse") {
+    const denominator = Math.hypot(center.x * direction.x, center.y * direction.y);
+    if (denominator <= 1e-12) return center;
+    return {
+      x: center.x + center.x * center.x * direction.x / denominator,
+      y: center.y + center.y * center.y * direction.y / denominator,
+    };
+  }
+  let best: CanvasPoint | null = null;
+  let bestProjection = Number.NEGATIVE_INFINITY;
+  const consider = (point: CanvasPoint) => {
+    const projection = dot(point, direction);
+    if (projection > bestProjection + 1e-12) {
+      best = point;
+      bestProjection = projection;
+    }
+  };
+  for (const segment of boundarySegments(shape, width, height, roundness)) {
+    consider(segment.start);
+    consider(segment.end);
+    if (segment.kind !== "quadratic") continue;
+    const coefficientA = dot({
+      x: segment.start.x - 2 * segment.control.x + segment.end.x,
+      y: segment.start.y - 2 * segment.control.y + segment.end.y,
+    }, direction);
+    const coefficientB = 2 * dot({
+      x: segment.control.x - segment.start.x,
+      y: segment.control.y - segment.start.y,
+    }, direction);
+    if (coefficientA < -1e-12) {
+      const ratio = -coefficientB / (2 * coefficientA);
+      if (ratio > 0 && ratio < 1) consider(quadraticPoint(segment.start, segment.control, segment.end, ratio));
+    }
+  }
+  return best;
+}
+
+/** Adaptive clean-boundary flattening used by independent geometry verification. */
+export function flattenShapeBoundary(
+  shape: ShapeBoundaryKind,
+  width: number,
+  height: number,
+  roundness: number,
+  tolerance = 1e-5,
+): CanvasPoint[] {
+  if (!(width > 0 && height > 0)) return [];
+  const safeTolerance = Math.max(1e-9, tolerance);
+  const points: CanvasPoint[] = [];
+  const flattenQuadratic = (start: CanvasPoint, control: CanvasPoint, end: CanvasPoint, depth: number) => {
+    const projectedControl = closestPointOnSegment(control, start, end);
+    if (depth >= 24 || Math.sqrt(distanceSquared(control, projectedControl)) <= safeTolerance * 2) {
+      points.push(end);
+      return;
+    }
+    const startControl = midpoint(start, control);
+    const controlEnd = midpoint(control, end);
+    const middle = midpoint(startControl, controlEnd);
+    flattenQuadratic(start, startControl, middle, depth + 1);
+    flattenQuadratic(middle, controlEnd, end, depth + 1);
+  };
+  if (shape === "ellipse") {
+    const center = { x: width / 2, y: height / 2 };
+    const pointAt = (angle: number) => ({
+      x: center.x + center.x * Math.cos(angle),
+      y: center.y + center.y * Math.sin(angle),
+    });
+    const flattenArc = (startAngle: number, endAngle: number, start: CanvasPoint, end: CanvasPoint, depth: number) => {
+      const middle = pointAt((startAngle + endAngle) / 2);
+      if (depth >= 24 || Math.sqrt(distanceSquared(middle, closestPointOnSegment(middle, start, end))) <= safeTolerance) {
+        points.push(end);
+        return;
+      }
+      const middleAngle = (startAngle + endAngle) / 2;
+      flattenArc(startAngle, middleAngle, start, middle, depth + 1);
+      flattenArc(middleAngle, endAngle, middle, end, depth + 1);
+    };
+    points.push(pointAt(0));
+    for (let quadrant = 0; quadrant < 4; quadrant += 1) {
+      const startAngle = quadrant * Math.PI / 2;
+      const endAngle = (quadrant + 1) * Math.PI / 2;
+      flattenArc(startAngle, endAngle, pointAt(startAngle), pointAt(endAngle), 0);
+    }
+    points.pop();
+    return points;
+  }
+  const segments = boundarySegments(shape, width, height, roundness);
+  if (!segments[0]) return [];
+  points.push(segments[0].start);
+  for (const segment of segments) {
+    if (segment.kind === "line") points.push(segment.end);
+    else flattenQuadratic(segment.start, segment.control, segment.end, 0);
+  }
+  points.pop();
+  return points;
+}
+
+function midpoint(first: CanvasPoint, second: CanvasPoint): CanvasPoint {
+  return { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 };
+}
+
 /** Nearest Euclidean point on the same clean logical perimeter. */
 export function projectPointToShapeBoundary(
   shape: ShapeBoundaryKind,
@@ -143,19 +280,14 @@ function roundedDiamondRayContainsPoint(
   const diagonal = Math.max(1, Math.hypot(width, height));
   const horizontalInset = cornerInset * width / diagonal;
   const verticalInset = cornerInset * height / diagonal;
-  const control = 0.45;
-  return rayQuadraticContainsPoint(centerX, centerY, directionX, directionY, centerX, 0, centerX + horizontalInset * control, 0, centerX + horizontalInset, verticalInset)
+  return rayQuadraticContainsPoint(centerX, centerY, directionX, directionY, centerX - horizontalInset, verticalInset, centerX, 0, centerX + horizontalInset, verticalInset)
     || rayLineContainsPoint(centerX, centerY, directionX, directionY, centerX + horizontalInset, verticalInset, width - horizontalInset, centerY - verticalInset)
-    || rayQuadraticContainsPoint(centerX, centerY, directionX, directionY, width - horizontalInset, centerY - verticalInset, width, centerY - verticalInset * control, width, centerY)
-    || rayQuadraticContainsPoint(centerX, centerY, directionX, directionY, width, centerY, width, centerY + verticalInset * control, width - horizontalInset, centerY + verticalInset)
+    || rayQuadraticContainsPoint(centerX, centerY, directionX, directionY, width - horizontalInset, centerY - verticalInset, width, centerY, width - horizontalInset, centerY + verticalInset)
     || rayLineContainsPoint(centerX, centerY, directionX, directionY, width - horizontalInset, centerY + verticalInset, centerX + horizontalInset, height - verticalInset)
-    || rayQuadraticContainsPoint(centerX, centerY, directionX, directionY, centerX + horizontalInset, height - verticalInset, centerX + horizontalInset * control, height, centerX, height)
-    || rayQuadraticContainsPoint(centerX, centerY, directionX, directionY, centerX, height, centerX - horizontalInset * control, height, centerX - horizontalInset, height - verticalInset)
+    || rayQuadraticContainsPoint(centerX, centerY, directionX, directionY, centerX + horizontalInset, height - verticalInset, centerX, height, centerX - horizontalInset, height - verticalInset)
     || rayLineContainsPoint(centerX, centerY, directionX, directionY, centerX - horizontalInset, height - verticalInset, horizontalInset, centerY + verticalInset)
-    || rayQuadraticContainsPoint(centerX, centerY, directionX, directionY, horizontalInset, centerY + verticalInset, 0, centerY + verticalInset * control, 0, centerY)
-    || rayQuadraticContainsPoint(centerX, centerY, directionX, directionY, 0, centerY, 0, centerY - verticalInset * control, horizontalInset, centerY - verticalInset)
-    || rayLineContainsPoint(centerX, centerY, directionX, directionY, horizontalInset, centerY - verticalInset, centerX - horizontalInset, verticalInset)
-    || rayQuadraticContainsPoint(centerX, centerY, directionX, directionY, centerX - horizontalInset, verticalInset, centerX - horizontalInset * control, 0, centerX, 0);
+    || rayQuadraticContainsPoint(centerX, centerY, directionX, directionY, horizontalInset, centerY + verticalInset, 0, centerY, horizontalInset, centerY - verticalInset)
+    || rayLineContainsPoint(centerX, centerY, directionX, directionY, horizontalInset, centerY - verticalInset, centerX - horizontalInset, verticalInset);
 }
 
 function rayLineContainsPoint(
@@ -268,21 +400,16 @@ function boundarySegments(shape: Exclude<ShapeBoundaryKind, "ellipse">, width: n
     ], { x: radius, y: 0 });
   }
   const { centerX, centerY, horizontalInset, verticalInset } = diamondMeasures(width, height);
-  const control = 0.45;
   return chainSegments([
-    { kind: "quadratic", control: { x: centerX + horizontalInset * control, y: 0 }, end: { x: centerX + horizontalInset, y: verticalInset } },
+    { kind: "quadratic", control: { x: centerX, y: 0 }, end: { x: centerX + horizontalInset, y: verticalInset } },
     { kind: "line", end: { x: width - horizontalInset, y: centerY - verticalInset } },
-    { kind: "quadratic", control: { x: width, y: centerY - verticalInset * control }, end: { x: width, y: centerY } },
-    { kind: "quadratic", control: { x: width, y: centerY + verticalInset * control }, end: { x: width - horizontalInset, y: centerY + verticalInset } },
+    { kind: "quadratic", control: { x: width, y: centerY }, end: { x: width - horizontalInset, y: centerY + verticalInset } },
     { kind: "line", end: { x: centerX + horizontalInset, y: height - verticalInset } },
-    { kind: "quadratic", control: { x: centerX + horizontalInset * control, y: height }, end: { x: centerX, y: height } },
-    { kind: "quadratic", control: { x: centerX - horizontalInset * control, y: height }, end: { x: centerX - horizontalInset, y: height - verticalInset } },
+    { kind: "quadratic", control: { x: centerX, y: height }, end: { x: centerX - horizontalInset, y: height - verticalInset } },
     { kind: "line", end: { x: horizontalInset, y: centerY + verticalInset } },
-    { kind: "quadratic", control: { x: 0, y: centerY + verticalInset * control }, end: { x: 0, y: centerY } },
-    { kind: "quadratic", control: { x: 0, y: centerY - verticalInset * control }, end: { x: horizontalInset, y: centerY - verticalInset } },
+    { kind: "quadratic", control: { x: 0, y: centerY }, end: { x: horizontalInset, y: centerY - verticalInset } },
     { kind: "line", end: { x: centerX - horizontalInset, y: verticalInset } },
-    { kind: "quadratic", control: { x: centerX - horizontalInset * control, y: 0 }, end: { x: centerX, y: 0 } },
-  ], { x: centerX, y: 0 });
+  ], { x: centerX - horizontalInset, y: verticalInset });
 }
 
 type Segment = { kind: "line"; end: CanvasPoint } | { kind: "quadratic"; control: CanvasPoint; end: CanvasPoint };

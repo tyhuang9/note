@@ -26,7 +26,6 @@ const MAX_EMBEDDED_RICH_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_RICH_TEXT_ATTRIBUTE_BYTES: usize = 12 * 1024 * 1024;
 const MIN_VISUAL_RECTANGLE_ROUNDNESS: f64 = 0.06;
 const DIAMOND_CORNER_INSET: f64 = 0.08;
-const DIAMOND_CORNER_CONTROL: f64 = 0.45;
 const RAY_INTERSECTION_TOLERANCE: f64 = 1e-12;
 
 struct PayloadLimitWriter {
@@ -1179,43 +1178,27 @@ fn boundary_segments(
     Some(chain_segments(
         vec![
             Segment::Quadratic(
-                (center_x + horizontal_inset * DIAMOND_CORNER_CONTROL, 0.0),
+                (center_x, 0.0),
                 (center_x + horizontal_inset, vertical_inset),
             ),
             Segment::Line((width - horizontal_inset, center_y - vertical_inset)),
             Segment::Quadratic(
-                (width, center_y - vertical_inset * DIAMOND_CORNER_CONTROL),
                 (width, center_y),
-            ),
-            Segment::Quadratic(
-                (width, center_y + vertical_inset * DIAMOND_CORNER_CONTROL),
                 (width - horizontal_inset, center_y + vertical_inset),
             ),
             Segment::Line((center_x + horizontal_inset, height - vertical_inset)),
             Segment::Quadratic(
-                (center_x + horizontal_inset * DIAMOND_CORNER_CONTROL, height),
                 (center_x, height),
-            ),
-            Segment::Quadratic(
-                (center_x - horizontal_inset * DIAMOND_CORNER_CONTROL, height),
                 (center_x - horizontal_inset, height - vertical_inset),
             ),
             Segment::Line((horizontal_inset, center_y + vertical_inset)),
             Segment::Quadratic(
-                (0.0, center_y + vertical_inset * DIAMOND_CORNER_CONTROL),
                 (0.0, center_y),
-            ),
-            Segment::Quadratic(
-                (0.0, center_y - vertical_inset * DIAMOND_CORNER_CONTROL),
                 (horizontal_inset, center_y - vertical_inset),
             ),
             Segment::Line((center_x - horizontal_inset, vertical_inset)),
-            Segment::Quadratic(
-                (center_x - horizontal_inset * DIAMOND_CORNER_CONTROL, 0.0),
-                (center_x, 0.0),
-            ),
         ],
-        (center_x, 0.0),
+        (center_x - horizontal_inset, vertical_inset),
     ))
 }
 
@@ -1364,6 +1347,439 @@ fn dot(first: Point, second: Point) -> f64 {
 fn distance_squared(first: Point, second: Point) -> f64 {
     let delta = subtract(first, second);
     dot(delta, delta)
+}
+
+#[derive(Clone)]
+enum ObjectBindingEndpoint {
+    Free(Point),
+    Element {
+        target_id: String,
+        gap: f64,
+        legacy_t: Option<f64>,
+    },
+}
+
+#[derive(Clone)]
+struct ObjectBindingTarget {
+    id: String,
+    kind: String,
+    shape: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    rotation: f64,
+    roundness: f64,
+    stroke_width: f64,
+}
+
+#[derive(Clone)]
+struct SupportVertex {
+    difference: Point,
+    start: Point,
+    end: Point,
+}
+
+struct ClosestSimplex {
+    closest: Point,
+    overlap: bool,
+    simplex: Vec<SupportVertex>,
+    weights: Vec<f64>,
+}
+
+enum ObjectBindingResolution {
+    Separated { start: Point, end: Point },
+    Overlap,
+}
+
+fn resolve_object_binding_points(
+    connector_id: &str,
+    connector_stroke_width: f64,
+    start: &ObjectBindingEndpoint,
+    end: &ObjectBindingEndpoint,
+    targets: &[ObjectBindingTarget],
+) -> Option<ObjectBindingResolution> {
+    if let (
+        ObjectBindingEndpoint::Element {
+            target_id: start_id,
+            legacy_t: start_t,
+            gap: start_gap,
+        },
+        ObjectBindingEndpoint::Element {
+            target_id: end_id,
+            legacy_t: end_t,
+            gap: end_gap,
+        },
+    ) = (start, end)
+    {
+        if start_id == end_id {
+            let target = targets.iter().find(|target| target.id == *start_id)?;
+            return match (start_t, end_t) {
+                (Some(start_t), Some(end_t)) => Some(ObjectBindingResolution::Separated {
+                    start: resolve_shape_anchor(
+                        &target.shape,
+                        target.x,
+                        target.y,
+                        target.width,
+                        target.height,
+                        target.rotation,
+                        target.roundness,
+                        *start_t,
+                        *start_gap,
+                    )?,
+                    end: resolve_shape_anchor(
+                        &target.shape,
+                        target.x,
+                        target.y,
+                        target.width,
+                        target.height,
+                        target.rotation,
+                        target.roundness,
+                        *end_t,
+                        *end_gap,
+                    )?,
+                }),
+                _ => None,
+            };
+        }
+    }
+    let start_reference = endpoint_reference(start, targets)?;
+    let end_reference = endpoint_reference(end, targets)?;
+    let fallback = deterministic_direction(connector_id);
+    let initial_direction = normalized_direction(start_reference, end_reference, fallback);
+    let resolution = closest_object_boundary_pair(start, end, targets, initial_direction)?;
+    let ObjectBindingResolution::Separated {
+        start: clean_start,
+        end: clean_end,
+    } = resolution
+    else {
+        return Some(ObjectBindingResolution::Overlap);
+    };
+    let direction = normalized_direction(clean_start, clean_end, fallback);
+    let start = apply_object_binding_clearance(
+        start,
+        clean_start,
+        direction,
+        connector_stroke_width,
+        targets,
+    )?;
+    let end = apply_object_binding_clearance(
+        end,
+        clean_end,
+        (-direction.0, -direction.1),
+        connector_stroke_width,
+        targets,
+    )?;
+    Some(ObjectBindingResolution::Separated { start, end })
+}
+
+fn endpoint_reference(
+    endpoint: &ObjectBindingEndpoint,
+    targets: &[ObjectBindingTarget],
+) -> Option<Point> {
+    match endpoint {
+        ObjectBindingEndpoint::Free(point) => Some(*point),
+        ObjectBindingEndpoint::Element { target_id, .. } => targets
+            .iter()
+            .find(|target| target.id == *target_id)
+            .map(|target| {
+                (
+                    target.x + target.width / 2.0,
+                    target.y + target.height / 2.0,
+                )
+            }),
+    }
+}
+
+fn closest_object_boundary_pair(
+    start: &ObjectBindingEndpoint,
+    end: &ObjectBindingEndpoint,
+    targets: &[ObjectBindingTarget],
+    initial_direction: Point,
+) -> Option<ObjectBindingResolution> {
+    let support = |direction: Point| -> Option<SupportVertex> {
+        let start_point = endpoint_support(start, direction, targets)?;
+        let end_point = endpoint_support(end, (-direction.0, -direction.1), targets)?;
+        Some(SupportVertex {
+            difference: subtract(start_point, end_point),
+            start: start_point,
+            end: end_point,
+        })
+    };
+    let mut state = closest_simplex_to_origin(vec![support(initial_direction)?]);
+    for _ in 0..64 {
+        let distance_squared = dot(state.closest, state.closest);
+        if state.overlap || distance_squared <= 1e-20 {
+            return Some(ObjectBindingResolution::Overlap);
+        }
+        let direction = (-state.closest.0, -state.closest.1);
+        let next = support(direction)?;
+        let improvement = distance_squared - dot(state.closest, next.difference);
+        if improvement <= 1e-12 * distance_squared.max(1.0) {
+            let (start, end) = simplex_witnesses(&state)?;
+            return Some(ObjectBindingResolution::Separated { start, end });
+        }
+        if state
+            .simplex
+            .iter()
+            .any(|vertex| distance_squared_point(vertex.difference, next.difference) <= 1e-24)
+        {
+            return None;
+        }
+        state.simplex.push(next);
+        state = closest_simplex_to_origin(state.simplex);
+    }
+    let (start, end) = simplex_witnesses(&state)?;
+    Some(ObjectBindingResolution::Separated { start, end })
+}
+
+fn endpoint_support(
+    endpoint: &ObjectBindingEndpoint,
+    direction: Point,
+    targets: &[ObjectBindingTarget],
+) -> Option<Point> {
+    match endpoint {
+        ObjectBindingEndpoint::Free(point) => Some(*point),
+        ObjectBindingEndpoint::Element { target_id, .. } => {
+            let target = targets.iter().find(|target| target.id == *target_id)?;
+            let local_direction = rotate_point(direction, -target.rotation);
+            let local = if target.kind == "text" {
+                (
+                    if local_direction.0 >= 0.0 {
+                        target.width
+                    } else {
+                        0.0
+                    },
+                    if local_direction.1 >= 0.0 {
+                        target.height
+                    } else {
+                        0.0
+                    },
+                )
+            } else {
+                shape_support_point(
+                    &target.shape,
+                    target.width,
+                    target.height,
+                    target.roundness,
+                    local_direction,
+                )?
+            };
+            let rotated = rotate_point(
+                (local.0 - target.width / 2.0, local.1 - target.height / 2.0),
+                target.rotation,
+            );
+            Some((
+                target.x + target.width / 2.0 + rotated.0,
+                target.y + target.height / 2.0 + rotated.1,
+            ))
+        }
+    }
+}
+
+fn shape_support_point(
+    shape: &str,
+    width: f64,
+    height: f64,
+    roundness: f64,
+    direction: Point,
+) -> Option<Point> {
+    let center = (width / 2.0, height / 2.0);
+    if shape == "ellipse" {
+        let denominator = (center.0 * direction.0).hypot(center.1 * direction.1);
+        return (denominator > 1e-12)
+            .then_some((
+                center.0 + center.0 * center.0 * direction.0 / denominator,
+                center.1 + center.1 * center.1 * direction.1 / denominator,
+            ))
+            .or(Some(center));
+    }
+    let mut best = None;
+    let mut best_projection = f64::NEG_INFINITY;
+    let mut consider = |point: Point| {
+        let projection = dot(point, direction);
+        if projection > best_projection + 1e-12 {
+            best = Some(point);
+            best_projection = projection;
+        }
+    };
+    for segment in boundary_segments(shape, width, height, roundness)? {
+        match segment {
+            BoundarySegment::Line { start, end } => {
+                consider(start);
+                consider(end);
+            }
+            BoundarySegment::Quadratic {
+                start,
+                control,
+                end,
+            } => {
+                consider(start);
+                consider(end);
+                let coefficient_a = dot(add(subtract(start, scale(control, 2.0)), end), direction);
+                let coefficient_b = 2.0 * dot(subtract(control, start), direction);
+                if coefficient_a < -1e-12 {
+                    let ratio = -coefficient_b / (2.0 * coefficient_a);
+                    if ratio > 0.0 && ratio < 1.0 {
+                        consider(quadratic_point(start, control, end, ratio));
+                    }
+                }
+            }
+        }
+    }
+    best
+}
+
+fn closest_simplex_to_origin(simplex: Vec<SupportVertex>) -> ClosestSimplex {
+    if simplex.len() == 1 {
+        return ClosestSimplex {
+            closest: simplex[0].difference,
+            overlap: false,
+            simplex,
+            weights: vec![1.0],
+        };
+    }
+    if simplex.len() == 2 {
+        return closest_segment_simplex(simplex[0].clone(), simplex[1].clone());
+    }
+    let triangle = simplex[simplex.len() - 3..].to_vec();
+    if origin_inside_triangle(
+        triangle[0].difference,
+        triangle[1].difference,
+        triangle[2].difference,
+    ) {
+        return ClosestSimplex {
+            closest: (0.0, 0.0),
+            overlap: true,
+            simplex: triangle,
+            weights: vec![0.0; 3],
+        };
+    }
+    let edges = [
+        closest_segment_simplex(triangle[0].clone(), triangle[1].clone()),
+        closest_segment_simplex(triangle[1].clone(), triangle[2].clone()),
+        closest_segment_simplex(triangle[2].clone(), triangle[0].clone()),
+    ];
+    edges
+        .into_iter()
+        .reduce(|best, candidate| {
+            if dot(candidate.closest, candidate.closest) < dot(best.closest, best.closest) - 1e-16 {
+                candidate
+            } else {
+                best
+            }
+        })
+        .unwrap()
+}
+
+fn closest_segment_simplex(first: SupportVertex, second: SupportVertex) -> ClosestSimplex {
+    let edge = subtract(second.difference, first.difference);
+    let size = dot(edge, edge);
+    let ratio = if size <= 1e-24 {
+        0.0
+    } else {
+        (-dot(first.difference, edge) / size).clamp(0.0, 1.0)
+    };
+    if ratio <= 1e-14 {
+        return ClosestSimplex {
+            closest: first.difference,
+            overlap: false,
+            simplex: vec![first],
+            weights: vec![1.0],
+        };
+    }
+    if ratio >= 1.0 - 1e-14 {
+        return ClosestSimplex {
+            closest: second.difference,
+            overlap: false,
+            simplex: vec![second],
+            weights: vec![1.0],
+        };
+    }
+    ClosestSimplex {
+        closest: add(first.difference, scale(edge, ratio)),
+        overlap: false,
+        simplex: vec![first, second],
+        weights: vec![1.0 - ratio, ratio],
+    }
+}
+
+fn origin_inside_triangle(first: Point, second: Point, third: Point) -> bool {
+    let first_cross = cross(subtract(second, first), (-first.0, -first.1));
+    let second_cross = cross(subtract(third, second), (-second.0, -second.1));
+    let third_cross = cross(subtract(first, third), (-third.0, -third.1));
+    (first_cross >= -1e-12 && second_cross >= -1e-12 && third_cross >= -1e-12)
+        || (first_cross <= 1e-12 && second_cross <= 1e-12 && third_cross <= 1e-12)
+}
+
+fn simplex_witnesses(state: &ClosestSimplex) -> Option<(Point, Point)> {
+    if state.overlap || state.simplex.len() != state.weights.len() {
+        return None;
+    }
+    Some(state.simplex.iter().zip(&state.weights).fold(
+        ((0.0, 0.0), (0.0, 0.0)),
+        |points, (vertex, weight)| {
+            (
+                add(points.0, scale(vertex.start, *weight)),
+                add(points.1, scale(vertex.end, *weight)),
+            )
+        },
+    ))
+}
+
+fn apply_object_binding_clearance(
+    endpoint: &ObjectBindingEndpoint,
+    point: Point,
+    direction: Point,
+    connector_stroke_width: f64,
+    targets: &[ObjectBindingTarget],
+) -> Option<Point> {
+    match endpoint {
+        ObjectBindingEndpoint::Free(_) => Some(point),
+        ObjectBindingEndpoint::Element { target_id, gap, .. } => {
+            let target = targets.iter().find(|target| target.id == *target_id)?;
+            let target_stroke = if target.kind == "shape" {
+                target.stroke_width
+            } else {
+                0.0
+            };
+            let clearance = gap + target_stroke / 2.0 + connector_stroke_width.max(0.0) / 2.0;
+            Some(add(point, scale(direction, clearance)))
+        }
+    }
+}
+
+fn normalized_direction(from: Point, to: Point, fallback: Point) -> Point {
+    let delta = subtract(to, from);
+    let length = delta.0.hypot(delta.1);
+    if length > 1e-12 && length.is_finite() {
+        scale(delta, 1.0 / length)
+    } else {
+        fallback
+    }
+}
+
+fn rotate_point(point: Point, degrees: f64) -> Point {
+    let radians = degrees.to_radians();
+    let (sin, cos) = radians.sin_cos();
+    (
+        zero_small(point.0 * cos - point.1 * sin),
+        zero_small(point.0 * sin + point.1 * cos),
+    )
+}
+
+fn deterministic_direction(value: &str) -> Point {
+    let mut hash: u32 = 2_166_136_261;
+    for code_unit in value.encode_utf16() {
+        hash ^= u32::from(code_unit);
+        hash = hash.wrapping_mul(16_777_619);
+    }
+    let angle = f64::from(hash) / 4_294_967_296.0 * std::f64::consts::TAU;
+    (angle.cos(), angle.sin())
+}
+
+fn distance_squared_point(first: Point, second: Point) -> f64 {
+    distance_squared(first, second)
 }
 
 fn zero_small(value: f64) -> f64 {
@@ -1791,6 +2207,84 @@ mod tests {
     use base64::{engine::general_purpose::STANDARD, Engine};
     use serde_json::json;
     use std::fs;
+
+    fn fixture_endpoint(value: &Value) -> ObjectBindingEndpoint {
+        match value.get("kind").and_then(Value::as_str).unwrap() {
+            "free" => ObjectBindingEndpoint::Free((
+                value["x"].as_f64().unwrap(),
+                value["y"].as_f64().unwrap(),
+            )),
+            "element" => ObjectBindingEndpoint::Element {
+                target_id: value["targetElementId"].as_str().unwrap().to_owned(),
+                gap: value["gap"].as_f64().unwrap(),
+                legacy_t: value
+                    .get("anchor")
+                    .and_then(|anchor| anchor.get("t"))
+                    .and_then(Value::as_f64),
+            },
+            kind => panic!("unexpected fixture endpoint kind: {kind}"),
+        }
+    }
+
+    #[test]
+    fn object_binding_resolver_matches_shared_golden_vectors() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/connector-object-binding-golden-vectors.json"
+        ))
+        .unwrap();
+        for vector in fixture["vectors"].as_array().unwrap() {
+            let targets = vector["targets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|target| ObjectBindingTarget {
+                    id: target["id"].as_str().unwrap().to_owned(),
+                    kind: target["kind"].as_str().unwrap().to_owned(),
+                    shape: target["shape"].as_str().unwrap().to_owned(),
+                    x: target["x"].as_f64().unwrap(),
+                    y: target["y"].as_f64().unwrap(),
+                    width: target["width"].as_f64().unwrap(),
+                    height: target["height"].as_f64().unwrap(),
+                    rotation: target["rotation"].as_f64().unwrap(),
+                    roundness: target["roundness"].as_f64().unwrap(),
+                    stroke_width: target["strokeWidth"].as_f64().unwrap(),
+                })
+                .collect::<Vec<_>>();
+            let name = vector["name"].as_str().unwrap();
+            let resolution = resolve_object_binding_points(
+                name,
+                vector["connectorStrokeWidth"].as_f64().unwrap(),
+                &fixture_endpoint(&vector["start"]),
+                &fixture_endpoint(&vector["end"]),
+                &targets,
+            );
+            let Some(expected) = vector
+                .get("expected")
+                .filter(|expected| !expected.is_null())
+            else {
+                assert!(
+                    resolution.is_none()
+                        || matches!(resolution, Some(ObjectBindingResolution::Overlap)),
+                    "{name}"
+                );
+                continue;
+            };
+            let Some(ObjectBindingResolution::Separated { start, end }) = resolution else {
+                panic!("{name} did not resolve");
+            };
+            for (actual, expected, coordinate) in [
+                (start.0, expected["start"]["x"].as_f64().unwrap(), "start.x"),
+                (start.1, expected["start"]["y"].as_f64().unwrap(), "start.y"),
+                (end.0, expected["end"]["x"].as_f64().unwrap(), "end.x"),
+                (end.1, expected["end"]["y"].as_f64().unwrap(), "end.y"),
+            ] {
+                assert!(
+                    (actual - expected).abs() <= 1e-8,
+                    "{name} {coordinate}: {actual} != {expected}"
+                );
+            }
+        }
+    }
     use tempfile::TempDir;
 
     fn root() -> TempDir {

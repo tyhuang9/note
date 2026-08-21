@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import boundaryVectors from "../../../tests/fixtures/connector-boundary-golden-vectors.json";
+import objectBindingVectors from "../../../tests/fixtures/connector-object-binding-golden-vectors.json";
 import type { ConnectorElement, RoughStyle, ShapeElement, TextElement } from "../../src/canvas/model/elements";
 import {
   CONNECTOR_BINDING_SNAP_RADIUS_PX,
@@ -18,11 +19,13 @@ import {
   MAX_CANVAS_VALUE,
   normalizeFreeConnectorEndpoint,
   resolveConnectorEndpoint,
+  resolveConnectorPoints,
   snapConnectorEndpoint,
   snapConnectorPointToAngle,
 } from "../../src/canvas/model/connectorBinding";
 import { canvasElementContainsPoint, getElementBounds } from "../../src/canvas/model/hitTesting";
 import { getSelectionElementBounds, scaleSelection, translateSelection } from "../../src/canvas/model/selectionBounds";
+import { flattenShapeBoundary, getShapeSupportPoint } from "../../src/canvas/model/shapeBoundary";
 
 const style: RoughStyle = {
   fillColor: null,
@@ -76,7 +79,189 @@ function arrow(start: ConnectorElement["start"], end: ConnectorElement["end"]): 
   };
 }
 
+function adaptiveBoundaryPoints(target: ShapeElement | TextElement, tolerance = 1e-5): { x: number; y: number }[] {
+  const local = target.type === "shape"
+    ? flattenShapeBoundary(target.shape, target.width, target.height, target.style.roundness, tolerance)
+    : [
+      { x: 0, y: 0 },
+      { x: target.width, y: 0 },
+      { x: target.width, y: target.height },
+      { x: 0, y: target.height },
+    ];
+  const radians = target.rotation * Math.PI / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  return local.map((point) => {
+    const dx = point.x - target.width / 2;
+    const dy = point.y - target.height / 2;
+    return {
+      x: target.x + target.width / 2 + dx * cos - dy * sin,
+      y: target.y + target.height / 2 + dx * sin + dy * cos,
+    };
+  });
+}
+
+function pointToSegmentDistanceForOracle(
+  point: { x: number; y: number },
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+): number {
+  const edge = { x: end.x - start.x, y: end.y - start.y };
+  const size = edge.x * edge.x + edge.y * edge.y;
+  const ratio = size === 0 ? 0 : Math.max(0, Math.min(1,
+    ((point.x - start.x) * edge.x + (point.y - start.y) * edge.y) / size,
+  ));
+  return Math.hypot(point.x - start.x - edge.x * ratio, point.y - start.y - edge.y * ratio);
+}
+
+function adaptiveFlattenOracleDistance(first: ShapeElement | TextElement, second: ShapeElement | TextElement): number {
+  const firstPoints = adaptiveBoundaryPoints(first);
+  const secondPoints = adaptiveBoundaryPoints(second);
+  let best = Number.POSITIVE_INFINITY;
+  for (let firstIndex = 0; firstIndex < firstPoints.length; firstIndex += 1) {
+    const firstStart = firstPoints[firstIndex];
+    const firstEnd = firstPoints[(firstIndex + 1) % firstPoints.length];
+    for (let secondIndex = 0; secondIndex < secondPoints.length; secondIndex += 1) {
+      const secondStart = secondPoints[secondIndex];
+      const secondEnd = secondPoints[(secondIndex + 1) % secondPoints.length];
+      best = Math.min(
+        best,
+        pointToSegmentDistanceForOracle(firstStart, secondStart, secondEnd),
+        pointToSegmentDistanceForOracle(firstEnd, secondStart, secondEnd),
+        pointToSegmentDistanceForOracle(secondStart, firstStart, firstEnd),
+        pointToSegmentDistanceForOracle(secondEnd, firstStart, firstEnd),
+      );
+    }
+  }
+  return best;
+}
+
+function adaptiveFlattenPointBoundaryDistance(target: ShapeElement | TextElement, point: { x: number; y: number }): number {
+  const points = adaptiveBoundaryPoints(target);
+  return points.reduce((best, start, index) => Math.min(
+    best,
+    pointToSegmentDistanceForOracle(point, start, points[(index + 1) % points.length]),
+  ), Number.POSITIVE_INFINITY);
+}
+
 describe("connector shape binding", () => {
+  it("matches the shared object-level closest-boundary vectors", () => {
+    for (const vector of objectBindingVectors.vectors) {
+      const targets = vector.targets.map((target) => target.kind === "text"
+        ? text({
+          id: target.id,
+          x: target.x,
+          y: target.y,
+          width: target.width,
+          height: target.height,
+          rotation: target.rotation,
+        })
+        : shape(target.shape as ShapeElement["shape"], {
+          id: target.id,
+          x: target.x,
+          y: target.y,
+          width: target.width,
+          height: target.height,
+          rotation: target.rotation,
+          style: { ...style, roundness: target.roundness, strokeWidth: target.strokeWidth },
+        }));
+      const connector = {
+        ...arrow(vector.start as ConnectorElement["start"], vector.end as ConnectorElement["end"]),
+        id: vector.name,
+        style: { ...style, strokeWidth: vector.connectorStrokeWidth, endArrowhead: "arrow" as const, startArrowhead: "none" as const },
+      };
+      const resolved = resolveConnectorPoints(connector, Object.fromEntries(targets.map((target) => [target.id, target])));
+      if (!vector.expected) {
+        expect(resolved, vector.name).toBeNull();
+      } else {
+        expect(resolved, vector.name).not.toBeNull();
+        expect(resolved!.start.x, vector.name).toBeCloseTo(vector.expected.start.x, 8);
+        expect(resolved!.start.y, vector.name).toBeCloseTo(vector.expected.start.y, 8);
+        expect(resolved!.end.x, vector.name).toBeCloseTo(vector.expected.end.x, 8);
+        expect(resolved!.end.y, vector.name).toBeCloseTo(vector.expected.end.y, 8);
+      }
+    }
+  });
+
+  it("matches an independent adaptive-flatten global boundary oracle", () => {
+    const cases: readonly [ShapeElement | TextElement, ShapeElement | TextElement][] = [
+      [
+        shape("rectangle", { id: "rect", height: 20, width: 200, x: 0, y: 0, style: { ...style, roundness: 0.4, strokeWidth: 0 } }),
+        text({ id: "angled-text", height: 20, rotation: 45, width: 60, x: 210, y: 30 }),
+      ],
+      [
+        shape("ellipse", { id: "ellipse", height: 120, rotation: 23, width: 240, x: 10, y: 20, style: { ...style, strokeWidth: 0 } }),
+        shape("diamond", { id: "diamond", height: 70, rotation: -31, width: 90, x: 260, y: 135, style: { ...style, strokeWidth: 0 } }),
+      ],
+      [
+        shape("diamond", { id: "diamond-2", height: 60, rotation: 45, width: 80, x: 20, y: 20, style: { ...style, strokeWidth: 0 } }),
+        text({ id: "text-2", height: 40, rotation: 45, width: 100, x: 210, y: 230 }),
+      ],
+    ];
+    for (const [first, second] of cases) {
+      const connector = {
+        ...arrow(
+          { kind: "element", targetElementId: first.id, gap: 0 },
+          { kind: "element", targetElementId: second.id, gap: 0 },
+        ),
+        id: `${first.id}-${second.id}`,
+        style: { ...style, strokeWidth: 0, endArrowhead: "arrow" as const, startArrowhead: "none" as const },
+      };
+      const resolved = resolveConnectorPoints(connector, { [first.id]: first, [second.id]: second });
+      expect(resolved).not.toBeNull();
+      const resolvedDistance = Math.hypot(
+        resolved!.end.x - resolved!.start.x,
+        resolved!.end.y - resolved!.start.y,
+      );
+      const oracleDistance = adaptiveFlattenOracleDistance(first, second);
+      expect(adaptiveFlattenPointBoundaryDistance(first, resolved!.start), `${first.id} witness ${JSON.stringify(resolved!.start)}`).toBeLessThanOrEqual(2e-5);
+      expect(adaptiveFlattenPointBoundaryDistance(second, resolved!.end), `${second.id} witness ${JSON.stringify(resolved!.end)}`).toBeLessThanOrEqual(2e-5);
+      expect(
+        Math.abs(resolvedDistance - oracleDistance),
+        `${first.id} to ${second.id}: GJK ${resolvedDistance}, oracle ${oracleDistance}`,
+      ).toBeLessThanOrEqual(2e-5);
+    }
+  }, 15_000);
+
+  it("beats the prior center-ray route on the non-concentric rotated-box counterexample", () => {
+    const first = text({ id: "first", x: -3, y: -1, width: 6, height: 2, rotation: 0 });
+    const second = text({ id: "second", x: 5, y: 2, width: 6, height: 2, rotation: 45 });
+    const connector = {
+      ...arrow(
+        { kind: "element", targetElementId: first.id, gap: 0 },
+        { kind: "element", targetElementId: second.id, gap: 0 },
+      ),
+      style: { ...style, strokeWidth: 0, endArrowhead: "arrow" as const, startArrowhead: "none" as const },
+    };
+    const points = resolveConnectorPoints(connector, { [first.id]: first, [second.id]: second })!;
+    expect(Math.hypot(points.end.x - points.start.x, points.end.y - points.start.y)).toBeCloseTo(2.24919419, 7);
+    expect(Math.hypot(points.end.x - points.start.x, points.end.y - points.start.y)).toBeLessThan(3.2793933);
+  });
+
+  it("keeps rounded rectangle and diamond supports consistent with their authored convex paths", () => {
+    for (const target of [
+      shape("rectangle", { width: 173, height: 91, style: { ...style, roundness: 0.73 } }),
+      shape("diamond", { width: 147, height: 83 }),
+    ]) {
+      const flattened = flattenShapeBoundary(target.shape, target.width, target.height, target.style.roundness, 1e-5);
+      const crosses = flattened.map((point, index) => {
+        const next = flattened[(index + 1) % flattened.length];
+        const after = flattened[(index + 2) % flattened.length];
+        return (next.x - point.x) * (after.y - next.y) - (next.y - point.y) * (after.x - next.x);
+      });
+      expect(crosses.every((value) => value >= -2e-5) || crosses.every((value) => value <= 2e-5)).toBe(true);
+      for (let index = 0; index < 72; index += 1) {
+        const angle = index * Math.PI * 2 / 72;
+        const direction = { x: Math.cos(angle), y: Math.sin(angle) };
+        const support = getShapeSupportPoint(target.shape, target.width, target.height, target.style.roundness, direction)!;
+        const supportProjection = support.x * direction.x + support.y * direction.y;
+        const flattenedProjection = Math.max(...flattened.map((point) => point.x * direction.x + point.y * direction.y));
+        expect(supportProjection).toBeGreaterThanOrEqual(flattenedProjection - 2e-5);
+        expect(supportProjection - flattenedProjection).toBeLessThanOrEqual(2e-5);
+      }
+    }
+  });
+
   it("canonicalizes spoken boundary degrees at the seam", () => {
     expect(getConnectorBoundaryDegrees(0)).toBe(0);
     expect(Object.is(getConnectorBoundaryDegrees(-0), -0)).toBe(false);
@@ -93,7 +278,7 @@ describe("connector shape binding", () => {
     expect(first).not.toBeNull();
     expect(second).not.toBeNull();
     expect(getConnectorCandidateAnnouncementKey(first)).toBe(getConnectorCandidateAnnouncementKey(second));
-    expect(getConnectorCandidateAnnouncement(first)).toContain("degrees");
+    expect(getConnectorCandidateAnnouncement(first)).toContain("nearest visible boundary");
   });
 
   it("matches the shared persisted boundary vectors", () => {
@@ -201,7 +386,7 @@ describe("connector shape binding", () => {
       target: { id: rectangle.id },
     });
     expect(getConnectorAuthoringCandidate({ x: 128, y: 50 }, [rectangle], 1)).toMatchObject({
-      endpoint: { kind: "element", targetElementId: rectangle.id, anchor: { t: 0.25 } },
+      endpoint: { kind: "element", targetElementId: rectangle.id, gap: 0 },
     });
     expect(getConnectorAuthoringCandidate({ x: 139, y: 50 }, [rectangle], 1)).toBeNull();
     expect(getConnectorAuthoringCandidate({ x: 124, y: 50 }, [rectangle], 2)).toMatchObject({
@@ -289,6 +474,15 @@ describe("connector shape binding", () => {
 
   it.each(["rectangle", "ellipse", "diamond"] as const)("exposes the cardinal anchors for a %s", (shapeName) => {
     const anchors = getShapeBindingAnchors(shape(shapeName));
+    if (shapeName === "diamond") {
+      expect(anchors.map(({ name, point }) => ({ name, point }))).toEqual([
+        { name: "top", point: { x: 60, y: 21.234789813026065 } },
+        { name: "right", point: { x: 107.9420169782899, y: 50 } },
+        { name: "bottom", point: { x: 60, y: 78.76521018697395 } },
+        { name: "left", point: { x: 12.057983021710108, y: 50 } },
+      ]);
+      return;
+    }
     expect(anchors.map(({ name, point }) => ({ name, point }))).toEqual([
       { name: "top", point: { x: 60, y: 20 } },
       { name: "right", point: { x: 110, y: 50 } },
@@ -301,13 +495,13 @@ describe("connector shape binding", () => {
     const rotated = shape("ellipse", { rotation: 90 });
     expect(getShapeAnchorPoint(rotated, { t: 0 })).toEqual({ x: 90, y: 50 });
     expect(getShapeAnchorPoint(rotated, { t: 0 }, 4)).toEqual({ x: 94, y: 50 });
-    expect(getShapeAnchorPoint(shape("diamond", { rotation: 90 }), { t: 0.25 })).toEqual({ x: 60, y: 100 });
+    expect(getShapeAnchorPoint(shape("diamond", { rotation: 90 }), { t: 0.25 })).toEqual({ x: 60, y: 97.9420169782899 });
   });
 
   it("snaps only within a fixed screen-pixel radius and to compatible shapes or text", () => {
     const rectangle = shape("rectangle");
     const nearAt200 = snapConnectorEndpoint({ x: 118, y: 50 }, [rectangle], 2, true);
-    expect(nearAt200).toEqual({ kind: "element", targetElementId: rectangle.id, anchor: { t: 0.25 }, gap: 0 });
+    expect(nearAt200).toEqual({ kind: "element", targetElementId: rectangle.id, gap: 0 });
     expect(snapConnectorEndpoint({ x: 120, y: 50 }, [rectangle], 2, true)).toEqual({ kind: "free", x: 120, y: 50 });
     expect(snapConnectorEndpoint({ x: 130, y: 50 }, [rectangle], 0.5, true)).toMatchObject({ kind: "element", targetElementId: rectangle.id });
     expect(snapConnectorEndpoint({ x: 110, y: 50 }, [rectangle], 1, false)).toEqual({ kind: "free", x: 110, y: 50 });

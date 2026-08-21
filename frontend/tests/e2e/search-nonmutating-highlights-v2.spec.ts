@@ -595,6 +595,107 @@ for (const scenario of [
   });
 }
 
+for (const family of ["primitive", "pan", "marquee"] as const) {
+  test(`external lost capture cancels two same-pointer ${family} sessions without stranding either`, async ({ page }) => {
+    await installSearchWorkspace(page);
+    await page.setViewportSize({ width: 1_440, height: 1_200 });
+    await page.goto("/");
+    await page.waitForTimeout(700);
+    await resetPersistenceCounts(page);
+    const baselineJson = await workspaceJson(page);
+    let repeatedPointerId: number | null = null;
+    let lastGesture: CapturedGesture | null = null;
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const gesture = await beginCapturedGesture(page, family);
+      lastGesture = gesture;
+      await gesture.assertActive();
+      expect(await hasCapturedPointer(page, gesture.pointerId)).toBe(true);
+      if (repeatedPointerId === null) repeatedPointerId = gesture.pointerId;
+      else expect(gesture.pointerId).toBe(repeatedPointerId);
+
+      await releaseCapturedPointerExternally(page, gesture.pointerId);
+      await gesture.assertCancelled();
+      expect(await hasCapturedPointer(page, gesture.pointerId)).toBe(false);
+      await page.mouse.move(gesture.stalePoint.x + 100, gesture.stalePoint.y + 80, { steps: 3 });
+      await page.mouse.up();
+      await gesture.assertCancelled();
+      expect(await workspaceJson(page)).toBe(baselineJson);
+      expect(await persistenceCounts(page)).toEqual({ apply: 0, session: 0 });
+    }
+
+    if (!lastGesture) throw new Error("Repeated captured gesture was unavailable.");
+    await lastGesture.performLaterGesture();
+  });
+}
+
+test("Find restores edge auto-pan from a selection drag without writes and a later auto-pan drag commits", async ({ page }) => {
+  await installSearchWorkspace(page);
+  await page.setViewportSize({ width: 1_440, height: 1_200 });
+  await page.goto("/");
+  await page.waitForTimeout(700);
+  const canvas = page.getByRole("tabpanel");
+  const canvasBounds = await canvas.boundingBox();
+  if (!canvasBounds) throw new Error("Canvas bounds were unavailable.");
+  const canvasContent = page.locator(".canvas-content");
+  const text = page.locator('[data-canvas-element-id="text-rich"]');
+  const shape = page.locator('[data-canvas-element-id="shape-rectangle"]');
+  await text.locator(".text-block-display").click();
+  await shape.focus();
+  await shape.press("Control+Enter");
+  const moveSurface = page.getByRole("button", { name: "Move selected elements" });
+  await expect(moveSurface).toBeVisible();
+  const baselineJson = await workspaceJson(page);
+  const baselineTransform = await canvasContent.evaluate((element) => (element as HTMLElement).style.transform);
+  await resetPersistenceCounts(page);
+
+  let moveBounds = await moveSurface.boundingBox();
+  if (!moveBounds) throw new Error("Selection move surface bounds were unavailable.");
+  let start = { x: moveBounds.x + moveBounds.width / 2, y: moveBounds.y + moveBounds.height / 2 };
+  const edge = { x: canvasBounds.x + canvasBounds.width - 5, y: canvasBounds.y + canvasBounds.height / 2 };
+  await page.evaluate(() => {
+    document.addEventListener("pointerdown", (event) => {
+      document.body.dataset.autoPanPointerId = String(event.pointerId);
+    }, { capture: true, once: true });
+  });
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(edge.x, edge.y, { steps: 6 });
+  await expect(page.locator(".drag-layer-clone")).toHaveCount(2);
+  await expect.poll(() => canvasContent.evaluate((element) => (element as HTMLElement).style.transform)).not.toBe(baselineTransform);
+  const pointerId = Number(await page.locator("body").getAttribute("data-auto-pan-pointer-id"));
+  await page.locator("body").evaluate((element) => delete (element as HTMLElement).dataset.autoPanPointerId);
+
+  await page.keyboard.press("Control+f");
+  await expect(page.getByRole("textbox", { name: "Find in canvas" })).toBeFocused();
+  await expect(page.locator(".drag-layer-clone")).toHaveCount(0);
+  await expect(page.locator("body")).not.toHaveClass(/is-interacting/);
+  expect(await hasCapturedPointer(page, pointerId)).toBe(false);
+  await expect.poll(() => canvasContent.evaluate((element) => (element as HTMLElement).style.transform)).toBe(baselineTransform);
+  await page.mouse.move(edge.x - 120, edge.y + 80, { steps: 3 });
+  await page.waitForTimeout(100);
+  await page.mouse.up();
+  await expect(page.locator(".drag-layer-clone")).toHaveCount(0);
+  expect(await workspaceJson(page)).toBe(baselineJson);
+  expect(await persistenceCounts(page)).toEqual({ apply: 0, session: 0 });
+
+  await page.getByRole("button", { name: "Close search", exact: true }).click();
+  moveBounds = await moveSurface.boundingBox();
+  if (!moveBounds) throw new Error("Restored selection move surface bounds were unavailable.");
+  start = { x: moveBounds.x + moveBounds.width / 2, y: moveBounds.y + moveBounds.height / 2 };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(edge.x, edge.y, { steps: 6 });
+  await expect(page.locator(".drag-layer-clone")).toHaveCount(2);
+  await expect.poll(() => canvasContent.evaluate((element) => (element as HTMLElement).style.transform)).not.toBe(baselineTransform);
+  await page.mouse.up();
+  await expect(page.locator(".drag-layer-clone")).toHaveCount(0);
+  await expect.poll(() => canvasContent.evaluate((element) => (element as HTMLElement).style.transform)).not.toBe(baselineTransform);
+  await expect.poll(() => workspaceJson(page)).not.toBe(baselineJson);
+  await expect.poll(async () => (await persistenceCounts(page)).apply).toBe(1);
+  await expect.poll(async () => (await persistenceCounts(page)).session).toBe(1);
+});
+
 for (const focusTarget of ["input", "previous", "next", "close"] as const) {
   test(`search ${focusTarget} Escape preserves a pending two-click Arrow`, async ({ page }) => {
     await installSearchWorkspace(page);
@@ -822,7 +923,7 @@ async function resetPersistenceCounts(page: Page) {
   });
 }
 
-type CapturedGestureFamily = "primitive" | "ink" | "pan" | "resize";
+type CapturedGestureFamily = "primitive" | "ink" | "marquee" | "pan" | "resize";
 
 type CapturedGesture = {
   assertActive: () => Promise<void>;
@@ -838,6 +939,7 @@ async function beginCapturedGesture(page: Page, family: CapturedGestureFamily): 
   if (!canvasBounds) throw new Error("Canvas bounds were unavailable.");
   const primitivePreview = page.locator(".primitive-authoring-preview");
   const inkPreview = page.locator(".canvas-live-draft-layer > path");
+  const marqueePreview = page.locator(".selection-rectangle");
   const textBlock = page.locator('[data-block-id="text-rich"]');
   const baselineTransform = await page.locator(".canvas-content").evaluate((element) => (element as HTMLElement).style.transform);
   const baselineTextWidth = await textBlock.evaluate((element) => Number.parseFloat((element as HTMLElement).style.width));
@@ -852,6 +954,10 @@ async function beginCapturedGesture(page: Page, family: CapturedGestureFamily): 
     await page.getByRole("button", { name: "Pen (P / 7)" }).click();
   } else if (family === "pan") {
     await page.getByRole("button", { name: "Hand (Space)" }).click();
+  } else if (family === "marquee") {
+    await page.getByRole("button", { name: "Select (V / 1)" }).click();
+    start = { x: canvasBounds.x + 40, y: canvasBounds.y + 500 };
+    stalePoint = { x: start.x + 140, y: start.y + 100 };
   } else {
     await textBlock.locator(".text-block-display").click();
     const handle = page.getByRole("button", { name: "Resize text width" });
@@ -880,11 +986,13 @@ async function beginCapturedGesture(page: Page, family: CapturedGestureFamily): 
       if (family === "primitive") await expect(primitivePreview).toHaveCount(1);
       else if (family === "ink") await expect(inkPreview).toHaveCount(1);
       else if (family === "pan") await expect(canvas).toHaveClass(/is-panning/);
+      else if (family === "marquee") await expect(marqueePreview).toBeVisible();
       else await expect(textBlock).toHaveClass(/is-resizing/);
     },
     assertCancelled: async () => {
       await expect(primitivePreview).toHaveCount(0);
       await expect(inkPreview).toHaveCount(0);
+      await expect(marqueePreview).toBeHidden();
       await expect(canvas).not.toHaveClass(/is-panning/);
       await expect(page.locator("body")).not.toHaveClass(/is-interacting/);
       if (family === "pan") {
@@ -917,6 +1025,15 @@ async function beginCapturedGesture(page: Page, family: CapturedGestureFamily): 
         await page.mouse.move(stalePoint.x, stalePoint.y, { steps: 3 });
         await page.mouse.up();
         await expect.poll(() => page.locator(".canvas-content").evaluate((element) => (element as HTMLElement).style.transform)).not.toBe(baselineTransform);
+      } else if (family === "marquee") {
+        await page.getByRole("button", { name: "Select (V / 1)" }).click();
+        const bounds = await textBlock.boundingBox();
+        if (!bounds) throw new Error("Later marquee target bounds were unavailable.");
+        await page.mouse.move(bounds.x - 12, bounds.y - 12);
+        await page.mouse.down();
+        await page.mouse.move(bounds.x + bounds.width + 12, bounds.y + bounds.height + 12, { steps: 5 });
+        await page.mouse.up();
+        await expect(textBlock).toHaveClass(/is-selected/);
       } else {
         await textBlock.locator(".text-block-display").click();
         const handle = page.getByRole("button", { name: "Resize text width" });
@@ -936,6 +1053,19 @@ async function beginCapturedGesture(page: Page, family: CapturedGestureFamily): 
 async function hasCapturedPointer(page: Page, pointerId: number) {
   return page.evaluate((id) => Array.from(document.querySelectorAll<HTMLElement>("*"))
     .some((element) => element.hasPointerCapture(id)), pointerId);
+}
+
+async function releaseCapturedPointerExternally(page: Page, pointerId: number) {
+  await page.evaluate((id) => {
+    const target = Array.from(document.querySelectorAll<HTMLElement>("*"))
+      .find((element) => element.hasPointerCapture(id));
+    if (!target) throw new Error("Captured lifecycle target was unavailable.");
+    target.releasePointerCapture(id);
+    target.dispatchEvent(new PointerEvent("lostpointercapture", {
+      bubbles: true,
+      pointerId: id,
+    }));
+  }, pointerId);
 }
 
 async function dispatchCapturedTermination(

@@ -366,6 +366,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
   );
 
   const capturePointer = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    ignoredLostCapturePointerIdRef.current = null;
     event.currentTarget.setPointerCapture(event.pointerId);
     capturedPointerRef.current = {
       pointerId: event.pointerId,
@@ -377,8 +378,8 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
     const captured = capturedPointerRef.current;
     if (!captured || (pointerId !== undefined && captured.pointerId !== pointerId)) return;
     capturedPointerRef.current = null;
-    ignoredLostCapturePointerIdRef.current = captured.pointerId;
     if (captured.target.hasPointerCapture(captured.pointerId)) {
+      ignoredLostCapturePointerIdRef.current = captured.pointerId;
       captured.target.releasePointerCapture(captured.pointerId);
     }
   }, []);
@@ -744,7 +745,6 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
         current.panOffsetRef.current = nextPanOffset;
         current.setPanOffset(nextPanOffset);
         current.setActiveMode("canvas");
-        ignoredLostCapturePointerIdRef.current = event.pointerId;
       }
 
       if (currentSelection?.didMove) {
@@ -816,7 +816,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
         && ignoredLostCapturePointerIdRef.current === event.pointerId
       ) {
         ignoredLostCapturePointerIdRef.current = null;
-        return;
+        if (capturedPointerRef.current?.pointerId !== event.pointerId) return;
       }
       cancelTransientPointerInteraction();
     },

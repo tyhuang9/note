@@ -385,7 +385,6 @@ type DragLayerSession = {
 };
 
 type ResizeLayerSession = {
-  blockIds: string[];
   connectorIds: ReadonlySet<string>;
   items: {
     cloneElement: HTMLElement;
@@ -5865,7 +5864,8 @@ function App() {
         const dragSession = dragLayerSessionRef.current;
         const resizeSession = resizeLayerSessionRef.current;
 
-        if (dragSession?.blockIds.includes(blockId) || resizeSession?.blockIds.includes(blockId)) {
+        const isResizeSource = resizeSession?.items.some((item) => item.element.id === blockId);
+        if (dragSession?.blockIds.includes(blockId) || isResizeSource) {
           element.classList.add("is-drag-source-hidden");
 
           if (dragSession && !dragSession.sourceElements.includes(element)) {
@@ -6285,11 +6285,13 @@ function App() {
 
     cleanupDragLayerSession(dragSession);
     dragLayerSessionRef.current = null;
+    if (updateState) {
+      scheduleCanvasContentTransform({ ...dragSession.startPanOffset });
+    }
     const selectedIds = new Set(dragSession.selectedBlockIds);
     const restoredBounds = getPreviewSelectionBounds(dataRef.current.elements, selectedIds);
     clearSelectionFrameVisualBounds(restoredBounds ?? undefined);
     if (updateState) {
-      setPanOffset(panOffsetRef.current);
       setActiveMode("selected");
     }
   }, []);
@@ -6601,7 +6603,6 @@ function App() {
 
     canvasElement.append(overlayElement);
     const session = {
-      blockIds: sourceEntries.map((entry) => entry.blockId),
       connectorIds,
       items,
       overlayElement,

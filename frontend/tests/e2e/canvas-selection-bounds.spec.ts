@@ -827,6 +827,8 @@ test("auto-pan keeps the live drag frame aligned and pointer cancel restores the
   });
   await page.mouse.up();
   await expect(page.locator(".drag-layer-clone")).toHaveCount(0);
+  await expect.poll(async () => page.locator(".canvas-content").evaluate((element) =>
+    (element as HTMLElement).style.transform)).toBe(originalTransform);
   await expect.poll(() => Promise.all([
     readWorldPosition(elements.shape),
     readWorldPosition(elements.text),

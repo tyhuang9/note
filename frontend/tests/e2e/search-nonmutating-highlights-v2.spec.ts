@@ -347,6 +347,94 @@ test("search exposes keyboard focus, live status, contrast, and deterministic fo
   await expect(selectTool).toBeFocused();
 });
 
+for (const focusTarget of ["input", "previous", "next", "close"] as const) {
+  test(`search ${focusTarget} focus blocks document mutation shortcuts and paste`, async ({ page }) => {
+    await installSearchWorkspace(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/");
+    const textControl = page
+      .locator('[data-canvas-element-id="text-rich"]')
+      .getByRole("button", { name: /Select and move text block/ });
+    await textControl.focus();
+    await textControl.press("Enter");
+    await textControl.press("Shift+ArrowRight");
+    await expect.poll(() => elementX(page, "text-rich")).toBe(330);
+    await page.keyboard.press("Control+c");
+    await page.waitForTimeout(700);
+    await resetPersistenceCounts(page);
+
+    const baselineJson = await workspaceJson(page);
+    const baselineSelection = await selectedCanvasElementIds(page);
+    const canvas = page.getByRole("tabpanel");
+    await expect(canvas).toHaveAttribute("data-active-tool", "select");
+    await page.getByRole("button", { name: "Find in canvas" }).click();
+    const panel = page.locator(".search-panel");
+    const search = page.getByRole("textbox", { name: "Find in canvas" });
+    await search.fill("needle");
+    await expect(page.locator(".search-status-announcement")).toHaveText("Result 1 of 5, Page title");
+    const focusedControl = focusTarget === "input"
+      ? search
+      : page.getByRole("button", {
+          name: focusTarget === "previous"
+            ? "Previous match"
+            : focusTarget === "next"
+              ? "Next match"
+              : "Close search",
+          exact: focusTarget === "close",
+        });
+
+    const assertApplicationInvariant = async () => {
+      await expect(panel).toBeVisible();
+      await expect(focusedControl).toBeFocused();
+      expect(await workspaceJson(page)).toBe(baselineJson);
+      expect(await selectedCanvasElementIds(page)).toEqual(baselineSelection);
+      expect(await persistenceCounts(page)).toEqual({ apply: 0, session: 0 });
+      await expect(canvas).toHaveAttribute("data-active-tool", "select");
+      await search.fill("needle");
+      await expect(page.locator(".search-status-announcement")).toHaveText("Result 1 of 5, Page title");
+    };
+
+    for (const shortcut of [
+      "Control+z",
+      "Control+y",
+      "Control+n",
+      "Control+o",
+      "Delete",
+      "Backspace",
+      "r",
+      "p",
+      "e",
+      "Control+a",
+    ]) {
+      await focusedControl.focus();
+      await expect(focusedControl).toBeFocused();
+      await page.keyboard.press(shortcut);
+      await assertApplicationInvariant();
+    }
+
+    await focusedControl.focus();
+    await focusedControl.evaluate((target) => {
+      const data = new DataTransfer();
+      data.setData("text/plain", "pasted search text");
+      target.dispatchEvent(new ClipboardEvent("paste", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: data,
+        composed: true,
+      }));
+    });
+    await assertApplicationInvariant();
+    await page.waitForTimeout(700);
+    expect(await persistenceCounts(page)).toEqual({ apply: 0, session: 0 });
+
+    await page.getByRole("button", { name: "Close search", exact: true }).click();
+    await canvas.focus();
+    await page.keyboard.press("Control+z");
+    await expect.poll(() => elementX(page, "text-rich")).toBe(320);
+    await expect.poll(async () => (await persistenceCounts(page)).apply).toBe(1);
+  });
+}
+
 for (const tool of [
   { label: "Pen (P / 7)", name: "pen" },
   { label: "Highlighter (H)", name: "highlighter" },
@@ -460,6 +548,15 @@ async function workspaceElements(page: Page) {
 async function elementX(page: Page, id: string) {
   const element = (await workspaceElements(page)).find((candidate) => candidate.id === id);
   return Number(element?.x);
+}
+
+async function selectedCanvasElementIds(page: Page) {
+  return page.locator('[data-canvas-element-id] [aria-pressed="true"], [data-canvas-element-id][aria-pressed="true"]').evaluateAll((elements) => (
+    Array.from(new Set(elements.flatMap((element) => {
+      const canvasElement = element.closest<HTMLElement>("[data-canvas-element-id]");
+      return canvasElement?.dataset.canvasElementId ? [canvasElement.dataset.canvasElementId] : [];
+    }))).sort()
+  ));
 }
 
 async function persistenceCounts(page: Page) {

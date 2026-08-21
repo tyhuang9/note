@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { CanvasElement, RoughStyle } from "../../src/canvas/model/elements";
 import {
+  createCanvasSearchTextIndex,
   findCanvasTextSearchMatches,
   findCanvasTextSearchResult,
   findTextSearchRanges,
@@ -54,6 +55,33 @@ describe("canvas text search", () => {
       { elementId: "text-lower", source: "text", start: 0, end: 4 },
       { elementId: "text-lower", source: "text", start: 5, end: 9 },
     ]);
+  });
+
+  it("does no rich projection work while search is inactive and projects each rich source once when active", () => {
+    const richContent = {
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text: "Needle" }] }],
+    };
+    const elements: CanvasElement[] = [
+      { ...base("rich-text", "text", 0, 0), backgroundMode: "surface", content: "legacy", richContent },
+      { ...base("rich-shape", "shape", 0, 100), shape: "rectangle", style, text: { content: "legacy", richContent } },
+      { ...base("plain-text", "text", 0, 200), backgroundMode: "surface", content: "Needle" },
+    ];
+    let projectionCount = 0;
+    const countingProjector: typeof projectRichTextForSearch = (document) => {
+      projectionCount += 1;
+      return projectRichTextForSearch(document);
+    };
+
+    const inactiveIndex = createCanvasSearchTextIndex(elements, false, countingProjector);
+    expect(inactiveIndex.size).toBe(0);
+    expect(projectionCount).toBe(0);
+
+    const activeIndex = createCanvasSearchTextIndex(elements, true, countingProjector);
+    expect(activeIndex.size).toBe(3);
+    expect(projectionCount).toBe(2);
+    expect(findCanvasTextSearchResult(elements, "needle", activeIndex).matches).toHaveLength(3);
+    expect(projectionCount).toBe(2);
   });
 
   it("maps one match across differently marked text leaves without changing the tree", () => {

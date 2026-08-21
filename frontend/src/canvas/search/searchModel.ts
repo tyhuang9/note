@@ -16,20 +16,37 @@ export type CanvasTextSearchMatch = Readonly<{
   end: number;
 }>;
 
-export function getSearchableText(element: CanvasElement): string | null {
+export function getSearchableText(
+  element: CanvasElement,
+  projectRichText: typeof projectRichTextForSearch = projectRichTextForSearch,
+): string | null {
   if (element.type === "text") {
     if (!element.richContent) return element.content;
-    const projection = projectRichTextForSearch(element.richContent);
+    const projection = projectRichText(element.richContent);
     return projection && (!element.content.trim() || hasRichTextRenderableSearchContent(element.richContent))
       ? projection.text
       : element.content;
   }
   if (element.type === "shape" && element.text) {
     return element.text.richContent
-      ? projectRichTextForSearch(element.text.richContent)?.text ?? element.text.content
+      ? projectRichText(element.text.richContent)?.text ?? element.text.content
       : element.text.content;
   }
   return null;
+}
+
+export function createCanvasSearchTextIndex(
+  elements: readonly CanvasElement[],
+  isActive: boolean,
+  projectRichText: typeof projectRichTextForSearch = projectRichTextForSearch,
+): ReadonlyMap<string, string> {
+  const index = new Map<string, string>();
+  if (!isActive) return index;
+  for (const element of elements) {
+    const text = getSearchableText(element, projectRichText);
+    if (text !== null) index.set(element.id, text);
+  }
+  return index;
 }
 
 export type CanvasTextSearchResult = Readonly<{
@@ -65,6 +82,7 @@ export function findCanvasTextSearchMatches(
 export function findCanvasTextSearchResult(
   elements: readonly CanvasElement[],
   query: string,
+  searchableTextByElementId?: ReadonlyMap<string, string>,
 ): CanvasTextSearchResult {
   if (!query.trim()) return { matches: [], isTruncated: false };
   const matches: CanvasTextSearchMatch[] = [];
@@ -85,7 +103,9 @@ export function findCanvasTextSearchResult(
     ));
   for (let elementIndex = 0; elementIndex < ordered.length; elementIndex += 1) {
       const { element } = ordered[elementIndex];
-      const searchableText = getSearchableText(element) ?? "";
+      const searchableText = searchableTextByElementId
+        ? searchableTextByElementId.get(element.id) ?? ""
+        : getSearchableText(element) ?? "";
       const remainingGlobal = MAX_CANVAS_SEARCH_MATCHES - matches.length;
       const result = findTextSearchRanges(
         searchableText,

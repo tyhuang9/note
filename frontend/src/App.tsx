@@ -108,9 +108,9 @@ import {
 } from "./editorUtils";
 import { cloneRichTextValue } from "./editor/richText";
 import {
+  createCanvasSearchTextIndex,
   findCanvasTextSearchResult,
   findTextSearchRanges,
-  getSearchableText,
   MAX_CANVAS_SEARCH_MATCHES,
 } from "./canvas/search/searchModel";
 import {
@@ -474,6 +474,8 @@ const TEXT_BLOCK_CONTENT_PADDING_LEFT = 10;
 const TEXT_BLOCK_CONTENT_PADDING_TOP = 5;
 const LLAMA_HARNESS_SELECTED_AGENT_KEY = "note.llamaHarness.selectedAgentId.v1";
 const DEFAULT_PAN_OFFSET: PanOffset = { x: 0, y: 0 };
+const NATIVE_SEARCH_TEXT_SHORTCUTS = new Set(["a", "c", "v", "x", "y", "z"]);
+const SEARCH_CONTROL_KEYS = new Set(["Tab", "Escape", "Enter", " "]);
 type SidebarSortOrder =
   | "name-asc"
   | "name-desc"
@@ -486,6 +488,31 @@ type PersistenceStatus = SaveState;
 type PendingAssetUpload = { dataUrl: string; fileName: string };
 
 type HeroIconName = WorkbenchIconName;
+
+function isCanvasSearchPanelTarget(target: EventTarget | null): target is Element {
+  return target instanceof Element && target.closest(".search-panel") !== null;
+}
+
+function guardCanvasSearchPanelKeyboardEvent(event: KeyboardEvent): boolean {
+  if (!isCanvasSearchPanelTarget(event.target)) return false;
+  const usesCommandModifier = event.ctrlKey || event.metaKey;
+  if (isTextEntryTarget(event.target)) {
+    const preservesNativeTextEditing = (
+      !usesCommandModifier && !event.altKey
+    ) || (
+      usesCommandModifier
+        && !event.altKey
+        && NATIVE_SEARCH_TEXT_SHORTCUTS.has(event.key.toLowerCase())
+    );
+    if (!preservesNativeTextEditing) event.preventDefault();
+  } else {
+    const preservesSearchControl = !usesCommandModifier
+      && !event.altKey
+      && SEARCH_CONTROL_KEYS.has(event.key);
+    if (!preservesSearchControl) event.preventDefault();
+  }
+  return true;
+}
 
 function readSelectedLlamaHarnessAgentId() {
   if (typeof window === "undefined") {
@@ -1639,9 +1666,16 @@ function App() {
       ];
     });
   }, [blocksByPageId, data.pages, folderNamesById, pageSearchQuery]);
+  const isCanvasElementSearchActive = isSearchOpen && Boolean(searchQuery.trim());
+  const canvasSearchTextIndex = useMemo(
+    () => createCanvasSearchTextIndex(visibleBlocks, isCanvasElementSearchActive),
+    [isCanvasElementSearchActive, visibleBlocks],
+  );
   const elementSearchResult = useMemo(
-    () => findCanvasTextSearchResult(visibleBlocks, searchQuery),
-    [searchQuery, visibleBlocks],
+    () => isCanvasElementSearchActive
+      ? findCanvasTextSearchResult(visibleBlocks, searchQuery, canvasSearchTextIndex)
+      : { matches: [], isTruncated: false },
+    [canvasSearchTextIndex, isCanvasElementSearchActive, searchQuery, visibleBlocks],
   );
   const titleSearchResult = useMemo(() => {
     if (!searchQuery.trim() || !selectedPage) {
@@ -3413,6 +3447,7 @@ function App() {
 
   useEffect(() => {
     function handleKeyboard(event: KeyboardEvent) {
+      if (guardCanvasSearchPanelKeyboardEvent(event)) return;
       if (event.target instanceof Element && event.target.closest(".connector-endpoint-chooser")) {
         return;
       }
@@ -3660,6 +3695,7 @@ function App() {
     }
 
     function handleKeyUp(event: KeyboardEvent) {
+      if (isCanvasSearchPanelTarget(event.target)) return;
       if (event.code === "Space") {
         isTemporaryHandActiveRef.current = false;
         canvasRef.current?.removeAttribute("data-temporary-hand");
@@ -3704,6 +3740,7 @@ function App() {
 
   useEffect(() => {
     function handlePaste(event: ClipboardEvent) {
+      if (isCanvasSearchPanelTarget(event.target)) return;
       if (activeWorkbenchOverlay) {
         return;
       }
@@ -8184,7 +8221,14 @@ function App() {
                 }
               }}
               onKeyDown={(event) => {
-                if (event.key !== "Tab" || isCanvasSearchInteractionBlocked()) return;
+                if (isCanvasSearchInteractionBlocked()) return;
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  closeCanvasSearch();
+                  return;
+                }
+                if (event.key !== "Tab") return;
                 const focusableControls = Array.from(
                   event.currentTarget.querySelectorAll<HTMLElement>(
                     'input:not([disabled]), button:not([disabled])',
@@ -8224,9 +8268,6 @@ function App() {
                       );
                     }
 
-                    if (event.key === "Escape") {
-                      closeCanvasSearch();
-                    }
                   }}
                   placeholder="Find in canvas"
                   ref={searchInputRef}
@@ -8342,7 +8383,7 @@ function App() {
                     onSelect={selectBlock}
                     onTextCommit={updateShapeText}
                     searchRanges={searchMatchesByElementId.get(shape.id) ?? []}
-                    searchableText={getSearchableText(shape) ?? ""}
+                    searchableText={canvasSearchTextIndex.get(shape.id) ?? ""}
                   />
                 )}
                 renderText={(block) => (
@@ -8376,7 +8417,7 @@ function App() {
                 onVisualDragMove={moveVisualDrag}
                 onVisualDragStart={startVisualDrag}
                 searchRanges={searchMatchesByElementId.get(block.id) ?? []}
-                searchableText={getSearchableText(block) ?? ""}
+                searchableText={canvasSearchTextIndex.get(block.id) ?? ""}
                 shouldFocusEnd={focusEndBlockId === block.id}
                 zoomLevel={zoomLevel}
                   />

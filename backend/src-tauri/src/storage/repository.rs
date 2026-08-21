@@ -1431,7 +1431,11 @@ fn quadratic_roots(a: f64, b: f64, c: f64) -> Vec<f64> {
         return Vec::new();
     }
     let root = discriminant.max(0.0).sqrt();
-    vec![(-b - root) / (2.0 * a), (-b + root) / (2.0 * a)]
+    if root == 0.0 {
+        return vec![-b / (2.0 * a)];
+    }
+    let stable_numerator = -0.5 * (b + if b >= 0.0 { root } else { -root });
+    vec![stable_numerator / a, c / stable_numerator]
 }
 
 fn quadratic_point(start: Point, control: Point, end: Point, ratio: f64) -> Point {

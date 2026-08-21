@@ -6,7 +6,7 @@ import type {
   TextElement,
 } from "./elements";
 import { isBoxCanvasElement } from "./elements";
-import { resolveConnectorEndpoint } from "./connectorBinding";
+import { resolveConnectorPoints } from "./connectorBinding";
 import { containsPointInsideShapeBoundaryFast } from "./shapeBoundary";
 import type { CanvasPoint, CanvasRect } from "./geometry";
 
@@ -26,9 +26,9 @@ export function getElementBounds(
   elementsById: Readonly<Record<ElementId, CanvasElement>> = {},
 ): Bounds | null {
   if (element.type === "connector") {
-    const start = resolveConnectorEndpoint(element.start, elementsById, element.pageId);
-    const end = resolveConnectorEndpoint(element.end, elementsById, element.pageId);
-    if (!start || !end) return null;
+    const points = resolveConnectorPoints(element, elementsById);
+    if (!points) return null;
+    const { start, end } = points;
     const padding = Math.max(0, element.style.strokeWidth / 2);
     return {
       x: Math.min(start.x, end.x) - padding,
@@ -125,9 +125,8 @@ export function canvasElementContainsPoint(
 ): boolean {
   if (element.type === "ink") return inkContainsPoint(element, point, tolerance);
   if (element.type === "connector") {
-    const start = resolveConnectorEndpoint(element.start, elementsById, element.pageId);
-    const end = resolveConnectorEndpoint(element.end, elementsById, element.pageId);
-    return Boolean(start && end && pointToSegmentDistance(point, start, end) <= Math.max(0, tolerance) + element.style.strokeWidth / 2);
+    const points = resolveConnectorPoints(element, elementsById);
+    return Boolean(points && pointToSegmentDistance(point, points.start, points.end) <= Math.max(0, tolerance) + element.style.strokeWidth / 2);
   }
   if (element.type === "shape") return shapeContainsPoint(element, point, tolerance);
   return boundsContainPoint(element, unrotatePoint(element, point), tolerance);

@@ -36,12 +36,14 @@ test("a 30 degree text east resize keeps its west midpoint fixed through preview
   await expect(connectorPreviews).toHaveCount(1);
   await expect(arrow).not.toBeVisible();
   await expect.poll(() => roundedBounds(connectorPreviews, "rotated connector preview")).not.toEqual(originalArrow);
+  const previewArrow = await roundedBounds(connectorPreviews, "rotated connector preview");
   expect(await persistenceCounts(page)).toEqual(callsBefore);
 
   await page.mouse.up();
   await expect(connectorPreviews).toHaveCount(0);
   await expect(arrow).toBeVisible();
   await expect.poll(() => roundedBounds(text, "committed rotated text")).toEqual(previewBounds);
+  await expect.poll(() => roundedBounds(arrow, "committed rotated connector")).toEqual(previewArrow);
   await expectTextResizeGripAligned(handle, text);
   const committedWest = await rotatedWestMidpoint(text);
   expect(committedWest.x).toBeCloseTo(originalWest.x, 1);
@@ -113,6 +115,8 @@ for (const zoom of [50, 100, 200]) {
     const text = page.locator('[data-block-id="target-text"]');
     const originalArrow = await roundedBounds(arrow, "original locked arrow");
     const originalText = await worldBox(text);
+    await page.waitForTimeout(650);
+    await resetPersistenceCounts(page);
     const callsBefore = await persistenceCounts(page);
 
     const corner = zoom === 100 ? "se" : "nw";
@@ -128,7 +132,9 @@ for (const zoom of [50, 100, 200]) {
     await expect(previews).toHaveCount(2);
     await expect(page.locator(".drag-layer-group .primitive-connector")).toHaveCount(0);
     await expect(arrow).not.toBeVisible();
-    await expect.poll(() => roundedBounds(previews.first(), "locked connector resize preview")).not.toEqual(originalArrow);
+    const boundPreview = page.locator('.connector-transform-preview[data-connector-id="locked-bound-bound"]');
+    await expect.poll(() => roundedBounds(boundPreview, "locked connector resize preview")).not.toEqual(originalArrow);
+    const previewArrow = await roundedBounds(boundPreview, "locked connector resize preview");
     // Text reflows rather than scaling its own model geometry during group resize.
     await expect.poll(() => worldBox(text)).toEqual(originalText);
 
@@ -138,6 +144,7 @@ for (const zoom of [50, 100, 200]) {
     await expect.poll(async () => (await persistenceCounts(page)).apply).toBe(callsBefore.apply + 1);
     expect((await persistenceCounts(page)).session).toBeLessThanOrEqual(callsBefore.session + 1);
     const resizedArrow = await roundedBounds(arrow, "resized arrow");
+    expect(resizedArrow).toEqual(previewArrow);
     expect(resizedArrow).not.toEqual(originalArrow);
 
     if (zoom !== 100) return;
@@ -352,9 +359,9 @@ async function persistedLiveScene(page: Page) {
 
 function connectorRecord(id: string) {
   return {
-    end: { anchor: { t: 0.75 }, gap: 0, kind: "element", targetElementId: "target-text" },
+    end: { gap: 0, kind: "element", targetElementId: "target-text" },
     id,
-    start: { anchor: { t: 0.25 }, gap: 0, kind: "element", targetElementId: "target-shape" },
+    start: { gap: 0, kind: "element", targetElementId: "target-shape" },
   };
 }
 
@@ -384,15 +391,15 @@ async function installLiveFollowWorkspace(page: Page, targetTextRotation = 0) {
           updatedAt: 1, width: 240, x: 560, y: 300, zIndex: 2,
         },
         {
-          createdAt: 1, end: { anchor: { t: 0.75 }, gap: 0, kind: "element", targetElementId: "target-text" },
+          createdAt: 1, end: { gap: 0, kind: "element", targetElementId: "target-text" },
           id: "locked-bound-bound", locked: true, opacity: 1, pageId: "page", routing: "straight",
-          start: { anchor: { t: 0.25 }, gap: 0, kind: "element", targetElementId: "target-shape" },
+          start: { gap: 0, kind: "element", targetElementId: "target-shape" },
           style: { ...stroke, endArrowhead: "arrow", startArrowhead: "none" }, type: "connector", updatedAt: 1, zIndex: 3,
         },
         {
           createdAt: 1, end: { kind: "free", x: 920, y: 250 }, id: "free-bound", locked: false,
           opacity: 1, pageId: "page", routing: "straight",
-          start: { anchor: { t: 0.5 }, gap: 0, kind: "element", targetElementId: "target-shape" },
+          start: { gap: 0, kind: "element", targetElementId: "target-shape" },
           style: { ...stroke, endArrowhead: "arrow", startArrowhead: "none" }, type: "connector", updatedAt: 1, zIndex: 4,
         },
       ] as ElementRecord[],

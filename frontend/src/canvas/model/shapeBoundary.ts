@@ -485,7 +485,9 @@ function quadraticRoots(a: number, b: number, c: number) {
   const discriminant = b * b - 4 * a * c;
   if (discriminant < -1e-12) return [];
   const root = Math.sqrt(Math.max(0, discriminant));
-  return [(-b - root) / (2 * a), (-b + root) / (2 * a)];
+  if (root === 0) return [-b / (2 * a)];
+  const stableNumerator = -0.5 * (b + (b >= 0 ? root : -root));
+  return [stableNumerator / a, c / stableNumerator];
 }
 
 function closestPointOnSegment(point: CanvasPoint, start: CanvasPoint, end: CanvasPoint): CanvasPoint {

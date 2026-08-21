@@ -149,6 +149,17 @@ for (const zoom of [50, 100, 200]) {
     await expect(arrow).toBeVisible();
     await expect.poll(() => roundedBounds(arrow)).toEqual(originalArrow);
     await expect.poll(() => canvasContentScale(canvas)).toBeCloseTo(zoom / 100, 4);
+
+    if (zoom === 100) {
+      await page.mouse.move(moveBounds.x + moveBounds.width / 2, moveBounds.y + moveBounds.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(moveBounds.x + moveBounds.width / 2 + 36, moveBounds.y + moveBounds.height / 2 + 18, { steps: 4 });
+      await expect(preview).toHaveCount(1);
+      const committedPreviewBounds = await roundedBounds(preview);
+      await page.mouse.up();
+      await expect(preview).toHaveCount(0);
+      await expect.poll(() => roundedBounds(arrow)).toEqual(committedPreviewBounds);
+    }
   });
 }
 

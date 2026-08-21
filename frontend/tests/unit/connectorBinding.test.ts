@@ -26,6 +26,7 @@ import {
 import { canvasElementContainsPoint, getElementBounds } from "../../src/canvas/model/hitTesting";
 import { getSelectionElementBounds, scaleSelection, translateSelection } from "../../src/canvas/model/selectionBounds";
 import { flattenShapeBoundary, getShapeSupportPoint } from "../../src/canvas/model/shapeBoundary";
+import { arrowheadPoints } from "../../src/canvas/components/PrimitiveElementView";
 
 const style: RoughStyle = {
   fillColor: null,
@@ -236,6 +237,70 @@ describe("connector shape binding", () => {
     const points = resolveConnectorPoints(connector, { [first.id]: first, [second.id]: second })!;
     expect(Math.hypot(points.end.x - points.start.x, points.end.y - points.start.y)).toBeCloseTo(2.24919419, 7);
     expect(Math.hypot(points.end.x - points.start.x, points.end.y - points.start.y)).toBeLessThan(3.2793933);
+  });
+
+  it("keeps the rendered destination arrow polygon outside rotated visible target strokes", () => {
+    const targets = [
+      shape("ellipse", { id: "ellipse", x: 240, y: 40, width: 180, height: 90, rotation: 31, style: { ...style, strokeWidth: 8 } }),
+      shape("diamond", { id: "diamond", x: 240, y: 180, width: 170, height: 110, rotation: -27, style: { ...style, strokeWidth: 5 } }),
+      text({ id: "text", x: 250, y: 340, width: 190, height: 70, rotation: 23 }),
+    ];
+    for (const [index, target] of targets.entries()) {
+      const connectorStrokeWidth = 6;
+      const gap = index + 2;
+      const connector = {
+        ...arrow(
+          { kind: "free", x: -80, y: target.y + target.height / 2 - 35 },
+          { kind: "element", targetElementId: target.id, gap },
+        ),
+        id: `arrowhead-clearance-${target.id}`,
+        style: { ...style, strokeWidth: connectorStrokeWidth, endArrowhead: "arrow" as const, startArrowhead: "none" as const },
+      };
+      const points = resolveConnectorPoints(connector, { [target.id]: target })!;
+      const length = Math.hypot(points.end.x - points.start.x, points.end.y - points.start.y);
+      const direction = {
+        x: (points.end.x - points.start.x) / length,
+        y: (points.end.y - points.start.y) / length,
+      };
+      const outward = { x: -direction.x, y: -direction.y };
+      const targetStrokeWidth = target.type === "shape" ? target.style.strokeWidth : 0;
+      const clearance = gap + targetStrokeWidth / 2 + connectorStrokeWidth / 2;
+      const cleanDestination = {
+        x: points.end.x - outward.x * clearance,
+        y: points.end.y - outward.y * clearance,
+      };
+      const polygon = arrowheadPoints(points.start, points.end)!;
+      for (const [x, y] of polygon) {
+        const outwardProjection = (x - cleanDestination.x) * outward.x + (y - cleanDestination.y) * outward.y;
+        expect(outwardProjection - connectorStrokeWidth / 2, target.id).toBeGreaterThanOrEqual(
+          gap + targetStrokeWidth / 2 - 1e-8,
+        );
+      }
+    }
+  });
+
+  it("reroutes immutable bindings after move, resize, rotation, and text reflow", () => {
+    const source = shape("rectangle", { id: "source", x: 20, y: 40, width: 130, height: 80 });
+    const destination = text({ id: "destination", x: 310, y: 90, width: 150, height: 48 });
+    const connector = arrow(
+      { kind: "element", targetElementId: source.id, gap: 2 },
+      { kind: "element", targetElementId: destination.id, gap: 3 },
+    );
+    const states = [
+      [source, destination],
+      [{ ...source, x: source.x + 35 }, destination],
+      [{ ...source, width: source.width + 70, height: source.height + 25 }, destination],
+      [source, { ...destination, rotation: 37 }],
+      [source, { ...destination, width: 105, height: 92 }],
+    ] as const;
+    const routes = states.map(([nextSource, nextDestination]) => resolveConnectorPoints(connector, {
+      [nextSource.id]: nextSource,
+      [nextDestination.id]: nextDestination,
+    }));
+    expect(routes.every(Boolean)).toBe(true);
+    for (let index = 1; index < routes.length; index += 1) expect(routes[index]).not.toEqual(routes[0]);
+    expect(connector.start).toEqual({ kind: "element", targetElementId: source.id, gap: 2 });
+    expect(connector.end).toEqual({ kind: "element", targetElementId: destination.id, gap: 3 });
   });
 
   it("keeps rounded rectangle and diamond supports consistent with their authored convex paths", () => {
@@ -541,9 +606,32 @@ describe("connector shape binding", () => {
     );
     const elementsById = { [rectangle.id]: rectangle, [connector.id]: connector };
     expect(resolveConnectorEndpoint(connector.start, elementsById)).toEqual({ x: 112, y: 50 });
-    expect(getSelectionElementBounds(connector, elementsById)).toEqual({ x: 111, y: 49, width: 80, height: 2 });
-    expect(getElementBounds(connector, elementsById)).toEqual({ x: 111, y: 49, width: 80, height: 2 });
+    const points = resolveConnectorPoints(connector, elementsById)!;
+    expect(points).toEqual({ start: { x: 114, y: 50 }, end: { x: 190, y: 50 } });
+    expect(getSelectionElementBounds(connector, elementsById)).toEqual({ x: 113, y: 49, width: 78, height: 2 });
+    expect(getElementBounds(connector, elementsById)).toEqual({ x: 113, y: 49, width: 78, height: 2 });
     expect(canvasElementContainsPoint(connector, { x: 150, y: 50 }, 0, elementsById)).toBe(true);
+  });
+
+  it("suppresses an overlapping route and restores it after either target moves apart", () => {
+    const first = shape("rectangle", { id: "first", x: 10, y: 20 });
+    const overlapping = shape("ellipse", { id: "second", x: 40, y: 30 });
+    const connector = arrow(
+      { kind: "element", targetElementId: first.id, gap: 0 },
+      { kind: "element", targetElementId: overlapping.id, gap: 0 },
+    );
+    expect(resolveConnectorPoints(connector, { [first.id]: first, [overlapping.id]: overlapping })).toBeNull();
+    expect(getSelectionElementBounds(connector, { [first.id]: first, [overlapping.id]: overlapping })).toBeNull();
+
+    const moved = { ...overlapping, x: 260 };
+    const elementsById = { [first.id]: first, [moved.id]: moved };
+    const restored = resolveConnectorPoints(connector, elementsById);
+    expect(restored).not.toBeNull();
+    expect(getSelectionElementBounds(connector, elementsById)).not.toBeNull();
+    expect(canvasElementContainsPoint(connector, {
+      x: (restored!.start.x + restored!.end.x) / 2,
+      y: (restored!.start.y + restored!.end.y) / 2,
+    }, 0, elementsById)).toBe(true);
   });
 
   it("keeps a bound endpoint bound during connector transforms and detaches it before target deletion", () => {

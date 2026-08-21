@@ -46,22 +46,17 @@ function expectedDiamondSegments(width: number, height: number): ExpectedSegment
   const centerY = height / 2;
   const horizontalInset = cornerInset * width / diagonal;
   const verticalInset = cornerInset * height / diagonal;
-  const control = 0.45;
 
   return chainExpectedSegments([
-    { kind: "quadratic", control: { x: centerX + horizontalInset * control, y: 0 }, end: { x: centerX + horizontalInset, y: verticalInset } },
+    { kind: "quadratic", control: { x: centerX, y: 0 }, end: { x: centerX + horizontalInset, y: verticalInset } },
     { kind: "line", end: { x: width - horizontalInset, y: centerY - verticalInset } },
-    { kind: "quadratic", control: { x: width, y: centerY - verticalInset * control }, end: { x: width, y: centerY } },
-    { kind: "quadratic", control: { x: width, y: centerY + verticalInset * control }, end: { x: width - horizontalInset, y: centerY + verticalInset } },
+    { kind: "quadratic", control: { x: width, y: centerY }, end: { x: width - horizontalInset, y: centerY + verticalInset } },
     { kind: "line", end: { x: centerX + horizontalInset, y: height - verticalInset } },
-    { kind: "quadratic", control: { x: centerX + horizontalInset * control, y: height }, end: { x: centerX, y: height } },
-    { kind: "quadratic", control: { x: centerX - horizontalInset * control, y: height }, end: { x: centerX - horizontalInset, y: height - verticalInset } },
+    { kind: "quadratic", control: { x: centerX, y: height }, end: { x: centerX - horizontalInset, y: height - verticalInset } },
     { kind: "line", end: { x: horizontalInset, y: centerY + verticalInset } },
-    { kind: "quadratic", control: { x: 0, y: centerY + verticalInset * control }, end: { x: 0, y: centerY } },
-    { kind: "quadratic", control: { x: 0, y: centerY - verticalInset * control }, end: { x: horizontalInset, y: centerY - verticalInset } },
+    { kind: "quadratic", control: { x: 0, y: centerY }, end: { x: horizontalInset, y: centerY - verticalInset } },
     { kind: "line", end: { x: centerX - horizontalInset, y: verticalInset } },
-    { kind: "quadratic", control: { x: centerX - horizontalInset * control, y: 0 }, end: { x: centerX, y: 0 } },
-  ], { x: centerX, y: 0 });
+  ], { x: centerX - horizontalInset, y: verticalInset });
 }
 
 function chainExpectedSegments(
@@ -270,8 +265,8 @@ describe("shape boundary geometry", () => {
     const diamondT = 0.245;
     const diamond = getShapeBoundaryPoint("diamond", 160, 100, 0, diamondT);
     expect(diamond).not.toBeNull();
-    expect(diamond!.x).toBeCloseTo(157.56643869277275, 9);
-    expect(diamond!.y).toBeCloseTo(47.56237646160562, 9);
+    expect(diamond!.x).toBeCloseTo(155.54455715540996, 9);
+    expect(diamond!.y).toBeCloseTo(47.625916648706934, 9);
   });
 
   it("matches a dense independent Q oracle for rectangle and diamond nearest distances", () => {
@@ -319,19 +314,21 @@ describe("shape boundary geometry", () => {
     }
   });
 
-  it("preserves all cardinal extrema for rounded rectangles and diamonds", () => {
+  it("matches the visible boundary at every cardinal ray", () => {
     for (const [shape, width, height, roundness] of [["rectangle", 180, 60, 0.6], ["diamond", 160, 100, 0]] as const) {
-      const extrema = [
-        [0, { x: width / 2, y: 0 }],
-        [0.25, { x: width, y: height / 2 }],
-        [0.5, { x: width / 2, y: height }],
-        [0.75, { x: 0, y: height / 2 }],
-      ] as const;
-      for (const [t, expected] of extrema) {
+      const center = { x: width / 2, y: height / 2 };
+      const segments = expectedSegments(shape, width, height, roundness);
+      for (const t of [0, 0.25, 0.5, 0.75]) {
+        const radians = t * Math.PI * 2;
+        const expected = expectedRayIntersection(center, {
+          x: Math.sin(radians),
+          y: -Math.cos(radians),
+        }, segments);
         const actual = getShapeBoundaryPoint(shape, width, height, roundness, t);
         expect(actual).not.toBeNull();
-        expect(actual!.x).toBeCloseTo(expected.x, 12);
-        expect(actual!.y).toBeCloseTo(expected.y, 12);
+        expect(expected).not.toBeNull();
+        expect(actual!.x).toBeCloseTo(expected!.x, 12);
+        expect(actual!.y).toBeCloseTo(expected!.y, 12);
       }
     }
   });

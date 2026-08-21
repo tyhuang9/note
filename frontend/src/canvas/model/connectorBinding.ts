@@ -440,9 +440,11 @@ export function detachConnectorEndpointsForDeletedTargets(
     if (endpoint.kind !== "element" || !deletedIds.has(endpoint.targetElementId)) return endpoint;
     if (resolved) return { kind: "free", ...resolved };
     const target = elementsById[endpoint.targetElementId];
-    return isBindableElement(target)
-      ? { kind: "free", x: target.x + target.width / 2, y: target.y + target.height / 2 }
-      : endpoint;
+    if (!isBindableElement(target)) return endpoint;
+    return normalizeFreeConnectorEndpoint({
+      x: target.x + target.width / 2,
+      y: target.y + target.height / 2,
+    }) ?? endpoint;
   };
   return elements.map((element) => {
     if (element.type !== "connector" || deletedIds.has(element.id)) return element;

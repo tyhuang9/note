@@ -20,6 +20,7 @@ import {
   getConnectorCandidateAnnouncement,
   getConnectorCandidateAnnouncementKey,
   normalizeFreeConnectorEndpoint,
+  resolveConnectorPoints,
   snapConnectorPointToAngle,
   type BindableElement,
   type ShapeBindingAnchor,
@@ -192,6 +193,37 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
   const paintArrowPreview = useCallback((session: ArrowAuthoringSession) => {
     const draftLayer = optionsRef.current.liveDraftLayerRef.current;
     if (!draftLayer) return;
+    const style = optionsRef.current.getArrowPreviewStyle(session.elementId);
+    const elementsById = Object.fromEntries(
+      optionsRef.current.visibleElements.map((element) => [element.id, element]),
+    );
+    const points = resolveConnectorPoints({
+      createdAt: 0,
+      end: session.currentEndpoint,
+      id: session.elementId,
+      locked: false,
+      opacity: 1,
+      pageId: optionsRef.current.visibleElements.find((element) => (
+        session.startEndpoint.kind === "element"
+          ? element.id === session.startEndpoint.targetElementId
+          : session.currentEndpoint.kind === "element" && element.id === session.currentEndpoint.targetElementId
+      ))?.pageId ?? "",
+      routing: "straight",
+      start: session.startEndpoint,
+      style,
+      type: "connector",
+      updatedAt: 0,
+      zIndex: 0,
+    }, elementsById);
+    if (!points && session.startEndpoint !== session.currentEndpoint) {
+      arrowPreviewRef.current?.remove();
+      arrowPreviewRef.current = null;
+      return;
+    }
+    if (points) {
+      session.startPoint = points.start;
+      session.currentPoint = points.end;
+    }
     const svg = arrowPreviewRef.current ?? document.createElementNS("http://www.w3.org/2000/svg", "svg");
     arrowPreviewRef.current = svg;
     svg.setAttribute("aria-hidden", "true");
@@ -203,7 +235,6 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
     svg.setAttribute("overflow", "visible");
     svg.setAttribute("pointer-events", "none");
     svg.setAttribute("opacity", "1");
-    const style = optionsRef.current.getArrowPreviewStyle(session.elementId);
     svg.setAttribute("data-seed", String(style.seed));
     renderConnectorRoughSvg(
       svg,

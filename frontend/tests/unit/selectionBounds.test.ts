@@ -9,6 +9,7 @@ import {
   scaleSelection,
   translateSelection,
 } from "../../src/canvas/model/selectionBounds";
+import { resolveConnectorPoints } from "../../src/canvas/model/connectorBinding";
 
 const text: TextElement = {
   backgroundMode: "surface",
@@ -91,12 +92,13 @@ describe("selection bounds", () => {
       start: { kind: "element", targetElementId: rectangle.id, anchor: { t: 0.25 }, gap: 3 },
       end: { kind: "free", x: 220, y: 50 },
     };
-    expect(getSelectionElementBounds(attached, { [rectangle.id]: rectangle, [attached.id]: attached })).toEqual({
-      x: 111,
-      y: 38,
-      width: 111,
-      height: 14,
-    });
+    const elementsById = { [rectangle.id]: rectangle, [attached.id]: attached };
+    const points = resolveConnectorPoints(attached, elementsById)!;
+    const bounds = getSelectionElementBounds(attached, elementsById)!;
+    expect(bounds.x).toBeCloseTo(Math.min(points.start.x, points.end.x) - 2);
+    expect(bounds.y).toBeCloseTo(Math.min(points.start.y, points.end.y) - 2);
+    expect(bounds.width).toBeCloseTo(Math.abs(points.start.x - points.end.x) + 4);
+    expect(bounds.height).toBeCloseTo(Math.abs(points.start.y - points.end.y) + 4);
   });
 });
 

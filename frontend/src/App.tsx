@@ -199,9 +199,8 @@ import {
   getDefaultKeyboardArrowEndpoints,
   getConnectorAuthoringCandidate,
   getConnectorBoundaryDegrees,
-  getNearestBindableBoundaryAnchor,
   isBindableElement,
-  resolveConnectorEndpoint,
+  normalizeFreeConnectorEndpoint,
   resolveConnectorPoints,
   snapConnectorEndpoint,
 } from "./canvas/model/connectorBinding";
@@ -5942,7 +5941,11 @@ function App() {
       const connector = elementsById[connectorId];
       if (!connector || connector.type !== "connector") continue;
       const points = resolveConnectorPoints(connector, elementsById);
-      if (!points) continue;
+      if (!points) {
+        previewElementsById.get(connectorId)?.remove();
+        previewElementsById.delete(connectorId);
+        continue;
+      }
       let wrapper = previewElementsById.get(connectorId);
       if (!wrapper) {
         wrapper = document.createElement("div");
@@ -7139,25 +7142,22 @@ function App() {
       const elementsById = Object.fromEntries(dataRef.current.elements.map((element) => [element.id, element]));
       setBlocksWithHistory((currentBlocks) => currentBlocks.map((element) => {
         if (element.id !== selectedId || element.type !== "connector" || element.locked) return element;
-        const resolved = resolveConnectorEndpoint(element[endpoint], elementsById, element.pageId);
+        const currentEndpoint = element[endpoint];
+        const points = resolveConnectorPoints(element, elementsById);
+        const target = currentEndpoint.kind === "element"
+          ? elementsById[currentEndpoint.targetElementId]
+          : undefined;
+        const resolved = points?.[endpoint]
+          ?? (currentEndpoint.kind === "free" ? currentEndpoint : null)
+          ?? (isBindableElement(target)
+            ? { x: target.x + target.width / 2, y: target.y + target.height / 2 }
+            : null);
         if (!resolved) return element;
-        if (element[endpoint].kind === "element") {
-          const target = elementsById[element[endpoint].targetElementId];
-          if (isBindableElement(target)) {
-            const anchor = getNearestBindableBoundaryAnchor(target, { x: resolved.x + delta.x, y: resolved.y + delta.y });
-            if (anchor) {
-              if (Math.abs(anchor.anchor.t - element[endpoint].anchor.t) < 1e-10) return element;
-              const moved = { ...element[endpoint], anchor: anchor.anchor };
-              setConnectorBindingAnnouncement(
-                `Moved ${endpoint} endpoint along ${getBindableTargetLabel(target)} at target-relative boundary position ${getConnectorBoundaryDegrees(anchor.anchor.t)} degrees.`,
-              );
-              return endpoint === "start"
-                ? { ...element, start: moved, updatedAt: Date.now() }
-                : { ...element, end: moved, updatedAt: Date.now() };
-            }
-          }
+        if (currentEndpoint.kind === "element") {
+          setConnectorBindingAnnouncement(`Detached and moved ${endpoint} endpoint. It is now free.`);
         }
-        const moved = { kind: "free" as const, x: resolved.x + delta.x, y: resolved.y + delta.y };
+        const moved = normalizeFreeConnectorEndpoint({ x: resolved.x + delta.x, y: resolved.y + delta.y });
+        if (!moved) return element;
         return endpoint === "start"
           ? { ...element, start: moved, updatedAt: Date.now() }
           : { ...element, end: moved, updatedAt: Date.now() };
@@ -7212,11 +7212,6 @@ function App() {
     return anchorName ? `${anchorName} anchor` : `boundary position ${getConnectorBoundaryDegrees(anchor.t)} degrees`;
   }
 
-  function getTargetRotationDescription(rotation: number): string {
-    const roundedRotation = Math.round(rotation);
-    return roundedRotation === 0 ? "" : `, target rotated ${roundedRotation} degrees`;
-  }
-
   function getConnectorEndpointDescription(
     connector: ConnectorElement,
     endpoint: "start" | "end",
@@ -7232,8 +7227,7 @@ function App() {
       element.id === current.targetElementId && element.pageId === connector.pageId && isBindableElement(element),
     );
     const targetLabel = target ? getBindableTargetLabel(target) : "an unavailable target";
-    const targetRotation = target ? getTargetRotationDescription(target.rotation) : "";
-    return `Currently bound to ${targetLabel} at the target-relative ${getAnchorLabel(current.anchor)}${targetRotation}. Press Enter to rebind or detach. Arrow keys move along the target boundary and remain bound.`;
+    return `Currently bound to ${targetLabel}. The endpoint follows the nearest visible boundary automatically. Press Enter to rebind or detach. Arrow keys detach and move the endpoint.`;
   }
 
   function openConnectorEndpointChooser(endpoint: "start" | "end", origin: HTMLButtonElement) {
@@ -7321,12 +7315,21 @@ function App() {
       return;
     }
     const elementsById = Object.fromEntries(dataRef.current.elements.map((element) => [element.id, element]));
-    const resolved = resolveConnectorEndpoint(current, elementsById, connector.pageId);
+    const points = resolveConnectorPoints(connector, elementsById);
+    const target = elementsById[current.targetElementId];
+    const resolved = points?.[chooser.endpoint]
+      ?? (isBindableElement(target)
+        ? { x: target.x + target.width / 2, y: target.y + target.height / 2 }
+        : null);
     if (!resolved) {
       setConnectorBindingAnnouncement(`Could not detach ${chooser.endpoint} endpoint because its target is unavailable.`);
       return;
     }
-    const next = { kind: "free" as const, ...resolved };
+    const next = normalizeFreeConnectorEndpoint(resolved);
+    if (!next) {
+      setConnectorBindingAnnouncement(`Could not detach ${chooser.endpoint} endpoint because its position is unavailable.`);
+      return;
+    }
     setBlocksWithHistory((currentBlocks) => currentBlocks.map((element) => {
       if (element.id !== connector.id || element.type !== "connector") return element;
       return chooser.endpoint === "start"
@@ -7639,10 +7642,17 @@ function App() {
     const pageId = selectedPageIdRef.current;
     if (!pageId) return false;
     const elementsById = Object.fromEntries(dataRef.current.elements.map((element) => [element.id, element]));
-    if (
-      !resolveConnectorEndpoint(start, elementsById, pageId)
-      || !resolveConnectorEndpoint(end, elementsById, pageId)
-    ) {
+    const isValidEndpoint = (endpoint: ConnectorEndpoint) => {
+      if (endpoint.kind === "free") return normalizeFreeConnectorEndpoint(endpoint) !== null;
+      if (endpoint.kind !== "element") return false;
+      const target = elementsById[endpoint.targetElementId];
+      return isBindableElement(target) && target.pageId === pageId;
+    };
+    if (!isValidEndpoint(start) || !isValidEndpoint(end) || (
+      start.kind === "element"
+      && end.kind === "element"
+      && start.targetElementId === end.targetElementId
+    )) {
       return false;
     }
     const timestamp = Date.now();
@@ -8579,10 +8589,7 @@ function App() {
                     ? ["nw", "ne", "se", "sw"]
                     : [];
               const connectorEndpointPoints = selected?.type === "connector"
-                ? {
-                    start: resolveConnectorEndpoint(selected.start, renderedCanvasElementsById, selected.pageId),
-                    end: resolveConnectorEndpoint(selected.end, renderedCanvasElementsById, selected.pageId),
-                  }
+                ? resolveConnectorPoints(selected, renderedCanvasElementsById)
                 : null;
               const connectorEndpointHandles = selected?.type === "connector" && !selected.locked && connectorEndpointPoints?.start && connectorEndpointPoints.end
                 ? ([
@@ -8640,7 +8647,7 @@ function App() {
             return (
               <ConnectorEndpointChooser
                 anchorT={chooserEndpoint.kind === "element"
-                  ? chooserEndpoint.anchor.t
+                  ? chooserEndpoint.anchor?.t ?? 0
                   : 0}
                 endpoint={connectorEndpointChooser.endpoint}
                 isBound={chooserEndpoint.kind === "element"}

@@ -13,6 +13,7 @@ import {
 } from "../../src/canvas/components/PrimitiveElementView";
 import { elementIdsBackToFront } from "../../src/canvas/interaction/useCanvasInteraction";
 import type { CanvasElement, RoughStyle, ShapeElement, TextElement } from "../../src/canvas/model/elements";
+import { getShapeBoundaryPoint } from "../../src/canvas/model/shapeBoundary";
 import { canvasColorToCss } from "../../src/canvas/rendering/canvasColor";
 
 const style: RoughStyle = {
@@ -92,13 +93,13 @@ describe("primitive rendering", () => {
     expect(continuity.closeGap).toBe(0);
   });
 
-  it("rounds diamond corners while its rendered path reaches every model cardinal extent", () => {
+  it("rounds diamond corners while its rendered path reaches every visible cardinal boundary", () => {
     const path = roundedDiamondPath(100, 60);
     const extents = sampledPathExtents(path);
-    expect(extents.minX).toBeCloseTo(0, 8);
-    expect(extents.maxX).toBeCloseTo(100, 8);
-    expect(extents.minY).toBeCloseTo(0, 8);
-    expect(extents.maxY).toBeCloseTo(60, 8);
+    expect(extents.minX).toBeCloseTo(getShapeBoundaryPoint("diamond", 100, 60, 0, 0.75)!.x, 8);
+    expect(extents.maxX).toBeCloseTo(getShapeBoundaryPoint("diamond", 100, 60, 0, 0.25)!.x, 8);
+    expect(extents.minY).toBeCloseTo(getShapeBoundaryPoint("diamond", 100, 60, 0, 0)!.y, 8);
+    expect(extents.maxY).toBeCloseTo(getShapeBoundaryPoint("diamond", 100, 60, 0, 0.5)!.y, 8);
   });
 
   it("adds render-only padding for rough outlines without changing model geometry", () => {

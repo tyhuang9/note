@@ -7,7 +7,7 @@ import type {
   TextElement,
 } from "./elements";
 import { isBoxCanvasElement } from "./elements";
-import { resolveConnectorEndpoint } from "./connectorBinding";
+import { resolveConnectorPoints } from "./connectorBinding";
 import type { CanvasPoint } from "./geometry";
 import type { Bounds } from "./hitTesting";
 import { normalizeBounds } from "./hitTesting";
@@ -287,9 +287,9 @@ function getConnectorBounds(
   connector: ConnectorElement,
   elementsById: Readonly<Record<ElementId, CanvasElement>>,
 ): Bounds | null {
-  const start = resolveConnectorEndpoint(connector.start, elementsById, connector.pageId);
-  const end = resolveConnectorEndpoint(connector.end, elementsById, connector.pageId);
-  if (!start || !end) return null;
+  const points = resolveConnectorPoints(connector, elementsById);
+  if (!points) return null;
+  const { start, end } = points;
   const padding = Math.max(0, connector.style.strokeWidth / 2);
   return {
     x: Math.min(start.x, end.x) - padding,

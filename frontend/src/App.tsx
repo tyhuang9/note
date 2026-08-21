@@ -34,7 +34,7 @@ import { DrawingPropertiesPanel } from "./canvas/components/DrawingPropertiesPan
 import { CanvasViewport } from "./canvas/components/CanvasViewport";
 import { CanvasWorldLayer } from "./canvas/components/CanvasWorldLayer";
 import { InkElementView } from "./canvas/components/InkElementView";
-import { ConnectorElementView, renderConnectorRoughSvg, ShapeElementView } from "./canvas/components/PrimitiveElementView";
+import { ConnectorElementView, renderConnectorRoughSvg, ShapeElementView, type ShapeTextEditSession } from "./canvas/components/PrimitiveElementView";
 import { ShapeBindingAnchors } from "./canvas/components/ShapeBindingAnchors";
 import { useCanvasInteraction, type ArrowAuthoringVisual } from "./canvas/interaction/useCanvasInteraction";
 import { cleanupMarquee } from "./canvas/interaction/marqueeCleanup";
@@ -1304,7 +1304,7 @@ function App() {
   const pageViewportsRef = useRef<Map<string, PageViewport>>(new Map());
   const isSnapToGridEnabledRef = useRef(isSnapToGridEnabled);
   const editingBlockIdRef = useRef<string | null>(editingBlockId);
-  const shapeTextEditSessionRef = useRef<{ elementId: string; finish: () => void } | null>(null);
+  const shapeTextEditSessionRef = useRef<{ elementId: string; session: ShapeTextEditSession } | null>(null);
   const selectedBlockIdsRef = useRef<string[]>(selectedBlockIds);
   const selectedFolderIdRef = useRef(selectedFolderId);
   const selectedPageIdRef = useRef(selectedPageId);
@@ -3450,6 +3450,26 @@ function App() {
       }
       if (activeWorkbenchOverlay) {
         return;
+      }
+
+      const shapeTextSession = shapeTextEditSessionRef.current;
+      const isShapeTextToolbarTarget = event.target instanceof Element
+        && event.target.closest(".global-text-toolbar") !== null;
+      if (shapeTextSession && isShapeTextToolbarTarget) {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          shapeTextEditSessionRef.current = null;
+          shapeTextSession.session.cancel();
+          return;
+        }
+        if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+          event.preventDefault();
+          event.stopPropagation();
+          shapeTextEditSessionRef.current = null;
+          shapeTextSession.session.commit();
+          return;
+        }
       }
 
       if (event.key === "Escape") {
@@ -7324,9 +7344,9 @@ function App() {
     }
   }, []);
 
-  const registerShapeTextEditSession = useCallback((elementId: string, finish: (() => void) | null) => {
-    if (finish) {
-      shapeTextEditSessionRef.current = { elementId, finish };
+  const registerShapeTextEditSession = useCallback((elementId: string, session: ShapeTextEditSession | null) => {
+    if (session) {
+      shapeTextEditSessionRef.current = { elementId, session };
     } else if (shapeTextEditSessionRef.current?.elementId === elementId) {
       shapeTextEditSessionRef.current = null;
     }
@@ -7336,7 +7356,7 @@ function App() {
     const session = shapeTextEditSessionRef.current;
     if (!session) return false;
     shapeTextEditSessionRef.current = null;
-    session.finish();
+    session.session.commit();
     return true;
   }
 
@@ -7653,6 +7673,7 @@ function App() {
         fromTool: true,
         placement: "block-origin",
       }),
+    onEditBindableText: editBlock,
     onImagePreviewPointChange: (point) => {
       const current = pendingImagePlacementRef.current;
       if (!current) return;
@@ -8014,6 +8035,7 @@ function App() {
           activeMode={activeMode}
           activeTool={activeTool}
           id={WORKSPACE_PAGE_PANEL_ID}
+          onDoubleClick={canvasInteraction.handleDoubleClick}
           onLostPointerCapture={canvasInteraction.handlePointerCancel}
           onPointerCancel={canvasInteraction.handlePointerCancel}
           onPointerCancelCapture={inkInteraction.handlePointerCancelCapture}
@@ -8407,10 +8429,6 @@ function App() {
                 connectorEndpointHandles,
                 height: bounds.height * zoomLevel + framePadding * 2,
                 moveLabel: selectionHasLockedElements ? "Move unlocked selected elements" : "Move selected elements",
-                onDoubleClick: () => {
-                  const selected = visibleCanvasElements.find((block) => block.id === selectedBlockIds[0]);
-                  if (selectedBlockIds.length === 1 && selected && (isTextElement(selected) || selected.type === "shape")) editBlock(selected.id);
-                },
                 onMoveKeyDown: moveSelectionByKeyboard,
                 onPointerCancel: (event: ReactPointerEvent<HTMLButtonElement>) => finishSelectionFrameInteraction(event, true),
                 onLostPointerCapture: (event: ReactPointerEvent<HTMLButtonElement>) => finishSelectionFrameInteraction(event, true),

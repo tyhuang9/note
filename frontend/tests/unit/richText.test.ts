@@ -65,6 +65,17 @@ describe("shared rich text model", () => {
     expect(excerpt.endsWith("...")).toBe(true);
   });
 
+  it("separates block image alt text from adjacent accessible text", () => {
+    expect(richTextToPlainText({
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "Before" }] },
+        { type: "image", attrs: { src: "data:image/png;base64,AA==", alt: "Diagram" } },
+        { type: "paragraph", content: [{ type: "text", text: "After" }] },
+      ],
+    })).toBe("Before\nDiagram\nAfter\n");
+  });
+
   it("deep-clones nested documents while preserving optional omission", () => {
     const unlabeled = { content: "" };
     expect(cloneRichTextValue(unlabeled)).toEqual({ content: "" });

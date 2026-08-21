@@ -2522,7 +2522,7 @@ h2 {
   pointer-events: auto;
 }
 
-.shape-contained-text-editor > div,
+.shape-contained-text-editor-surface,
 .shape-contained-text-editor-content {
   width: 100%;
   min-width: 0;
@@ -2531,9 +2531,23 @@ h2 {
 
 .shape-contained-text-editor-content {
   box-sizing: border-box;
-  padding: 4px;
+  padding: 4px 4px 24px;
   outline: none;
   cursor: text;
+}
+
+.shape-contained-text-editor-hint {
+  position: absolute;
+  right: 6px;
+  bottom: 4px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  color: color-mix(in srgb, var(--canvas-tool-text) 78%, transparent);
+  background: color-mix(in srgb, var(--canvas-tool-bg) 92%, transparent);
+  font-size: 11px;
+  line-height: 1.25;
+  pointer-events: none;
+  user-select: none;
 }
 
 .shape-contained-text-editor-content:focus-visible {

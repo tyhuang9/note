@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import type {
+  MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
   WheelEvent as ReactWheelEvent,
 } from "react";
@@ -84,6 +85,7 @@ type CanvasInteractionOptions = {
   onCreatePrimitive: (elementId: string, tool: PrimitiveTool, geometry: PrimitiveGeometry, appearance: Readonly<{ opacity: number; style: RoughStyle }>) => void;
   onArrowStatusChange: (message: string) => void;
   onCreateText: (point: CanvasPoint) => void;
+  onEditBindableText: (elementId: string) => void;
   onImagePreviewPointChange: (point: CanvasPoint | null) => void;
   onPlaceImage: (point: CanvasPoint) => void;
   onRequestImagePicker: () => void;
@@ -117,6 +119,12 @@ function directHoveredElementId(
 function isCanvasChromeTarget(target: EventTarget | null) {
   return target instanceof Element &&
     target.closest(".canvas-tool-palette, .drawing-properties-panel, .offscreen-indicators, .search-panel, .selection-frame") !== null;
+}
+
+function isCanvasDoubleClickExcludedTarget(target: EventTarget | null) {
+  return target instanceof Element && target.closest(
+    ".canvas-tool-palette, .drawing-properties-panel, .offscreen-indicators, .search-panel, .selection-frame-handle, .selection-frame-endpoint-handle, .selection-frame-text-resize-e",
+  ) !== null;
 }
 
 function isCanvasBackgroundTarget(target: EventTarget | null) {
@@ -591,6 +599,29 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
     [getCanvasPoint, startPan],
   );
 
+  const handleDoubleClick = useCallback(
+    (event: ReactMouseEvent<HTMLElement>) => {
+      const current = optionsRef.current;
+      if (
+        event.button !== 0
+        || current.activeToolRef.current !== "select"
+        || isCanvasDoubleClickExcludedTarget(event.target)
+        || event.target instanceof Element && event.target.closest(".shape-contained-text-editor")
+      ) return;
+      const point = getCanvasPoint(event.clientX, event.clientY);
+      if (!point) return;
+      const target = getDirectBindableTargetAtPoint(current.visibleElements, point);
+      if (!target) return;
+      event.preventDefault();
+      event.stopPropagation();
+      current.cleanupMarquee();
+      current.setInsertionPoint(null);
+      current.setIsCanvasKeyboardActive(true);
+      current.onEditBindableText(target.id);
+    },
+    [getCanvasPoint],
+  );
+
   const handlePointerMove = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
       const currentPrimitive = primitiveSession.current;
@@ -848,6 +879,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
   }, []);
 
   return {
+    handleDoubleClick,
     handlePointerDown,
     handlePointerDownCapture,
     handlePointerCancel,

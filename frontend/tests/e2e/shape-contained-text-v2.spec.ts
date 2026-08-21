@@ -107,7 +107,7 @@ test("rich structure clips and transforms with its composite shape through resiz
 
   const shape = page.locator('[data-canvas-element-id="rich-shape"]');
   const text = shape.locator(".shape-contained-text-display");
-  await expect(shape).toHaveAttribute("aria-label", /Heading\s+Item\s+PixelLink/);
+  await expect(shape).toHaveAttribute("aria-label", /Heading\s+Item\s+Pixel\s+Link/);
   await expect(text.locator("h2")).toHaveText("Heading");
   await expect(text.locator("ul li")).toHaveText("Item");
   await expect(text.locator("img")).toHaveAttribute("alt", "Pixel");
@@ -142,28 +142,65 @@ test("rich structure clips and transforms with its composite shape through resiz
   await expect(page.locator(".canvas-accessibility-status")).toContainText("Redid a shape-contained text change");
 });
 
-test("direct shape-root double-click edits locked and unlocked shapes but ignores click-drag", async ({ page }) => {
+test("native canvas double-click edits locked and unlocked shapes but ignores click-drag", async ({ page }) => {
   await installShapeTextWorkspace(page);
   await page.goto("/");
 
   const lockedShape = page.locator('[data-canvas-element-id="shape"]');
-  await lockedShape.dispatchEvent("dblclick", { button: 0, detail: 2 });
+  await doubleClickCanvasElement(page, lockedShape);
   const lockedEditor = lockedShape.locator('[role="textbox"]');
-  await expect(lockedEditor).toBeFocused();
-  await lockedEditor.dispatchEvent("dblclick", { button: 0, detail: 2 });
   await expect(lockedEditor).toBeFocused();
   await lockedEditor.press("Escape");
 
   const blankShape = page.locator('[data-canvas-element-id="blank-shape"]');
-  await blankShape.dispatchEvent("pointerdown", { button: 0, clientX: 20, clientY: 20, pointerId: 41 });
-  await blankShape.dispatchEvent("pointermove", { button: 0, clientX: 25, clientY: 20, pointerId: 41 });
-  await blankShape.dispatchEvent("pointerup", { button: 0, clientX: 25, clientY: 20, pointerId: 41 });
-  await blankShape.dispatchEvent("dblclick", { button: 0, detail: 2 });
+  await clickCanvasElement(page, blankShape);
+  const moveSurface = page.locator(".selection-frame-move-surface");
+  const moveBounds = await moveSurface.boundingBox();
+  if (!moveBounds) throw new Error("Selected shape move surface is unavailable");
+  await page.mouse.move(moveBounds.x + moveBounds.width / 2, moveBounds.y + moveBounds.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(moveBounds.x + moveBounds.width / 2 + 18, moveBounds.y + moveBounds.height / 2 + 12, { steps: 3 });
+  await page.mouse.up();
   await expect(blankShape.locator('[role="textbox"]')).toHaveCount(0);
 
-  await blankShape.dispatchEvent("dblclick", { button: 0, detail: 2 });
+  await doubleClickCanvasElement(page, blankShape);
   await expect(blankShape.locator('[role="textbox"]')).toBeFocused();
   await blankShape.locator('[role="textbox"]').press("Escape");
+});
+
+test("shape toolbar Escape cancels and Control+Enter commits from native controls", async ({ page }) => {
+  await installShapeTextWorkspace(page);
+  await page.goto("/");
+
+  const shape = page.locator('[data-canvas-element-id="blank-shape"]');
+  await shape.focus();
+  await shape.press("F2");
+  const editor = shape.locator('[role="textbox"]');
+  const hint = shape.locator(".shape-contained-text-editor-hint");
+  await expect(hint).toBeVisible();
+  await expect(hint).toHaveAttribute("aria-hidden", "true");
+  await expect(hint).toHaveText("Esc cancels · Ctrl/⌘+Enter saves");
+  await editor.fill("Canceled from toolbar");
+  const baselineWrites = await writeCount(page);
+  await editor.press("Tab");
+  const fontFamily = page.getByRole("combobox", { name: "Font family" });
+  await expect(fontFamily).toBeFocused();
+  await fontFamily.press("Escape");
+  await expect(shape).toBeFocused();
+  await expect(page.locator(".canvas-accessibility-status")).toHaveText("Shape text editing canceled.");
+  await expect.poll(() => writeCount(page)).toBe(baselineWrites);
+  expect(await shapeRecord(page, "blank-shape")).not.toHaveProperty("text");
+
+  await shape.press("F2");
+  await editor.fill("Saved from toolbar");
+  await editor.press("Tab");
+  const bold = page.getByRole("button", { name: "Bold" });
+  await bold.focus();
+  await bold.press("Control+Enter");
+  await expect(shape).toBeFocused();
+  await expect(page.locator(".canvas-accessibility-status")).toHaveText("Shape text saved.");
+  await expect(shape).toContainText("Saved from toolbar");
+  await expect.poll(() => writeCount(page)).toBe(baselineWrites + 1);
 });
 
 for (const exit of ["canvas", "tool", "page", "selection"] as const) {
@@ -398,6 +435,18 @@ async function observeShapeTextAnnouncements(page: Page) {
 
 async function shapeTextAnnouncements(page: Page) {
   return page.evaluate(() => (window as unknown as { __shapeTextAnnouncements: string[] }).__shapeTextAnnouncements);
+}
+
+async function clickCanvasElement(page: Page, element: ReturnType<Page["locator"]>) {
+  const bounds = await element.boundingBox();
+  if (!bounds) throw new Error("Canvas element is unavailable");
+  await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+}
+
+async function doubleClickCanvasElement(page: Page, element: ReturnType<Page["locator"]>) {
+  const bounds = await element.boundingBox();
+  if (!bounds) throw new Error("Canvas element is unavailable");
+  await page.mouse.dblclick(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
 }
 
 async function installShapeTextWorkspace(

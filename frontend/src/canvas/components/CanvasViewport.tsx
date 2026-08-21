@@ -1,5 +1,6 @@
 import { forwardRef, type ReactNode } from "react";
 import type {
+  MouseEventHandler,
   PointerEventHandler,
   WheelEventHandler,
 } from "react";
@@ -11,6 +12,7 @@ type CanvasViewportProps = {
   labelledBy?: string;
   children: ReactNode;
   id: string;
+  onDoubleClick: MouseEventHandler<HTMLElement>;
   onPointerCancel: PointerEventHandler<HTMLElement>;
   onPointerCancelCapture?: PointerEventHandler<HTMLElement>;
   onPointerDown: PointerEventHandler<HTMLElement>;
@@ -32,6 +34,7 @@ export const CanvasViewport = forwardRef<HTMLElement, CanvasViewportProps>(
       labelledBy,
       children,
       id,
+      onDoubleClick,
       onPointerCancel,
       onPointerCancelCapture,
       onPointerDown,
@@ -53,6 +56,7 @@ export const CanvasViewport = forwardRef<HTMLElement, CanvasViewportProps>(
         data-active-tool={activeTool}
         id={id}
         onContextMenu={(event) => event.preventDefault()}
+        onDoubleClick={onDoubleClick}
         onPointerCancel={onPointerCancel}
         onPointerCancelCapture={onPointerCancelCapture}
         onPointerDown={(event) => {

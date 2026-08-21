@@ -32,11 +32,12 @@ type ShapeElementViewProps = PrimitiveElementViewProps<ShapeElement> & {
   onActiveEditorChange: (editor: Editor | null) => void;
   onEdit: (elementId: string) => void;
   onEditEnd: (elementId: string, outcome?: ShapeTextEditOutcome, restoreFocus?: boolean) => void;
-  onEditSessionChange: (elementId: string, finish: (() => void) | null) => void;
+  onEditSessionChange: (elementId: string, session: ShapeTextEditSession | null) => void;
   onTextCommit: (elementId: string, text: RichTextValue | undefined) => void;
 };
 
 export type ShapeTextEditOutcome = "canceled" | "committed" | "unchanged";
+export type ShapeTextEditSession = Readonly<{ cancel: () => void; commit: () => void }>;
 
 function createPrimitiveRootRef(elementId: string, onElementChange?: PrimitiveElementViewProps<ShapeElement>["onElementChange"]): RefCallback<HTMLDivElement> {
   return (element) => onElementChange?.(elementId, element);
@@ -148,8 +149,6 @@ function primitiveKeyDown(
 
 export function ShapeElementView({ element, isDragSourceHidden = false, isEditing, isSelected, onActiveEditorChange, onEdit, onEditEnd, onEditSessionChange, onElementChange, onKeyboardMove, onSelect, onTextCommit }: ShapeElementViewProps) {
   const ref = useRef<SVGSVGElement | null>(null);
-  const pointerGesture = useRef<{ didMove: boolean; pointerId: number; x: number; y: number } | null>(null);
-  const previousPointerGestureWasDrag = useRef(false);
   const rootRef = createPrimitiveRootRef(element.id, onElementChange);
   const renderPadding = shapeRenderPadding(element.style);
   const accessibleName = useMemo(
@@ -170,16 +169,6 @@ export function ShapeElementView({ element, isDragSourceHidden = false, isEditin
       className={`primitive-element shape-element ${isEditing ? "is-editing" : ""} ${isDragSourceHidden ? "is-drag-source-hidden" : ""}`}
       data-canvas-element-id={element.id}
       data-canvas-element-type="shape"
-      onDoubleClick={(event) => {
-        if (isEditing) return;
-        if (previousPointerGestureWasDrag.current) {
-          previousPointerGestureWasDrag.current = false;
-          return;
-        }
-        event.preventDefault();
-        event.stopPropagation();
-        onEdit(element.id);
-      }}
       onKeyDown={(event) => {
         if (event.key === "F2") {
           event.preventDefault();
@@ -188,25 +177,6 @@ export function ShapeElementView({ element, isDragSourceHidden = false, isEditin
           return;
         }
         primitiveKeyDown(event, element, onKeyboardMove, onSelect);
-      }}
-      onPointerCancel={() => {
-        previousPointerGestureWasDrag.current = Boolean(pointerGesture.current?.didMove);
-        pointerGesture.current = null;
-      }}
-      onPointerDown={(event) => {
-        if (event.button !== 0) return;
-        pointerGesture.current = { didMove: false, pointerId: event.pointerId, x: event.clientX, y: event.clientY };
-      }}
-      onPointerMove={(event) => {
-        const gesture = pointerGesture.current;
-        if (!gesture || gesture.pointerId !== event.pointerId) return;
-        if (Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) >= 4) gesture.didMove = true;
-      }}
-      onPointerUp={(event) => {
-        const gesture = pointerGesture.current;
-        if (!gesture || gesture.pointerId !== event.pointerId) return;
-        previousPointerGestureWasDrag.current = gesture.didMove;
-        pointerGesture.current = null;
       }}
       ref={rootRef}
       role={isEditing ? "group" : "button"}
@@ -376,6 +346,8 @@ function ShapeContainedTextEditor({ element, onActiveEditorChange, onCancel, onC
   useEffect(() => {
     if (!editor) return;
     const finishCurrentDraft = () => finish(editor, false, false);
+    const cancelAndRestoreFocus = () => finish(editor, true, true);
+    const commitAndRestoreFocus = () => finish(editor, false, true);
     const finishWhenFocusLeavesSession = (event: FocusEvent) => {
       const target = event.target;
       if (
@@ -385,7 +357,7 @@ function ShapeContainedTextEditor({ element, onActiveEditorChange, onCancel, onC
       finishCurrentDraft();
     };
     onActiveEditorChange(editor);
-    onEditSessionChange(element.id, finishCurrentDraft);
+    onEditSessionChange(element.id, { cancel: cancelAndRestoreFocus, commit: commitAndRestoreFocus });
     document.addEventListener("focusin", finishWhenFocusLeavesSession);
     return () => {
       document.removeEventListener("focusin", finishWhenFocusLeavesSession);
@@ -396,7 +368,10 @@ function ShapeContainedTextEditor({ element, onActiveEditorChange, onCancel, onC
 
   return (
     <div className="shape-contained-text shape-contained-text-editor" style={shapeTextInsetStyle(element)}>
-      <EditorContent editor={editor} />
+      <EditorContent className="shape-contained-text-editor-surface" editor={editor} />
+      <div aria-hidden="true" className="shape-contained-text-editor-hint">
+        Esc cancels · Ctrl/⌘+Enter saves
+      </div>
     </div>
   );
 }

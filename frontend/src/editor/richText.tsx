@@ -367,6 +367,7 @@ function collectPlainText(content: JSONContent, lines: string[]) {
   if (content.type === "image") {
     const alt = typeof content.attrs?.alt === "string" ? content.attrs.alt : "";
     if (alt) appendInline(lines, alt);
+    if (lines.length > 0 && lines[lines.length - 1] !== "") lines.push("");
     return;
   }
   const isBlock = ["paragraph", "heading", "codeBlock", "blockquote", "listItem"].includes(content.type ?? "");

@@ -514,8 +514,9 @@ describe("connector shape binding", () => {
     const connector = arrow({ kind: "element", targetElementId: target.id, anchor: { t: 0 }, gap: 4 }, { kind: "free", x: 190, y: 50 });
     expect(getTextAnchorPoint(target, { t: 0 })).toEqual({ x: 90, y: 50 });
     expect(resolveConnectorEndpoint(connector.start, { [target.id]: target })).toEqual({ x: 94, y: 50 });
+    const beforeDelete = resolveConnectorPoints(connector, { [target.id]: target })!;
     const [, detached] = detachConnectorEndpointsForDeletedTargets([target, connector], new Set([target.id]));
-    expect(detached).toMatchObject({ start: { kind: "free", x: 94, y: 50 } });
+    expect(detached).toMatchObject({ start: { kind: "free", ...beforeDelete.start } });
   });
 
   it("keeps a locked bound-bound arrow live when a text target is transformed", () => {
@@ -556,8 +557,9 @@ describe("connector shape binding", () => {
     expect(translated.end).toEqual({ kind: "free", x: 202, y: 56 });
     const scaled = scaleSelection([connector], new Set([connector.id]), { x: 110, y: 50, width: 80, height: 10 }, "se", 2)[0] as ConnectorElement;
     expect(scaled.start).toEqual(connector.start);
+    const beforeDelete = resolveConnectorPoints(connector, { [rectangle.id]: rectangle })!;
     const detached = detachConnectorEndpointsForDeletedTargets([rectangle, connector], new Set([rectangle.id]));
-    expect(detached[1]).toMatchObject({ start: { kind: "free", x: 110, y: 50 } });
+    expect(detached[1]).toMatchObject({ start: { kind: "free", ...beforeDelete.start } });
   });
 
   it("fails safely for dangling or non-shape targets", () => {
@@ -608,7 +610,8 @@ describe("connector shape binding", () => {
       { kind: "element", targetElementId: edge.id, anchor: { t: 0.25 }, gap: 0 },
       { kind: "free", x: 1, y: 1 },
     );
+    const beforeDelete = resolveConnectorPoints(connector, { [edge.id]: edge })!;
     const [, detached] = detachConnectorEndpointsForDeletedTargets([edge, connector], new Set([edge.id]));
-    expect(detached).toMatchObject({ start: { kind: "free", x: MAX_CANVAS_VALUE, y: 50 } });
+    expect(detached).toMatchObject({ start: { kind: "free", ...beforeDelete.start } });
   });
 });

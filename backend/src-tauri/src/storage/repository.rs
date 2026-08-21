@@ -707,12 +707,18 @@ fn validate_connector_endpoint(value: &Value, context: &str) -> Result<(), Strin
         .ok_or_else(|| format!("{context} must be an object"))?;
     match endpoint.get("kind").and_then(Value::as_str) {
         Some("free") => {
+            validate_known_keys(endpoint, &["kind", "x", "y"], context)?;
             let x = required_finite_object(endpoint, "x", context)?;
             let y = required_finite_object(endpoint, "y", context)?;
             validate_canvas_coordinate(x, &format!("{context}.x"))?;
             validate_canvas_coordinate(y, &format!("{context}.y"))?;
         }
         Some("element") => {
+            validate_known_keys(
+                endpoint,
+                &["kind", "targetElementId", "anchor", "gap"],
+                context,
+            )?;
             let target = "targetElementId";
             let position = "anchor";
             endpoint
@@ -720,15 +726,22 @@ fn validate_connector_endpoint(value: &Value, context: &str) -> Result<(), Strin
                 .and_then(Value::as_str)
                 .filter(|id| !id.is_empty())
                 .ok_or_else(|| format!("{context}.{target} must be a non-empty string"))?;
-            let t = endpoint
-                .get("anchor")
-                .and_then(Value::as_object)
-                .and_then(|anchor| anchor.get("t"));
-            if t.and_then(Value::as_f64)
-                .filter(|t| t.is_finite() && (0.0..=1.0).contains(t))
-                .is_none()
-            {
-                return Err(format!("{context}.{position} must be within 0 and 1"));
+            if let Some(anchor) = endpoint.get("anchor") {
+                validate_known_keys(
+                    anchor
+                        .as_object()
+                        .ok_or_else(|| format!("{context}.{position} must be within 0 and 1"))?,
+                    &["t"],
+                    &format!("{context}.anchor"),
+                )?;
+                if anchor
+                    .get("t")
+                    .and_then(Value::as_f64)
+                    .filter(|t| t.is_finite() && (0.0..=1.0).contains(t))
+                    .is_none()
+                {
+                    return Err(format!("{context}.{position} must be within 0 and 1"));
+                }
             }
             let gap = required_finite_object(endpoint, "gap", context)?;
             if !(0.0..=MAX_CANVAS_VALUE).contains(&gap) {
@@ -942,6 +955,7 @@ fn validate_final_connector_bindings(
             .and_then(|style| style.get("endArrowhead"))
             .and_then(Value::as_str)
             == Some("arrow");
+        let mut binding_targets = Vec::new();
         for endpoint_name in ["start", "end"] {
             let context = format!("connector {connector_id}.{endpoint_name}");
             let endpoint = connector
@@ -961,13 +975,48 @@ fn validate_final_connector_bindings(
                     "{context}.kind element is only supported for arrow connectors"
                 ));
             }
-            validate_bound_connector_target(
+            let target = validate_bound_connector_target(
                 transaction,
                 page_id,
                 target_element_id,
                 endpoint,
                 &context,
             )?;
+            if !binding_targets
+                .iter()
+                .any(|candidate: &ObjectBindingTarget| candidate.id == target.id)
+            {
+                binding_targets.push(target);
+            }
+        }
+        if is_arrow {
+            let start = object_binding_endpoint_from_value(
+                connector
+                    .get("start")
+                    .ok_or("connector.start is required")?,
+            )?;
+            let end = object_binding_endpoint_from_value(
+                connector.get("end").ok_or("connector.end is required")?,
+            )?;
+            let connector_stroke_width = connector
+                .get("style")
+                .and_then(Value::as_object)
+                .and_then(|style| style.get("strokeWidth"))
+                .and_then(Value::as_f64)
+                .unwrap_or(2.0);
+            if resolve_object_binding_points(
+                &connector_id,
+                connector_stroke_width,
+                &start,
+                &end,
+                &binding_targets,
+            )
+            .is_none()
+            {
+                return Err(format!(
+                    "connector {connector_id} has an invalid or same-target canonical binding"
+                ));
+            }
         }
     }
     Ok(())
@@ -979,7 +1028,7 @@ fn validate_bound_connector_target(
     target_element_id: &str,
     endpoint: &Value,
     context: &str,
-) -> Result<(), String> {
+) -> Result<ObjectBindingTarget, String> {
     let target: Option<(String, String, String)> = transaction
         .query_row(
             "SELECT page_id,element_type,payload_json FROM elements WHERE id=?",
@@ -1017,7 +1066,74 @@ fn validate_bound_connector_target(
         ));
     }
     validate_bound_connector_resolution(&target, &target_type, endpoint, context)?;
-    Ok(())
+    object_binding_target_from_value(&target, &target_type, target_element_id, context)
+}
+
+fn object_binding_endpoint_from_value(value: &Value) -> Result<ObjectBindingEndpoint, String> {
+    match value.get("kind").and_then(Value::as_str) {
+        Some("free") => Ok(ObjectBindingEndpoint::Free((
+            value
+                .get("x")
+                .and_then(Value::as_f64)
+                .ok_or("connector endpoint x is invalid")?,
+            value
+                .get("y")
+                .and_then(Value::as_f64)
+                .ok_or("connector endpoint y is invalid")?,
+        ))),
+        Some("element") => Ok(ObjectBindingEndpoint::Element {
+            target_id: value
+                .get("targetElementId")
+                .and_then(Value::as_str)
+                .ok_or("connector endpoint target is invalid")?
+                .to_owned(),
+            gap: value
+                .get("gap")
+                .and_then(Value::as_f64)
+                .ok_or("connector endpoint gap is invalid")?,
+            legacy_t: value
+                .get("anchor")
+                .and_then(Value::as_object)
+                .and_then(|anchor| anchor.get("t"))
+                .and_then(Value::as_f64),
+        }),
+        _ => Err("connector endpoint kind is invalid".into()),
+    }
+}
+
+fn object_binding_target_from_value(
+    target: &Value,
+    target_type: &str,
+    target_id: &str,
+    context: &str,
+) -> Result<ObjectBindingTarget, String> {
+    let style = target.get("style").and_then(Value::as_object);
+    Ok(ObjectBindingTarget {
+        id: target_id.to_owned(),
+        kind: target_type.to_owned(),
+        shape: if target_type == "text" {
+            "text".to_owned()
+        } else {
+            target
+                .get("shape")
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("{context}.targetElementId has invalid shape payload"))?
+                .to_owned()
+        },
+        x: required_finite(target, "x", context)?,
+        y: required_finite(target, "y", context)?,
+        width: required_finite(target, "width", context)?,
+        height: required_finite(target, "height", context)?,
+        rotation: required_finite(target, "rotation", context)?,
+        roundness: style
+            .and_then(|style| style.get("roundness"))
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0),
+        stroke_width: style
+            .and_then(|style| style.get("strokeWidth"))
+            .and_then(Value::as_f64)
+            .unwrap_or(2.0),
+    })
 }
 
 fn validate_bound_connector_resolution(
@@ -1059,17 +1175,19 @@ fn validate_bound_connector_resolution(
     let endpoint = endpoint
         .as_object()
         .ok_or_else(|| format!("{context} must be an object"))?;
-    let t = endpoint
+    let gap = required_finite_object(endpoint, "gap", context)?;
+    if let Some(t) = endpoint
         .get("anchor")
         .and_then(Value::as_object)
         .and_then(|anchor| anchor.get("t"))
         .and_then(Value::as_f64)
-        .ok_or_else(|| format!("{context}.anchor must be within 0 and 1"))?;
-    let gap = required_finite_object(endpoint, "gap", context)?;
-    let resolved = resolve_shape_anchor(shape, x, y, width, height, rotation, roundness, t, gap)
-        .ok_or_else(|| format!("{context} resolves to an invalid point"))?;
-    validate_canvas_coordinate(resolved.0, &format!("{context}.resolved.x"))?;
-    validate_canvas_coordinate(resolved.1, &format!("{context}.resolved.y"))?;
+    {
+        let resolved =
+            resolve_shape_anchor(shape, x, y, width, height, rotation, roundness, t, gap)
+                .ok_or_else(|| format!("{context} resolves to an invalid point"))?;
+        validate_canvas_coordinate(resolved.0, &format!("{context}.resolved.x"))?;
+        validate_canvas_coordinate(resolved.1, &format!("{context}.resolved.y"))?;
+    }
     Ok(())
 }
 
@@ -2778,6 +2896,10 @@ mod tests {
                 json!({"kind":"element","targetElementId":"shape-1","anchor":{"t":0.25},"gap":-1.0}),
                 "gap must be between",
             ),
+            (
+                json!({"kind":"element","targetElementId":"shape-1","anchor":{"t":0.25,"side":"right"},"gap":0.0}),
+                "anchor.side is not supported",
+            ),
         ] {
             let error = apply_scene_changes_at(
                 directory.path(),
@@ -2801,6 +2923,71 @@ mod tests {
                 1
             );
         }
+    }
+
+    #[test]
+    fn canonical_object_bindings_persist_reject_same_target_and_allow_overlap() {
+        let directory = root();
+        seed_page(directory.path());
+        let canonical = connector_element(
+            json!({"kind":"element","targetElementId":"shape-1","gap":4.0}),
+            json!({"kind":"free","x":160.0,"y":60.0}),
+        );
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![shape_element("shape-1", "p"), canonical.clone()],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            load_workspace_data_at(directory.path())
+                .unwrap()
+                .elements
+                .into_iter()
+                .find(|element| element["id"] == "connector-1")
+                .unwrap()["start"],
+            canonical["start"]
+        );
+
+        let error = apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 1,
+                upserts: vec![connector_element(
+                    json!({"kind":"element","targetElementId":"shape-1","gap":0.0}),
+                    json!({"kind":"element","targetElementId":"shape-1","gap":0.0}),
+                )],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("same-target canonical binding"));
+
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 1,
+                upserts: vec![
+                    shape_element("shape-2", "p"),
+                    connector_element(
+                        json!({"kind":"element","targetElementId":"shape-1","gap":0.0}),
+                        json!({"kind":"element","targetElementId":"shape-2","gap":0.0}),
+                    ),
+                ],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            load_workspace_data_at(directory.path()).unwrap().pages[0].revision,
+            2
+        );
     }
 
     #[test]

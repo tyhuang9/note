@@ -6,8 +6,10 @@ import {
   isSafeCanvasCoordinate,
   isSafeCanvasDimension,
   isSafeCanvasRotation,
+  isBindableElement,
   MAX_CANVAS_VALUE,
   resolveConnectorEndpoint,
+  resolveConnectorPoints,
 } from "../model/connectorBinding";
 
 export const MAX_ASSET_BYTES = 16 * 1024 * 1024;
@@ -137,10 +139,11 @@ function normalizeLoadedCanvasElements(elements: readonly CanvasElement[]): Canv
   const elementsById = Object.fromEntries(safeElements.map((element) => [element.id, element]));
   return safeElements.map((element) => {
     if (element.type !== "connector") return element;
+    const [start, end] = normalizeLoadedConnectorEndpoints(element, elementsById);
     return {
       ...element,
-      start: normalizeLoadedConnectorEndpoint(element.start, element, elementsById),
-      end: normalizeLoadedConnectorEndpoint(element.end, element, elementsById),
+      start,
+      end,
     };
   });
 }
@@ -152,6 +155,44 @@ function hasSafeLoadedGeometry(element: CanvasElement): boolean {
     && isSafeCanvasDimension(element.width)
     && isSafeCanvasDimension(element.height)
     && isSafeCanvasRotation(element.rotation);
+}
+
+function normalizeLoadedConnectorEndpoints(
+  connector: ConnectorElement,
+  elementsById: Readonly<Record<string, CanvasElement>>,
+): readonly [ConnectorElement["start"], ConnectorElement["end"]] {
+  const start = normalizeLoadedConnectorEndpoint(connector.start, connector, elementsById);
+  const end = normalizeLoadedConnectorEndpoint(connector.end, connector, elementsById);
+  if (
+    connector.style.endArrowhead === "arrow"
+    && start.kind === "element"
+    && end.kind === "element"
+    && start.targetElementId === end.targetElementId
+  ) {
+    const rawStartEndpoint: unknown = connector.start;
+    const rawEndEndpoint: unknown = connector.end;
+    const rawStart = isRecord(rawStartEndpoint) && isRecord(rawStartEndpoint.anchor)
+      ? { ...start, anchor: { t: rawStartEndpoint.anchor.t as number } }
+      : null;
+    const rawEnd = isRecord(rawEndEndpoint) && isRecord(rawEndEndpoint.anchor)
+      ? { ...end, anchor: { t: rawEndEndpoint.anchor.t as number } }
+      : null;
+    if (rawStart && rawEnd) {
+      const startPoint = resolveConnectorEndpoint(rawStart, elementsById, connector.pageId);
+      const endPoint = resolveConnectorEndpoint(rawEnd, elementsById, connector.pageId);
+      if (startPoint && endPoint) return [{ kind: "free", ...startPoint }, { kind: "free", ...endPoint }];
+    }
+    return [{ kind: "free", x: 0, y: 0 }, { kind: "free", x: 0, y: 0 }];
+  }
+  if (connector.style.endArrowhead === "arrow") return [start, end];
+  const candidate = { ...connector, start, end };
+  const points = resolveConnectorPoints(candidate, elementsById);
+  return points
+    ? [{ kind: "free", ...points.start }, { kind: "free", ...points.end }]
+    : [
+      start.kind === "free" ? start : { kind: "free", x: 0, y: 0 },
+      end.kind === "free" ? end : { kind: "free", x: 0, y: 0 },
+    ];
 }
 
 function normalizeLoadedConnectorEndpoint(
@@ -170,26 +211,38 @@ function normalizeLoadedConnectorEndpoint(
   }
   if (endpoint.kind === "element"
     && typeof endpoint.targetElementId === "string"
-    && isRecord(endpoint.anchor)
-    && typeof endpoint.anchor.t === "number"
-    && Number.isFinite(endpoint.anchor.t)
-    && endpoint.anchor.t >= 0
-    && endpoint.anchor.t <= 1
     && typeof endpoint.gap === "number"
     && Number.isFinite(endpoint.gap)
     && endpoint.gap >= 0
     && endpoint.gap <= MAX_CANVAS_VALUE) {
+    const target = elementsById[endpoint.targetElementId];
+    const hasValidLegacyAnchor = endpoint.anchor === undefined || (
+      isRecord(endpoint.anchor)
+      && Object.keys(endpoint.anchor).length === 1
+      && Object.prototype.hasOwnProperty.call(endpoint.anchor, "t")
+      && typeof endpoint.anchor.t === "number"
+      && Number.isFinite(endpoint.anchor.t)
+      && endpoint.anchor.t >= 0
+      && endpoint.anchor.t <= 1
+    );
     const binding: Extract<ConnectorElement["start"], { kind: "element" }> = {
-      anchor: { t: endpoint.anchor.t },
       gap: endpoint.gap,
       kind: "element",
       targetElementId: endpoint.targetElementId,
     };
-    const resolved = resolveConnectorEndpoint(binding, elementsById, connector.pageId);
-    if (!resolved) return { kind: "free", x: 0, y: 0 };
-    return connector.style.endArrowhead === "arrow"
-      ? binding
-      : { kind: "free", ...resolved };
+    if (!hasValidLegacyAnchor || !isBindableElement(target) || target.pageId !== connector.pageId) {
+      return { kind: "free", x: 0, y: 0 };
+    }
+    if (endpoint.anchor !== undefined) {
+      const legacyBinding = {
+        ...binding,
+        anchor: { t: (endpoint.anchor as Record<string, unknown>).t as number },
+      };
+      if (!resolveConnectorEndpoint(legacyBinding, elementsById, connector.pageId)) {
+        return { kind: "free", x: 0, y: 0 };
+      }
+    }
+    return binding;
   }
   return { kind: "free", x: 0, y: 0 };
 }

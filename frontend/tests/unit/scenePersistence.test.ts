@@ -208,18 +208,35 @@ describe("scene repository", () => {
       updatedAt: 1,
       zIndex: 1,
     };
+    const sameTargetLegacyConnector: ConnectorElement = {
+      ...boundConnector,
+      id: "same-target-legacy-arrow",
+      start: { kind: "element", targetElementId: "rectangle", anchor: { t: 0.25 }, gap: 0 },
+      end: { kind: "element", targetElementId: "rectangle", anchor: { t: 0.75 }, gap: 0 },
+    };
+    const calls: string[] = [];
     const invoke: Invoke = async (command) => {
-      if (command === "load_workspace_data") return { elements: [rectangle, boundConnector], folders: [], pages: [], warnings: [] } as never;
+      calls.push(command);
+      if (command === "load_workspace_data") {
+        return { elements: [rectangle, boundConnector, sameTargetLegacyConnector], folders: [], pages: [], warnings: [] } as never;
+      }
       return undefined as never;
     };
 
-    const loaded = (await createSceneRepository(invoke).loadWorkspace()).elements.find(
+    const elements = (await createSceneRepository(invoke).loadWorkspace()).elements;
+    const loaded = elements.find(
       (element): element is ConnectorElement => element.id === boundConnector.id,
     );
     expect(loaded).toMatchObject({
-      start: { kind: "element", targetElementId: "rectangle", anchor: { t: 0.25 }, gap: 6 },
+      start: { kind: "element", targetElementId: "rectangle", gap: 6 },
       style: { endArrowhead: "arrow" },
     });
+    expect(loaded?.start).not.toHaveProperty("anchor");
+    expect(elements.find((element) => element.id === sameTargetLegacyConnector.id)).toMatchObject({
+      start: { kind: "free", x: 110, y: 50 },
+      end: { kind: "free", x: 10, y: 50 },
+    });
+    expect(calls).toEqual(["load_workspace_data"]);
   });
 
   it("normalizes malformed bindings and unsafe coordinates to safe free endpoints", async () => {
@@ -306,6 +323,12 @@ describe("scene repository", () => {
           arrow("connector", { kind: "connector", targetConnectorId: "missing", pathT: 0.25, gap: 0 }),
           arrow("large-free", { kind: "free", x: MAX_CANVAS_VALUE + 1, y: 0 }),
           arrow("large-gap", bound("rectangle", MAX_CANVAS_VALUE + 1)),
+          arrow("anchor-extra", {
+            kind: "element",
+            targetElementId: "rectangle",
+            anchor: { t: 0.25, side: "right" },
+            gap: 0,
+          } as unknown as ConnectorElement["start"]),
           arrow("resolved-overshoot", bound("overshoot-rectangle", MAX_CANVAS_VALUE)),
           arrow("line", bound("rectangle"), "none"),
           arrow("null", null as unknown as ConnectorElement["start"]),
@@ -327,12 +350,12 @@ describe("scene repository", () => {
     );
     expect(loaded.elements.some((element) => element.id === "unsafe-rectangle")).toBe(false);
     expect(loaded.elements.some((element) => element.id === "unsafe-rotation")).toBe(false);
-    for (const id of ["missing", "unsafe-shape", "group", "connector", "large-free", "large-gap", "resolved-overshoot", "null", "undefined", "string", "number"]) {
+    for (const id of ["missing", "unsafe-shape", "group", "connector", "large-free", "large-gap", "anchor-extra", "resolved-overshoot", "null", "undefined", "string", "number"]) {
       expect(connectorById[id].start).toEqual({ kind: "free", x: 0, y: 0 });
     }
-    expect(connectorById.nonshape.start).toEqual(bound("text-target"));
+    expect(connectorById.nonshape.start).toEqual({ kind: "element", targetElementId: "text-target", gap: 0 });
     expect(connectorById["cross-page"].start).toEqual({ kind: "free", x: 0, y: 0 });
-    expect(connectorById.line.start).toEqual({ kind: "free", x: 110, y: 50 });
+    expect(connectorById.line.start).toEqual({ kind: "free", x: 112, y: 60 });
   });
 
   it("persists a normalized overshooting legacy binding while deleting its target", async () => {

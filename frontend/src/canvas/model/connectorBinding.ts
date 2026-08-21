@@ -436,15 +436,19 @@ export function detachConnectorEndpointsForDeletedTargets(
   deletedIds: ReadonlySet<ElementId>,
 ): CanvasElement[] {
   const elementsById = Object.fromEntries(elements.map((element) => [element.id, element]));
-  const detach = (endpoint: ConnectorEndpoint, sourcePageId: string): ConnectorEndpoint => {
+  const detach = (endpoint: ConnectorEndpoint, resolved: CanvasPoint | null): ConnectorEndpoint => {
     if (endpoint.kind !== "element" || !deletedIds.has(endpoint.targetElementId)) return endpoint;
-    const resolved = resolveConnectorEndpoint(endpoint, elementsById, sourcePageId);
-    return resolved ? { kind: "free", ...resolved } : endpoint;
+    if (resolved) return { kind: "free", ...resolved };
+    const target = elementsById[endpoint.targetElementId];
+    return isBindableElement(target)
+      ? { kind: "free", x: target.x + target.width / 2, y: target.y + target.height / 2 }
+      : endpoint;
   };
   return elements.map((element) => {
     if (element.type !== "connector" || deletedIds.has(element.id)) return element;
-    const start = detach(element.start, element.pageId);
-    const end = detach(element.end, element.pageId);
+    const points = resolveConnectorPoints(element, elementsById);
+    const start = detach(element.start, points?.start ?? null);
+    const end = detach(element.end, points?.end ?? null);
     return start === element.start && end === element.end
       ? element
       : { ...element, start, end, updatedAt: Date.now() };

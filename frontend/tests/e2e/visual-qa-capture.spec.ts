@@ -52,31 +52,27 @@ test("captures drawing editor visual QA states", async ({ page }) => {
     firstEllipseBounds.x + firstEllipseBounds.width - 1,
     firstEllipseBounds.y + firstEllipseBounds.height / 2,
   );
-  const firstAnchors = page.locator(`[data-connector-target-id="${firstId}"]`);
-  const secondAnchors = page.locator(`[data-connector-target-id="${secondId}"]`);
-  await expect(firstAnchors).toHaveCount(1);
-  await expect(secondAnchors).toHaveCount(0);
-  await expect(firstAnchors.first()).toBeVisible();
+  const firstHighlight = page.locator(`[data-connector-target-id="${firstId}"]`);
+  const secondHighlight = page.locator(`[data-connector-target-id="${secondId}"]`);
+  await expect(firstHighlight).toHaveCount(1);
+  await expect(secondHighlight).toHaveCount(0);
+  await expect(firstHighlight).toHaveAttribute("data-connector-binding-state", "snapped");
+  await expect(page.locator('[role="status"].canvas-accessibility-status')).toHaveText(
+    "Arrow start bound. Choose an end point.",
+  );
   await page.screenshot({ path: `${evidenceRoot}/implementation-arrow-anchors-dark-1069x598.png` });
 
-  const firstPerimeter = await requiredBounds(
-    firstAnchors,
-    "first ellipse active boundary anchor",
-  );
   const secondEllipseBounds = await requiredBounds(secondEllipse, "second ellipse");
   await page.mouse.move(
     secondEllipseBounds.x + 1,
     secondEllipseBounds.y + secondEllipseBounds.height / 2,
     { steps: 6 },
   );
-  await expect(firstAnchors).toHaveCount(0);
-  await expect(secondAnchors).toHaveCount(1);
-  const secondPerimeter = await requiredBounds(
-    secondAnchors,
-    "second ellipse active boundary anchor",
-  );
-  const start = center(firstPerimeter);
-  const end = center(secondPerimeter);
+  await expect(firstHighlight).toHaveCount(0);
+  await expect(secondHighlight).toHaveCount(1);
+  await expect(secondHighlight).toHaveAttribute("data-connector-binding-state", "snapped");
+  const secondTargetBounds = await requiredBounds(secondHighlight, "second ellipse whole-object target highlight");
+  const end = center(secondTargetBounds);
   await page.mouse.move(end.x, end.y, { steps: 6 });
   const preview = canvas.getByTestId("canvas-live-draft-layer").locator(".arrow-authoring-preview");
   await expect(preview).toHaveAttribute("opacity", "1");
@@ -91,8 +87,12 @@ test("captures drawing editor visual QA states", async ({ page }) => {
   const endHandle = page.getByRole("button", { name: "Move connector end endpoint" });
   await expect(startHandle).toBeVisible();
   await expect(endHandle).toBeVisible();
-  expect(distance(center(await requiredBounds(startHandle, "arrow start handle")), start)).toBeLessThanOrEqual(2);
-  expect(distance(center(await requiredBounds(endHandle, "arrow end handle")), end)).toBeLessThanOrEqual(2);
+  const resolvedStart = await resolvedConnectorEndpointScreen(page, arrow, "start");
+  const resolvedEnd = await resolvedConnectorEndpointScreen(page, arrow, "end");
+  expect(resolvedStart.x).toBeGreaterThan(center(firstEllipseBounds).x);
+  expect(resolvedEnd.x).toBeLessThan(center(secondEllipseBounds).x);
+  expect(distance(center(await requiredBounds(startHandle, "arrow start handle")), resolvedStart)).toBeLessThanOrEqual(2);
+  expect(distance(center(await requiredBounds(endHandle, "arrow end handle")), resolvedEnd)).toBeLessThanOrEqual(2);
   await page.screenshot({ path: `${evidenceRoot}/implementation-bound-arrow-dark-1069x598.png` });
 
   // A bound arrow follows its source shape instead of retaining stale coordinates.
@@ -166,6 +166,31 @@ async function requiredBounds(locator: Locator, label: string) {
   const bounds = await locator.boundingBox();
   if (!bounds) throw new Error(`${label} bounds were unavailable.`);
   return bounds;
+}
+
+async function resolvedConnectorEndpointScreen(page: Page, connector: Locator, endpoint: "start" | "end") {
+  const point = await connector.evaluate((node, endpointName) => {
+    const x = Number(node.getAttribute(`data-connector-${endpointName}-x`));
+    const y = Number(node.getAttribute(`data-connector-${endpointName}-y`));
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      throw new Error(`Resolved connector ${endpointName} point was unavailable.`);
+    }
+    return { x, y };
+  }, endpoint);
+  return modelToScreen(page, point);
+}
+
+async function modelToScreen(page: Page, point: { x: number; y: number }) {
+  return page.evaluate((worldPoint) => {
+    const content = document.querySelector<HTMLElement>(".canvas-content");
+    if (!content) throw new Error("Canvas content was unavailable.");
+    const bounds = content.getBoundingClientRect();
+    const matrix = new DOMMatrixReadOnly(getComputedStyle(content).transform);
+    return {
+      x: bounds.x + worldPoint.x * matrix.a,
+      y: bounds.y + worldPoint.y * matrix.d,
+    };
+  }, point);
 }
 
 function center(bounds: { x: number; y: number; width: number; height: number }) {

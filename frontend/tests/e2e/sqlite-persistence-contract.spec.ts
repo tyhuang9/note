@@ -125,6 +125,10 @@ test("persists a bound arrow endpoint and resolves it from the current target af
   const rectangleControl = page.getByRole("button", { name: "Select and move rectangle shape. Press F2 to edit contained text." });
   const targetId = await rectangleControl.getAttribute("data-canvas-element-id");
   if (!targetId) throw new Error("Rectangle target id was unavailable.");
+  await expect(page.locator(".persistence-status")).toHaveText("Saved");
+  await page.evaluate(() => {
+    (window as unknown as { __notePersistenceCalls: string[] }).__notePersistenceCalls = [];
+  });
 
   await page.getByRole("button", { name: "Arrow (A / 5)" }).click();
   const rectangleBounds = await rectangleControl.boundingBox();
@@ -133,13 +137,18 @@ test("persists a bound arrow endpoint and resolves it from the current target af
     rectangleBounds.x + rectangleBounds.width - 1,
     rectangleBounds.y + rectangleBounds.height / 2,
   );
-  const rightAnchor = page.locator(`[data-connector-target-id="${targetId}"][data-connector-anchor="right"]`);
-  const anchorBounds = await rightAnchor.boundingBox();
-  if (!anchorBounds) throw new Error("Connector anchor was not available.");
-  await page.mouse.move(canvasBounds.x + 800, anchorBounds.y + anchorBounds.height / 2, { steps: 5 });
-  await page.mouse.click(canvasBounds.x + 800, anchorBounds.y + anchorBounds.height / 2);
+  const targetHighlight = page.locator(`[data-connector-target-id="${targetId}"]`);
+  await expect(targetHighlight).toHaveAttribute("data-connector-binding-state", "snapped");
+  await expect(page.locator('[role="status"].canvas-accessibility-status')).toHaveText(
+    "Arrow start bound. Choose an end point.",
+  );
+  const highlightBounds = await targetHighlight.boundingBox();
+  if (!highlightBounds) throw new Error("Whole-object connector target highlight was not available.");
+  await page.mouse.move(canvasBounds.x + 800, highlightBounds.y + highlightBounds.height / 2, { steps: 5 });
+  await page.mouse.click(canvasBounds.x + 800, highlightBounds.y + highlightBounds.height / 2);
   const arrow = page.getByRole("button", { name: "Select and move arrow connector" });
   await expect(arrow).toBeVisible();
+  await expect.poll(() => persistenceCommands(page)).toContain("apply_scene_changes");
   await expect(page.locator(".persistence-status")).toHaveText("Saved");
 
   await page.reload();

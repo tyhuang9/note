@@ -98,12 +98,15 @@ test("an overlap-suppressed connector stays visibly keyboard-manageable for rebi
   await page.keyboard.press("Control+z");
   await expect(marker).toBeVisible();
   await page.setViewportSize({ width: 760, height: 700 });
+  await expect.poll(async () => {
+    const [compactCanvasBounds, compactMarkerBounds] = await Promise.all([
+      requiredBounds(canvas, "compact canvas"),
+      requiredBounds(marker, "compact suppressed connector marker"),
+    ]);
+    return containmentOverflow(compactMarkerBounds, compactCanvasBounds);
+  }).toEqual({ bottom: 0, left: 0, right: 0, top: 0 });
   const compactCanvasBounds = await requiredBounds(canvas, "compact canvas");
   const compactMarkerBounds = await requiredBounds(marker, "compact suppressed connector marker");
-  expect(compactMarkerBounds.x).toBeGreaterThanOrEqual(compactCanvasBounds.x);
-  expect(compactMarkerBounds.y).toBeGreaterThanOrEqual(compactCanvasBounds.y);
-  expect(compactMarkerBounds.x + compactMarkerBounds.width).toBeLessThanOrEqual(compactCanvasBounds.x + compactCanvasBounds.width);
-  expect(compactMarkerBounds.y + compactMarkerBounds.height).toBeLessThanOrEqual(compactCanvasBounds.y + compactCanvasBounds.height);
   await marker.focus();
   await page.keyboard.press("Enter");
   const compactManagement = page.getByRole("group", { name: "Arrow connector 1 endpoint management" });
@@ -251,6 +254,18 @@ function assertContained(inner: { height: number; width: number; x: number; y: n
   expect(inner.y).toBeGreaterThanOrEqual(outer.y);
   expect(inner.x + inner.width).toBeLessThanOrEqual(outer.x + outer.width);
   expect(inner.y + inner.height).toBeLessThanOrEqual(outer.y + outer.height);
+}
+
+function containmentOverflow(
+  inner: { height: number; width: number; x: number; y: number },
+  outer: { height: number; width: number; x: number; y: number },
+) {
+  return {
+    bottom: Math.max(inner.y + inner.height - (outer.y + outer.height), 0),
+    left: Math.max(outer.x - inner.x, 0),
+    right: Math.max(inner.x + inner.width - (outer.x + outer.width), 0),
+    top: Math.max(outer.y - inner.y, 0),
+  };
 }
 
 async function requiredBounds(locator: Locator, label: string) {

@@ -151,15 +151,28 @@ test("uses tool-specific native cursors and localized canvas keyboard focus", as
 
   await page.locator('[data-tool="arrow"]').click();
   await page.mouse.click(diamondBounds.x + diamondBounds.width - 1, diamondBounds.y + diamondBounds.height / 2);
-  const rightAnchor = page.locator(`[data-connector-target-id="${diamondId}"][data-connector-anchor="right"]`);
-  await expect(rightAnchor).toBeVisible();
-  const rightAnchorBounds = await requiredBounds(rightAnchor, "diamond right cardinal anchor");
-  await page.mouse.click(Math.min(bounds.x + bounds.width - 40, rightAnchorBounds.x + 220), rightAnchorBounds.y + rightAnchorBounds.height / 2);
+  const targetHighlight = page.locator(`[data-connector-target-id="${diamondId}"]`);
+  await expect(targetHighlight).toBeVisible();
+  await expect(targetHighlight).toHaveAttribute("aria-hidden", "true");
+  await expect(targetHighlight).toHaveAttribute("data-connector-binding-state", "snapped");
+  await expect(page.locator('[role="status"].canvas-accessibility-status')).toHaveText(
+    "Arrow start bound. Choose an end point.",
+  );
+  const targetHighlightBounds = await requiredBounds(targetHighlight, "whole-object diamond target highlight");
+  await page.mouse.click(
+    Math.min(bounds.x + bounds.width - 40, targetHighlightBounds.x + targetHighlightBounds.width + 220),
+    targetHighlightBounds.y + targetHighlightBounds.height / 2,
+  );
+  const arrow = page.getByRole("button", { name: "Select and move arrow connector" });
+  await expect(arrow).toBeVisible();
   await page.locator('[data-tool="select"]').click();
   const startHandle = page.getByRole("button", { name: "Move connector start endpoint" });
   const startHandleBounds = await requiredBounds(startHandle, "diamond-bound connector start");
-  expect(Math.abs(startHandleBounds.x + startHandleBounds.width / 2 - (rightAnchorBounds.x + rightAnchorBounds.width / 2))).toBeLessThanOrEqual(2);
-  expect(Math.abs(startHandleBounds.y + startHandleBounds.height / 2 - (rightAnchorBounds.y + rightAnchorBounds.height / 2))).toBeLessThanOrEqual(2);
+  const resolvedStart = await resolvedConnectorEndpointScreen(page, arrow, "start");
+  expect(Math.hypot(
+    startHandleBounds.x + startHandleBounds.width / 2 - resolvedStart.x,
+    startHandleBounds.y + startHandleBounds.height / 2 - resolvedStart.y,
+  )).toBeLessThanOrEqual(2);
 });
 
 test("keeps the canvas focus badge contained and separate from offscreen navigation in light/dark compact zoomed workspaces", async ({ page }) => {
@@ -292,4 +305,29 @@ async function requiredBounds(locator: Locator, label: string) {
   const bounds = await locator.boundingBox();
   if (!bounds) throw new Error(`${label} bounds were unavailable.`);
   return bounds;
+}
+
+async function resolvedConnectorEndpointScreen(page: Page, connector: Locator, endpoint: "start" | "end") {
+  const point = await connector.evaluate((node, endpointName) => {
+    const x = Number(node.getAttribute(`data-connector-${endpointName}-x`));
+    const y = Number(node.getAttribute(`data-connector-${endpointName}-y`));
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      throw new Error(`Resolved connector ${endpointName} point was unavailable.`);
+    }
+    return { x, y };
+  }, endpoint);
+  return modelToScreen(page, point);
+}
+
+async function modelToScreen(page: Page, point: { x: number; y: number }) {
+  return page.evaluate((worldPoint) => {
+    const content = document.querySelector<HTMLElement>(".canvas-content");
+    if (!content) throw new Error("Canvas content was unavailable.");
+    const bounds = content.getBoundingClientRect();
+    const matrix = new DOMMatrixReadOnly(getComputedStyle(content).transform);
+    return {
+      x: bounds.x + worldPoint.x * matrix.a,
+      y: bounds.y + worldPoint.y * matrix.d,
+    };
+  }, point);
 }

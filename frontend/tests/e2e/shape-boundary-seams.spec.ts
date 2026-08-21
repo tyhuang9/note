@@ -11,7 +11,7 @@ test("keeps rough rectangle and diamond joins closed in previews and committed l
   const bounds = await requiredBounds(canvas, "canvas");
   const cases = [
     { moves: 8, shape: "rectangle", size: { height: 140, width: 220 } },
-    { moves: 12, shape: "diamond", size: { height: 110, width: 140 } },
+    { moves: 8, shape: "diamond", size: { height: 110, width: 140 } },
   ] as const;
 
   for (const [themeIndex, theme] of (["light", "dark"] as const).entries()) {

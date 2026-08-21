@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-type FixtureMode = "detachable" | "blocked" | "binding";
+type FixtureMode = "detachable" | "blocked" | "binding" | "preview-recovery";
 
 test("two-click creation and chooser binding reject post-clearance maximum-envelope overshoot atomically", async ({ page }) => {
   await installExtremeOverlapWorkspace(page, "binding");
@@ -80,6 +80,88 @@ test("two-click creation and chooser binding reject post-clearance maximum-envel
   await page.keyboard.press("Control+z");
   await expect.poll(() => currentConnector(page)).toEqual(before);
   await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
+});
+
+test("retarget clears an invalid preview, recovers in the same capture, and releases atomically", async ({ page }) => {
+  await installExtremeOverlapWorkspace(page, "preview-recovery");
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await page.goto("/");
+
+  const canvas = page.getByRole("tabpanel");
+  const connector = page.locator('[data-canvas-element-id="edge-connector"]');
+  await connector.focus();
+  await page.keyboard.press("Enter");
+  const startHandle = page.getByRole("button", { name: "Move connector start endpoint" });
+  const status = page.locator('.canvas-accessibility-status[role="status"]');
+  const selectionFrame = page.locator(".selection-frame");
+  const [startHandleBounds, safeTargetBounds, invalidTargetBounds, originalConnector, originalFrame] = await Promise.all([
+    requiredBounds(startHandle, "free start endpoint"),
+    requiredBounds(page.locator('[data-canvas-element-id="safe-target"]'), "safe target"),
+    requiredBounds(page.locator('[data-canvas-element-id="edge-first"]'), "maximum-envelope target"),
+    roundedBounds(connector),
+    roundedBounds(selectionFrame),
+  ]);
+  const safePoint = {
+    x: safeTargetBounds.x + safeTargetBounds.width / 2,
+    y: safeTargetBounds.y + safeTargetBounds.height / 2,
+  };
+  const invalidPoint = {
+    x: invalidTargetBounds.x + invalidTargetBounds.width / 2,
+    y: invalidTargetBounds.y + invalidTargetBounds.height * 0.3,
+  };
+  const before = await currentConnector(page);
+  await page.waitForTimeout(650);
+  await resetCounts(page);
+
+  await page.mouse.move(
+    startHandleBounds.x + startHandleBounds.width / 2,
+    startHandleBounds.y + startHandleBounds.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(safePoint.x, safePoint.y, { steps: 4 });
+  await expect.poll(() => roundedBounds(connector)).not.toEqual(originalConnector);
+  await expect.poll(() => roundedBounds(selectionFrame)).not.toEqual(originalFrame);
+
+  await page.mouse.move(invalidPoint.x, invalidPoint.y, { steps: 4 });
+  await expect.poll(() => roundedBounds(connector)).toEqual(originalConnector);
+  await expect.poll(() => roundedBounds(selectionFrame)).toEqual(originalFrame);
+  await expect(status).toHaveText(
+    "Could not bind start endpoint because the connector's visible stroke would exceed the safe canvas boundary.",
+  );
+
+  await page.mouse.move(safePoint.x, safePoint.y, { steps: 4 });
+  await expect.poll(() => roundedBounds(connector)).not.toEqual(originalConnector);
+  await expect.poll(() => roundedBounds(selectionFrame)).not.toEqual(originalFrame);
+  await expect(status).toHaveText(/Snapped to Rectangle 2 .*nearest facing visible boundary/);
+
+  await page.mouse.move(invalidPoint.x, invalidPoint.y, { steps: 4 });
+  await expect.poll(() => roundedBounds(connector)).toEqual(originalConnector);
+  await expect.poll(() => roundedBounds(selectionFrame)).toEqual(originalFrame);
+  await page.mouse.up();
+
+  await expect(status).toHaveText(
+    "Could not bind start endpoint because the connector's visible stroke would exceed the safe canvas boundary.",
+  );
+  await expect.poll(() => currentConnector(page)).toEqual(before);
+  await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
+  await canvas.focus();
+  await page.keyboard.press("Control+z");
+  await expect.poll(() => currentConnector(page)).toEqual(before);
+  await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
+
+  const recoveredHandleBounds = await requiredBounds(startHandle, "recovered start endpoint");
+  await page.mouse.move(
+    recoveredHandleBounds.x + recoveredHandleBounds.width / 2,
+    recoveredHandleBounds.y + recoveredHandleBounds.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(safePoint.x, safePoint.y, { steps: 4 });
+  await page.mouse.up();
+  await expect.poll(() => currentConnector(page)).toMatchObject({
+    start: { gap: 0, kind: "element", targetElementId: "safe-target" },
+  });
+  await page.waitForTimeout(650);
+  await expect.poll(() => counts(page)).toEqual({ apply: 1, persistence: 2, session: 1 });
 });
 
 test("a suppressed connector detaches safely at the positive canvas boundary and undo restores it", async ({ page }) => {
@@ -226,6 +308,16 @@ async function requiredBounds(locator: Locator, label: string) {
   return bounds;
 }
 
+async function roundedBounds(locator: Locator) {
+  const bounds = await requiredBounds(locator, "element");
+  return {
+    height: Math.round(bounds.height),
+    width: Math.round(bounds.width),
+    x: Math.round(bounds.x),
+    y: Math.round(bounds.y),
+  };
+}
+
 async function installExtremeOverlapWorkspace(page: Page, mode: FixtureMode) {
   await page.addInitScript((fixtureMode: FixtureMode) => {
     type ElementRecord = Record<string, unknown> & { id: string; pageId: string; type: string };
@@ -241,7 +333,8 @@ async function installExtremeOverlapWorkspace(page: Page, mode: FixtureMode) {
       strokeWidth: 2,
     };
     const blocked = fixtureMode === "blocked";
-    const binding = fixtureMode === "binding";
+    const binding = fixtureMode === "binding" || fixtureMode === "preview-recovery";
+    const previewRecovery = fixtureMode === "preview-recovery";
     const shapeGeometry = blocked
       ? { height: 1_000_000, width: 1_000_000, x: -500_000, y: -500_000 }
       : { height: 100, width: 100, x: binding ? 999_899 : 999_900, y: 300 };
@@ -249,6 +342,9 @@ async function installExtremeOverlapWorkspace(page: Page, mode: FixtureMode) {
     const initial = {
       elements: (binding ? [
         { createdAt: 1, id: "edge-first", locked: false, opacity: 1, pageId: "page", rotation: 0, shape: "rectangle", style, type: "shape", updatedAt: 1, ...shapeGeometry, zIndex: 2 },
+        ...(previewRecovery ? [
+          { createdAt: 1, height: 100, id: "safe-target", locked: false, opacity: 1, pageId: "page", rotation: 0, shape: "rectangle", style: { ...style, seed: 74 }, type: "shape", updatedAt: 1, width: 100, x: 999_400, y: 450, zIndex: 3 },
+        ] : []),
         { createdAt: 1, end: { kind: "free", x: 1_000_000, y: 350 }, id: "edge-connector", locked: false, opacity: 1, pageId: "page", routing: "straight", start: { kind: "free", x: 999_700, y: 350 }, style: { ...style, endArrowhead: "arrow", fillColor: null, seed: 75, startArrowhead: "none" }, type: "connector", updatedAt: 1, zIndex: 8 },
       ] : [
         { createdAt: 1, id: "edge-first", locked: false, opacity: 1, pageId: "page", rotation: 0, shape: "rectangle", style, type: "shape", updatedAt: 1, ...shapeGeometry, zIndex: 2 },

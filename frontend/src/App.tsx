@@ -7163,7 +7163,11 @@ function App() {
 
     if (session.connectorEndpoint) {
       const preview = getConnectorEndpointPreview(session.connectorEndpoint, clientX, clientY);
-      if (!preview) return;
+      if (!preview) {
+        setConnectorEndpointPreview(null);
+        setSelectionFramePreview(null);
+        return;
+      }
       setConnectorEndpointPreview(preview);
       const previewElementsById = overlayTransformedElements(session.baseElementsById, [preview]);
       setSelectionFramePreview(getSelectionElementBounds(preview, previewElementsById));

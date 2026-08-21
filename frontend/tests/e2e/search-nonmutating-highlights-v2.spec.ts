@@ -525,6 +525,7 @@ for (const family of ["primitive", "ink", "pan", "resize"] as const) {
     await installSearchWorkspace(page);
     await page.setViewportSize({ width: 1_440, height: 1_200 });
     await page.goto("/");
+    await page.waitForTimeout(700);
     await resetPersistenceCounts(page);
     const baselineJson = await workspaceJson(page);
     const gesture = await beginCapturedGesture(page, family);

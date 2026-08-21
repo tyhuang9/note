@@ -3481,7 +3481,8 @@ h2 {
 
 .text-block:hover .text-block-header,
 .text-block.is-selected .text-block-header,
-.text-block.is-editing .text-block-header {
+.text-block.is-editing .text-block-header,
+.text-block:focus-within .text-block-header {
   border-bottom-color: #c6cbd1;
   background: #f3f4f6;
   opacity: 1;
@@ -4514,7 +4515,8 @@ h2 {
 
 .app-shell.is-dark .text-block:hover .text-block-header,
 .app-shell.is-dark .text-block.is-selected .text-block-header,
-.app-shell.is-dark .text-block.is-editing .text-block-header {
+.app-shell.is-dark .text-block.is-editing .text-block-header,
+.app-shell.is-dark .text-block:focus-within .text-block-header {
   border-bottom-color: #393440;
   background: #292631;
 }
@@ -5314,7 +5316,8 @@ h2 {
 
 .text-block:hover .text-block-header::after,
 .text-block.is-selected .text-block-header::after,
-.text-block.is-editing .text-block-header::after {
+.text-block.is-editing .text-block-header::after,
+.text-block:focus-within .text-block-header::after {
   opacity: 1;
 }
 

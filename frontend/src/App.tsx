@@ -3784,7 +3784,7 @@ function App() {
       return;
     }
 
-    canvasContentElement.style.transform = `translate3d(${nextPanOffset.x}px, ${nextPanOffset.y}px, 0) scale(${zoomLevel})`;
+    canvasContentElement.style.transform = `translate3d(${nextPanOffset.x}px, ${nextPanOffset.y}px, 0) scale(${zoomLevelRef.current})`;
   }
 
   function scheduleCanvasContentTransform(nextPanOffset: PanOffset) {

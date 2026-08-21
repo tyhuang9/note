@@ -116,6 +116,38 @@ test("F2 edits an existing unlocked text selection", async ({ page }) => {
   await expect(block.locator(".ProseMirror")).toBeFocused();
 });
 
+for (const theme of ["dark", "light"] as const) {
+  test(`an unselected text header is visibly reachable with Tab in ${theme} mode`, async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: /create new note/i }).click();
+    const canvas = page.getByRole("tabpanel");
+    const bounds = await canvas.boundingBox();
+    if (!bounds) throw new Error("Canvas bounds were not available.");
+
+    const themeToggle = page.getByRole("button", { name: "Dark mode" });
+    await expect(themeToggle).toHaveAttribute("aria-pressed", "true");
+    if (theme === "light") {
+      await themeToggle.click();
+      await expect(themeToggle).toHaveAttribute("aria-pressed", "false");
+    }
+
+    const block = await createTextBlock(page, bounds.x + 300, bounds.y + 240, `${theme} focus target`);
+    await page.mouse.click(bounds.x + 760, bounds.y + 520);
+    await expect(block).not.toHaveClass(/is-selected/);
+    const header = block.locator(".text-block-header");
+
+    await focusWithTab(page, header);
+    await expect(header).toBeFocused();
+    await expect(header).toHaveCSS("opacity", "1");
+    await expect(header).toHaveCSS("outline-style", "solid");
+    await expect(block).not.toHaveClass(/is-selected/);
+
+    await header.click();
+    await expect(block).toHaveClass(/is-selected/);
+    await expect(block.locator(".text-block-editor-content")).toHaveCount(0);
+  });
+}
+
 test("single selected text narrows with reflow and commits its last preview", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: /create new note/i }).click();
@@ -251,6 +283,15 @@ async function readBlockPosition(block: Locator) {
     x: Number.parseFloat((element as HTMLElement).style.left),
     y: Number.parseFloat((element as HTMLElement).style.top),
   }));
+}
+
+async function focusWithTab(page: Page, target: Locator) {
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  for (let step = 0; step < 160; step += 1) {
+    await page.keyboard.press("Tab");
+    if (await target.evaluate((element) => document.activeElement === element)) return;
+  }
+  throw new Error("Text block header was not reachable with Tab.");
 }
 
 async function readBlockSize(block: Locator) {

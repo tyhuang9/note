@@ -148,6 +148,7 @@ for (const zoom of [50, 100, 200]) {
     await expect(preview).toHaveCount(0);
     await expect(arrow).toBeVisible();
     await expect.poll(() => roundedBounds(arrow)).toEqual(originalArrow);
+    await expect.poll(() => canvasContentScale(canvas)).toBeCloseTo(zoom / 100, 4);
   });
 }
 
@@ -400,6 +401,20 @@ async function requiredBounds(locator: Locator, label: string) {
   const bounds = await locator.boundingBox();
   if (!bounds) throw new Error(`${label} bounds were unavailable.`);
   return bounds;
+}
+
+async function canvasContentScale(canvas: Locator) {
+  return canvas.locator(".canvas-content").evaluate((element) => {
+    const transform = getComputedStyle(element).transform;
+    if (transform === "none") return 1;
+    const values = transform.match(/^matrix\(([^)]+)\)$/)?.[1]
+      .split(",")
+      .map(Number);
+    if (!values || values.length !== 6 || !Number.isFinite(values[0])) {
+      throw new Error(`Canvas transform was not a 2D matrix: ${transform}`);
+    }
+    return values[0];
+  });
 }
 
 function round(bounds: { x: number; y: number; width: number; height: number }) {

@@ -106,6 +106,7 @@ import {
   hasCanvasToolShortcutContext,
   isTextEntryTarget,
 } from "./editorUtils";
+import { cloneRichTextValue } from "./editor/richText";
 import {
   callOpenAICompatibleWhisperTranscription,
   DEFAULT_LOCAL_STT_CONFIG,
@@ -423,7 +424,7 @@ type DrawingPropertyPreviewTransaction = {
   selectedIds: string[];
 };
 
-type CopyableElement = TextElement | ImageElement;
+type CopyableElement = TextElement | ImageElement | ShapeElement;
 type CopiedBlock = Omit<CopyableElement, "id" | "pageId" | "x" | "y"> & {
   offsetX: number;
   offsetY: number;
@@ -2436,11 +2437,14 @@ function App() {
   }, [activeMode]);
 
   function cloneBlocks(blocks: CanvasElement[]) {
-    return blocks.map((block) =>
-      isTextElement(block)
-        ? { ...block, richContent: cloneRichContent(block.richContent) }
-        : { ...block },
-    );
+    return blocks.map((block) => ({
+      ...block,
+      ...(isTextElement(block)
+        ? { richContent: cloneRichContent(block.richContent) }
+        : block.type === "shape" && block.text
+          ? { text: cloneRichTextValue(block.text) }
+          : {}),
+    }));
   }
 
   function cloneRichContent(richContent: TextElement["richContent"]) {
@@ -2454,6 +2458,8 @@ function App() {
       ...blockFields,
       ...(isTextElement(block) && block.richContent
         ? { richContent: cloneRichContent(block.richContent) }
+        : block.type === "shape" && block.text
+          ? { text: cloneRichTextValue(block.text) }
         : {}),
     };
   }
@@ -2657,6 +2663,8 @@ function App() {
       pageId,
       ...(isTextElement(block)
         ? { richContent: cloneRichContent(block.richContent) }
+        : block.type === "shape" && block.text
+          ? { text: cloneRichTextValue(block.text) }
         : {}),
     }));
   }
@@ -2967,13 +2975,15 @@ function App() {
     const minY = Math.min(...blocksToCopy.map((block) => block.y));
 
     copiedBlocksRef.current = blocksToCopy
-      .filter((block): block is CopyableElement => block.type === "text" || block.type === "image")
+      .filter((block): block is CopyableElement => block.type === "text" || block.type === "image" || block.type === "shape")
       .map((block) => {
         const { id: _id, pageId: _pageId, x, y, ...blockFields } = block;
         return {
           ...blockFields,
           ...(isTextElement(block) && block.richContent
             ? { richContent: cloneRichContent(block.richContent) }
+            : block.type === "shape" && block.text
+              ? { text: cloneRichTextValue(block.text) }
             : {}),
           offsetX: x - minX,
           offsetY: y - minY,
@@ -3002,7 +3012,7 @@ function App() {
         ...pageFields,
         elements: currentData.elements
           .filter((block): block is CopyableElement =>
-            block.pageId === page.id && (block.type === "text" || block.type === "image"),
+            block.pageId === page.id && (block.type === "text" || block.type === "image" || block.type === "shape"),
           )
           .map(cloneCopiedPageBlock),
         viewport: clonePageViewport(page.id),

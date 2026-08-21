@@ -148,6 +148,7 @@ describe("scene repository", () => {
     expect((repeatedWorkspace.elements[0] as ShapeElement).style.seed).toBe(
       (workspace.elements[0] as ShapeElement).style.seed,
     );
+    expect(workspace.elements[0]).not.toHaveProperty("text");
   });
 
   it("matches the backend asset-size limit before FileReader allocation", () => {

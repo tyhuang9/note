@@ -21,6 +21,10 @@ export type TextElement = ElementBase<"text"> & BoxGeometry & {
   richContent?: JSONContent;
   isWidthManuallyResized?: boolean;
 };
+export type RichTextValue = {
+  content: string;
+  richContent?: JSONContent;
+};
 export type ImageElement = ElementBase<"image"> & BoxGeometry & { assetId: string; fileName?: string; altText?: string; naturalWidth: number; naturalHeight: number; fit: "contain" };
 export type InkPoint = [x: number, y: number, pressure: number];
 export type InkElement = ElementBase<"ink"> & BoxGeometry & { points: InkPoint[]; brush: { kind: "pen" | "highlighter"; color: CanvasColor; size: number; opacity: number; thinning: number; smoothing: number; streamline: number; simulatePressure: boolean } };
@@ -33,7 +37,11 @@ export type RoughStyle = {
   strokeStyle: "solid" | "dashed" | "dotted";
   strokeWidth: number;
 };
-export type ShapeElement = ElementBase<"shape"> & BoxGeometry & { shape: "rectangle" | "ellipse" | "diamond"; style: RoughStyle };
+export type ShapeElement = ElementBase<"shape"> & BoxGeometry & {
+  shape: "rectangle" | "ellipse" | "diamond";
+  style: RoughStyle;
+  text?: RichTextValue;
+};
 export type PerimeterAnchor = { t: number };
 export type ConnectorEndpoint =
   | { kind: "free"; x: number; y: number }

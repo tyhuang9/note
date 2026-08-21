@@ -34,15 +34,18 @@ import { DrawingPropertiesPanel } from "./canvas/components/DrawingPropertiesPan
 import { CanvasViewport } from "./canvas/components/CanvasViewport";
 import { CanvasWorldLayer } from "./canvas/components/CanvasWorldLayer";
 import { InkElementView } from "./canvas/components/InkElementView";
-import { ConnectorElementView, renderConnectorRoughSvg, ShapeElementView, type ShapeTextEditSession } from "./canvas/components/PrimitiveElementView";
+import { ConnectorElementView, ShapeElementView, type ShapeTextEditSession } from "./canvas/components/PrimitiveElementView";
 import { ConnectorBindingTargetHighlight } from "./canvas/components/ConnectorBindingTargetHighlight";
 import { useCanvasInteraction, type ArrowAuthoringVisual } from "./canvas/interaction/useCanvasInteraction";
 import { cleanupMarquee } from "./canvas/interaction/marqueeCleanup";
 import { createLatestFrameQueue, type LatestFrameQueue } from "./canvas/interaction/latestFrame";
 import {
+  forEachAffectedConnectorGeometry,
   overlayTransformedElements,
-  resolveAffectedConnectorGeometry,
 } from "./canvas/interaction/transformPreview";
+import { ConnectorPreviewCanvas } from "./canvas/rendering/connectorPreviewCanvas";
+import { compareConnectorPreviewStack, type ConnectorPreviewCommand } from "./canvas/rendering/connectorPreviewProtocol";
+import { resolveCanvasColor } from "./canvas/rendering/canvasColor";
 import {
   deterministicSeed,
   type PrimitiveGeometry,
@@ -370,6 +373,20 @@ type ClipboardReadItem = {
   types: string[];
 };
 
+type ConnectorPreviewRecord = Readonly<{
+  bounds: Readonly<{ height: number; left: number; top: number; width: number }>;
+  end: CanvasPoint;
+  start: CanvasPoint;
+}>;
+
+type ConnectorPreviewElement = HTMLCanvasElement & {
+  __connectorPreviewRecords?: ReadonlyMap<string, ConnectorPreviewRecord>;
+};
+
+type ConnectorPreviewLayer = {
+  renderer: ConnectorPreviewCanvas | null;
+};
+
 type DragLayerSession = {
   affectedConnectorIds: ReadonlySet<string>;
   autoPanRafId: number | null;
@@ -380,7 +397,7 @@ type DragLayerSession = {
   groupElement: HTMLDivElement;
   overlayElement: HTMLDivElement;
   sourceElements: HTMLElement[];
-  connectorPreviewElements: Map<string, HTMLDivElement>;
+  connectorPreviewElements: ConnectorPreviewLayer;
   connectorSourceElements: HTMLElement[];
   selectedBlockIds: string[];
   selectedElements: readonly CanvasElement[];
@@ -401,7 +418,7 @@ type ResizeLayerSession = {
   }[];
   overlayElement: HTMLDivElement;
   sourceElements: HTMLElement[];
-  connectorPreviewElements: Map<string, HTMLDivElement>;
+  connectorPreviewElements: ConnectorPreviewLayer;
   connectorSourceElements: HTMLElement[];
   selectedElements: readonly CanvasElement[];
   selectedIds: ReadonlySet<string>;
@@ -411,7 +428,7 @@ type TextResizeSession = {
   affectedConnectorIds: ReadonlySet<string>;
   baseElementsById: Readonly<Record<string, CanvasElement>>;
   block: TextElement;
-  connectorPreviewElements: Map<string, HTMLDivElement>;
+  connectorPreviewElements: ConnectorPreviewLayer;
   connectorSourceElements: HTMLElement[];
   handleElement: HTMLButtonElement | null;
   originalHeight: string;
@@ -491,6 +508,30 @@ const TEXT_BLOCK_CONTENT_PADDING_TOP = 5;
 const LLAMA_HARNESS_SELECTED_AGENT_KEY = "note.llamaHarness.selectedAgentId.v1";
 const DEFAULT_PAN_OFFSET: PanOffset = { x: 0, y: 0 };
 const SEARCH_CONTROL_COMMAND_KEYS = new Set(["a", "f", "n", "o", "y", "z", "+", "=", "-", "0"]);
+
+function createConnectorPreviewLayer(): ConnectorPreviewLayer {
+  return { renderer: null };
+}
+
+function cleanupConnectorPreviewLayer(layer: ConnectorPreviewLayer) {
+  layer.renderer?.dispose();
+  layer.renderer = null;
+}
+
+const lightPreviewColorCache = new WeakMap<ConnectorElement["style"]["strokeColor"], string>();
+const darkPreviewColorCache = new WeakMap<ConnectorElement["style"]["strokeColor"], string>();
+
+function resolvedPreviewColor(color: ConnectorElement["style"]["strokeColor"], darkMode: boolean) {
+  const cache = darkMode ? darkPreviewColorCache : lightPreviewColorCache;
+  const cached = cache.get(color);
+  if (cached) return cached;
+  const resolved = resolveCanvasColor(color, darkMode ? "dark" : "light");
+  const value = resolved
+    ? `rgba(${resolved.red}, ${resolved.green}, ${resolved.blue}, ${resolved.alpha})`
+    : "#000000";
+  cache.set(color, value);
+  return value;
+}
 type SidebarSortOrder =
   | "name-asc"
   | "name-desc"
@@ -5924,7 +5965,7 @@ function App() {
     for (const sourceElement of session.connectorSourceElements) {
       sourceElement.classList.remove("is-drag-source-hidden");
     }
-    for (const preview of session.connectorPreviewElements.values()) preview.remove();
+    cleanupConnectorPreviewLayer(session.connectorPreviewElements);
 
     session.overlayElement.remove();
     document.body.classList.remove("is-interacting");
@@ -5949,63 +5990,74 @@ function App() {
   function renderTransientConnectorPreviews(
     elementsById: Readonly<Record<string, CanvasElement>>,
     connectorIds: ReadonlySet<string>,
-    previewElementsById: Map<string, HTMLDivElement>,
+    previewLayer: ConnectorPreviewLayer,
   ) {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const zoom = zoomLevelRef.current;
     const pan = panOffsetRef.current;
-    for (const { connector, points } of resolveAffectedConnectorGeometry(elementsById, connectorIds)) {
-      if (!points) {
-        previewElementsById.get(connector.id)?.remove();
-        previewElementsById.delete(connector.id);
-        continue;
+    const canvasBounds = canvas.getBoundingClientRect();
+    const records = connectorIds.size <= 32 ? new Map<string, ConnectorPreviewRecord>() : null;
+    const commands: ConnectorPreviewCommand[] = [];
+    let sceneIndex = 0;
+    forEachAffectedConnectorGeometry(elementsById, connectorIds, ({ connector, points }) => {
+      if (!points) return;
+      const start = { x: pan.x + points.start.x * zoom, y: pan.y + points.start.y * zoom };
+      const end = { x: pan.x + points.end.x * zoom, y: pan.y + points.end.y * zoom };
+      if (records) {
+        const padding = Math.max(8, connector.style.strokeWidth * 2) * zoom;
+        records.set(connector.id, {
+          bounds: {
+            height: Math.max(1, Math.abs(end.y - start.y) + padding * 2),
+            left: Math.min(start.x, end.x) - padding,
+            top: Math.min(start.y, end.y) - padding,
+            width: Math.max(1, Math.abs(end.x - start.x) + padding * 2),
+          },
+          end: points.end,
+          start: points.start,
+        });
       }
-      let wrapper = previewElementsById.get(connector.id);
-      if (!wrapper) {
-        wrapper = document.createElement("div");
-        wrapper.className = "drag-layer-clone connector-transform-preview";
-        wrapper.setAttribute("aria-hidden", "true");
-        wrapper.style.pointerEvents = "none";
-        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-        svg.classList.add("primitive-connector");
-        wrapper.append(svg);
-        canvas.append(wrapper);
-        previewElementsById.set(connector.id, wrapper);
-      }
-      const padding = Math.max(8, connector.style.strokeWidth * 2) * zoom;
-      const minX = Math.min(points.start.x, points.end.x) * zoom;
-      const minY = Math.min(points.start.y, points.end.y) * zoom;
-      const width = Math.max(1, Math.abs(points.end.x - points.start.x) * zoom + padding * 2);
-      const height = Math.max(1, Math.abs(points.end.y - points.start.y) * zoom + padding * 2);
-      wrapper.style.position = "absolute";
-      wrapper.style.left = `${pan.x + minX - padding}px`;
-      wrapper.style.top = `${pan.y + minY - padding}px`;
-      wrapper.style.width = `${width}px`;
-      wrapper.style.height = `${height}px`;
-      wrapper.style.opacity = String(connector.opacity);
-      wrapper.style.zIndex = String(connector.zIndex);
-      wrapper.dataset.connectorId = connector.id;
-      wrapper.dataset.connectorStartX = String(points.start.x);
-      wrapper.dataset.connectorStartY = String(points.start.y);
-      wrapper.dataset.connectorEndX = String(points.end.x);
-      wrapper.dataset.connectorEndY = String(points.end.y);
-      const svg = wrapper.firstElementChild as SVGSVGElement;
-      svg.setAttribute("width", String(width));
-      svg.setAttribute("height", String(height));
-      svg.setAttribute("overflow", "visible");
-      renderConnectorRoughSvg(svg, {
-        ...connector.style,
+      commands.push({
+        end,
+        endArrowhead: connector.style.endArrowhead,
+        opacity: connector.opacity,
         roughness: connector.style.roughness * zoom,
+        sceneIndex: sceneIndex++,
+        seed: connector.style.seed,
+        start,
+        stroke: resolvedPreviewColor(connector.style.strokeColor, isDarkMode),
+        strokeStyle: connector.style.strokeStyle,
         strokeWidth: connector.style.strokeWidth * zoom,
-      }, {
-        x: (points.start.x * zoom - minX) + padding,
-        y: (points.start.y * zoom - minY) + padding,
-      }, {
-        x: (points.end.x * zoom - minX) + padding,
-        y: (points.end.y * zoom - minY) + padding,
-      }, zoom);
+        visualScale: zoom,
+        zIndex: connector.zIndex,
+      });
+    });
+    if (commands.length === 0) {
+      cleanupConnectorPreviewLayer(previewLayer);
+      return;
     }
+    if (!previewLayer.renderer) {
+      const preview = document.createElement("canvas") as ConnectorPreviewElement;
+      preview.className = "connector-transform-preview connector-transform-preview-layer";
+      preview.setAttribute("aria-hidden", "true");
+      preview.style.height = "100%";
+      preview.style.inset = "0";
+      preview.style.pointerEvents = "none";
+      preview.style.position = "absolute";
+      preview.style.width = "100%";
+      preview.style.zIndex = "18";
+      canvas.append(preview);
+      previewLayer.renderer = new ConnectorPreviewCanvas(preview);
+    }
+    const preview = previewLayer.renderer.element as ConnectorPreviewElement;
+    preview.__connectorPreviewRecords = records ?? undefined;
+    preview.dataset.connectorCount = `${commands.length}`;
+    previewLayer.renderer.render({
+      commands: commands.sort(compareConnectorPreviewStack),
+      devicePixelRatio: Math.max(1, window.devicePixelRatio || 1),
+      height: canvasBounds.height,
+      width: canvasBounds.width,
+    });
   }
 
   function selectDraggedBlocks(blockIds: string[]) {
@@ -6234,7 +6286,7 @@ function App() {
         groupElement,
         overlayElement,
         sourceElements: sourceEntries.map((entry) => entry.element),
-        connectorPreviewElements: new Map(),
+        connectorPreviewElements: createConnectorPreviewLayer(),
         connectorSourceElements: Array.from(affectedConnectorIds).flatMap((id) => {
           const element = blockElementsRef.current.get(id);
           return element ? [element] : [];
@@ -6348,7 +6400,7 @@ function App() {
     for (const sourceElement of session.connectorSourceElements) {
       sourceElement.classList.remove("is-drag-source-hidden");
     }
-    for (const preview of session.connectorPreviewElements.values()) preview.remove();
+    cleanupConnectorPreviewLayer(session.connectorPreviewElements);
     session.overlayElement.remove();
     document.body.classList.remove("is-interacting");
   }
@@ -6492,7 +6544,7 @@ function App() {
       affectedConnectorIds,
       baseElementsById,
       block: getRenderedTextResizeBlock(block, sourceElement),
-      connectorPreviewElements: new Map(),
+      connectorPreviewElements: createConnectorPreviewLayer(),
       connectorSourceElements: Array.from(affectedConnectorIds).flatMap((id) => {
         const element = blockElementsRef.current.get(id);
         return element ? [element] : [];
@@ -6563,7 +6615,7 @@ function App() {
     for (const connectorElement of session.connectorSourceElements) {
       connectorElement.classList.remove("is-drag-source-hidden");
     }
-    for (const preview of session.connectorPreviewElements.values()) preview.remove();
+    cleanupConnectorPreviewLayer(session.connectorPreviewElements);
     document.body.classList.remove("is-interacting");
   }
 
@@ -6659,7 +6711,7 @@ function App() {
       items,
       overlayElement,
       sourceElements: sourceEntries.map((entry) => entry.element),
-      connectorPreviewElements: new Map<string, HTMLDivElement>(),
+      connectorPreviewElements: createConnectorPreviewLayer(),
       connectorSourceElements: Array.from(connectorIds).flatMap((id) => {
         const element = blockElementsRef.current.get(id);
         return element ? [element] : [];

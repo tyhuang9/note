@@ -620,9 +620,9 @@ test("mixed resize previews a selected free connector with the exact committed t
     start.y + (interactive.corner.includes("s") ? 64 : -64),
     { steps: 5 },
   );
-  let preview = page.locator(`.connector-transform-preview[data-connector-id="${connectorId}"]`);
+  let preview = page.locator(".connector-transform-preview");
   await expect(preview).toHaveCount(1);
-  expect(await readConnectorEndpoints(preview)).not.toEqual(original);
+  expect(await readConnectorEndpoints(preview, connectorId)).not.toEqual(original);
   await interactive.handle.dispatchEvent("pointercancel", {
     bubbles: true,
     button: 0,
@@ -646,9 +646,9 @@ test("mixed resize previews a selected free connector with the exact committed t
     start.y + (interactive.corner.includes("s") ? 64 : -64),
     { steps: 5 },
   );
-  preview = page.locator(`.connector-transform-preview[data-connector-id="${connectorId}"]`);
+  preview = page.locator(".connector-transform-preview");
   await expect(preview).toHaveCount(1);
-  const previewEndpoints = await readConnectorEndpoints(preview);
+  const previewEndpoints = await readConnectorEndpoints(preview, connectorId);
   await page.mouse.up();
   await expect(preview).toHaveCount(0);
   await expect.poll(() => readConnectorEndpoints(connector)).toEqual(previewEndpoints);
@@ -968,15 +968,22 @@ async function readWorldSize(locator: Locator) {
   }));
 }
 
-async function readConnectorEndpoints(locator: Locator) {
-  return locator.evaluate((element) => ({
-    end: {
-      x: Number((element as HTMLElement).dataset.connectorEndX),
-      y: Number((element as HTMLElement).dataset.connectorEndY),
-    },
-    start: {
-      x: Number((element as HTMLElement).dataset.connectorStartX),
-      y: Number((element as HTMLElement).dataset.connectorStartY),
-    },
-  }));
+async function readConnectorEndpoints(locator: Locator, connectorId?: string | null) {
+  return locator.evaluate((element, id) => {
+    const records = (element as HTMLCanvasElement & {
+      __connectorPreviewRecords?: Map<string, { end: { x: number; y: number }; start: { x: number; y: number } }>;
+    }).__connectorPreviewRecords;
+    const record = id ? records?.get(id) : undefined;
+    if (record) return { end: record.end, start: record.start };
+    return {
+      end: {
+        x: Number((element as HTMLElement).dataset.connectorEndX),
+        y: Number((element as HTMLElement).dataset.connectorEndY),
+      },
+      start: {
+        x: Number((element as HTMLElement).dataset.connectorStartX),
+        y: Number((element as HTMLElement).dataset.connectorStartY),
+      },
+    };
+  }, connectorId);
 }

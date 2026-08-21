@@ -129,12 +129,15 @@ for (const zoom of [50, 100, 200]) {
     await page.mouse.move(handleBounds.x + handleBounds.width / 2 + resizeDelta.x, handleBounds.y + handleBounds.height / 2 + resizeDelta.y, { steps: 5 });
 
     const previews = page.locator(".connector-transform-preview");
-    await expect(previews).toHaveCount(2);
+    await expect(previews).toHaveCount(1);
+    await expect(previews).toHaveAttribute("data-preview-renderer", "two-worker");
+    await expect(previews).toHaveAttribute("data-presented-frame", /[1-9]\d*/);
+    await expect(previews).toHaveAttribute("data-connector-count", "2");
     await expect(page.locator(".drag-layer-group .primitive-connector")).toHaveCount(0);
     await expect(arrow).not.toBeVisible();
-    const boundPreview = page.locator('.connector-transform-preview[data-connector-id="locked-bound-bound"]');
-    await expect.poll(() => roundedBounds(boundPreview, "locked connector resize preview")).not.toEqual(originalArrow);
-    const previewArrow = await roundedBounds(boundPreview, "locked connector resize preview");
+    const boundPreview = previews;
+    await expect.poll(() => roundedConnectorPreviewBounds(boundPreview, "locked-bound-bound", "locked connector resize preview")).not.toEqual(originalArrow);
+    const previewArrow = await roundedConnectorPreviewBounds(boundPreview, "locked-bound-bound", "locked connector resize preview");
     // Text reflows rather than scaling its own model geometry during group resize.
     await expect.poll(() => worldBox(text)).toEqual(originalText);
 
@@ -168,6 +171,40 @@ for (const zoom of [50, 100, 200]) {
   });
 }
 
+test("the main-thread Canvas2D fallback paints and cancels without persistence", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(globalThis, "Worker", { configurable: true, value: undefined });
+  });
+  await installLiveFollowWorkspace(page);
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await page.goto("/");
+  await selectBothTargets(page);
+  await page.waitForTimeout(650);
+  await resetPersistenceCounts(page);
+  const callsBefore = await persistenceCounts(page);
+  const moveSurface = page.getByRole("button", { name: "Move selected elements" });
+  const moveBounds = await requiredBounds(moveSurface, "selection move surface");
+  await page.mouse.move(moveBounds.x + moveBounds.width / 2, moveBounds.y + moveBounds.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(moveBounds.x + moveBounds.width / 2 + 45, moveBounds.y + moveBounds.height / 2 + 30);
+
+  const preview = page.locator(".connector-transform-preview");
+  await expect(preview).toHaveAttribute("data-preview-renderer", "main-thread");
+  await expect(preview).toHaveAttribute("data-presented-frame", /[1-9]\d*/);
+  expect(await preview.evaluate((element) => {
+    const canvas = element as HTMLCanvasElement;
+    const pixels = canvas.getContext("2d")?.getImageData(0, 0, canvas.width, canvas.height).data;
+    if (!pixels) return 0;
+    let painted = 0;
+    for (let index = 3; index < pixels.length; index += 4) if (pixels[index] !== 0) painted += 1;
+    return painted;
+  })).toBeGreaterThan(0);
+
+  await page.keyboard.press("Escape");
+  await expect(preview).toHaveCount(0);
+  await expect.poll(() => persistenceCounts(page)).toEqual(callsBefore);
+});
+
 test("edge auto-pan keeps locked bound arrows in a transient preview and cancel restores without writes", async ({ page }) => {
   await installLiveFollowWorkspace(page);
   await page.setViewportSize({ width: 1100, height: 720 });
@@ -188,13 +225,14 @@ test("edge auto-pan keeps locked bound arrows in a transient preview and cancel 
   const canvasTransform = await page.locator(".canvas-content").getAttribute("style");
   await page.mouse.move(canvasBounds.x + canvasBounds.width - 2, canvasBounds.y + canvasBounds.height / 2, { steps: 8 });
   const preview = page.locator(".connector-transform-preview");
-  await expect(preview).toHaveCount(2);
+  await expect(preview).toHaveCount(1);
+  await expect(preview).toHaveAttribute("data-connector-count", "2");
   await expect(page.locator(".drag-layer-group .primitive-connector")).toHaveCount(0);
-  const freeBoundPath = await connectorPreviewPathSignature(preview.nth(1));
+  const freeBoundPath = await connectorPreviewPathSignature(preview, "free-bound");
   await expect(arrow).not.toBeVisible();
   await page.waitForTimeout(400);
   await expect.poll(() => page.locator(".canvas-content").getAttribute("style")).not.toEqual(canvasTransform);
-  await expect.poll(() => connectorPreviewPathSignature(preview.nth(1))).not.toEqual(freeBoundPath);
+  await expect.poll(() => connectorPreviewPathSignature(preview, "free-bound")).not.toEqual(freeBoundPath);
 
   await page.keyboard.press("Escape");
   await expect(preview).toHaveCount(0);
@@ -267,7 +305,30 @@ function round(bounds: Bounds) {
 }
 
 async function roundedBounds(locator: Locator, label: string) {
-  return round(await requiredBounds(locator, label));
+  const previewBounds = await locator.evaluate((element) => {
+    const records = (element as HTMLCanvasElement & {
+      __connectorPreviewRecords?: Map<string, { bounds: { height: number; left: number; top: number; width: number } }>;
+    }).__connectorPreviewRecords;
+    const record = records?.values().next().value;
+    if (!record) return null;
+    const root = element.getBoundingClientRect();
+    return { height: record.bounds.height, width: record.bounds.width, x: root.x + record.bounds.left, y: root.y + record.bounds.top };
+  });
+  return round(previewBounds ?? await requiredBounds(locator, label));
+}
+
+async function roundedConnectorPreviewBounds(locator: Locator, connectorId: string, label: string) {
+  const bounds = await locator.evaluate((element, id) => {
+    const records = (element as HTMLCanvasElement & {
+      __connectorPreviewRecords?: Map<string, { bounds: { height: number; left: number; top: number; width: number } }>;
+    }).__connectorPreviewRecords;
+    const record = records?.get(id);
+    if (!record) return null;
+    const root = element.getBoundingClientRect();
+    return { height: record.bounds.height, width: record.bounds.width, x: root.x + record.bounds.left, y: root.y + record.bounds.top };
+  }, connectorId);
+  if (!bounds) throw new Error(`${label} bounds were unavailable.`);
+  return round(bounds);
 }
 
 async function rotatedWestMidpoint(locator: Locator) {
@@ -312,8 +373,13 @@ async function expectTextResizeGripAligned(handle: Locator, text: Locator) {
   expect(handleBounds.y + handleBounds.height / 2).toBeCloseTo(east.y, 1);
 }
 
-async function connectorPreviewPathSignature(locator: Locator) {
-  return locator.locator("path").evaluateAll((paths) => paths.map((path) => path.getAttribute("d") ?? "").join("|"));
+async function connectorPreviewPathSignature(locator: Locator, connectorId: string) {
+  return locator.evaluate((element, id) => {
+    const records = (element as HTMLCanvasElement & {
+      __connectorPreviewRecords?: Map<string, { end: { x: number; y: number }; start: { x: number; y: number } }>;
+    }).__connectorPreviewRecords;
+    return JSON.stringify(records?.get(id) ?? null);
+  }, connectorId);
 }
 
 async function worldBox(locator: Locator) {

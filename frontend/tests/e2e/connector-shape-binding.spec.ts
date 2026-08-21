@@ -525,7 +525,16 @@ function round(bounds: { x: number; y: number; width: number; height: number }) 
 }
 
 async function roundedBounds(locator: Locator) {
-  return round(await requiredBounds(locator, "element"));
+  const previewBounds = await locator.evaluate((element) => {
+    const records = (element as HTMLCanvasElement & {
+      __connectorPreviewRecords?: Map<string, { bounds: { height: number; left: number; top: number; width: number } }>;
+    }).__connectorPreviewRecords;
+    const record = records?.values().next().value;
+    if (!record) return null;
+    const root = element.getBoundingClientRect();
+    return { height: record.bounds.height, width: record.bounds.width, x: root.x + record.bounds.left, y: root.y + record.bounds.top };
+  });
+  return round(previewBounds ?? await requiredBounds(locator, "element"));
 }
 
 async function endpointCounts(page: Page) {

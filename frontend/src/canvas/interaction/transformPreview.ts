@@ -23,10 +23,19 @@ export function resolveAffectedConnectorGeometry(
   connectorIds: ReadonlySet<string>,
 ): ConnectorPreviewGeometry[] {
   const previews: ConnectorPreviewGeometry[] = [];
+  forEachAffectedConnectorGeometry(elementsById, connectorIds, (preview) => previews.push(preview));
+  return previews;
+}
+
+/** Visits affected connector geometry without allocating a scene-sized intermediate array. */
+export function forEachAffectedConnectorGeometry(
+  elementsById: Readonly<Record<string, CanvasElement>>,
+  connectorIds: ReadonlySet<string>,
+  visit: (preview: ConnectorPreviewGeometry) => void,
+) {
   for (const connectorId of connectorIds) {
     const connector = elementsById[connectorId];
     if (!connector || connector.type !== "connector") continue;
-    previews.push({ connector, points: resolveConnectorPoints(connector, elementsById) });
+    visit({ connector, points: resolveConnectorPoints(connector, elementsById) });
   }
-  return previews;
 }

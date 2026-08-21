@@ -928,7 +928,7 @@ fn validate_element(value: &Value, page_id: &str) -> Result<(), String> {
 fn validate_final_connector_bindings(
     transaction: &Transaction<'_>,
     page_id: &str,
-) -> Result<(), String> {
+) -> Result<ConnectorBindingValidationStats, String> {
     let connectors = {
         let mut statement = transaction
             .prepare(
@@ -944,7 +944,7 @@ fn validate_final_connector_bindings(
             .map_err(|error| error.to_string())?;
         rows
     };
-    let target_index = ConnectorBindingTargetIndex::load(transaction, page_id)?;
+    let mut target_index = ConnectorBindingTargetIndex::load(transaction, page_id)?;
     debug_assert_eq!(target_index.load_query_count, 1);
 
     for (connector_id, payload) in connectors {
@@ -978,7 +978,8 @@ fn validate_final_connector_bindings(
                 ));
             }
             let target = validate_bound_connector_target(
-                &target_index,
+                transaction,
+                &mut target_index,
                 target_element_id,
                 endpoint,
                 &context,
@@ -1020,7 +1021,7 @@ fn validate_final_connector_bindings(
             }
         }
     }
-    Ok(())
+    Ok(target_index.stats())
 }
 
 enum IndexedConnectorBindingTarget {
@@ -1028,20 +1029,27 @@ enum IndexedConnectorBindingTarget {
         element_type: String,
         payload: Result<Value, String>,
     },
-    Incompatible,
-    OtherPage,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct ConnectorBindingValidationStats {
+    absent_reference_query_count: usize,
+    indexed_target_count: usize,
+    target_index_query_count: usize,
 }
 
 struct ConnectorBindingTargetIndex {
+    absent_reference_query_count: usize,
     by_id: HashMap<String, IndexedConnectorBindingTarget>,
     load_query_count: usize,
+    page_id: String,
 }
 
 impl ConnectorBindingTargetIndex {
     fn load(transaction: &Transaction<'_>, page_id: &str) -> Result<Self, String> {
         let mut statement = transaction
             .prepare(
-                "SELECT id,page_id,element_type,CASE WHEN page_id=? AND element_type IN ('shape','text') THEN payload_json ELSE '' END FROM elements",
+                "SELECT id,element_type,payload_json FROM elements WHERE page_id=? AND element_type IN ('shape','text')",
             )
             .map_err(|error| error.to_string())?;
         let rows = statement
@@ -1050,60 +1058,65 @@ impl ConnectorBindingTargetIndex {
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
                 ))
             })
             .map_err(|error| error.to_string())?;
         let mut by_id = HashMap::new();
         for row in rows {
-            let (id, target_page_id, element_type, payload_json) =
-                row.map_err(|error| error.to_string())?;
-            let target = if target_page_id != page_id {
-                IndexedConnectorBindingTarget::OtherPage
-            } else if element_type != "shape" && element_type != "text" {
-                IndexedConnectorBindingTarget::Incompatible
-            } else {
-                IndexedConnectorBindingTarget::Bindable {
-                    element_type,
-                    payload: serde_json::from_str(&payload_json).map_err(|error| error.to_string()),
-                }
+            let (id, element_type, payload_json) = row.map_err(|error| error.to_string())?;
+            let target = IndexedConnectorBindingTarget::Bindable {
+                element_type,
+                payload: serde_json::from_str(&payload_json).map_err(|error| error.to_string()),
             };
             by_id.insert(id, target);
         }
         Ok(Self {
+            absent_reference_query_count: 0,
             by_id,
             load_query_count: 1,
+            page_id: page_id.to_owned(),
         })
     }
 
-    #[cfg(test)]
-    fn load_query_count(&self) -> usize {
-        self.load_query_count
+    fn stats(&self) -> ConnectorBindingValidationStats {
+        ConnectorBindingValidationStats {
+            absent_reference_query_count: self.absent_reference_query_count,
+            indexed_target_count: self.by_id.len(),
+            target_index_query_count: self.load_query_count,
+        }
     }
 }
 
 fn validate_bound_connector_target(
-    target_index: &ConnectorBindingTargetIndex,
+    transaction: &Transaction<'_>,
+    target_index: &mut ConnectorBindingTargetIndex,
     target_element_id: &str,
     endpoint: &Value,
     context: &str,
 ) -> Result<ObjectBindingTarget, String> {
-    let Some(target) = target_index.by_id.get(target_element_id) else {
-        return Err(format!(
-            "{context}.targetElementId must reference an existing compatible element on this page"
-        ));
-    };
-    let (target_type, target) = match target {
-        IndexedConnectorBindingTarget::OtherPage => {
-            return Err(format!(
+    if !target_index.by_id.contains_key(target_element_id) {
+        target_index.absent_reference_query_count += 1;
+        let referenced_element = transaction
+            .query_row(
+                "SELECT page_id,element_type FROM elements WHERE id=?",
+                [target_element_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        return match referenced_element {
+            None => Err(format!(
+                "{context}.targetElementId must reference an existing compatible element on this page"
+            )),
+            Some((page_id, _)) if page_id != target_index.page_id => Err(format!(
                 "{context}.targetElementId must reference a compatible element on the same page"
-            ));
-        }
-        IndexedConnectorBindingTarget::Incompatible => {
-            return Err(format!(
+            )),
+            Some(_) => Err(format!(
                 "{context}.targetElementId must reference a rectangle, ellipse, diamond, or text block"
-            ));
-        }
+            )),
+        };
+    }
+    let (target_type, target) = match target_index.by_id.get(target_element_id).unwrap() {
         IndexedConnectorBindingTarget::Bindable {
             element_type,
             payload,
@@ -2387,7 +2400,10 @@ mod tests {
     use super::*;
     use base64::{engine::general_purpose::STANDARD, Engine};
     use serde_json::json;
-    use std::{fs, time::Instant};
+    use std::{
+        fs,
+        time::{Duration, Instant},
+    };
 
     fn fixture_endpoint(value: &Value) -> ObjectBindingEndpoint {
         match value.get("kind").and_then(Value::as_str).unwrap() {
@@ -2492,6 +2508,38 @@ mod tests {
                 [page_id],
             )
             .unwrap();
+    }
+    fn seed_unrelated_shapes(root: &Path, page_id: &str, count: usize) {
+        let mut connection = database::open(&root.join("note.db")).unwrap();
+        let transaction = connection.transaction().unwrap();
+        {
+            let mut statement = transaction.prepare(
+                "INSERT INTO elements(id,page_id,element_type,x,y,width,height,rotation,z_index,opacity,locked,created_at,updated_at,payload_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ).unwrap();
+            for index in 0..count {
+                let id = format!("unrelated-shape-{index}");
+                let payload = shape_element(&id, page_id);
+                statement
+                    .execute(params![
+                        id,
+                        page_id,
+                        "shape",
+                        10.0,
+                        20.0,
+                        100.0,
+                        60.0,
+                        0.0,
+                        index as i64,
+                        1.0,
+                        0,
+                        1,
+                        1,
+                        serde_json::to_string(&payload).unwrap(),
+                    ])
+                    .unwrap();
+            }
+        }
+        transaction.commit().unwrap();
     }
     fn element(id: &str, updated_at: i64) -> Value {
         json!({"id":id,"pageId":"p","type":"text","x":1.0,"y":2.0,"width":100.0,"height":40.0,"rotation":0.0,"zIndex":0,"opacity":1.0,"locked":false,"createdAt":1,"updatedAt":updated_at,"content":"hello"})
@@ -3283,7 +3331,7 @@ mod tests {
     }
 
     #[test]
-    fn connector_binding_validation_loads_targets_once_for_five_thousand_connectors() {
+    fn connector_binding_validation_is_page_bounded_for_five_thousand_connectors() {
         let directory = root();
         seed_page(directory.path());
         apply_scene_changes_at(
@@ -3296,13 +3344,6 @@ mod tests {
             },
         )
         .unwrap();
-        {
-            let mut connection = database::open(&directory.path().join("note.db")).unwrap();
-            let transaction = connection.transaction().unwrap();
-            let index = ConnectorBindingTargetIndex::load(&transaction, "p").unwrap();
-            assert_eq!(index.load_query_count(), 1);
-        }
-
         let connectors = (0..5_000)
             .map(|index| {
                 connector_element_on_page(
@@ -3325,21 +3366,104 @@ mod tests {
         )
         .unwrap();
 
+        let (baseline_stats, baseline_elapsed) = {
+            let mut connection = database::open(&directory.path().join("note.db")).unwrap();
+            let transaction = connection.transaction().unwrap();
+            let started = Instant::now();
+            let stats = validate_final_connector_bindings(&transaction, "p").unwrap();
+            (stats, started.elapsed())
+        };
+        assert_eq!(
+            baseline_stats,
+            ConnectorBindingValidationStats {
+                absent_reference_query_count: 0,
+                indexed_target_count: 1,
+                target_index_query_count: 1,
+            }
+        );
+
+        seed_additional_page(directory.path(), "unrelated-page");
+        seed_unrelated_shapes(directory.path(), "unrelated-page", 20_000);
+        let (populated_stats, populated_elapsed) = {
+            let mut connection = database::open(&directory.path().join("note.db")).unwrap();
+            let transaction = connection.transaction().unwrap();
+            let index = ConnectorBindingTargetIndex::load(&transaction, "p").unwrap();
+            assert_eq!(index.stats(), baseline_stats);
+            assert!(!index.by_id.contains_key("unrelated-shape-0"));
+            let started = Instant::now();
+            let stats = validate_final_connector_bindings(&transaction, "p").unwrap();
+            (stats, started.elapsed())
+        };
+        assert_eq!(populated_stats, baseline_stats);
+        assert!(
+            populated_elapsed < baseline_elapsed.saturating_mul(4) + Duration::from_millis(250),
+            "unrelated pages changed 5k validation from {baseline_elapsed:?} to {populated_elapsed:?}"
+        );
+        assert!(
+            populated_elapsed.as_secs_f64() < 10.0,
+            "page-bounded 5k connector validation took {populated_elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn absent_binding_targets_use_one_primary_key_diagnostic_query() {
+        let directory = root();
+        seed_page(directory.path());
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![shape_element("shape-1", "p"), ink_element()],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+        seed_additional_page(directory.path(), "other-page");
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "other-page".into(),
+                base_revision: 0,
+                upserts: vec![shape_element("other-shape", "other-page")],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+
         let mut connection = database::open(&directory.path().join("note.db")).unwrap();
         let transaction = connection.transaction().unwrap();
-        let index = ConnectorBindingTargetIndex::load(&transaction, "p").unwrap();
-        assert_eq!(index.load_query_count(), 1);
-        assert!(matches!(
-            index.by_id.get("shared-target"),
-            Some(IndexedConnectorBindingTarget::Bindable { .. })
-        ));
-        let started = Instant::now();
-        validate_final_connector_bindings(&transaction, "p").unwrap();
-        let elapsed = started.elapsed();
-        assert!(
-            elapsed.as_secs_f64() < 10.0,
-            "5k connector validation took {elapsed:?}"
-        );
+        let mut index = ConnectorBindingTargetIndex::load(&transaction, "p").unwrap();
+        let endpoint = |target: &str| json!({"kind":"element","targetElementId":target,"gap":0.0});
+        validate_bound_connector_target(
+            &transaction,
+            &mut index,
+            "shape-1",
+            &endpoint("shape-1"),
+            "connector valid.start",
+        )
+        .unwrap();
+        assert_eq!(index.stats().absent_reference_query_count, 0);
+
+        for (target, expected) in [
+            ("ink-1", "rectangle, ellipse, diamond, or text block"),
+            ("other-shape", "same page"),
+            ("missing-shape", "existing compatible element"),
+        ] {
+            let before = index.stats().absent_reference_query_count;
+            let error = match validate_bound_connector_target(
+                &transaction,
+                &mut index,
+                target,
+                &endpoint(target),
+                "connector invalid.start",
+            ) {
+                Ok(_) => panic!("{target} unexpectedly passed binding validation"),
+                Err(error) => error,
+            };
+            assert!(error.contains(expected), "unexpected diagnostic: {error}");
+            assert_eq!(index.stats().absent_reference_query_count, before + 1);
+        }
     }
 
     #[test]

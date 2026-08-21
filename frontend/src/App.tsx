@@ -107,6 +107,7 @@ import {
   isTextEntryTarget,
 } from "./editorUtils";
 import { cloneRichTextValue } from "./editor/richText";
+import { findCanvasTextSearchMatches } from "./canvas/search/searchModel";
 import {
   callOpenAICompatibleWhisperTranscription,
   DEFAULT_LOCAL_STT_CONFIG,
@@ -269,6 +270,7 @@ type PageHeaderProps = {
   isAssistantOpen: boolean;
   isGridVisible: boolean;
   isDarkMode: boolean;
+  isCanvasSearchUnavailable: boolean;
   isTextFormattingVisible: boolean;
   isEditingHeaderTitle: boolean;
   isSnapToGridEnabled: boolean;
@@ -448,7 +450,7 @@ type PageSearchResult = {
 };
 
 type CanvasSearchMatch =
-  | ({ kind: "block" } & SearchMatch)
+  | ({ kind: "element" } & SearchMatch)
   | { end: number; kind: "title"; start: number };
 
 const DRAG_AUTO_PAN_EDGE_PX = 56;
@@ -1189,6 +1191,7 @@ function App() {
   const [imageImportError, setImageImportError] = useState<string | null>(null);
   const [panOffset, setPanOffset] = useState<PanOffset>({ x: 0, y: 0 });
   const [livePanOffset, setLivePanOffset] = useState<PanOffset>(panOffset);
+  const [searchPanOffset, setSearchPanOffset] = useState<PanOffset | null>(null);
   const [insertionPoint, setInsertionPoint] = useState<InsertionPoint | null>(null);
   const [canvasSize, setCanvasSize] = useState<CanvasSize>({ width: 0, height: 0 });
   const [zoomLevel, setZoomLevel] = useState(DEFAULT_ZOOM);
@@ -1282,7 +1285,6 @@ function App() {
   const panRafId = useRef<number | null>(null);
   const selectionRafId = useRef<number | null>(null);
   const pendingSelectionRect = useRef<SelectionRect | null>(null);
-  const searchCache = useRef<Map<string, SearchMatch[]>>(new Map());
   const copiedBlocksRef = useRef<CopiedBlock[]>([]);
   const copiedPagesRef = useRef<CopiedPage[]>([]);
   const copiedContentKindRef = useRef<"blocks" | "pages" | null>(null);
@@ -1628,67 +1630,10 @@ function App() {
       ];
     });
   }, [blocksByPageId, data.pages, folderNamesById, pageSearchQuery]);
-  const blockSearchMatches = useMemo<SearchMatch[]>(() => {
-    const nextQuery = searchQuery.trim().toLowerCase();
-
-    if (!nextQuery) {
-      return [];
-    }
-
-    const textVisibleBlocks = visibleBlocks.filter(isTextElement);
-    const cacheKey = `${selectedPageId}:${nextQuery}:${textVisibleBlocks
-      .map((block) => `${block.id}:${block.x}:${block.y}:${block.content}`)
-      .join("|")}`;
-    const cachedMatches = searchCache.current.get(cacheKey);
-
-    if (cachedMatches) {
-      return cachedMatches;
-    }
-
-    const nextMatches = textVisibleBlocks
-      .flatMap((block) => {
-        const matches: SearchMatch[] = [];
-        const content = block.content.toLowerCase();
-        let start = content.indexOf(nextQuery);
-
-        while (start !== -1) {
-          matches.push({
-            blockId: block.id,
-            start,
-            end: start + nextQuery.length,
-          });
-          start = content.indexOf(nextQuery, start + nextQuery.length);
-        }
-
-        return matches;
-      })
-      .sort((firstMatch, secondMatch) => {
-        const firstBlock = textVisibleBlocks.find((block) => block.id === firstMatch.blockId);
-        const secondBlock = textVisibleBlocks.find((block) => block.id === secondMatch.blockId);
-
-        if (!firstBlock || !secondBlock) {
-          return 0;
-        }
-
-        return (
-          firstBlock.y - secondBlock.y ||
-          firstBlock.x - secondBlock.x ||
-          firstMatch.start - secondMatch.start
-        );
-      });
-
-    searchCache.current.set(cacheKey, nextMatches);
-
-    if (searchCache.current.size > 20) {
-      const oldestKey = searchCache.current.keys().next().value;
-
-      if (oldestKey) {
-        searchCache.current.delete(oldestKey);
-      }
-    }
-
-    return nextMatches;
-  }, [searchQuery, selectedPageId, visibleBlocks]);
+  const elementSearchMatches = useMemo<SearchMatch[]>(
+    () => findCanvasTextSearchMatches(visibleBlocks, searchQuery),
+    [searchQuery, visibleBlocks],
+  );
   const titleSearchMatches = useMemo<CanvasSearchMatch[]>(() => {
     const nextQuery = searchQuery.trim().toLowerCase();
 
@@ -1714,16 +1659,25 @@ function App() {
   const searchMatches = useMemo<CanvasSearchMatch[]>(
     () => [
       ...titleSearchMatches,
-      ...blockSearchMatches.map((match) => ({
+      ...elementSearchMatches.map((match) => ({
         ...match,
-        kind: "block" as const,
+        kind: "element" as const,
       })),
     ],
-    [blockSearchMatches, titleSearchMatches],
+    [elementSearchMatches, titleSearchMatches],
   );
   const activeCanvasSearchMatch = searchMatches[activeSearchIndex] ?? null;
   const activeSearchMatch =
-    activeCanvasSearchMatch?.kind === "block" ? activeCanvasSearchMatch : null;
+    activeCanvasSearchMatch?.kind === "element" ? activeCanvasSearchMatch : null;
+  const searchMatchesByElementId = useMemo(() => {
+    const matchesByElementId = new Map<string, SearchMatch[]>();
+    for (const match of elementSearchMatches) {
+      const matches = matchesByElementId.get(match.elementId);
+      if (matches) matches.push(match);
+      else matchesByElementId.set(match.elementId, [match]);
+    }
+    return matchesByElementId;
+  }, [elementSearchMatches]);
   const canvasViewport = useMemo<ViewportRect | null>(() => {
     if (canvasSize.width === 0 || canvasSize.height === 0) {
       return null;
@@ -2340,7 +2294,12 @@ function App() {
 
   useEffect(() => {
     setActiveSearchIndex(0);
+    setSearchPanOffset(null);
   }, [searchQuery, selectedPageId]);
+
+  useEffect(() => {
+    setSearchPanOffset(null);
+  }, [panOffset.x, panOffset.y, zoomLevel]);
 
   useEffect(() => {
     if (activeSearchIndex >= searchMatches.length) {
@@ -3524,7 +3483,7 @@ function App() {
       if (
         (event.metaKey || event.ctrlKey) &&
         event.key.toLowerCase() === "f" &&
-        !currentEditingBlockId &&
+        !isCanvasSearchInteractionBlocked() &&
         !isTextEntryTarget(event.target) &&
         !isTextEntryTarget(document.activeElement)
       ) {
@@ -4127,12 +4086,36 @@ function App() {
     setPageSearchFocusRequest((currentRequest) => currentRequest + 1);
   }
 
+  function isCanvasSearchInteractionBlocked() {
+    return Boolean(
+      editingBlockIdRef.current
+      || activeTextEditor && !activeTextEditor.isDestroyed
+      || shapeTextEditSessionRef.current
+      || isEditingHeaderTitle
+      || editingFolderId
+      || editingPageId
+      || connectorEndpointChooser
+      || activeNarrowOverlay
+      || isAIProvidersOpen
+      || document.querySelector(
+        '.slash-command-popup, .connector-endpoint-chooser, [role="dialog"], [aria-modal="true"]',
+      )
+    );
+  }
+
   function focusCanvasSearch() {
+    if (isCanvasSearchInteractionBlocked()) return;
     setIsSearchOpen(true);
     window.requestAnimationFrame(() => {
       searchInputRef.current?.focus();
       searchInputRef.current?.select();
     });
+  }
+
+  function closeCanvasSearch() {
+    setIsSearchOpen(false);
+    setSearchQuery("");
+    setSearchPanOffset(null);
   }
 
   function getAssistantErrorMessage(error: unknown) {
@@ -7805,7 +7788,7 @@ function App() {
   });
 
   function focusSearchMatch(matchIndex: number) {
-    if (searchMatches.length === 0) {
+    if (searchMatches.length === 0 || isCanvasSearchInteractionBlocked()) {
       return;
     }
 
@@ -7814,26 +7797,21 @@ function App() {
       searchMatches.length;
     const match = searchMatches[normalizedIndex];
 
-    blurActiveTextEntry();
     setActiveSearchIndex(normalizedIndex);
-    setSelectedBlockIds([]);
-    setEditingBlockId(null);
-    setInsertionPoint(null);
-    setIsCanvasKeyboardActive(true);
-    setActiveMode("canvas");
 
     if (match.kind === "title") {
+      setSearchPanOffset(null);
       window.requestAnimationFrame(() => searchInputRef.current?.focus());
       return;
     }
 
-    const block = visibleBlocks.find((currentBlock) => currentBlock.id === match.blockId);
+    const block = visibleBlocks.find((currentBlock) => currentBlock.id === match.elementId);
 
-    if (!block) {
+    if (!block || !isBoxCanvasElement(block)) {
       return;
     }
 
-    setPanOffset({
+    setSearchPanOffset({
       x: canvasSize.width / 2 - (block.x + block.width / 2) * zoomLevel,
       y: canvasSize.height / 2 - (block.y + block.height / 2) * zoomLevel,
     });
@@ -7893,7 +7871,21 @@ function App() {
       ? `${activeSearchDisplayIndex} / ${searchMatches.length}`
       : "0 / 0";
   const canvasSearchSourceLabel =
-    activeCanvasSearchMatch?.kind === "title" ? "Title" : "Text";
+    activeCanvasSearchMatch?.kind === "title"
+      ? "Title"
+      : activeCanvasSearchMatch?.source === "shape-text"
+        ? "Shape text"
+        : "Text";
+  const isCanvasSearchUnavailable = Boolean(
+    editingBlockId
+    || activeTextEditor && !activeTextEditor.isDestroyed
+    || isEditingHeaderTitle
+    || editingFolderId
+    || editingPageId
+    || connectorEndpointChooser
+    || activeNarrowOverlay
+    || isAIProvidersOpen
+  );
 
   return (
     <WorkbenchShell
@@ -7971,6 +7963,7 @@ function App() {
           activeTextEditor={activeTextEditor}
           assistantToggleButtonRef={assistantToggleButtonRef}
           isAssistantOpen={shouldRenderAssistantPanel}
+          isCanvasSearchUnavailable={isCanvasSearchUnavailable}
           isGridVisible={isGridVisible}
           isDarkMode={isDarkMode}
           isEditingHeaderTitle={isEditingHeaderTitle}
@@ -8138,8 +8131,7 @@ function App() {
                   }
 
                   if (event.key === "Escape") {
-                    setIsSearchOpen(false);
-                    setSearchQuery("");
+                    closeCanvasSearch();
                   }
                 }}
                 placeholder="Find in canvas"
@@ -8154,7 +8146,7 @@ function App() {
               </span>
               <button
                 aria-label="Previous match"
-                disabled={searchMatches.length === 0}
+                disabled={searchMatches.length === 0 || isCanvasSearchUnavailable}
                 onClick={() => focusSearchMatch(activeSearchIndex - 1)}
                 title="Previous match"
                 type="button"
@@ -8163,7 +8155,7 @@ function App() {
               </button>
               <button
                 aria-label="Next match"
-                disabled={searchMatches.length === 0}
+                disabled={searchMatches.length === 0 || isCanvasSearchUnavailable}
                 onClick={() => focusSearchMatch(activeSearchIndex + 1)}
                 title="Next match"
                 type="button"
@@ -8173,8 +8165,7 @@ function App() {
               <button
                 aria-label="Close search"
                 onClick={() => {
-                  setIsSearchOpen(false);
-                  setSearchQuery("");
+                  closeCanvasSearch();
                 }}
                 title="Close search"
                 type="button"
@@ -8186,7 +8177,7 @@ function App() {
           <CanvasWorldLayer
             isGridVisible={isGridVisible}
             liveDraftLayerRef={liveDraftLayerRef}
-            panOffset={panOffset}
+            panOffset={searchPanOffset ?? panOffset}
             ref={canvasContentRef}
             zoomLevel={zoomLevel}
           >
@@ -8225,6 +8216,9 @@ function App() {
                 )}
                 renderShape={(shape) => (
                   <ShapeElementView
+                    activeSearchRange={
+                      activeSearchMatch?.elementId === shape.id ? activeSearchMatch : null
+                    }
                     element={shape}
                     isEditing={shape.id === editingBlockId}
                     isSelected={selectedBlockIds.includes(shape.id)}
@@ -8236,13 +8230,14 @@ function App() {
                     onKeyboardMove={moveCanvasElementByKeyboard}
                     onSelect={selectBlock}
                     onTextCommit={updateShapeText}
+                    searchRanges={searchMatchesByElementId.get(shape.id) ?? []}
                   />
                 )}
                 renderText={(block) => (
                   <TextBlockView
                 block={block}
                 activeSearchRange={
-                  activeSearchMatch?.blockId === block.id ? activeSearchMatch : null
+                  activeSearchMatch?.elementId === block.id ? activeSearchMatch : null
                 }
                 isEditing={block.id === editingBlockId}
                 isDragSourceHidden={false}
@@ -8268,7 +8263,7 @@ function App() {
                 onVisualDragEnd={endVisualDrag}
                 onVisualDragMove={moveVisualDrag}
                 onVisualDragStart={startVisualDrag}
-                searchQuery={searchQuery}
+                searchRanges={searchMatchesByElementId.get(block.id) ?? []}
                 shouldFocusEnd={focusEndBlockId === block.id}
                 zoomLevel={zoomLevel}
                   />
@@ -9484,6 +9479,7 @@ const PageHeader = memo(function PageHeader({
   isAssistantOpen,
   isGridVisible,
   isDarkMode,
+  isCanvasSearchUnavailable,
   isEditingHeaderTitle,
   isSnapToGridEnabled,
   isTextFormattingVisible,
@@ -9553,6 +9549,7 @@ const PageHeader = memo(function PageHeader({
             aria-label="Find in canvas"
             className="header-toggle icon-button"
             data-tooltip="Find in canvas (Ctrl+F)"
+            disabled={isCanvasSearchUnavailable}
             onClick={onFocusCanvasSearch}
             type="button"
           >
@@ -9816,6 +9813,7 @@ function arePageHeaderPropsEqual(previous: PageHeaderProps, next: PageHeaderProp
     previous.isAssistantOpen === next.isAssistantOpen &&
     previous.isGridVisible === next.isGridVisible &&
     previous.isDarkMode === next.isDarkMode &&
+    previous.isCanvasSearchUnavailable === next.isCanvasSearchUnavailable &&
     previous.isEditingHeaderTitle === next.isEditingHeaderTitle &&
     previous.isSnapToGridEnabled === next.isSnapToGridEnabled &&
     previous.isTextFormattingVisible === next.isTextFormattingVisible &&

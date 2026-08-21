@@ -4,6 +4,7 @@ import { EditorContent, useEditor } from "@tiptap/react";
 import { RoughSVG } from "roughjs/bin/svg";
 import type { Options } from "roughjs/bin/core";
 import type { CanvasElement, ConnectorElement, ElementId, RichTextValue, RoughStyle, ShapeElement } from "../model/elements";
+import type { SearchMatch } from "../../appTypes";
 import { resolveConnectorPoints } from "../model/connectorBinding";
 import { roundedDiamondPath, roundedRectanglePath } from "../model/shapeBoundary";
 export { roundedDiamondPath, roundedRectanglePath } from "../model/shapeBoundary";
@@ -28,12 +29,14 @@ type PrimitiveElementViewProps<T extends ShapeElement | ConnectorElement> = {
 };
 
 type ShapeElementViewProps = PrimitiveElementViewProps<ShapeElement> & {
+  activeSearchRange: SearchMatch | null;
   isEditing: boolean;
   onActiveEditorChange: (editor: Editor | null) => void;
   onEdit: (elementId: string) => void;
   onEditEnd: (elementId: string, outcome?: ShapeTextEditOutcome, restoreFocus?: boolean) => void;
   onEditSessionChange: (elementId: string, session: ShapeTextEditSession | null) => void;
   onTextCommit: (elementId: string, text: RichTextValue | undefined) => void;
+  searchRanges: readonly SearchMatch[];
 };
 
 export type ShapeTextEditOutcome = "canceled" | "committed" | "unchanged";
@@ -147,7 +150,7 @@ function primitiveKeyDown(
   onKeyboardMove(element.id, delta);
 }
 
-export function ShapeElementView({ element, isDragSourceHidden = false, isEditing, isSelected, onActiveEditorChange, onEdit, onEditEnd, onEditSessionChange, onElementChange, onKeyboardMove, onSelect, onTextCommit }: ShapeElementViewProps) {
+export function ShapeElementView({ activeSearchRange, element, isDragSourceHidden = false, isEditing, isSelected, onActiveEditorChange, onEdit, onEditEnd, onEditSessionChange, onElementChange, onKeyboardMove, onSelect, onTextCommit, searchRanges }: ShapeElementViewProps) {
   const ref = useRef<SVGSVGElement | null>(null);
   const rootRef = createPrimitiveRootRef(element.id, onElementChange);
   const renderPadding = shapeRenderPadding(element.style);
@@ -210,7 +213,19 @@ export function ShapeElementView({ element, isDragSourceHidden = false, isEditin
           style={shapeTextInsetStyle(element)}
         >
           <div className="shape-contained-text-content">
-            {renderShapeRichTextContent(element.text, `${element.id}-shape-text`)}
+            {renderShapeRichTextContent(
+              element.text,
+              `${element.id}-shape-text`,
+              searchRanges.length > 0 ? {
+                searchableText: element.text.content,
+                ranges: searchRanges.map((range) => ({
+                  start: range.start,
+                  end: range.end,
+                  isActive: activeSearchRange?.start === range.start
+                    && activeSearchRange.end === range.end,
+                })),
+              } : undefined,
+            )}
           </div>
         </div>
       ) : null}

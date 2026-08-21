@@ -64,8 +64,9 @@ export type OffscreenGroup = {
 };
 
 export type SearchMatch = {
-  blockId: string;
+  elementId: string;
   end: number;
+  source: "text" | "shape-text";
   start: number;
 };
 

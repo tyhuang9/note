@@ -46,12 +46,12 @@ const TEXT_BLOCK_HORIZONTAL_PADDING = 18;
 type TextBlockViewProps = {
   block: TextElement;
   activeSearchRange: SearchMatch | null;
+  searchRanges: readonly SearchMatch[];
   isEditing: boolean;
   isDragSourceHidden: boolean;
   interactionCancellationKey: string;
   isMultiSelected: boolean;
   isSelected: boolean;
-  searchQuery: string;
   shouldFocusEnd: boolean;
   onEditEnd: (blockId: string) => void;
   onDelete: (blockId: string) => void;
@@ -89,12 +89,12 @@ type CaretPoint = {
 export const TextBlockView = memo(function TextBlockView({
   block,
   activeSearchRange,
+  searchRanges,
   isEditing,
   isDragSourceHidden,
   interactionCancellationKey,
   isMultiSelected,
   isSelected,
-  searchQuery,
   shouldFocusEnd,
   onEditEnd,
   onDelete,
@@ -361,43 +361,6 @@ export const TextBlockView = memo(function TextBlockView({
       });
       commitTimerRef.current = null;
     }, TEXT_COMMIT_DELAY_MS);
-  }
-
-  function renderHighlightedContent() {
-    const nextQuery = searchQuery.trim();
-
-    if (!nextQuery) {
-      return block.content;
-    }
-
-    const escapedQuery = nextQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const queryRegex = new RegExp(`(${escapedQuery})`, "gi");
-
-    let cursor = 0;
-
-    return block.content.split(queryRegex).map((part, index) => {
-      const start = cursor;
-
-      cursor += part.length;
-
-      if (part.toLowerCase() !== nextQuery.toLowerCase()) {
-        return <span key={`${part}-${index}`}>{part}</span>;
-      }
-
-      return (
-        <mark
-          className={
-            activeSearchRange?.start === start &&
-            activeSearchRange.end === start + part.length
-              ? "is-active-search-match"
-              : undefined
-          }
-          key={`${part}-${index}`}
-        >
-          {part}
-        </mark>
-      );
-    });
   }
 
   function getTextOffsetFromNode(
@@ -1017,10 +980,21 @@ export const TextBlockView = memo(function TextBlockView({
             }
           }}
           ref={displayRef}
-          {...(searchQuery.trim()
-            ? { children: renderHighlightedContent() }
-            : { children: renderRichBlockContent(block) })}
-        />
+        >
+          {renderRichBlockContent(
+            block,
+            `${block.id}-display`,
+            searchRanges.length > 0 ? {
+              searchableText: block.content,
+              ranges: searchRanges.map((range) => ({
+                start: range.start,
+                end: range.end,
+                isActive: activeSearchRange?.start === range.start
+                  && activeSearchRange.end === range.end,
+              })),
+            } : undefined,
+          )}
+        </div>
       ) : null}
       <>
         <div
@@ -1051,7 +1025,8 @@ function areSearchRangesEqual(
   }
 
   return (
-    previousRange.blockId === nextRange.blockId &&
+    previousRange.elementId === nextRange.elementId &&
+    previousRange.source === nextRange.source &&
     previousRange.start === nextRange.start &&
     previousRange.end === nextRange.end
   );
@@ -1724,7 +1699,7 @@ function areTextBlockViewPropsEqual(
     previousProps.interactionCancellationKey === nextProps.interactionCancellationKey &&
     previousProps.isMultiSelected === nextProps.isMultiSelected &&
     previousProps.isSelected === nextProps.isSelected &&
-    previousProps.searchQuery === nextProps.searchQuery &&
+    previousProps.searchRanges === nextProps.searchRanges &&
     previousProps.shouldFocusEnd === nextProps.shouldFocusEnd &&
     previousProps.zoomLevel === nextProps.zoomLevel &&
     areSearchRangesEqual(

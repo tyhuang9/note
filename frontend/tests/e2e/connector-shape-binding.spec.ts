@@ -273,6 +273,54 @@ test("desktop dark endpoint chooser traps focus, stays below the toolbar, and bi
   await expect(description).toContainText("Currently free");
 });
 
+test("endpoint chooser blocks rapid canvas shortcuts and preserves an immediate target choice", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  const canvasBounds = await requiredBounds(canvas, "canvas");
+  await createRectangleWithTool(page, canvasBounds.x + 340, canvasBounds.y + 180);
+  await createRectangleWithTool(page, canvasBounds.x + 500, canvasBounds.y + 300);
+  await selectTool(page, "arrow");
+  await authorArrow(
+    page,
+    canvasBounds.x + canvasBounds.width * 0.62,
+    canvasBounds.y + canvasBounds.height * 0.72,
+    canvasBounds.x + canvasBounds.width * 0.84,
+    canvasBounds.y + canvasBounds.height * 0.82,
+  );
+  const arrow = page.getByRole("button", { name: "Select and move arrow connector" });
+  await selectTool(page, "select");
+  await arrow.focus();
+  await page.keyboard.press("Enter");
+  const startHandle = page.getByRole("button", { name: "Move connector start endpoint" });
+  await expect(startHandle).toBeVisible();
+
+  for (let iteration = 0; iteration < 6; iteration += 1) {
+    await startHandle.focus();
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("r");
+    const dialog = page.getByRole("dialog", { name: "Choose start endpoint target" });
+    await expect(dialog).toBeVisible();
+    await expect(page.getByRole("button", { name: "Select (V / 1)" })).toHaveAttribute("aria-pressed", "true");
+    await dialog.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(startHandle).toBeFocused();
+  }
+
+  await startHandle.focus();
+  await page.keyboard.press("Enter");
+  const dialog = page.getByRole("dialog", { name: "Choose start endpoint target" });
+  const firstTarget = dialog.locator('[data-connector-target="true"]').filter({
+    hasText: /^Rectangle 1 \(center \d+, \d+\)$/,
+  });
+  const secondTarget = dialog.locator('[data-connector-target="true"]').filter({
+    hasText: /^Rectangle 2 \(center \d+, \d+\)$/,
+  });
+  await secondTarget.focus();
+  await page.keyboard.press("Space");
+  await expect(secondTarget).toHaveAttribute("aria-pressed", "true");
+  await expect(secondTarget).toBeFocused();
+  await expect(firstTarget).toHaveAttribute("aria-pressed", "false");
+});
+
 test("compact light endpoint chooser is an in-viewport sheet and Escape restores focus", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 598 });
   await page.getByRole("button", { name: "Dark mode" }).click();

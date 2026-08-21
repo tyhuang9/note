@@ -43,6 +43,7 @@ export function ConnectorEndpointChooser({
   targetElementId,
 }: ConnectorEndpointChooserProps) {
   const dialogRef = useRef<HTMLElement | null>(null);
+  const focusMovedInsideDialogRef = useRef(false);
   const [toolbarPosition, setToolbarPosition] = useState({ left: 0, top: 0 });
   const [anchorDegrees, setAnchorDegrees] = useState(getConnectorBoundaryDegrees(anchorT));
   const selectedTarget = targets.find(({ id }) => id === targetElementId) ?? null;
@@ -78,8 +79,16 @@ export function ConnectorEndpointChooser({
     const root = document.getElementById("root");
     const rootWasInert = root?.hasAttribute("inert") ?? false;
     root?.setAttribute("inert", "");
+    function noteFocusMovedInsideDialog(event: FocusEvent) {
+      if (event.target instanceof Node && dialogRef.current?.contains(event.target)) {
+        focusMovedInsideDialogRef.current = true;
+      }
+    }
+
+    document.addEventListener("focusin", noteFocusMovedInsideDialog, true);
     const focusFrame = window.requestAnimationFrame(() => {
       const dialog = dialogRef.current;
+      if (focusMovedInsideDialogRef.current || dialog?.contains(document.activeElement)) return;
       const selectedTargetButton = dialog?.querySelector<HTMLButtonElement>(
         '[data-connector-target][aria-pressed="true"]',
       );
@@ -88,6 +97,7 @@ export function ConnectorEndpointChooser({
     });
     return () => {
       window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener("focusin", noteFocusMovedInsideDialog, true);
       if (!rootWasInert) root?.removeAttribute("inert");
     };
   }, []);

@@ -3442,6 +3442,12 @@ function App() {
   useEffect(() => {
     function handleKeyboard(event: KeyboardEvent) {
       if (guardCanvasSearchPanelKeyboardEvent(event)) return;
+      // Opening the endpoint chooser is a React state transition, so the portal
+      // and its focus target may not exist for the next key in the same input
+      // burst. The ref is set synchronously by the opener and remains the
+      // authoritative modal state until close, rather than relying on the
+      // current active element to suppress canvas shortcuts.
+      if (connectorEndpointChooserRef.current !== null) return;
       if (event.target instanceof Element && event.target.closest(".connector-endpoint-chooser")) {
         return;
       }
@@ -7247,16 +7253,19 @@ function App() {
       window.cancelAnimationFrame(connectorEndpointFocusReturnRafRef.current);
       connectorEndpointFocusReturnRafRef.current = null;
     }
-    setConnectorEndpointChooser({
+    const chooser = {
       endpoint,
       targetElementId: currentTargetId,
-    });
+    };
+    connectorEndpointChooserRef.current = chooser;
+    setConnectorEndpointChooser(chooser);
   }
 
   function closeConnectorEndpointChooser() {
     const endpoint = connectorEndpointChooser?.endpoint;
     const origin = connectorEndpointOriginFocusRef.current;
     connectorEndpointOriginFocusRef.current = null;
+    connectorEndpointChooserRef.current = null;
     setConnectorEndpointChooser(null);
     if (!endpoint) return;
     if (connectorEndpointFocusReturnRafRef.current !== null) {

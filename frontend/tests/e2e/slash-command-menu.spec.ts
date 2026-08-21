@@ -124,6 +124,7 @@ test("canvas find does not steal focus from text editing or close slash commands
 test("canvas find shortcut remains available from non-text canvas controls", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openInitialNote(page);
+  await page.getByRole("textbox", { name: "Page title" }).press("Escape");
   const selectTool = page.getByRole("button", { name: /Select \(V/ });
   await selectTool.focus();
   await expect(selectTool).toBeFocused();
@@ -523,7 +524,7 @@ test("divider places the caret in a following paragraph and persists after blur"
   await expect(display).toBeVisible();
   await expect(display.locator("hr")).toHaveCount(1);
 
-  await display.locator("p").click();
+  await display.locator("p").dblclick();
   const reopenedDividerOnlyEditor = block.locator(".text-block-editor-content");
   await expect(reopenedDividerOnlyEditor).toBeVisible();
   await expect(reopenedDividerOnlyEditor).toBeFocused();
@@ -537,7 +538,7 @@ test("divider places the caret in a following paragraph and persists after blur"
   await expect(display.locator("hr")).toHaveCount(1);
   await expect(display.locator("p")).toHaveText("After divider");
 
-  await display.locator("p").click();
+  await display.locator("p").dblclick();
   const reopenedEditor = block.locator(".text-block-editor-content");
   await expect(reopenedEditor).toBeVisible();
   await expect(reopenedEditor.locator("hr")).toHaveCount(1);

@@ -1,8 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { CanvasElement, RoughStyle } from "../../src/canvas/model/elements";
-import { findCanvasTextSearchMatches, getSearchableText } from "../../src/canvas/search/searchModel";
+import {
+  findCanvasTextSearchMatches,
+  findCanvasTextSearchResult,
+  findTextSearchRanges,
+  getSearchableText,
+  MAX_CANVAS_SEARCH_MATCHES,
+  MAX_CANVAS_SEARCH_MATCHES_PER_ELEMENT,
+} from "../../src/canvas/search/searchModel";
 import { mapRichTextHighlightLeaves, renderShapeRichTextContent } from "../../src/editor/richText";
+import { projectRichTextForSearch } from "../../src/editor/richTextSearch";
 
 const style: RoughStyle = {
   roughness: 0.5,
@@ -84,9 +92,10 @@ describe("canvas text search", () => {
       ],
     };
 
-    expect(mapRichTextHighlightLeaves(document, "Alpha\nBeta", [{ start: 6, end: 10 }])).not.toBeNull();
+    expect(projectRichTextForSearch(document)?.text).toBe("Alpha\nBeta\n");
+    expect(mapRichTextHighlightLeaves(document, "Alpha\nBeta\n", [{ start: 6, end: 10 }])).not.toBeNull();
     expect(mapRichTextHighlightLeaves(document, "Alpha changed Beta", [{ start: 14, end: 18 }])).toBeNull();
-    expect(mapRichTextHighlightLeaves(document, "Alpha\nBeta", [{ start: 5, end: 7 }])).toBeNull();
+    expect(mapRichTextHighlightLeaves(document, "Alpha\nBeta\n", [{ start: 4, end: 7 }])).not.toBeNull();
   });
 
   it("renders highlights inside the original rich tree and falls back to that tree on mirror mismatch", () => {
@@ -113,9 +122,9 @@ describe("canvas text search", () => {
     };
     const snapshot = structuredClone(richContent);
     const highlighted = renderToStaticMarkup(renderShapeRichTextContent(
-      { content: "AlphaBeta\nItem", richContent },
+      { content: "stale plain mirror", richContent },
       "shape-rich",
-      { searchableText: "AlphaBeta\nItem", ranges: [{ start: 2, end: 8, isActive: true }] },
+      { searchableText: "AlphaBeta\nItem\nDiagram", ranges: [{ start: 2, end: 8, isActive: true }] },
     ));
 
     expect(highlighted).toContain("<h2>");
@@ -134,5 +143,44 @@ describe("canvas text search", () => {
     expect(fallback).toContain("<h2><strong>Alpha</strong><em>Beta</em></h2>");
     expect(fallback).not.toContain("<mark");
     expect(richContent).toEqual(snapshot);
+  });
+
+  it("projects structural separators and image alt text for the same search and render offsets", () => {
+    const richContent = {
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "Before" }] },
+        { type: "image", attrs: { src: "data:image/png;base64,AA==", alt: "Diagram" } },
+        { type: "paragraph", content: [{ type: "text", text: "After" }] },
+      ],
+    };
+    const projection = projectRichTextForSearch(richContent);
+    expect(projection?.text).toBe("Before\nDiagram\nAfter");
+    const imageRange = findTextSearchRanges(projection?.text ?? "", "diagram", 10).ranges[0];
+    const markup = renderToStaticMarkup(renderShapeRichTextContent(
+      { content: "legacy mirror", richContent },
+      "image-search",
+      { searchableText: projection?.text ?? "", ranges: [{ ...imageRange, isActive: true }] },
+    ));
+    expect(markup).toContain("canvas-search-image-match is-active-search-match");
+  });
+
+  it("caps dense matches during scanning and keeps Unicode offsets on the original UTF-16 text", () => {
+    const denseElements = Array.from({ length: 6 }, (_, index): CanvasElement => ({
+      ...base(`dense-${index}`, "text", 0, index),
+      backgroundMode: "surface",
+      content: "a".repeat(1_000),
+    }));
+    const dense = findCanvasTextSearchResult(denseElements, "a");
+    expect(dense.matches).toHaveLength(MAX_CANVAS_SEARCH_MATCHES);
+    expect(dense.matches.filter((match) => match.elementId === "dense-0")).toHaveLength(MAX_CANVAS_SEARCH_MATCHES_PER_ELEMENT);
+    expect(dense.isTruncated).toBe(true);
+
+    const original = "İA 😀A e\u0301";
+    const dottedI = findTextSearchRanges(original, "İa", 10).ranges[0];
+    expect(original.slice(dottedI.start, dottedI.end)).toBe("İA");
+    expect(findTextSearchRanges(original, "😀", 10).ranges[0]).toEqual({ start: 3, end: 5 });
+    const grapheme = findTextSearchRanges(original, "e\u0301", 10).ranges[0];
+    expect(original.slice(grapheme.start, grapheme.end)).toBe("e\u0301");
   });
 });

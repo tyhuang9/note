@@ -3580,14 +3580,14 @@ h2 {
   min-width: 140px;
 }
 
-.text-block-display mark {
+.canvas-search-match {
   border-radius: 2px;
   padding: 0 1px;
   color: inherit;
   background: #ffe66d;
 }
 
-.text-block-display mark.is-active-search-match {
+.canvas-search-match.is-active-search-match {
   background: #ffb84d;
   box-shadow: 0 0 0 1px rgba(159, 92, 0, 0.38);
 }
@@ -4511,11 +4511,11 @@ h2 {
   background: #302c38;
 }
 
-.app-shell.is-dark .text-block-display mark {
+.app-shell.is-dark .canvas-search-match {
   background: rgba(234, 179, 8, 0.42);
 }
 
-.app-shell.is-dark .text-block-display mark.is-active-search-match {
+.app-shell.is-dark .canvas-search-match.is-active-search-match {
   background: rgba(245, 158, 11, 0.68);
   box-shadow: 0 0 0 1px rgba(255, 219, 140, 0.34);
 }

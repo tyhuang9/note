@@ -14,6 +14,25 @@ const SAFE_DATA_IMAGE_PATTERN = /^data:image\/(png|jpeg|gif|webp);base64,([a-z\d
 const UNSAFE_URL_CHARACTER_PATTERN = /[\p{White_Space}\p{Cc}]/u;
 const shapeRichTextRenderCache = new WeakMap<RichTextValue, Map<string, ReactNode>>();
 
+export type RichTextHighlightRange = Readonly<{
+  start: number;
+  end: number;
+  isActive?: boolean;
+}>;
+
+export type RichTextLeafSegment = Readonly<{
+  start: number;
+  end: number;
+  text: string;
+  isHighlighted: boolean;
+  isActive: boolean;
+}>;
+
+export type RichTextHighlightOptions = Readonly<{
+  searchableText: string;
+  ranges: readonly RichTextHighlightRange[];
+}>;
+
 const TextStyle = Mark.create({
   name: "textStyle",
 
@@ -382,9 +401,14 @@ function appendInline(lines: string[], text: string) {
   else lines[lines.length - 1] += text;
 }
 
-export function renderRichTextContent(value: RichTextValue, key = "root"): ReactNode {
+export function renderRichTextContent(
+  value: RichTextValue,
+  key = "root",
+  highlights?: RichTextHighlightOptions,
+): ReactNode {
   try {
-    return renderTipTapContent(getCanonicalRichTextDocument(value), key, "legacy");
+    const document = getCanonicalRichTextDocument(value);
+    return renderTipTapContent(document, key, "legacy", createHighlightRenderPlan(document, highlights));
   } catch {
     return value.content.split("\n").map((line, index) => (
       <p key={`${key}-fallback-${index}`}>{line || <br />}</p>
@@ -392,21 +416,137 @@ export function renderRichTextContent(value: RichTextValue, key = "root"): React
   }
 }
 
-export function renderShapeRichTextContent(value: RichTextValue, key = "root"): ReactNode {
+export function renderShapeRichTextContent(
+  value: RichTextValue,
+  key = "root",
+  highlights?: RichTextHighlightOptions,
+): ReactNode {
+  const document = getCanonicalShapeRichTextDocument(value);
+  if (highlights) {
+    return renderTipTapContent(document, key, "shape", createHighlightRenderPlan(document, highlights));
+  }
   let cachedByKey = shapeRichTextRenderCache.get(value);
   if (!cachedByKey) {
     cachedByKey = new Map();
     shapeRichTextRenderCache.set(value, cachedByKey);
   }
   if (!cachedByKey.has(key)) {
-    cachedByKey.set(key, renderTipTapContent(getCanonicalShapeRichTextDocument(value), key, "shape"));
+    cachedByKey.set(key, renderTipTapContent(document, key, "shape"));
   }
   return cachedByKey.get(key);
 }
 
-function renderTipTapContent(content: JSONContent, key: string, mode: "legacy" | "shape"): ReactNode {
-  if (content.type === "text") return renderTextMarks(content.text ?? "", content.marks ?? [], key, mode);
-  const children = content.content?.map((child, index) => renderTipTapContent(child, `${key}-${index}`, mode));
+/**
+ * Maps presentation-only search ranges onto existing rich-text leaves. The
+ * document and its plain-text mirror are never repaired or normalized. If the
+ * mirror cannot be mapped exactly (apart from structural whitespace between
+ * leaves), callers must render the original rich document without highlights.
+ */
+export function mapRichTextHighlightLeaves(
+  document: JSONContent,
+  searchableText: string,
+  ranges: readonly RichTextHighlightRange[],
+): RichTextLeafSegment[][] | null {
+  const leaves: string[] = [];
+  collectTextLeaves(document, leaves);
+  const normalizedRanges = ranges.filter((range) => (
+    Number.isInteger(range.start)
+    && Number.isInteger(range.end)
+    && range.start >= 0
+    && range.end > range.start
+    && range.end <= searchableText.length
+  ));
+  if (normalizedRanges.length !== ranges.length) return null;
+
+  const positions: Array<Readonly<{ start: number; end: number }>> = [];
+  let cursor = 0;
+  for (const leaf of leaves) {
+    const start = searchableText.indexOf(leaf, cursor);
+    if (start === -1 || !isStructuralWhitespace(searchableText.slice(cursor, start))) return null;
+    positions.push({ start, end: start + leaf.length });
+    cursor = start + leaf.length;
+  }
+  if (!isStructuralWhitespace(searchableText.slice(cursor))) return null;
+
+  const mappedCoverage = positions.map(({ start, end }) => ({ start, end }));
+  if (normalizedRanges.some((range) => !rangeCoveredByLeaves(range, mappedCoverage))) return null;
+
+  return leaves.map((leaf, leafIndex) => {
+    const leafStart = positions[leafIndex].start;
+    const leafEnd = positions[leafIndex].end;
+    const boundaries = new Set([leafStart, leafEnd]);
+    for (const range of normalizedRanges) {
+      if (range.end <= leafStart || range.start >= leafEnd) continue;
+      boundaries.add(Math.max(leafStart, range.start));
+      boundaries.add(Math.min(leafEnd, range.end));
+    }
+    const orderedBoundaries = [...boundaries].sort((first, second) => first - second);
+    return orderedBoundaries.slice(0, -1).map((start, segmentIndex) => {
+      const end = orderedBoundaries[segmentIndex + 1];
+      const matchingRange = normalizedRanges.find((range) => range.start <= start && range.end >= end);
+      return {
+        start,
+        end,
+        text: leaf.slice(start - leafStart, end - leafStart),
+        isHighlighted: Boolean(matchingRange),
+        isActive: matchingRange?.isActive === true,
+      };
+    });
+  });
+}
+
+function collectTextLeaves(content: JSONContent, leaves: string[]) {
+  if (content.type === "text") {
+    if (content.text) leaves.push(content.text);
+    return;
+  }
+  content.content?.forEach((child) => collectTextLeaves(child, leaves));
+}
+
+function isStructuralWhitespace(value: string) {
+  return /^\s*$/.test(value);
+}
+
+function rangeCoveredByLeaves(
+  range: RichTextHighlightRange,
+  leaves: readonly Readonly<{ start: number; end: number }>[],
+) {
+  let cursor = range.start;
+  for (const leaf of leaves) {
+    if (leaf.end <= cursor || leaf.start >= range.end) continue;
+    if (leaf.start > cursor) return false;
+    cursor = Math.max(cursor, Math.min(range.end, leaf.end));
+    if (cursor === range.end) return true;
+  }
+  return false;
+}
+
+type HighlightRenderPlan = {
+  leafIndex: number;
+  leaves: RichTextLeafSegment[][];
+};
+
+function createHighlightRenderPlan(
+  document: JSONContent,
+  highlights?: RichTextHighlightOptions,
+): HighlightRenderPlan | undefined {
+  if (!highlights || highlights.ranges.length === 0) return undefined;
+  const leaves = mapRichTextHighlightLeaves(document, highlights.searchableText, highlights.ranges);
+  return leaves ? { leafIndex: 0, leaves } : undefined;
+}
+
+function renderTipTapContent(
+  content: JSONContent,
+  key: string,
+  mode: "legacy" | "shape",
+  highlightPlan?: HighlightRenderPlan,
+): ReactNode {
+  if (content.type === "text") {
+    const segments = highlightPlan?.leaves[highlightPlan.leafIndex++];
+    const text = segments ? renderHighlightedLeaf(segments, key) : content.text ?? "";
+    return renderTextMarks(text, content.marks ?? [], key, mode);
+  }
+  const children = content.content?.map((child, index) => renderTipTapContent(child, `${key}-${index}`, mode, highlightPlan));
   switch (content.type) {
     case "doc": return children;
     case "paragraph": return <p key={key}>{children?.length ? children : <br />}</p>;
@@ -436,8 +576,23 @@ function renderTipTapContent(content: JSONContent, key: string, mode: "legacy" |
   }
 }
 
+function renderHighlightedLeaf(segments: readonly RichTextLeafSegment[], key: string): ReactNode {
+  return segments.map((segment, index) => segment.isHighlighted ? (
+    <mark
+      className={`canvas-search-match${segment.isActive ? " is-active-search-match" : ""}`}
+      data-search-end={segment.end}
+      data-search-start={segment.start}
+      key={`${key}-highlight-${index}`}
+    >
+      {segment.text}
+    </mark>
+  ) : (
+    segment.text
+  ));
+}
+
 function renderTextMarks(
-  text: string,
+  text: ReactNode,
   marks: NonNullable<JSONContent["marks"]>,
   key: string,
   mode: "legacy" | "shape",

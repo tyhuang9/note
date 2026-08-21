@@ -2534,7 +2534,7 @@ h2 {
   color: var(--shape-text-surface-color, var(--canvas-tool-text));
 }
 
-.app-shell.is-dark .shape-element.has-contained-text-surface .canvas-search-match {
+.shape-element.has-contained-text-surface .canvas-search-match {
   color: var(--canvas-tool-text);
 }
 

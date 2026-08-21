@@ -1,5 +1,11 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
+const surfaceBackgrounds: Record<string, string> = {
+  "labeled-diamond": "rgb(232, 226, 255)",
+  "labeled-ellipse": "rgb(15, 76, 92)",
+  "labeled-rectangle": "rgb(232, 226, 255)",
+};
+
 for (const dark of [false, true]) {
   for (const zoom of [1, 2]) {
     test(`keeps ${dark ? "dark" : "light"} contained rich text quiet and readable at ${zoom * 100}%`, async ({ page }, testInfo) => {
@@ -15,7 +21,7 @@ for (const dark of [false, true]) {
       for (const id of ids) {
         const shape = page.locator(`[data-canvas-element-id="${id}"]`);
         await expect(shape).toBeVisible();
-        await assertReadableQuietSurface(shape);
+        await assertReadableQuietSurface(shape, surfaceBackgrounds[id]);
         initialSvg.set(id, await svgSnapshot(shape.locator("svg.primitive-shape")));
       }
 
@@ -33,9 +39,19 @@ for (const dark of [false, true]) {
         const shape = page.locator(`[data-canvas-element-id="${id}"]`);
         const activeMatch = shape.locator(".canvas-search-match.is-active-search-match");
         await expect(activeMatch).toHaveCount(1);
-        await assertReadableQuietSurface(shape);
-        expect(await contrastRatio(activeMatch, activeMatch)).toBeGreaterThanOrEqual(4.5);
+        await assertReadableQuietSurface(shape, surfaceBackgrounds[id]);
+        for (const candidateId of ids) {
+          const match = page.locator(`[data-canvas-element-id="${candidateId}"] .canvas-search-match`);
+          await expect(match).toHaveCount(1);
+          expect(await contrastRatio(match, match)).toBeGreaterThanOrEqual(4.5);
+        }
         expect(await svgSnapshot(shape.locator("svg.primitive-shape"))).toEqual(initialSvg.get(id));
+        if (id === "labeled-ellipse") {
+          const ellipseScreenshotName = `contained-ellipse-find-active-${dark ? "dark" : "light"}-${zoom * 100}.png`;
+          const ellipseScreenshotPath = testInfo.outputPath(ellipseScreenshotName);
+          await shape.screenshot({ path: ellipseScreenshotPath });
+          await testInfo.attach(ellipseScreenshotName, { path: ellipseScreenshotPath, contentType: "image/png" });
+        }
       }
       const screenshotName = `contained-diamond-${dark ? "dark" : "light"}-${zoom * 100}.png`;
       const screenshotPath = testInfo.outputPath(screenshotName);
@@ -49,23 +65,23 @@ for (const dark of [false, true]) {
         await shape.press("F2");
         const editor = shape.locator(".shape-contained-text-editor-surface");
         await expect(editor).toBeVisible();
-        await expect(editor).toHaveCSS("background-color", "rgb(232, 226, 255)");
+        await expect(editor).toHaveCSS("background-color", surfaceBackgrounds[id]);
         expect(await opaqueBackground(editor)).toBe(true);
         expect(await svgSnapshot(shape.locator("svg.primitive-shape"))).toEqual(initialSvg.get(id));
         await shape.getByRole("textbox", { name: /Edit text inside/ }).press("Escape");
         await expect(shape.locator(".shape-contained-text-display")).toBeVisible();
-        await assertReadableQuietSurface(shape);
+        await assertReadableQuietSurface(shape, surfaceBackgrounds[id]);
         expect(await svgSnapshot(shape.locator("svg.primitive-shape"))).toEqual(initialSvg.get(id));
       }
     });
   }
 }
 
-async function assertReadableQuietSurface(shape: Locator) {
+async function assertReadableQuietSurface(shape: Locator, expectedBackground: string) {
   await expect(shape).toHaveClass(/has-contained-text-surface/);
   const textRegion = shape.locator(".shape-contained-text-display");
   const surface = shape.locator(".shape-contained-text-content");
-  await expect(surface).toHaveCSS("background-color", "rgb(232, 226, 255)");
+  await expect(surface).toHaveCSS("background-color", expectedBackground);
   expect(await opaqueBackground(surface)).toBe(true);
   for (const text of [surface.locator("h2"), surface.locator("em"), surface.locator("li"), surface.locator("p").last()]) {
     expect(await contrastRatio(text, surface)).toBeGreaterThanOrEqual(4.5);
@@ -147,8 +163,9 @@ async function installWorkspace(page: Page, isDarkMode: boolean) {
         { type: "paragraph", content: [{ type: "text", text: "Readable body" }] },
       ],
     };
-    const style = (seed: number) => ({
-      fillColor: { kind: "fixed", value: "#e8e2ff" },
+    const fills = ["#e8e2ff", "#0f4c5c", "#e8e2ff"] as const;
+    const style = (seed: number, fillColor: string) => ({
+      fillColor: { kind: "fixed", value: fillColor },
       roughness: 1,
       roundness: 0.45,
       seed,
@@ -159,13 +176,13 @@ async function installWorkspace(page: Page, isDarkMode: boolean) {
     const shapes = ["rectangle", "ellipse", "diamond"].flatMap((shape, index) => [
       {
         createdAt: 1, height: 300, id: `labeled-${shape}`, locked: false, opacity: 1, pageId: "page",
-        rotation: [-8, 7, 12][index], shape, style: style(71 + index),
+        rotation: [-8, 7, 12][index], shape, style: style(71 + index, fills[index]),
         text: { content: "Quiet heading\nKeep it calm\nList detail\nReadable body", richContent: structuredClone(richContent) },
         type: "shape", updatedAt: 1, width: 360, x: 50 + index * 390, y: 110, zIndex: 1 + index,
       },
       {
         createdAt: 1, height: 170, id: `unlabeled-${shape}`, locked: false, opacity: 1, pageId: "page",
-        rotation: [-8, 7, 12][index], shape, style: style(81 + index), type: "shape",
+        rotation: [-8, 7, 12][index], shape, style: style(81 + index, fills[index]), type: "shape",
         updatedAt: 1, width: 300, x: 80 + index * 390, y: 510, zIndex: 5 + index,
       },
     ]);

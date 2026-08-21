@@ -9,10 +9,12 @@ import type { DrawingTool } from "../interaction/useInkInteraction";
 type CanvasViewportProps = {
   activeMode: "canvas" | "selected" | "editing" | "dragging" | "resizing" | "selecting" | "panning";
   activeTool: DrawingTool;
+  describedBy?: string;
   labelledBy?: string;
   children: ReactNode;
   id: string;
   isInteractionDisabled?: boolean;
+  isKeyboardShapeCreationAvailable?: boolean;
   onDoubleClick: MouseEventHandler<HTMLElement>;
   onPointerCancel: PointerEventHandler<HTMLElement>;
   onPointerCancelCapture?: PointerEventHandler<HTMLElement>;
@@ -32,10 +34,12 @@ export const CanvasViewport = forwardRef<HTMLElement, CanvasViewportProps>(
     {
       activeMode,
       activeTool,
+      describedBy,
       labelledBy,
       children,
       id,
       isInteractionDisabled = false,
+      isKeyboardShapeCreationAvailable = false,
       onDoubleClick,
       onPointerCancel,
       onPointerCancelCapture,
@@ -66,6 +70,8 @@ export const CanvasViewport = forwardRef<HTMLElement, CanvasViewportProps>(
     return (
       <section
         aria-label={labelledBy ? undefined : "Canvas workspace"}
+        aria-describedby={describedBy}
+        aria-keyshortcuts={isKeyboardShapeCreationAvailable ? "Enter" : undefined}
         aria-labelledby={labelledBy}
         className={`canvas ${activeMode === "canvas" ? "is-canvas-selected" : ""} ${activeMode === "panning" ? "is-panning" : ""} ${activeMode === "selecting" ? "is-selecting" : ""}`}
         data-active-tool={activeTool}

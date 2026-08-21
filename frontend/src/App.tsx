@@ -1431,6 +1431,7 @@ function App() {
   }> | null>(null);
   const keyboardArrowCreationRef = useRef<() => boolean>(() => false);
   const keyboardShapeCreationRef = useRef<(tool: ShapeTool) => boolean>(() => false);
+  const keyboardShapeAnnouncementSequenceRef = useRef(0);
   const keyboardArrowEndpointFocusRafRef = useRef<number | null>(null);
 
   const setSelectedPageId = useCallback((nextPageId: string) => {
@@ -1809,6 +1810,15 @@ function App() {
   const isCanvasAuthoringAvailable = Boolean(
     selectedPage && !isTemplatePage(selectedPage) && canvasViewport,
   );
+  const activeKeyboardShapeLabel = !isCanvasAuthoringAvailable
+    ? null
+    : activeTool === "rectangle"
+    ? "Rectangle"
+    : activeTool === "ellipse"
+      ? "Ellipse"
+      : activeTool === "diamond"
+        ? "Diamond"
+        : null;
   const availableDrawingPropertiesContext = isCanvasAuthoringAvailable
     ? drawingPropertiesContext
     : null;
@@ -8141,16 +8151,18 @@ function App() {
       ? getDefaultKeyboardShapeGeometry(tool, canvasViewportRef.current)
       : null;
     const label = tool === "rectangle" ? "Rectangle" : tool === "ellipse" ? "Ellipse" : "Diamond";
+    keyboardShapeAnnouncementSequenceRef.current += 1;
+    const sequence = keyboardShapeAnnouncementSequenceRef.current;
     if (!geometry) {
-      setConnectorBindingAnnouncement(`${label} is unavailable at the current canvas position.`);
+      setConnectorBindingAnnouncement(`Keyboard shape ${sequence} was not created. ${label} is unavailable at the current canvas position.`);
       return false;
     }
     const elementId = createId("shape");
     const keepsToolActive = isToolLockedRef.current;
     completePrimitiveCreation(elementId, tool, geometry, getPrimitiveAppearance(tool, elementId));
     setConnectorBindingAnnouncement(keepsToolActive
-      ? `${label} created at the center of the viewport. Tool lock kept ${label} active.`
-      : `${label} created at the center of the viewport. Switched to Select.`);
+      ? `Keyboard shape ${sequence} created. ${label} is centered in the viewport. Tool lock kept ${label} active.`
+      : `Keyboard shape ${sequence} created. ${label} is centered in the viewport. Switched to Select.`);
     canvasRef.current?.focus({ preventScroll: true });
     return true;
   };
@@ -8517,7 +8529,13 @@ function App() {
           </div>
         ) : null}
 
+        {activeKeyboardShapeLabel ? (
+          <span className="canvas-accessibility-status" id="canvas-shape-authoring-instruction">
+            {`${activeKeyboardShapeLabel} tool selected. Drag to draw, or press Enter to add a default ${activeKeyboardShapeLabel.toLowerCase()} at the center of the viewport.`}
+          </span>
+        ) : null}
         <CanvasViewport
+          describedBy={activeKeyboardShapeLabel ? "canvas-shape-authoring-instruction" : undefined}
           labelledBy={
             selectedPageId ? getWorkspaceTabId(selectedPageId) : undefined
           }
@@ -8525,6 +8543,7 @@ function App() {
           activeTool={activeTool}
           id={WORKSPACE_PAGE_PANEL_ID}
           isInteractionDisabled={isSearchOpen}
+          isKeyboardShapeCreationAvailable={activeKeyboardShapeLabel !== null}
           onDoubleClick={canvasInteraction.handleDoubleClick}
           onLostPointerCapture={(event) => {
             inkInteraction.handlePointerCancelCapture(event);

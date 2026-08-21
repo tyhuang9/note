@@ -131,6 +131,7 @@ test("focused canvas Enter creates accessible viewport-centered shapes", async (
   const canvas = page.getByRole("tabpanel");
   const status = page.locator('.canvas-accessibility-status[role="status"]');
   let expectedShapeCount = 1;
+  let expectedKeyboardSequence = 0;
   let lastCreatedId = "";
 
   for (const zoom of [50, 100, 200]) {
@@ -138,9 +139,14 @@ test("focused canvas Enter creates accessible viewport-centered shapes", async (
     if (zoom === 100) await panCanvas(page, canvas, { x: 90, y: 55 });
     for (const shape of Object.keys(TOOL_NAMES) as ShapeName[]) {
       await page.getByRole("button", { name: TOOL_NAMES[shape] }).click();
+      await expect(canvas).toHaveAttribute("aria-keyshortcuts", "Enter");
+      await expect(canvas).toHaveAccessibleDescription(
+        `${shapeLabel(shape)} tool selected. Drag to draw, or press Enter to add a default ${shape} at the center of the viewport.`,
+      );
       await canvas.focus();
       await settleAndResetCounts(page);
       await page.keyboard.press("Enter");
+      expectedKeyboardSequence += 1;
       expectedShapeCount += 1;
 
       await expect(page.locator('[data-canvas-element-type="shape"]')).toHaveCount(expectedShapeCount);
@@ -154,7 +160,8 @@ test("focused canvas Enter creates accessible viewport-centered shapes", async (
       await expect(createdLocator).toHaveAttribute("aria-pressed", "true");
       await expect(canvas).toBeFocused();
       await expect(page.getByRole("button", { name: "Select (V / 1)" })).toHaveAttribute("aria-pressed", "true");
-      await expect(status).toHaveText(`${shapeLabel(shape)} created at the center of the viewport. Switched to Select.`);
+      await expect(canvas).not.toHaveAttribute("aria-keyshortcuts");
+      await expect(status).toHaveText(`Keyboard shape ${expectedKeyboardSequence} created. ${shapeLabel(shape)} is centered in the viewport. Switched to Select.`);
       const canvasBounds = await requiredBounds(canvas, "canvas");
       const createdBounds = await requiredBounds(createdLocator, "keyboard-created shape");
       expect(createdBounds.x + createdBounds.width / 2).toBeCloseTo(canvasBounds.x + canvasBounds.width / 2, 0);
@@ -168,11 +175,31 @@ test("focused canvas Enter creates accessible viewport-centered shapes", async (
   await canvas.focus();
   await settleAndResetCounts(page);
   await page.keyboard.press("Enter");
+  expectedKeyboardSequence += 1;
   expectedShapeCount += 1;
   await expect.poll(() => counts(page)).toEqual({ apply: 1, persistence: 2, session: 1 });
   lastCreatedId = (await newestShape(page))?.id ?? "";
   await expect(page.getByRole("button", { name: TOOL_NAMES.diamond })).toHaveAttribute("aria-pressed", "true");
-  await expect(status).toHaveText("Diamond created at the center of the viewport. Tool lock kept Diamond active.");
+  await expect(status).toHaveText(`Keyboard shape ${expectedKeyboardSequence} created. Diamond is centered in the viewport. Tool lock kept Diamond active.`);
+
+  await settleAndResetCounts(page);
+  await page.evaluate(() => {
+    const statusNode = document.querySelector('.canvas-accessibility-status[role="status"]');
+    if (!statusNode) throw new Error("Canvas status was unavailable.");
+    (window as unknown as { __shapeKeyboardStatusMutations: number }).__shapeKeyboardStatusMutations = 0;
+    new MutationObserver(() => {
+      (window as unknown as { __shapeKeyboardStatusMutations: number }).__shapeKeyboardStatusMutations += 1;
+    }).observe(statusNode, { characterData: true, childList: true, subtree: true });
+  });
+  await page.keyboard.press("Enter");
+  expectedKeyboardSequence += 1;
+  expectedShapeCount += 1;
+  lastCreatedId = (await newestShape(page))?.id ?? "";
+  await expect.poll(() => counts(page)).toEqual({ apply: 1, persistence: 2, session: 1 });
+  await expect(status).toHaveText(`Keyboard shape ${expectedKeyboardSequence} created. Diamond is centered in the viewport. Tool lock kept Diamond active.`);
+  await expect.poll(() => page.evaluate(() => (
+    window as unknown as { __shapeKeyboardStatusMutations: number }
+  ).__shapeKeyboardStatusMutations)).toBeGreaterThan(0);
 
   await page.keyboard.press("Control+z");
   await expect(page.locator('[data-canvas-element-type="shape"]')).toHaveCount(expectedShapeCount - 1);
@@ -245,7 +272,7 @@ test("keyboard shape creation guards text, modal, modified, repeated, and unsafe
   await unsafeCanvas.focus();
   await settleAndResetCounts(page);
   await page.keyboard.press("Enter");
-  await expect(status).toHaveText("Ellipse is unavailable at the current canvas position.");
+  await expect(status).toHaveText("Keyboard shape 1 was not created. Ellipse is unavailable at the current canvas position.");
   await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
 });
 

@@ -23,6 +23,7 @@ const MAX_RICH_TEXT_DEPTH: usize = 64;
 const MAX_RICH_TEXT_NODES: usize = 20_000;
 const MAX_RICH_TEXT_PLAIN_BYTES: usize = 4 * 1024 * 1024;
 const MAX_EMBEDDED_RICH_IMAGE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_RICH_TEXT_ATTRIBUTE_BYTES: usize = 12 * 1024 * 1024;
 const MIN_VISUAL_RECTANGLE_ROUNDNESS: f64 = 0.06;
 const DIAMOND_CORNER_INSET: f64 = 0.08;
 const DIAMOND_CORNER_CONTROL: f64 = 0.45;
@@ -290,8 +291,15 @@ fn validate_rich_text_document(value: &Value, context: &str) -> Result<(), Strin
     if value.get("type").and_then(Value::as_str) != Some("doc") {
         return Err(format!("{context} root type must be doc"));
     }
-    let mut node_count = 0;
-    validate_rich_text_node(value, None, context, 0, &mut node_count)
+    let mut totals = RichTextTotals::default();
+    validate_rich_text_node(value, None, context, 0, &mut totals)
+}
+
+#[derive(Default)]
+struct RichTextTotals {
+    attribute_bytes: usize,
+    node_count: usize,
+    text_bytes: usize,
 }
 
 fn validate_rich_text_node(
@@ -299,15 +307,15 @@ fn validate_rich_text_node(
     parent_type: Option<&str>,
     context: &str,
     depth: usize,
-    node_count: &mut usize,
+    totals: &mut RichTextTotals,
 ) -> Result<(), String> {
     if depth > MAX_RICH_TEXT_DEPTH {
         return Err(format!(
             "{context} exceeds the {MAX_RICH_TEXT_DEPTH} level depth limit"
         ));
     }
-    *node_count += 1;
-    if *node_count > MAX_RICH_TEXT_NODES {
+    totals.node_count += 1;
+    if totals.node_count > MAX_RICH_TEXT_NODES {
         return Err(format!(
             "{context} exceeds the {MAX_RICH_TEXT_NODES} node limit"
         ));
@@ -330,13 +338,29 @@ fn validate_rich_text_node(
         context,
     )?;
     validate_rich_text_node_attrs(node_type, node.get("attrs"), context)?;
+    if let Some(attrs) = node.get("attrs") {
+        totals.attribute_bytes += serde_json::to_vec(attrs)
+            .map_err(|error| format!("{context}.attrs cannot be serialized: {error}"))?
+            .len();
+        if totals.attribute_bytes > MAX_RICH_TEXT_ATTRIBUTE_BYTES {
+            return Err(format!(
+                "{context}.attrs exceeds the aggregate attribute byte limit"
+            ));
+        }
+    }
     if node_type == "text" {
         let text = node
             .get("text")
             .and_then(Value::as_str)
             .ok_or_else(|| format!("{context}.text must be a string"))?;
-        if text.len() > MAX_RICH_TEXT_PLAIN_BYTES {
-            return Err(format!("{context}.text exceeds the text byte limit"));
+        if text.is_empty() {
+            return Err(format!("{context}.text must not be empty"));
+        }
+        totals.text_bytes += text.len();
+        if totals.text_bytes > MAX_RICH_TEXT_PLAIN_BYTES {
+            return Err(format!(
+                "{context}.text exceeds the aggregate text byte limit"
+            ));
         }
         if node.get("content").is_some() {
             return Err(format!("{context}.content is not allowed"));
@@ -354,8 +378,31 @@ fn validate_rich_text_node(
         if marks.len() > 32 {
             return Err(format!("{context}.marks exceeds the 32 mark limit"));
         }
+        let mut mark_types = Vec::with_capacity(marks.len());
         for (index, mark) in marks.iter().enumerate() {
             validate_rich_text_mark(mark, &format!("{context}.marks[{index}]"))?;
+            let mark_type = mark["type"].as_str().expect("validated mark type");
+            if mark_types.contains(&mark_type) {
+                return Err(format!("{context}.marks contains a duplicate mark"));
+            }
+            mark_types.push(mark_type);
+            if let Some(attrs) = mark.get("attrs") {
+                totals.attribute_bytes += serde_json::to_vec(attrs)
+                    .map_err(|error| {
+                        format!("{context}.marks[{index}].attrs cannot be serialized: {error}")
+                    })?
+                    .len();
+                if totals.attribute_bytes > MAX_RICH_TEXT_ATTRIBUTE_BYTES {
+                    return Err(format!(
+                        "{context}.marks exceeds the aggregate attribute byte limit"
+                    ));
+                }
+            }
+        }
+        if mark_types.contains(&"code") && mark_types.len() > 1 {
+            return Err(format!(
+                "{context}.marks cannot combine code with another mark"
+            ));
         }
     }
     let leaf = matches!(node_type, "text" | "image" | "hardBreak" | "horizontalRule");
@@ -366,15 +413,36 @@ fn validate_rich_text_node(
         let children = children
             .as_array()
             .ok_or_else(|| format!("{context}.content must be an array"))?;
+        if matches!(
+            node_type,
+            "doc" | "blockquote" | "bulletList" | "orderedList"
+        ) && children.is_empty()
+        {
+            return Err(format!("{context}.content must not be empty"));
+        }
+        if node_type == "listItem"
+            && children
+                .first()
+                .and_then(|child| child.get("type"))
+                .and_then(Value::as_str)
+                != Some("paragraph")
+        {
+            return Err(format!("{context}.content must start with a paragraph"));
+        }
         for (index, child) in children.iter().enumerate() {
             validate_rich_text_node(
                 child,
                 Some(node_type),
                 &format!("{context}.content[{index}]"),
                 depth + 1,
-                node_count,
+                totals,
             )?;
         }
+    } else if matches!(
+        node_type,
+        "doc" | "blockquote" | "bulletList" | "orderedList" | "listItem"
+    ) {
+        return Err(format!("{context}.content must not be empty"));
     }
     Ok(())
 }
@@ -577,7 +645,7 @@ fn validate_rich_text_mark(value: &Value, context: &str) -> Result<(), String> {
     validate_known_keys(mark, &["type", "attrs"], context)?;
     let allowed_attrs: &[&str] = match mark_type {
         "textStyle" => &["fontFamily", "fontSize"],
-        "link" => &["href", "target", "rel", "class"],
+        "link" => &["href", "target", "rel", "class", "title"],
         _ => &[],
     };
     let attrs = match mark.get("attrs") {
@@ -617,7 +685,7 @@ fn validate_rich_text_mark(value: &Value, context: &str) -> Result<(), String> {
         if !is_safe_absolute_url(href, &["http", "https", "mailto", "tel"]) {
             return Err(format!("{context}.attrs.href uses an unsafe URL"));
         }
-        for key in ["target", "rel", "class"] {
+        for key in ["target", "rel", "class", "title"] {
             if attrs.get(key).is_some_and(|value| {
                 !value.is_null() && value.as_str().is_none_or(|text| text.len() > 512)
             }) {
@@ -2075,6 +2143,32 @@ mod tests {
                 vector["name"]
             );
         }
+    }
+
+    #[test]
+    fn rich_text_aggregate_text_and_attribute_limits_are_enforced() {
+        let text = "x".repeat(3 * 1024 * 1024);
+        let text_document = json!({"type":"doc","content":[
+            {"type":"paragraph","content":[{"type":"text","text":text}]},
+            {"type":"paragraph","content":[{"type":"text","text":text}]}
+        ]});
+        assert!(validate_rich_text_document(&text_document, "aggregate")
+            .unwrap_err()
+            .contains("aggregate text"));
+
+        let image_source = format!(
+            "data:image/png;base64,{}",
+            STANDARD.encode(vec![0; 5 * 1024 * 1024])
+        );
+        let attribute_document = json!({"type":"doc","content":[
+            {"type":"image","attrs":{"src":image_source}},
+            {"type":"image","attrs":{"src":image_source}}
+        ]});
+        assert!(
+            validate_rich_text_document(&attribute_document, "aggregate")
+                .unwrap_err()
+                .contains("aggregate attribute")
+        );
     }
 
     #[test]

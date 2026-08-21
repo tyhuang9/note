@@ -8,6 +8,7 @@ export const MAX_RICH_TEXT_DEPTH = 64;
 export const MAX_RICH_TEXT_NODES = 20_000;
 export const MAX_RICH_TEXT_PLAIN_BYTES = 4 * 1024 * 1024;
 export const MAX_EMBEDDED_RICH_IMAGE_BYTES = 8 * 1024 * 1024;
+export const MAX_RICH_TEXT_ATTRIBUTE_BYTES = 12 * 1024 * 1024;
 const SAFE_LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:", "tel:"]);
 const SAFE_DATA_IMAGE_PATTERN = /^data:image\/(png|jpeg|gif|webp);base64,([a-z\d+/]*={0,2})$/i;
 
@@ -141,38 +142,54 @@ export function validateRichTextDocument(value: unknown): string | null {
     return "richContent exceeds the byte limit";
   }
   if (!isRecord(value) || value.type !== "doc") return "richContent root type must be doc";
-  const count = { value: 0 };
-  return validateRichTextNode(value, null, 0, count, "richContent");
+  const totals = { attributeBytes: 0, nodeCount: 0, textBytes: 0 };
+  return validateRichTextNode(value, null, 0, totals, "richContent");
 }
 
 function validateRichTextNode(
   node: Record<string, unknown>,
   parentType: string | null,
   depth: number,
-  count: { value: number },
+  totals: { attributeBytes: number; nodeCount: number; textBytes: number },
   context: string,
 ): string | null {
   if (depth > MAX_RICH_TEXT_DEPTH) return `${context} exceeds the depth limit`;
-  count.value += 1;
-  if (count.value > MAX_RICH_TEXT_NODES) return `${context} exceeds the node limit`;
+  totals.nodeCount += 1;
+  if (totals.nodeCount > MAX_RICH_TEXT_NODES) return `${context} exceeds the node limit`;
   const type = typeof node.type === "string" ? node.type : "";
   if (!isAllowedChild(parentType, type)) return `${context}.type '${type}' is not supported here`;
   const allowedKeys = new Set(["type", "attrs", "content", "marks", "text"]);
   if (Object.keys(node).some((key) => !allowedKeys.has(key))) return `${context} has an unknown field`;
   const attrsError = validateNodeAttrs(type, node.attrs, context);
   if (attrsError) return attrsError;
+  if (node.attrs !== undefined) {
+    totals.attributeBytes += utf8Length(JSON.stringify(node.attrs));
+    if (totals.attributeBytes > MAX_RICH_TEXT_ATTRIBUTE_BYTES) return `${context}.attrs exceeds the aggregate attribute byte limit`;
+  }
   if (type === "text") {
     if (typeof node.text !== "string") return `${context}.text must be a string`;
-    if (new TextEncoder().encode(node.text).length > MAX_RICH_TEXT_PLAIN_BYTES) return `${context}.text exceeds the byte limit`;
+    if (!node.text) return `${context}.text must not be empty`;
+    totals.textBytes += utf8Length(node.text);
+    if (totals.textBytes > MAX_RICH_TEXT_PLAIN_BYTES) return `${context}.text exceeds the aggregate byte limit`;
     if (node.content !== undefined) return `${context}.content is not allowed`;
   } else if (node.text !== undefined) return `${context}.text is only valid on text nodes`;
   const marks = node.marks;
   if (marks !== undefined) {
+    if (type !== "text") return `${context}.marks is only valid on text nodes`;
     if (!Array.isArray(marks) || marks.length > 32) return `${context}.marks is invalid`;
+    const markTypes = new Set<string>();
     for (let index = 0; index < marks.length; index += 1) {
       const error = validateRichTextMark(marks[index], `${context}.marks[${index}]`);
       if (error) return error;
+      const mark = marks[index] as Record<string, unknown>;
+      if (markTypes.has(mark.type as string)) return `${context}.marks contains a duplicate mark`;
+      markTypes.add(mark.type as string);
+      if (mark.attrs !== undefined) {
+        totals.attributeBytes += utf8Length(JSON.stringify(mark.attrs));
+        if (totals.attributeBytes > MAX_RICH_TEXT_ATTRIBUTE_BYTES) return `${context}.marks exceeds the aggregate attribute byte limit`;
+      }
     }
+    if (markTypes.has("code") && markTypes.size > 1) return `${context}.marks cannot combine code with another mark`;
   }
   if (isLeafNode(type)) {
     if (node.content !== undefined) return `${context}.content is not allowed`;
@@ -180,13 +197,19 @@ function validateRichTextNode(
   }
   if (node.content !== undefined && !Array.isArray(node.content)) return `${context}.content must be an array`;
   const children = (node.content ?? []) as unknown[];
+  if ((type === "doc" || type === "blockquote" || type === "bulletList" || type === "orderedList") && children.length === 0) return `${context}.content must not be empty`;
+  if (type === "listItem" && (children.length === 0 || !isRecord(children[0]) || children[0].type !== "paragraph")) return `${context}.content must start with a paragraph`;
   for (let index = 0; index < children.length; index += 1) {
     const child = children[index];
     if (!isRecord(child)) return `${context}.content[${index}] must be an object`;
-    const error = validateRichTextNode(child, type, depth + 1, count, `${context}.content[${index}]`);
+    const error = validateRichTextNode(child, type, depth + 1, totals, `${context}.content[${index}]`);
     if (error) return error;
   }
   return null;
+}
+
+function utf8Length(value: string) {
+  return new TextEncoder().encode(value).length;
 }
 
 function isAllowedChild(parent: string | null, child: string) {
@@ -243,7 +266,7 @@ function validateRichTextMark(value: unknown, context: string): string | null {
   const attrs = value.attrs === undefined ? undefined : isRecord(value.attrs) ? value.attrs : null;
   if (attrs === null) return `${context}.attrs must be an object`;
   const allowed = value.type === "textStyle" ? ["fontFamily", "fontSize"]
-    : value.type === "link" ? ["href", "target", "rel", "class"] : [];
+    : value.type === "link" ? ["href", "target", "rel", "class", "title"] : [];
   if (attrs && Object.keys(attrs).some((key) => !allowed.includes(key))) return `${context}.attrs has an unknown field`;
   if (value.type === "textStyle" && attrs) {
     const family = attrs.fontFamily;
@@ -253,7 +276,7 @@ function validateRichTextMark(value: unknown, context: string): string | null {
   }
   if (value.type === "link") {
     if (!attrs || typeof attrs.href !== "string" || !isSafeLinkHref(attrs.href)) return `${context}.attrs.href is unsafe`;
-    for (const key of ["target", "rel", "class"] as const) {
+    for (const key of ["target", "rel", "class", "title"] as const) {
       const field = attrs[key];
       if (field !== undefined && field !== null && (typeof field !== "string" || field.length > 512)) return `${context}.attrs.${key} is invalid`;
     }

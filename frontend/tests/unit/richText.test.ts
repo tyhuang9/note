@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { getSchema } from "@tiptap/core";
 import {
   cloneRichTextValue,
   getCanonicalRichTextDocument,
@@ -6,6 +7,7 @@ import {
   richTextToPlainText,
   MAX_EMBEDDED_RICH_IMAGE_BYTES,
   validateRichTextDocument,
+  richTextExtensions,
 } from "../../src/editor/richText";
 import vectors from "../../../tests/fixtures/rich-text-security-vectors.json";
 
@@ -68,6 +70,11 @@ describe("shared rich text model", () => {
     }
   });
 
+  it("round-trips the editor-default golden through the actual Tiptap schema", () => {
+    const golden = vectors.valid[0].doc;
+    expect(getSchema(richTextExtensions).nodeFromJSON(golden).toJSON()).toEqual(golden);
+  });
+
   it("accepts the decoded embedded-image boundary and rejects one byte over", () => {
     const zeroBytesAsBase64 = (bytes: number) => {
       const remainder = bytes % 3;
@@ -82,5 +89,22 @@ describe("shared rich text model", () => {
     });
     expect(validateRichTextDocument(documentForBytes(MAX_EMBEDDED_RICH_IMAGE_BYTES))).toBeNull();
     expect(validateRichTextDocument(documentForBytes(MAX_EMBEDDED_RICH_IMAGE_BYTES + 1))).not.toBeNull();
+  });
+
+  it("enforces aggregate text and attribute byte budgets", () => {
+    const text = "x".repeat(3 * 1024 * 1024);
+    expect(validateRichTextDocument({
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text }] },
+        { type: "paragraph", content: [{ type: "text", text }] },
+      ],
+    })).toContain("aggregate");
+
+    const image = (bytes: number) => ({
+      type: "image",
+      attrs: { src: `data:image/png;base64,${"AAAA".repeat(Math.floor(bytes / 3))}` },
+    });
+    expect(validateRichTextDocument({ type: "doc", content: [image(5 * 1024 * 1024), image(5 * 1024 * 1024)] })).toContain("aggregate attribute");
   });
 });

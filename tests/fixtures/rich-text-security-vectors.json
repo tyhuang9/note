@@ -12,7 +12,7 @@
                 "type": "text",
                 "text": "Linked",
                 "marks": [
-                  { "type": "link", "attrs": { "href": "https://example.com/path", "target": null, "rel": null, "class": null } },
+                  { "type": "link", "attrs": { "href": "https://example.com/path", "target": null, "rel": null, "class": null, "title": null } },
                   { "type": "textStyle", "attrs": { "fontFamily": null, "fontSize": "16px" } }
                 ]
               }
@@ -36,5 +36,12 @@
     { "name": "unknown node field", "doc": { "type": "doc", "evil": true } },
     { "name": "oversized font", "doc": { "type": "doc", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "x", "marks": [{ "type": "textStyle", "attrs": { "fontSize": "120px" } }] }] }] } },
     { "name": "unknown image attr", "doc": { "type": "doc", "content": [{ "type": "image", "attrs": { "src": "https://example.com/a.png", "onerror": "bad" } }] } }
+    ,{ "name": "empty doc", "doc": { "type": "doc" } }
+    ,{ "name": "empty list", "doc": { "type": "doc", "content": [{ "type": "bulletList" }] } }
+    ,{ "name": "list item without paragraph first", "doc": { "type": "doc", "content": [{ "type": "bulletList", "content": [{ "type": "listItem", "content": [{ "type": "blockquote", "content": [{ "type": "paragraph" }] }] }] }] } }
+    ,{ "name": "empty text", "doc": { "type": "doc", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "" }] }] } }
+    ,{ "name": "duplicate mark", "doc": { "type": "doc", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "x", "marks": [{ "type": "bold" }, { "type": "bold" }] }] }] } }
+    ,{ "name": "code mark combined", "doc": { "type": "doc", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "x", "marks": [{ "type": "code" }, { "type": "bold" }] }] }] } }
+    ,{ "name": "marks on non text", "doc": { "type": "doc", "content": [{ "type": "paragraph", "marks": [{ "type": "bold" }] }] } }
   ]
 }

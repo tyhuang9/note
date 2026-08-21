@@ -517,7 +517,7 @@ test("cancels interrupted opacity previews and commits lost pointer capture once
   if (!bounds) throw new Error("Canvas bounds were not available.");
   await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
   await page.mouse.click(bounds.x + 420, bounds.y + 320);
-  const rectangle = page.getByRole("button", { name: "Select and move rectangle element" });
+  const rectangle = page.getByRole("button", { name: "Select and move rectangle shape. Press F2 to edit contained text." });
   const opacity = page.getByRole("slider", { name: "Opacity" });
 
   await opacity.dispatchEvent("pointerdown", { pointerId: 41 });

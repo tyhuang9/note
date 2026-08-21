@@ -122,7 +122,7 @@ test("persists a bound arrow endpoint and resolves it from the current target af
 
   await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
   await page.mouse.click(canvasBounds.x + 360, canvasBounds.y + 300);
-  const rectangleControl = page.getByRole("button", { name: "Select and move rectangle element" });
+  const rectangleControl = page.getByRole("button", { name: "Select and move rectangle shape. Press F2 to edit contained text." });
   const targetId = await rectangleControl.getAttribute("data-canvas-element-id");
   if (!targetId) throw new Error("Rectangle target id was unavailable.");
 

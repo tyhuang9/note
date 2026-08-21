@@ -11,7 +11,7 @@ test("arrow binding exposes visual-only anchors, follows target transforms, and 
   const canvas = page.getByRole("tabpanel");
   const canvasBounds = await requiredBounds(canvas, "canvas");
   const rectangle = await createRectangle(page, canvasBounds.x + 360, canvasBounds.y + 300);
-  const rectangleControl = page.getByRole("button", { name: "Select and move rectangle element" });
+  const rectangleControl = page.getByRole("button", { name: "Select and move rectangle shape. Press F2 to edit contained text." });
   const targetId = await rectangleControl.getAttribute("data-canvas-element-id");
   if (!targetId) throw new Error("Rectangle target id was unavailable.");
 
@@ -68,7 +68,7 @@ test("lines stay free while arrows remain bound through keyboard movement and re
   for (const zoom of [50, 100, 200]) {
     await setZoom(page, canvas, zoom);
     const rectangle = await createRectangle(page, canvasBounds.x + 300, canvasBounds.y + 240);
-    const rectangleControl = page.getByRole("button", { name: "Select and move rectangle element" }).last();
+    const rectangleControl = page.getByRole("button", { name: "Select and move rectangle shape. Press F2 to edit contained text." }).last();
     const targetId = await rectangleControl.getAttribute("data-canvas-element-id");
     if (!targetId) throw new Error("Rectangle target id was unavailable.");
 
@@ -118,7 +118,7 @@ for (const zoom of [50, 100, 200]) {
     const canvasBounds = await requiredBounds(canvas, "canvas");
     await setZoom(page, canvas, zoom);
     const rectangle = await createRectangle(page, canvasBounds.x + 360, canvasBounds.y + 300);
-    const rectangleControl = page.getByRole("button", { name: "Select and move rectangle element" }).last();
+    const rectangleControl = page.getByRole("button", { name: "Select and move rectangle shape. Press F2 to edit contained text." }).last();
     const targetId = await rectangleControl.getAttribute("data-canvas-element-id");
     if (!targetId) throw new Error("Rectangle target id was unavailable.");
     await selectTool(page, "arrow");

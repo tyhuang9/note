@@ -41,7 +41,7 @@ test("all-text selections render a four-corner composite frame and move as one g
   const beforeSecondWidth = await readWorldWidth(blocks.second);
   const header = blocks.first.locator(".text-block-header");
   await header.focus();
-  await expect(header).toHaveAttribute("aria-keyshortcuts", "Alt+Shift+ArrowLeft Alt+Shift+ArrowRight");
+  await expect(header).toHaveAttribute("aria-keyshortcuts", "F2 Alt+Shift+ArrowLeft Alt+Shift+ArrowRight");
   await header.press("Alt+Shift+ArrowRight");
   await expect.poll(() => readWorldWidth(blocks.first)).toBeCloseTo(beforeWidth + 10, 1);
   await expect.poll(() => readWorldWidth(blocks.second)).toBeCloseTo(beforeSecondWidth, 1);

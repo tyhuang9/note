@@ -231,7 +231,7 @@ test("keyboard endpoint chooser describes rotated text targets and binds a targe
 
 async function selectBothTargets(page: Page) {
   await page.getByRole("button", { name: "Select (V / 1)" }).click();
-  const rectangle = page.getByRole("button", { name: "Select and move rectangle element" });
+  const rectangle = page.getByRole("button", { name: "Select and move rectangle shape. Press F2 to edit contained text." });
   const textHeader = page.locator('[data-block-id="target-text"] .text-block-header');
   // Primitive selection is exposed through its keyboard semantic control;
   // text preserves its regular additive-header interaction.

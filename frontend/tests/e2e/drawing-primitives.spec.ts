@@ -127,7 +127,7 @@ test("routes drawing shortcuts from canvas contexts without stealing editable co
   await expect(rectangleTool).toHaveAttribute("aria-pressed", "true");
 
   await page.mouse.click(bounds.x + 450, bounds.y + 330);
-  const selectedRectangle = page.getByRole("button", { name: "Select and move rectangle element" });
+  const selectedRectangle = page.getByRole("button", { name: "Select and move rectangle shape. Press F2 to edit contained text." });
   await selectedRectangle.focus();
   await page.keyboard.press("o");
   await expect(page.getByRole("button", { name: "Ellipse (O / 4)" })).toHaveAttribute("aria-pressed", "true");
@@ -296,7 +296,7 @@ test("selects, moves, and deletes shapes and connectors from the keyboard", asyn
 
   await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
   await page.mouse.click(bounds.x + 420, bounds.y + 320);
-  const shape = page.getByRole("button", { name: "Select and move rectangle element" });
+  const shape = page.getByRole("button", { name: "Select and move rectangle shape. Press F2 to edit contained text." });
   await page.getByRole("button", { name: "Select (V / 1)" }).click();
   await page.mouse.click(bounds.x + 850, bounds.y + 650);
   await shape.focus();

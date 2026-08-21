@@ -82,6 +82,10 @@ export const CanvasViewport = forwardRef<HTMLElement, CanvasViewportProps>(
           if (isSearchPanelEvent(event)) return;
           if (!blockCanvasInteraction(event)) onDoubleClick(event);
         }}
+        onDoubleClickCapture={(event) => {
+          if (isSearchPanelEvent(event)) return;
+          blockCanvasInteraction(event);
+        }}
         onKeyDownCapture={(event) => {
           if (isSearchPanelEvent(event)) return;
           blockCanvasInteraction(event);

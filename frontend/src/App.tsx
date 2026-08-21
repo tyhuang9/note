@@ -272,6 +272,7 @@ type SidebarProps = {
 type PageHeaderProps = {
   activeTextEditor: Editor | null;
   assistantToggleButtonRef: Ref<HTMLButtonElement>;
+  canvasSearchButtonRef: Ref<HTMLButtonElement>;
   isAssistantOpen: boolean;
   isGridVisible: boolean;
   isDarkMode: boolean;
@@ -282,10 +283,11 @@ type PageHeaderProps = {
   openPages: OpenPageTab[];
   selectedPageId: string;
   textFormatState: TextFormatState;
+  titleSearchHighlights: readonly Readonly<{ end: number; isActive: boolean; start: number }>[];
   zoomLevel: number;
   onClosePageTab: (pageId: string) => void;
   onCreatePage: () => void;
-  onFocusCanvasSearch: () => void;
+  onFocusCanvasSearch: (trigger?: HTMLElement | null) => void;
   onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
   onRenamePage: (pageId: string, title: string) => void;
   onReorderPageTab: (
@@ -1276,7 +1278,9 @@ function App() {
   const textResizeSessionRef = useRef<TextResizeSession | null>(null);
   const cancelCanvasSelectionRef = useRef<() => void>(() => undefined);
   const cancelVisualDragRef = useRef<(updateState?: boolean) => void>(() => undefined);
+  const canvasSearchButtonRef = useRef<HTMLButtonElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const searchReturnFocusRef = useRef<HTMLElement | null>(null);
   const explorerPanelRef = useRef<HTMLDivElement | null>(null);
   const explorerToggleButtonRef = useRef<HTMLButtonElement | null>(null);
   const assistantPanelRef = useRef<HTMLElement | null>(null);
@@ -1665,6 +1669,14 @@ function App() {
   const activeCanvasSearchMatch = searchMatches[activeSearchIndex] ?? null;
   const activeSearchMatch =
     activeCanvasSearchMatch?.kind === "element" ? activeCanvasSearchMatch : null;
+  const titleSearchHighlights = useMemo(
+    () => searchMatches.flatMap((match, index) => match.kind === "title" ? [{
+      end: match.end,
+      isActive: index === activeSearchIndex,
+      start: match.start,
+    }] : []),
+    [activeSearchIndex, searchMatches],
+  );
   const searchMatchesByElementId = useMemo(() => {
     const matchesByElementId = new Map<string, SearchMatch[]>();
     for (const match of searchMatches) {
@@ -3485,7 +3497,13 @@ function App() {
         !isTextEntryTarget(document.activeElement)
       ) {
         event.preventDefault();
-        focusCanvasSearch();
+        focusCanvasSearch(
+          document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : event.target instanceof HTMLElement
+              ? event.target
+              : null,
+        );
         return;
       }
 
@@ -4107,8 +4125,11 @@ function App() {
     );
   }
 
-  function focusCanvasSearch() {
+  function focusCanvasSearch(trigger?: HTMLElement | null) {
     if (isCanvasSearchInteractionBlocked()) return;
+    searchReturnFocusRef.current = trigger?.isConnected && trigger !== document.body
+      ? trigger
+      : canvasRef.current;
     setIsSearchOpen(true);
     window.requestAnimationFrame(() => {
       searchInputRef.current?.focus();
@@ -4116,10 +4137,24 @@ function App() {
     });
   }
 
-  function closeCanvasSearch() {
+  function closeCanvasSearch({ restoreFocus = true }: { restoreFocus?: boolean } = {}) {
+    const returnFocusTarget = searchReturnFocusRef.current;
+    searchReturnFocusRef.current = null;
     setIsSearchOpen(false);
     setSearchQuery("");
     setSearchPanOffset(null);
+    if (!restoreFocus) return;
+    window.requestAnimationFrame(() => {
+      const fallbackTarget = canvasSearchButtonRef.current?.isConnected
+        && !canvasSearchButtonRef.current.disabled
+        ? canvasSearchButtonRef.current
+        : canvasRef.current;
+      const focusTarget = returnFocusTarget?.isConnected
+        && !(returnFocusTarget instanceof HTMLButtonElement && returnFocusTarget.disabled)
+        ? returnFocusTarget
+        : fallbackTarget;
+      focusTarget?.focus({ preventScroll: true });
+    });
   }
 
   function getAssistantErrorMessage(error: unknown) {
@@ -7876,10 +7911,15 @@ function App() {
       : "0 / 0";
   const canvasSearchSourceLabel =
     activeCanvasSearchMatch?.kind === "title"
-      ? "Title"
+      ? "Page title"
       : activeCanvasSearchMatch?.source === "shape-text"
         ? "Shape text"
         : "Text";
+  const canvasSearchStatusLabel = !hasCanvasSearchQuery
+    ? "Enter a search query."
+    : searchMatches.length === 0
+      ? "No results."
+      : `Result ${activeSearchDisplayIndex} of ${searchMatches.length}${isSearchTruncated ? " or more" : ""}, ${canvasSearchSourceLabel}`;
   const isCanvasSearchUnavailable = Boolean(
     editingBlockId
     || activeTextEditor && !activeTextEditor.isDestroyed
@@ -7892,7 +7932,7 @@ function App() {
   );
 
   useEffect(() => {
-    if (isSearchOpen && isCanvasSearchUnavailable) closeCanvasSearch();
+    if (isSearchOpen && isCanvasSearchUnavailable) closeCanvasSearch({ restoreFocus: false });
   }, [isCanvasSearchUnavailable, isSearchOpen]);
 
   return (
@@ -7970,6 +8010,7 @@ function App() {
         <PageHeader
           activeTextEditor={activeTextEditor}
           assistantToggleButtonRef={assistantToggleButtonRef}
+          canvasSearchButtonRef={canvasSearchButtonRef}
           isAssistantOpen={shouldRenderAssistantPanel}
           isCanvasSearchUnavailable={isCanvasSearchUnavailable}
           isGridVisible={isGridVisible}
@@ -7980,6 +8021,7 @@ function App() {
           openPages={openPages}
           selectedPageId={selectedPageId}
           textFormatState={textFormatState}
+          titleSearchHighlights={titleSearchHighlights}
           zoomLevel={zoomLevel}
           onClosePageTab={closePageTab}
           onCreatePage={createPage}
@@ -8036,7 +8078,7 @@ function App() {
           activeMode={activeMode}
           activeTool={activeTool}
           id={WORKSPACE_PAGE_PANEL_ID}
-          isInteractionDisabled={searchPanOffset !== null}
+          isInteractionDisabled={isSearchOpen}
           onDoubleClick={canvasInteraction.handleDoubleClick}
           onLostPointerCapture={canvasInteraction.handlePointerCancel}
           onPointerCancel={canvasInteraction.handlePointerCancel}
@@ -8137,68 +8179,85 @@ function App() {
               }}
               onPointerDown={(event) => event.stopPropagation()}
             >
-              <HeroIcon name="magnifying-glass" />
-              <input
-                aria-label="Find in canvas"
-                disabled={isCanvasSearchUnavailable}
-                onChange={(event) => {
-                  if (!isCanvasSearchInteractionBlocked()) setSearchQuery(event.currentTarget.value);
-                }}
-                onKeyDown={(event) => {
-                  if (isCanvasSearchInteractionBlocked()) {
-                    event.preventDefault();
-                    return;
-                  }
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    focusSearchMatch(
-                      activeSearchIndex + (event.shiftKey ? -1 : 1),
-                    );
-                  }
+              <div className="search-panel-query">
+                <HeroIcon name="magnifying-glass" />
+                <input
+                  aria-describedby="canvas-search-status"
+                  aria-label="Find in canvas"
+                  disabled={isCanvasSearchUnavailable}
+                  onChange={(event) => {
+                    if (!isCanvasSearchInteractionBlocked()) setSearchQuery(event.currentTarget.value);
+                  }}
+                  onKeyDown={(event) => {
+                    if (isCanvasSearchInteractionBlocked()) {
+                      event.preventDefault();
+                      return;
+                    }
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      focusSearchMatch(
+                        activeSearchIndex + (event.shiftKey ? -1 : 1),
+                      );
+                    }
 
-                  if (event.key === "Escape") {
-                    closeCanvasSearch();
-                  }
-                }}
-                placeholder="Find in canvas"
-                ref={searchInputRef}
-                value={searchQuery}
-              />
-              <span className="search-panel-count">
-                {canvasSearchResultLabel}
-                {hasCanvasSearchQuery && searchMatches.length > 0 ? (
-                  <small>{canvasSearchSourceLabel}</small>
-                ) : null}
+                    if (event.key === "Escape") {
+                      closeCanvasSearch();
+                    }
+                  }}
+                  placeholder="Find in canvas"
+                  ref={searchInputRef}
+                  value={searchQuery}
+                />
+              </div>
+              <span
+                aria-atomic="true"
+                aria-live="polite"
+                className="search-panel-count"
+                id="canvas-search-status"
+                role="status"
+              >
+                <span aria-hidden="true">
+                  {canvasSearchResultLabel}
+                  {hasCanvasSearchQuery && searchMatches.length > 0 ? (
+                    <small>{canvasSearchSourceLabel}</small>
+                  ) : null}
+                </span>
+                <span className="search-status-announcement">{canvasSearchStatusLabel}</span>
               </span>
-              <button
-                aria-label="Previous match"
-                disabled={searchMatches.length === 0 || isCanvasSearchUnavailable}
-                onClick={() => focusSearchMatch(activeSearchIndex - 1)}
-                title="Previous match"
-                type="button"
-              >
-                <HeroIcon name="chevron-up" />
-              </button>
-              <button
-                aria-label="Next match"
-                disabled={searchMatches.length === 0 || isCanvasSearchUnavailable}
-                onClick={() => focusSearchMatch(activeSearchIndex + 1)}
-                title="Next match"
-                type="button"
-              >
-                <HeroIcon name="chevron-down" />
-              </button>
-              <button
-                aria-label="Close search"
-                disabled={isCanvasSearchUnavailable}
-                onClick={() => {
-                  closeCanvasSearch();
-                }}
-                title="Close search"
-                type="button"
-              >
-                <HeroIcon name="x-mark" />
-              </button>
+              <div className="search-panel-actions">
+                <button
+                  aria-label="Previous match"
+                  disabled={searchMatches.length === 0 || isCanvasSearchUnavailable}
+                  onClick={() => focusSearchMatch(activeSearchIndex - 1)}
+                  title="Previous match"
+                  type="button"
+                >
+                  <HeroIcon name="chevron-up" />
+                </button>
+                <button
+                  aria-label="Next match"
+                  disabled={searchMatches.length === 0 || isCanvasSearchUnavailable}
+                  onClick={() => focusSearchMatch(activeSearchIndex + 1)}
+                  title="Next match"
+                  type="button"
+                >
+                  <HeroIcon name="chevron-down" />
+                </button>
+                <button
+                  aria-label="Close search"
+                  disabled={isCanvasSearchUnavailable}
+                  onClick={() => {
+                    closeCanvasSearch();
+                  }}
+                  title="Close search"
+                  type="button"
+                >
+                  <HeroIcon name="x-mark" />
+                </button>
+              </div>
+              <span aria-hidden="true" className="search-panel-paused-cue">
+                Canvas interactions paused while Find is open.
+              </span>
             </div>
           ) : null}
           <CanvasWorldLayer
@@ -9505,6 +9564,7 @@ function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps) {
 const PageHeader = memo(function PageHeader({
   activeTextEditor,
   assistantToggleButtonRef,
+  canvasSearchButtonRef,
   isAssistantOpen,
   isGridVisible,
   isDarkMode,
@@ -9515,6 +9575,7 @@ const PageHeader = memo(function PageHeader({
   openPages,
   selectedPageId,
   textFormatState,
+  titleSearchHighlights,
   zoomLevel,
   onClosePageTab,
   onCreatePage,
@@ -9558,6 +9619,7 @@ const PageHeader = memo(function PageHeader({
         onSetEditingActiveTab={onSetEditingHeaderTitle}
         selectedPageId={selectedPageId}
         tabs={openPages}
+        titleSearch={{ pageId: selectedPageId, ranges: titleSearchHighlights }}
       />
       <div className="page-header-actions">
         {isTextFormattingVisible ? (
@@ -9586,7 +9648,7 @@ const PageHeader = memo(function PageHeader({
                 return;
               }
 
-              onFocusCanvasSearch();
+              onFocusCanvasSearch(event.currentTarget);
             }}
             onPointerDown={(event) => {
               if (isCanvasSearchUnavailable) {
@@ -9594,6 +9656,7 @@ const PageHeader = memo(function PageHeader({
                 event.stopPropagation();
               }
             }}
+            ref={canvasSearchButtonRef}
             type="button"
           >
             <HeroIcon name="magnifying-glass" />
@@ -9863,6 +9926,7 @@ function arePageHeaderPropsEqual(previous: PageHeaderProps, next: PageHeaderProp
     previous.openPages === next.openPages &&
     previous.selectedPageId === next.selectedPageId &&
     previous.textFormatState === next.textFormatState &&
+    previous.titleSearchHighlights === next.titleSearchHighlights &&
     previous.zoomLevel === next.zoomLevel
   );
 }

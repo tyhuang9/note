@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 test("rich standalone and shape search is presentation-only across navigation and close", async ({ page }) => {
   await installSearchWorkspace(page);
@@ -21,9 +21,9 @@ test("rich standalone and shape search is presentation-only across navigation an
   await page.getByRole("button", { name: "Find in canvas" }).click();
   const search = page.getByRole("textbox", { name: "Find in canvas" });
   await search.fill("needle");
-  await expect(page.locator(".canvas-search-match")).toHaveCount(8);
-  await expect(page.locator(".canvas-search-match.is-active-search-match")).toHaveCount(0);
-  await expect(page.locator(".search-panel-count")).toContainText("Title");
+  await expect(page.locator('[data-canvas-element-id] .canvas-search-match')).toHaveCount(8);
+  await expect(page.locator(".page-title-search-match.is-active-search-match")).toHaveCount(1);
+  await expect(page.locator(".search-status-announcement")).toHaveText("Result 1 of 5, Page title");
   await expect(page.locator(".ProseMirror")).toHaveCount(0);
   await assertRichTreesRemainFormatted(page);
   expect(await formattingSnapshot(page)).toEqual(baseline.formatting);
@@ -31,6 +31,8 @@ test("rich standalone and shape search is presentation-only across navigation an
 
   await page.getByRole("button", { name: "Next match" }).click();
   await expect(page.locator('[data-canvas-element-id="text-rich"] .canvas-search-match.is-active-search-match')).toHaveCount(2);
+  await expect(page.locator(".page-title-search-match:not(.is-active-search-match)")).toHaveCount(1);
+  await expect(page.locator(".search-status-announcement")).toHaveText("Result 2 of 5, Text");
   await page.getByRole("button", { name: "Next match" }).click();
   await expect(page.locator('[data-canvas-element-id="shape-rectangle"] .canvas-search-match.is-active-search-match')).toHaveCount(2);
   await expect(page.getByRole("tabpanel")).toHaveAttribute("data-search-navigation-active", "true");
@@ -52,7 +54,8 @@ test("rich standalone and shape search is presentation-only across navigation an
   await page.getByRole("button", { name: "Next match" }).click();
   await expect(page.locator('[data-canvas-element-id="shape-diamond"] .canvas-search-match.is-active-search-match')).toHaveCount(2);
   await page.getByRole("button", { name: "Next match" }).click();
-  await expect(page.locator(".canvas-search-match.is-active-search-match")).toHaveCount(0);
+  await expect(page.locator(".page-title-search-match.is-active-search-match")).toHaveCount(1);
+  await expect(page.locator(".search-status-announcement")).toHaveText("Result 1 of 5, Page title");
   await expect(page.locator(".canvas-content")).toHaveAttribute("style", baselineTransform ?? "");
   await page.getByRole("button", { name: "Previous match" }).click();
   await expect(page.locator('[data-canvas-element-id="shape-diamond"] .canvas-search-match.is-active-search-match')).toHaveCount(2);
@@ -84,18 +87,38 @@ test("find entry paths cannot steal an editor or slash-command draft", async ({ 
   await resetPersistenceCounts(page);
 
   const text = page.locator('[data-canvas-element-id="editor-guard"]');
-  await page.getByRole("button", { name: "Find in canvas" }).click();
-  await page.getByRole("textbox", { name: "Find in canvas" }).fill("needle");
+  const shape = page.locator('[data-canvas-element-id="shape-rectangle"]');
+  const findButton = page.getByRole("button", { name: "Find in canvas" });
+  await findButton.click();
+  const searchInput = page.getByRole("textbox", { name: "Find in canvas" });
+  await searchInput.fill("needle");
+  const inertWorkspaceJson = await workspaceJson(page);
+  const inertTextGeometry = await text.boundingBox();
+  const inertShapeGeometry = await shape.boundingBox();
+
+  // The whole canvas is inert while Find is open, including nested editor entry handlers.
+  await text.dblclick();
+  await expect(text.locator(".text-block-editor-content")).toHaveCount(0);
+  await shape.focus();
+  await shape.press("F2");
+  await expect(shape.locator(".shape-contained-text-editor-content")).toHaveCount(0);
+  await expect(page.locator(".search-panel")).toBeVisible();
+  expect(await workspaceJson(page)).toBe(inertWorkspaceJson);
+  expect(await text.boundingBox()).toEqual(inertTextGeometry);
+  expect(await shape.boundingBox()).toEqual(inertShapeGeometry);
+  expect(await persistenceCounts(page)).toEqual({ apply: 0, session: 0 });
+  await searchInput.focus();
+  await searchInput.press("Escape");
+  await expect(findButton).toBeFocused();
+
   await text.dblclick();
   const editor = text.locator(".text-block-editor-content");
   await expect(editor).toBeFocused();
-  await expect(page.locator(".search-panel")).toHaveCount(0);
   await page.keyboard.type("/");
   await expect(page.locator(".slash-command-menu")).toBeVisible();
   const draftBefore = await editor.innerText();
   const geometryBefore = await text.boundingBox();
 
-  const findButton = page.getByRole("button", { name: "Find in canvas" });
   await expect(findButton).toBeDisabled();
   await page.keyboard.press("Control+f");
   await expect(editor).toBeFocused();
@@ -114,14 +137,10 @@ test("find entry paths cannot steal an editor or slash-command draft", async ({ 
   await page.reload();
   await page.waitForTimeout(700);
   await resetPersistenceCounts(page);
-  const shape = page.locator('[data-canvas-element-id="shape-rectangle"]');
-  await page.getByRole("button", { name: "Find in canvas" }).click();
-  await page.getByRole("textbox", { name: "Find in canvas" }).fill("needle");
   await shape.focus();
   await shape.press("F2");
   const shapeEditor = shape.locator(".shape-contained-text-editor-content");
   await expect(shapeEditor).toBeFocused();
-  await expect(page.locator(".search-panel")).toHaveCount(0);
   await shapeEditor.fill("Dirty shape draft");
   const shapeDraft = await shapeEditor.innerText();
   const shapeGeometry = await shape.boundingBox();
@@ -139,12 +158,13 @@ test("find entry paths cannot steal an editor or slash-command draft", async ({ 
   expect(await workspaceJson(page)).toBe(shapeJson);
   expect(await persistenceCounts(page)).toEqual({ apply: 0, session: 0 });
 
-  await page.getByRole("button", { name: "Find in canvas" }).click();
+  await findButton.click();
   await page.getByRole("textbox", { name: "Find in canvas" }).fill("needle");
   await page.getByRole("tab", { name: "Needle Search invariants" }).dblclick();
   const titleInput = page.getByRole("textbox", { name: "Page title" });
   await expect(titleInput).toBeFocused();
   await expect(page.locator(".search-panel")).toHaveCount(0);
+  await expect(findButton).not.toBeFocused();
   await titleInput.fill("Dirty page title draft");
   const titleWorkspaceJson = await workspaceJson(page);
   await expect(findButton).toBeDisabled();
@@ -156,8 +176,6 @@ test("find entry paths cannot steal an editor or slash-command draft", async ({ 
   expect(await persistenceCounts(page)).toEqual({ apply: 0, session: 0 });
   await titleInput.press("Escape");
 
-  await page.getByRole("button", { name: "Find in canvas" }).click();
-  await page.getByRole("textbox", { name: "Find in canvas" }).fill("needle");
   const connector = page.getByRole("button", { name: "Select and move arrow connector" });
   await connector.focus();
   await connector.press("Enter");
@@ -166,9 +184,9 @@ test("find entry paths cannot steal an editor or slash-command draft", async ({ 
   await startHandle.press("Space");
   const chooser = page.getByRole("dialog", { name: "Choose start endpoint target" });
   await expect(chooser).toBeVisible();
-  await expect(page.locator(".search-panel")).toHaveCount(0);
   const chooserWorkspaceJson = await workspaceJson(page);
   await expect(findButton).toBeDisabled();
+  await findButton.click({ force: true });
   await page.keyboard.press("Control+f");
   await expect(chooser).toBeVisible();
   await expect(page.locator(".search-panel")).toHaveCount(0);
@@ -185,10 +203,96 @@ test("dense one-character query is visibly capped without writes", async ({ page
   await page.getByRole("button", { name: "Find in canvas" }).click();
   await page.getByRole("textbox", { name: "Find in canvas" }).fill("a");
   await expect(page.locator(".search-panel-count")).toContainText(/1 \/ 500\+/);
+  await expect(page.locator(".search-status-announcement")).toHaveText("Result 1 of 500 or more, Page title");
   await expect(page.locator(".ProseMirror")).toHaveCount(0);
   const renderedMatches = await page.locator(".canvas-search-match, .canvas-search-image-match").count();
   expect(renderedMatches).toBeLessThanOrEqual(500);
   expect(await persistenceCounts(page)).toEqual({ apply: 0, session: 0 });
+});
+
+test("search exposes keyboard focus, live status, contrast, and deterministic focus return", async ({ page }) => {
+  await installSearchWorkspace(page);
+  await page.setViewportSize({ width: 320, height: 640 });
+  await page.goto("/");
+  await expect(page.locator('[data-canvas-element-id="text-rich"]')).toBeVisible();
+
+  const findButton = page.getByRole("button", { name: "Find in canvas" });
+  await findButton.click();
+  const panel = page.locator(".search-panel");
+  const search = page.getByRole("textbox", { name: "Find in canvas" });
+  const status = page.locator("#canvas-search-status");
+  await expect(search).toBeFocused();
+  await expect(search).toHaveAttribute("aria-describedby", "canvas-search-status");
+  await expect(status).toHaveAttribute("aria-atomic", "true");
+  await expect(status).toHaveAttribute("aria-live", "polite");
+  await expect(page.getByText("Canvas interactions paused while Find is open.")).toBeVisible();
+  const focusStyle = await search.evaluate((element) => {
+    const inputStyle = getComputedStyle(element);
+    const queryStyle = getComputedStyle(element.closest(".search-panel-query")!);
+    return {
+      outlineStyle: inputStyle.outlineStyle,
+      outlineWidth: Number.parseFloat(inputStyle.outlineWidth),
+      queryBoxShadow: queryStyle.boxShadow,
+    };
+  });
+  expect(focusStyle.outlineStyle).not.toBe("none");
+  expect(focusStyle.outlineWidth).toBeGreaterThanOrEqual(2);
+  expect(focusStyle.queryBoxShadow).not.toBe("none");
+  const inputBounds = await search.boundingBox();
+  expect(inputBounds?.height ?? 0).toBeGreaterThanOrEqual(44);
+  for (const button of await panel.getByRole("button").all()) {
+    const bounds = await button.boundingBox();
+    expect(bounds?.width ?? 0).toBeGreaterThanOrEqual(44);
+    expect(bounds?.height ?? 0).toBeGreaterThanOrEqual(44);
+  }
+  const panelBounds = await panel.boundingBox();
+  const canvasBounds = await page.getByRole("tabpanel").boundingBox();
+  if (!panelBounds || !canvasBounds) throw new Error("Compact search bounds were unavailable");
+  expect(panelBounds.x).toBeGreaterThanOrEqual(canvasBounds.x);
+  expect(panelBounds.x + panelBounds.width).toBeLessThanOrEqual(canvasBounds.x + canvasBounds.width);
+
+  await search.fill("needle");
+  await expect(status.locator(".search-status-announcement")).toHaveText("Result 1 of 5, Page title");
+  const source = status.locator("small");
+  await expect(source).toBeVisible();
+  expect(await contrastRatio(source, panel)).toBeGreaterThanOrEqual(4.5);
+  const activeTitle = page.locator(".page-title-search-match.is-active-search-match");
+  await expect(activeTitle).toHaveCount(1);
+  expect(await contrastRatio(activeTitle, activeTitle)).toBeGreaterThanOrEqual(4.5);
+  await search.press("Tab");
+  const previous = page.getByRole("button", { name: "Previous match" });
+  await expect(previous).toBeFocused();
+  await page.keyboard.press("Tab");
+  const next = page.getByRole("button", { name: "Next match" });
+  await expect(next).toBeFocused();
+  await next.press("Enter");
+  await expect(status.locator(".search-status-announcement")).toHaveText("Result 2 of 5, Text");
+  const inactiveTitle = page.locator(".page-title-search-match:not(.is-active-search-match)");
+  await expect(inactiveTitle).toHaveCount(1);
+  expect(await contrastRatio(inactiveTitle, inactiveTitle)).toBeGreaterThanOrEqual(4.5);
+  await search.fill("not-present-anywhere");
+  await expect(status.locator(".search-status-announcement")).toHaveText("No results.");
+  await page.getByRole("button", { name: "Close search", exact: true }).click();
+  await expect(findButton).toBeFocused();
+
+  await page.getByRole("button", { name: "Dark mode" }).click();
+  await findButton.click();
+  await search.fill("needle");
+  await expect(status.locator(".search-status-announcement")).toHaveText("Result 1 of 5, Page title");
+  expect(await contrastRatio(status.locator("small"), panel)).toBeGreaterThanOrEqual(4.5);
+  expect(await contrastRatio(page.locator(".page-title-search-match.is-active-search-match"), page.locator(".page-title-search-match.is-active-search-match"))).toBeGreaterThanOrEqual(4.5);
+  await page.getByRole("button", { name: "Next match" }).click();
+  expect(await contrastRatio(page.locator(".page-title-search-match:not(.is-active-search-match)"), page.locator(".page-title-search-match:not(.is-active-search-match)"))).toBeGreaterThanOrEqual(4.5);
+  await search.click();
+  await search.press("Escape");
+  await expect(findButton).toBeFocused();
+
+  const selectTool = page.getByRole("button", { name: "Select (V / 1)" });
+  await selectTool.focus();
+  await page.keyboard.press("Control+f");
+  await expect(search).toBeFocused();
+  await search.press("Escape");
+  await expect(selectTool).toBeFocused();
 });
 
 for (const tool of [
@@ -199,6 +303,7 @@ for (const tool of [
   { label: "Line (L / 6)", name: "line" },
   { label: "Arrow (A / 5)", name: "arrow" },
   { label: "Hand (Space)", name: "hand" },
+  { label: "Select (V / 1)", name: "select" },
 ] as const) {
   test(`search controls never author with the ${tool.name} tool`, async ({ page }) => {
     await installSearchWorkspace(page);
@@ -223,6 +328,16 @@ for (const tool of [
     const baselineTransform = await page.locator(".canvas-content").getAttribute("style");
 
     await page.getByRole("button", { name: "Find in canvas" }).click();
+    const canvas = page.getByRole("tabpanel");
+    await expect(canvas).toHaveAttribute("data-search-navigation-active", "true");
+    const canvasBounds = await canvas.boundingBox();
+    if (!canvasBounds) throw new Error("Canvas bounds were unavailable");
+    await page.mouse.click(canvasBounds.x + 24, canvasBounds.y + 80);
+    await canvas.focus();
+    await canvas.press("Enter");
+    await canvas.press("ArrowRight");
+    expect(await workspaceJson(page)).toBe(baselineJson);
+    expect(await persistenceCounts(page)).toEqual({ apply: 0, session: 0 });
     const search = page.getByRole("textbox", { name: "Find in canvas" });
     await search.click();
     await search.pressSequentially("needle");
@@ -230,7 +345,8 @@ for (const tool of [
     await page.getByRole("button", { name: "Next match" }).click();
     await expect(page.locator('[data-canvas-element-id="text-rich"] .canvas-search-match.is-active-search-match')).toHaveCount(2);
     await page.getByRole("button", { name: "Previous match" }).click();
-    await expect(page.locator(".canvas-search-match.is-active-search-match")).toHaveCount(0);
+    await expect(page.locator('[data-canvas-element-id] .canvas-search-match.is-active-search-match')).toHaveCount(0);
+    await expect(page.locator(".page-title-search-match.is-active-search-match")).toHaveCount(1);
     await expect(page.locator(".canvas-content")).toHaveAttribute("style", baselineTransform ?? "");
     await page.getByRole("button", { name: "Close search", exact: true }).click();
 
@@ -306,6 +422,27 @@ async function resetPersistenceCounts(page: Page) {
       __searchPersistenceCounts: { apply: number; session: number };
     }).__searchPersistenceCounts = { apply: 0, session: 0 };
   });
+}
+
+async function contrastRatio(foreground: Locator, background: Locator) {
+  const [foregroundColor, backgroundColor] = await Promise.all([
+    foreground.evaluate((element) => getComputedStyle(element).color),
+    background.evaluate((element) => getComputedStyle(element).backgroundColor),
+  ]);
+  const parseRgb = (value: string) => {
+    const channels = value.match(/[\d.]+/g)?.slice(0, 3).map(Number);
+    if (!channels || channels.length !== 3) throw new Error(`Could not parse color: ${value}`);
+    return channels.map((channel) => {
+      const normalized = channel / 255;
+      return normalized <= 0.04045
+        ? normalized / 12.92
+        : ((normalized + 0.055) / 1.055) ** 2.4;
+    });
+  };
+  const luminance = (channels: number[]) => 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+  const first = luminance(parseRgb(foregroundColor));
+  const second = luminance(parseRgb(backgroundColor));
+  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
 }
 
 async function installSearchWorkspace(page: Page) {

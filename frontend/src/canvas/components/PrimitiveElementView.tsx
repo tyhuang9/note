@@ -1,9 +1,9 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, type KeyboardEvent, type RefCallback } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, type CSSProperties, type KeyboardEvent, type RefCallback } from "react";
 import type { Editor } from "@tiptap/core";
 import { EditorContent, useEditor } from "@tiptap/react";
 import { RoughSVG } from "roughjs/bin/svg";
 import type { Options } from "roughjs/bin/core";
-import type { CanvasElement, ConnectorElement, ElementId, RichTextValue, RoughStyle, ShapeElement } from "../model/elements";
+import type { CanvasColor, CanvasElement, ConnectorElement, ElementId, RichTextValue, RoughStyle, ShapeElement } from "../model/elements";
 import type { SearchMatch } from "../../appTypes";
 import { resolveConnectorPoints } from "../model/connectorBinding";
 import { roundedDiamondPath, roundedRectanglePath } from "../model/shapeBoundary";
@@ -42,6 +42,10 @@ type ShapeElementViewProps = PrimitiveElementViewProps<ShapeElement> & {
 
 export type ShapeTextEditOutcome = "canceled" | "committed" | "unchanged";
 export type ShapeTextEditSession = Readonly<{ cancel: () => void; commit: () => void }>;
+
+export function shouldRenderShapeTextSurface(element: ShapeElement, isEditing: boolean) {
+  return element.style.fillColor != null && (isEditing || element.text !== undefined);
+}
 
 function createPrimitiveRootRef(elementId: string, onElementChange?: PrimitiveElementViewProps<ShapeElement>["onElementChange"]): RefCallback<HTMLDivElement> {
   return (element) => onElementChange?.(elementId, element);
@@ -170,7 +174,7 @@ export function ShapeElementView({ activeSearchRange, element, isDragSourceHidde
       aria-label={isEditing ? shapeEditingAccessibleName(element) : accessibleName}
       aria-keyshortcuts={isEditing ? "Escape Control+Enter" : "F2"}
       aria-pressed={isEditing ? undefined : isSelected}
-      className={`primitive-element shape-element ${isEditing ? "is-editing" : ""} ${isDragSourceHidden ? "is-drag-source-hidden" : ""}`}
+      className={`primitive-element shape-element ${isEditing ? "is-editing" : ""} ${shouldRenderShapeTextSurface(element, isEditing) ? "has-contained-text-surface" : ""} ${isDragSourceHidden ? "is-drag-source-hidden" : ""}`}
       data-canvas-element-id={element.id}
       data-canvas-element-type="shape"
       onKeyDown={(event) => {
@@ -244,7 +248,43 @@ function shapeEditingAccessibleName(element: ShapeElement) {
   return `Editing text inside ${element.shape} shape. Escape cancels. Control+Enter saves.`;
 }
 
-function shapeTextInsetStyle(element: ShapeElement) {
+type ShapeTextInsetCss = CSSProperties & {
+  "--shape-text-surface-color": string;
+  "--shape-text-surface-fill": string;
+  "--shape-text-surface-radius": string;
+};
+
+export function shapeTextSurfaceColors(fillColor: CanvasColor | null | undefined) {
+  if (fillColor?.kind !== "fixed") {
+    return {
+      color: "var(--canvas-tool-text)",
+      fill: "var(--canvas-shape-text-surface)",
+    };
+  }
+  const shorthand = /^#([\da-f])([\da-f])([\da-f])$/i.exec(fillColor.value);
+  const full = /^#([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i.exec(fillColor.value);
+  const channels = shorthand
+    ? shorthand.slice(1).map((channel) => Number.parseInt(`${channel}${channel}`, 16))
+    : full?.slice(1).map((channel) => Number.parseInt(channel, 16));
+  if (!channels) {
+    return {
+      color: "var(--canvas-tool-text)",
+      fill: "var(--canvas-shape-text-surface)",
+    };
+  }
+  const luminance = channels
+    .map((channel) => {
+      const normalized = channel / 255;
+      return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+    })
+    .reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index], 0);
+  return {
+    color: luminance > 0.179 ? "#000000" : "#ffffff",
+    fill: fillColor.value,
+  };
+}
+
+export function shapeTextInsetStyle(element: ShapeElement): ShapeTextInsetCss {
   const horizontal = element.shape === "rectangle"
     ? 12
     : element.shape === "ellipse"
@@ -255,8 +295,12 @@ function shapeTextInsetStyle(element: ShapeElement) {
     : element.shape === "ellipse"
       ? Math.max(8, element.height * 0.14645)
       : Math.max(8, element.height * 0.25);
+  const surfaceColors = shapeTextSurfaceColors(element.style.fillColor);
   return {
     inset: `${Math.min(vertical, Math.max(0, element.height / 2 - 2))}px ${Math.min(horizontal, Math.max(0, element.width / 2 - 2))}px`,
+    "--shape-text-surface-color": surfaceColors.color,
+    "--shape-text-surface-fill": surfaceColors.fill,
+    "--shape-text-surface-radius": element.shape === "ellipse" ? "999px" : element.shape === "diamond" ? "8px" : "6px",
   };
 }
 

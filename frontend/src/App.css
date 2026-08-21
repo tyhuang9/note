@@ -13,6 +13,7 @@
   --workbench-text-secondary: #9b9b9b;
   --workbench-text-muted: #737373;
   --canvas-tool-bg: rgba(255, 255, 255, 0.96);
+  --canvas-shape-text-surface: #ffffff;
   --canvas-tool-border: rgba(32, 41, 54, 0.18);
   --canvas-tool-text: #202936;
   --canvas-selection: #7c3aed;
@@ -2513,6 +2514,30 @@ h2 {
   min-width: 0;
 }
 
+.shape-element.has-contained-text-surface .shape-contained-text-content,
+.shape-element.has-contained-text-surface .shape-contained-text-editor-surface {
+  border-radius: var(--shape-text-surface-radius, 6px);
+  background: var(--shape-text-surface-fill, var(--canvas-shape-text-surface));
+  box-shadow: 0 0 5px 3px var(--shape-text-surface-fill, var(--canvas-shape-text-surface));
+}
+
+.shape-element.has-contained-text-surface .shape-contained-text {
+  color: var(--shape-text-surface-color, var(--canvas-tool-text));
+}
+
+.shape-element.has-contained-text-surface .shape-contained-text h1,
+.shape-element.has-contained-text-surface .shape-contained-text h2,
+.shape-element.has-contained-text-surface .shape-contained-text h3,
+.shape-element.has-contained-text-surface .shape-contained-text h4,
+.shape-element.has-contained-text-surface .shape-contained-text h5,
+.shape-element.has-contained-text-surface .shape-contained-text h6 {
+  color: var(--shape-text-surface-color, var(--canvas-tool-text));
+}
+
+.app-shell.is-dark .shape-element.has-contained-text-surface .canvas-search-match {
+  color: var(--canvas-tool-text);
+}
+
 .shape-contained-text-editor {
   align-items: stretch;
   justify-content: stretch;
@@ -3730,6 +3755,7 @@ h2 {
 
 .app-shell.is-dark {
   --canvas-tool-bg: rgba(30, 30, 30, 0.96);
+  --canvas-shape-text-surface: var(--workbench-panel);
   --canvas-tool-border: rgba(255, 255, 255, 0.2);
   --canvas-tool-text: #f5f5f5;
   --canvas-selection: #a78bfa;

@@ -4,10 +4,13 @@ import {
   roughOptions,
   roundedDiamondPath,
   roundedRectanglePath,
+  shapeTextInsetStyle,
+  shapeTextSurfaceColors,
   shapeRenderPadding,
+  shouldRenderShapeTextSurface,
 } from "../../src/canvas/components/PrimitiveElementView";
 import { elementIdsBackToFront } from "../../src/canvas/interaction/useCanvasInteraction";
-import type { CanvasElement, RoughStyle, TextElement } from "../../src/canvas/model/elements";
+import type { CanvasElement, RoughStyle, ShapeElement, TextElement } from "../../src/canvas/model/elements";
 import { canvasColorToCss } from "../../src/canvas/rendering/canvasColor";
 
 const style: RoughStyle = {
@@ -81,6 +84,52 @@ describe("primitive rendering", () => {
   it("adds render-only padding for rough outlines without changing model geometry", () => {
     expect(shapeRenderPadding({ ...style, roughness: 0, strokeWidth: 1 })).toBe(8);
     expect(shapeRenderPadding({ ...style, roughness: 8, strokeWidth: 4 })).toBe(20);
+  });
+
+  it("layers a shape-aware quiet surface over labeled rough fills without changing unlabeled hachure options", () => {
+    const filledStyle: RoughStyle = {
+      ...style,
+      fillColor: { kind: "fixed", value: "#e8e2ff" },
+      strokeStyle: "solid",
+    };
+    const unlabeled: ShapeElement = {
+      createdAt: 1,
+      height: 180,
+      id: "rough-shape",
+      locked: false,
+      opacity: 1,
+      pageId: "page-1",
+      rotation: 12,
+      shape: "diamond",
+      style: filledStyle,
+      type: "shape",
+      updatedAt: 1,
+      width: 300,
+      x: 0,
+      y: 0,
+      zIndex: 1,
+    };
+    const labeled: ShapeElement = { ...unlabeled, text: { content: "Readable label" } };
+
+    expect(roughOptions(unlabeled.style)).toMatchObject({ fill: "#e8e2ff", seed: 314159 });
+    expect(roughOptions(labeled.style)).toEqual(roughOptions(unlabeled.style));
+    expect(shouldRenderShapeTextSurface(unlabeled, false)).toBe(false);
+    expect(shouldRenderShapeTextSurface(labeled, false)).toBe(true);
+    expect(shouldRenderShapeTextSurface(unlabeled, true)).toBe(true);
+    expect(shouldRenderShapeTextSurface({ ...labeled, style: { ...filledStyle, fillColor: undefined } }, false)).toBe(false);
+    expect(shapeTextInsetStyle(labeled)).toEqual({
+      inset: "45px 75px",
+      "--shape-text-surface-color": "#000000",
+      "--shape-text-surface-fill": "#e8e2ff",
+      "--shape-text-surface-radius": "8px",
+    });
+    expect(shapeTextInsetStyle({ ...labeled, shape: "ellipse" })["--shape-text-surface-radius"]).toBe("999px");
+    expect(shapeTextInsetStyle({ ...labeled, shape: "rectangle" })["--shape-text-surface-radius"]).toBe("6px");
+    expect(shapeTextSurfaceColors({ kind: "fixed", value: "#123" })).toEqual({ color: "#ffffff", fill: "#123" });
+    expect(shapeTextSurfaceColors({ kind: "fixed", value: "invalid" })).toEqual({
+      color: "var(--canvas-tool-text)",
+      fill: "var(--canvas-shape-text-surface)",
+    });
   });
 
   it("builds a finite arrowhead and skips a zero-length connector", () => {

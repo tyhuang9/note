@@ -1,11 +1,22 @@
-import { useLayoutEffect, useRef, type KeyboardEvent, type RefCallback } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, type KeyboardEvent, type RefCallback } from "react";
+import type { Editor } from "@tiptap/core";
+import { EditorContent, useEditor } from "@tiptap/react";
 import { RoughSVG } from "roughjs/bin/svg";
 import type { Options } from "roughjs/bin/core";
-import type { CanvasElement, ConnectorElement, ElementId, RoughStyle, ShapeElement } from "../model/elements";
+import type { CanvasElement, ConnectorElement, ElementId, RichTextValue, RoughStyle, ShapeElement } from "../model/elements";
 import { resolveConnectorPoints } from "../model/connectorBinding";
 import { roundedDiamondPath, roundedRectanglePath } from "../model/shapeBoundary";
 export { roundedDiamondPath, roundedRectanglePath } from "../model/shapeBoundary";
 import { canvasColorToCss } from "../rendering/canvasColor";
+import { createSlashCommandExtension } from "../../editor/SlashCommandExtension";
+import {
+  getCanonicalShapeRichTextDocument,
+  hasTipTapRenderableContent,
+  renderShapeRichTextContent,
+  richTextToPlainText,
+  shapeRichTextExtensions,
+  validateRichTextDocument,
+} from "../../editor/richText";
 
 type PrimitiveElementViewProps<T extends ShapeElement | ConnectorElement> = {
   element: T;
@@ -14,6 +25,14 @@ type PrimitiveElementViewProps<T extends ShapeElement | ConnectorElement> = {
   onElementChange?: (elementId: string, element: HTMLDivElement | null) => void;
   onKeyboardMove: (elementId: string, delta: Readonly<{ x: number; y: number }>) => void;
   onSelect: (elementId: string, additive?: boolean) => void;
+};
+
+type ShapeElementViewProps = PrimitiveElementViewProps<ShapeElement> & {
+  isEditing: boolean;
+  onActiveEditorChange: (editor: Editor | null) => void;
+  onEdit: (elementId: string) => void;
+  onEditEnd: (elementId: string) => void;
+  onTextCommit: (elementId: string, text: RichTextValue | undefined) => void;
 };
 
 function createPrimitiveRootRef(elementId: string, onElementChange?: PrimitiveElementViewProps<ShapeElement>["onElementChange"]): RefCallback<HTMLDivElement> {
@@ -124,7 +143,7 @@ function primitiveKeyDown(
   onKeyboardMove(element.id, delta);
 }
 
-export function ShapeElementView({ element, isDragSourceHidden = false, isSelected, onElementChange, onKeyboardMove, onSelect }: PrimitiveElementViewProps<ShapeElement>) {
+export function ShapeElementView({ element, isDragSourceHidden = false, isEditing, isSelected, onActiveEditorChange, onEdit, onEditEnd, onElementChange, onKeyboardMove, onSelect, onTextCommit }: ShapeElementViewProps) {
   const ref = useRef<SVGSVGElement | null>(null);
   const rootRef = createPrimitiveRootRef(element.id, onElementChange);
   const renderPadding = shapeRenderPadding(element.style);
@@ -136,16 +155,25 @@ export function ShapeElementView({ element, isDragSourceHidden = false, isSelect
   }, [element, renderPadding]);
   return (
     <div
-      aria-label={`${element.locked ? "Select locked" : "Select and move"} ${element.shape} element`}
-      aria-pressed={isSelected}
-      className={`primitive-element ${isDragSourceHidden ? "is-drag-source-hidden" : ""}`}
+      aria-label={shapeAccessibleName(element)}
+      aria-keyshortcuts="F2"
+      aria-pressed={isEditing ? undefined : isSelected}
+      className={`primitive-element shape-element ${isEditing ? "is-editing" : ""} ${isDragSourceHidden ? "is-drag-source-hidden" : ""}`}
       data-canvas-element-id={element.id}
       data-canvas-element-type="shape"
-      onKeyDown={(event) => primitiveKeyDown(event, element, onKeyboardMove, onSelect)}
+      onKeyDown={(event) => {
+        if (event.key === "F2") {
+          event.preventDefault();
+          event.stopPropagation();
+          onEdit(element.id);
+          return;
+        }
+        primitiveKeyDown(event, element, onKeyboardMove, onSelect);
+      }}
       ref={rootRef}
-      role="button"
+      role={isEditing ? "group" : "button"}
       style={{ height: element.height, left: element.x, opacity: element.opacity, position: "absolute", top: element.y, transform: `rotate(${element.rotation}deg)`, width: element.width, zIndex: element.zIndex }}
-      tabIndex={0}
+      tabIndex={isEditing ? -1 : 0}
     >
       <svg
         aria-label={`${element.shape} shape`}
@@ -156,6 +184,147 @@ export function ShapeElementView({ element, isDragSourceHidden = false, isSelect
         ref={ref}
         style={{ left: -renderPadding, position: "absolute", top: -renderPadding, width: `calc(100% + ${renderPadding * 2}px)` }}
       />
+      {isEditing ? (
+        <ShapeContainedTextEditor
+          element={element}
+          onActiveEditorChange={onActiveEditorChange}
+          onCancel={() => onEditEnd(element.id)}
+          onCommit={(text) => {
+            onTextCommit(element.id, text);
+            onEditEnd(element.id);
+          }}
+        />
+      ) : element.text ? (
+        <div
+          aria-hidden="true"
+          className="shape-contained-text shape-contained-text-display text-block-rich-content"
+          style={shapeTextInsetStyle(element)}
+        >
+          {renderShapeRichTextContent(element.text, `${element.id}-shape-text`)}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function shapeAccessibleName(element: ShapeElement) {
+  const action = element.locked ? "Select locked" : "Select and move";
+  const label = element.text
+    ? element.text.content.trim()
+      || (element.text.richContent ? richTextToPlainText(element.text.richContent).trim() : "")
+    : "";
+  return `${action} ${element.shape} element${label ? `: ${label}` : ""}; press F2 to edit contained text`;
+}
+
+function shapeTextInsetStyle(element: ShapeElement) {
+  const horizontal = element.shape === "rectangle"
+    ? 12
+    : element.shape === "ellipse"
+      ? Math.max(8, element.width * 0.14645)
+      : Math.max(8, element.width * 0.25);
+  const vertical = element.shape === "rectangle"
+    ? 12
+    : element.shape === "ellipse"
+      ? Math.max(8, element.height * 0.14645)
+      : Math.max(8, element.height * 0.25);
+  return {
+    inset: `${Math.min(vertical, Math.max(0, element.height / 2 - 2))}px ${Math.min(horizontal, Math.max(0, element.width / 2 - 2))}px`,
+  };
+}
+
+type ShapeContainedTextEditorProps = {
+  element: ShapeElement;
+  onActiveEditorChange: (editor: Editor | null) => void;
+  onCancel: () => void;
+  onCommit: (text: RichTextValue | undefined) => void;
+};
+
+function ShapeContainedTextEditor({ element, onActiveEditorChange, onCancel, onCommit }: ShapeContainedTextEditorProps) {
+  const initialText = useMemo(() => element.text ?? { content: "" }, [element.id]);
+  const baselineDocument = useRef(getCanonicalShapeRichTextDocument(initialText));
+  const finalized = useRef(false);
+  const extensions = useMemo(
+    () => [...shapeRichTextExtensions, createSlashCommandExtension(element.id)],
+    [element.id],
+  );
+
+  function finish(editor: Editor, cancel: boolean) {
+    if (finalized.current) return;
+    finalized.current = true;
+    onActiveEditorChange(null);
+    if (cancel) {
+      onCancel();
+      return;
+    }
+    const richContent = editor.getJSON();
+    const content = editor.getText({ blockSeparator: "\n" });
+    const isEmpty = !content.trim() && !hasTipTapRenderableContent(richContent);
+    const didChange = content !== initialText.content
+      || JSON.stringify(richContent) !== JSON.stringify(baselineDocument.current);
+    if (!didChange) {
+      onCommit(element.text);
+      return;
+    }
+    if (isEmpty) {
+      onCommit(undefined);
+      return;
+    }
+    if (validateRichTextDocument(richContent) !== null) {
+      onCancel();
+      return;
+    }
+    onCommit({ content, richContent });
+  }
+
+  const editor = useEditor({
+    extensions,
+    content: baselineDocument.current,
+    editorProps: {
+      attributes: {
+        "aria-label": `Edit text inside ${element.shape}`,
+        "aria-multiline": "true",
+        class: "shape-contained-text-editor-content text-block-rich-content",
+        role: "textbox",
+      },
+      handleKeyDown: (_view, event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          if (editor) finish(editor, true);
+          return true;
+        }
+        if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+          event.preventDefault();
+          event.stopPropagation();
+          if (editor) finish(editor, false);
+          return true;
+        }
+        return false;
+      },
+    },
+    onBlur: ({ editor: blurredEditor, event }) => {
+      const target = event.relatedTarget;
+      if (
+        document.body.dataset.noteToolbarInteraction === "true"
+        || target instanceof HTMLElement && target.closest(".global-text-toolbar")
+      ) {
+        onActiveEditorChange(blurredEditor);
+        return;
+      }
+      finish(blurredEditor, false);
+    },
+    onCreate: ({ editor: createdEditor }) => {
+      onActiveEditorChange(createdEditor);
+      queueMicrotask(() => createdEditor.commands.focus("end"));
+    },
+    onDestroy: () => onActiveEditorChange(null),
+  });
+
+  useEffect(() => () => onActiveEditorChange(null), [onActiveEditorChange]);
+
+  return (
+    <div className="shape-contained-text shape-contained-text-editor" style={shapeTextInsetStyle(element)}>
+      <EditorContent editor={editor} />
     </div>
   );
 }

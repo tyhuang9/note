@@ -139,6 +139,7 @@ import {
   type BoxCanvasElement,
   type CanvasElement,
   type InkElement,
+  type RichTextValue,
   type RoughStyle,
   type ConnectorElement,
   type ConnectorEndpoint,
@@ -5672,6 +5673,18 @@ function App() {
     });
   }, []);
 
+  const updateShapeText = useCallback((elementId: string, text: RichTextValue | undefined) => {
+    setBlocksWithHistory((elements) => elements.map((element) => {
+      if (element.id !== elementId || element.type !== "shape") return element;
+      if (JSON.stringify(element.text) === JSON.stringify(text)) return element;
+      if (!text) {
+        const { text: _text, ...shapeWithoutText } = element;
+        return { ...shapeWithoutText, updatedAt: Date.now() };
+      }
+      return { ...element, text: cloneRichTextValue(text), updatedAt: Date.now() };
+    }));
+  }, []);
+
   const updateImageElement = useCallback((elementId: string, updates: ImageElementUpdates) => {
     setData((currentData) => {
       let didChange = false;
@@ -6904,6 +6917,17 @@ function App() {
   }
 
   function moveSelectionByKeyboard(event: ReactKeyboardEvent<HTMLButtonElement>) {
+    if (event.key === "F2" && selectedBlockIdsRef.current.length === 1) {
+      const selected = dataRef.current.elements.find(
+        (element) => element.id === selectedBlockIdsRef.current[0],
+      );
+      if (selected?.type === "text" || selected?.type === "shape") {
+        event.preventDefault();
+        event.stopPropagation();
+        editBlock(selected.id);
+      }
+      return;
+    }
     const step = (event.shiftKey ? 10 : 1) / zoomLevelRef.current;
     const delta = event.key === "ArrowLeft"
       ? { x: -step, y: 0 }
@@ -7245,6 +7269,11 @@ function App() {
     setActiveMode((currentMode) =>
       currentMode === "editing" ? "selected" : currentMode,
     );
+    if (dataRef.current.elements.some((element) => element.id === blockId && element.type === "shape")) {
+      window.requestAnimationFrame(() => {
+        blockElementsRef.current.get(blockId)?.focus({ preventScroll: true });
+      });
+    }
   }, []);
 
   const handleFocusEndHandled = useCallback(() => {
@@ -8108,10 +8137,15 @@ function App() {
                 renderShape={(shape) => (
                   <ShapeElementView
                     element={shape}
+                    isEditing={shape.id === editingBlockId}
                     isSelected={selectedBlockIds.includes(shape.id)}
+                    onActiveEditorChange={setActiveTextEditor}
+                    onEdit={editBlock}
+                    onEditEnd={endBlockEdit}
                     onElementChange={registerBlockElement}
                     onKeyboardMove={moveCanvasElementByKeyboard}
                     onSelect={selectBlock}
+                    onTextCommit={updateShapeText}
                   />
                 )}
                 renderText={(block) => (
@@ -8307,7 +8341,7 @@ function App() {
                 moveLabel: selectionHasLockedElements ? "Move unlocked selected elements" : "Move selected elements",
                 onDoubleClick: () => {
                   const selected = visibleCanvasElements.find((block) => block.id === selectedBlockIds[0]);
-                  if (selectedBlockIds.length === 1 && selected && isTextElement(selected)) editBlock(selected.id);
+                  if (selectedBlockIds.length === 1 && selected && (isTextElement(selected) || selected.type === "shape")) editBlock(selected.id);
                 },
                 onMoveKeyDown: moveSelectionByKeyboard,
                 onPointerCancel: (event: ReactPointerEvent<HTMLButtonElement>) => finishSelectionFrameInteraction(event, true),

@@ -242,6 +242,48 @@ test("retargeting through a connector overlay binds, survives transforms and per
   expect(await counts(page)).toEqual({ apply: 0, session: 0 });
 });
 
+test("pointer retarget rejects the opposite endpoint target without data, persistence, or history mutation", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  await canvas.focus();
+  await page.keyboard.press("a");
+  await page.keyboard.press("Enter");
+  await selectTool(page, "select");
+  await page.waitForTimeout(650);
+  await resetCounts(page);
+
+  const target = await modelToScreen(page, seededRoundedRectangleBoundaryPoint(0.18));
+  const endHandle = page.getByRole("button", { name: "Move connector end endpoint" });
+  const endBounds = await requiredBounds(endHandle, "free end endpoint");
+  await page.mouse.move(endBounds.x + endBounds.width / 2, endBounds.y + endBounds.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(target.x, target.y, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(async () => (await newestConnector(page))?.end).toEqual({
+    gap: 0,
+    kind: "element",
+    targetElementId: "rounded-rectangle",
+  });
+  await page.waitForTimeout(650);
+  expect((await counts(page)).apply).toBe(1);
+
+  const beforeRejectedDrop = await newestConnector(page);
+  await resetCounts(page);
+  const startHandle = page.getByRole("button", { name: "Move connector start endpoint" });
+  const startBounds = await requiredBounds(startHandle, "free start endpoint");
+  await page.mouse.move(startBounds.x + startBounds.width / 2, startBounds.y + startBounds.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(target.x, target.y, { steps: 5 });
+  await expect(page.locator('[data-connector-target-id="rounded-rectangle"]')).toHaveCount(0);
+  await page.mouse.up();
+  await page.waitForTimeout(650);
+  expect(await newestConnector(page)).toEqual(beforeRejectedDrop);
+  expect(await counts(page)).toEqual({ apply: 0, session: 0 });
+
+  await canvas.focus();
+  await page.keyboard.press("Control+z");
+  await expect.poll(async () => (await newestConnector(page))?.end).toMatchObject({ kind: "free" });
+});
+
 async function selectTool(page: Page, tool: string) {
   await page.locator(`.canvas-tool-palette [data-tool="${tool}"]`).click();
 }

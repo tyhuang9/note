@@ -213,6 +213,7 @@ import {
   getConnectorEndpointDetachPoint,
   getConnectorAuthoringCandidate,
   isBindableElement,
+  isConnectorBindingPersistable,
   normalizeFreeConnectorEndpoint,
   resolveConnectorPoints,
   snapConnectorEndpoint,
@@ -7078,9 +7079,22 @@ function App() {
       y: (clientY - rect.top - panOffsetRef.current.y) / zoomLevelRef.current,
     };
     const targets = dataRef.current.elements.filter((element) => element.pageId === connector.pageId);
+    const opposite = connector[endpoint === "start" ? "end" : "start"];
+    const oppositeTargetId = opposite.kind === "element" ? opposite.targetElementId : null;
     const directTargetId = getDirectBindableTargetAtPoint(targets, point)?.id;
-    const candidate = connector.style.endArrowhead === "arrow"
+    const unfilteredCandidate = connector.style.endArrowhead === "arrow"
       ? getConnectorAuthoringCandidate(point, targets, zoomLevelRef.current, directTargetId)
+      : null;
+    if (oppositeTargetId && unfilteredCandidate?.target.id === oppositeTargetId) {
+      announceConnectorEndpointRetargetCandidate(null);
+      setConnectorEndpointRetargetVisual(null);
+      return null;
+    }
+    const eligibleTargets = oppositeTargetId
+      ? targets.filter((target) => target.id !== oppositeTargetId)
+      : targets;
+    const candidate = connector.style.endArrowhead === "arrow"
+      ? getConnectorAuthoringCandidate(point, eligibleTargets, zoomLevelRef.current, directTargetId)
       : null;
     announceConnectorEndpointRetargetCandidate(candidate);
     setConnectorEndpointRetargetVisual(candidate ? {
@@ -7088,7 +7102,7 @@ function App() {
       target: candidate.target,
     } : null);
     const nextEndpoint = candidate?.endpoint ?? snapConnectorEndpoint(
-      point, targets, zoomLevelRef.current, connector.style.endArrowhead === "arrow",
+      point, eligibleTargets, zoomLevelRef.current, connector.style.endArrowhead === "arrow",
     );
     return endpoint === "start"
       ? { ...connector, start: nextEndpoint }
@@ -7200,9 +7214,27 @@ function App() {
     if (session.connectorEndpoint && session.didMove) {
       const preview = getConnectorEndpointPreview(session.connectorEndpoint, event.clientX, event.clientY);
       if (preview) {
-        setBlocksWithHistory((currentBlocks) => currentBlocks.map((element) =>
-          element.id === preview.id ? { ...preview, updatedAt: Date.now() } : element,
-        ));
+        setBlocksWithHistory((currentBlocks) => {
+          const liveConnector = currentBlocks.find((element): element is ConnectorElement =>
+            element.id === preview.id && element.type === "connector",
+          );
+          if (!liveConnector || liveConnector.style.endArrowhead !== "arrow") return currentBlocks;
+          const proposedEndpoint = preview[session.connectorEndpoint!];
+          const oppositeEndpoint = liveConnector[session.connectorEndpoint === "start" ? "end" : "start"];
+          if (
+            proposedEndpoint.kind === "element"
+            && oppositeEndpoint.kind === "element"
+            && proposedEndpoint.targetElementId === oppositeEndpoint.targetElementId
+          ) return currentBlocks;
+          const candidate = session.connectorEndpoint === "start"
+            ? { ...liveConnector, start: proposedEndpoint }
+            : { ...liveConnector, end: proposedEndpoint };
+          const currentElementsById = indexCanvasElements(currentBlocks);
+          if (!isConnectorBindingPersistable(candidate, currentElementsById)) return currentBlocks;
+          return currentBlocks.map((element) => element.id === candidate.id
+            ? { ...candidate, updatedAt: Date.now() }
+            : element);
+        });
       }
     } else if (session.textResize) {
       const textResize = textResizeSessionRef.current;

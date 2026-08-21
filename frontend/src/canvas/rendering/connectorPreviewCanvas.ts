@@ -65,6 +65,38 @@ export class MatchingWorkerBitmapPair<T extends CloseableBitmap> {
   }
 }
 
+/** Tracks the newest valid request so a worker failure cannot revive an invalid or stale frame. */
+export class LatestWorkerFrameRecovery<T> {
+  private latest: Readonly<{ frameId: number; value: T }> | null = null;
+  private presentedFrameId = 0;
+
+  request(frameId: number, value: T) {
+    this.latest = { frameId, value };
+  }
+
+  drop(frameId: number) {
+    if (this.latest?.frameId === frameId) this.latest = null;
+  }
+
+  clear() {
+    this.latest = null;
+  }
+
+  presented(frameId: number) {
+    this.presentedFrameId = frameId;
+  }
+
+  takeUnpresented() {
+    if (!this.latest || this.latest.frameId === this.presentedFrameId) return null;
+    this.presentedFrameId = this.latest.frameId;
+    return this.latest.value;
+  }
+
+  hasValidRequest() {
+    return this.latest !== null;
+  }
+}
+
 /** Allows one active worker frame and replaces, rather than accumulates, its single pending frame. */
 export function createLatestWorkerFrameQueue<T>(send: (value: T) => void): LatestWorkerFrameQueue<T> {
   let active = false;
@@ -101,9 +133,9 @@ export class ConnectorPreviewCanvas {
   private disposed = false;
   private frameId = 0;
   private bitmapPair = new MatchingWorkerBitmapPair<ImageBitmap>();
+  private frameRecovery = new LatestWorkerFrameRecovery<ConnectorPreviewFrame>();
   private activeFrameId = 0;
   private activeFrame: ConnectorPreviewFrame | null = null;
-  private lastFrame: ConnectorPreviewFrame | null = null;
   private queue: LatestWorkerFrameQueue<WorkerFrame> | null = null;
   private workers: Worker[] = [];
 
@@ -126,9 +158,10 @@ export class ConnectorPreviewCanvas {
       this.dropRequestedFrame();
       return;
     }
-    this.lastFrame = frame;
     if (this.workers.length === 2 && this.queue) {
-      this.queue.enqueue({ frame, frameId: ++this.frameId });
+      const frameId = ++this.frameId;
+      this.frameRecovery.request(frameId, frame);
+      this.queue.enqueue({ frame, frameId });
       this.canvas.dataset.pendingDepth = `${this.queue.pendingDepth()}`;
       return;
     }
@@ -164,31 +197,34 @@ export class ConnectorPreviewCanvas {
           type: "module",
         });
         worker.onmessage = (event: MessageEvent<WorkerResponse>) => this.receiveWorkerMessage(event.data);
-        worker.onerror = () => this.activateFallback(false);
-        worker.onmessageerror = () => this.activateFallback(false);
+        worker.onerror = () => this.activateFallback();
+        worker.onmessageerror = () => this.activateFallback();
         this.workers.push(worker);
       }
       this.queue = createLatestWorkerFrameQueue((message) => this.sendWorkerFrame(message));
       this.canvas.dataset.previewRenderer = "two-worker";
     } catch {
-      this.activateFallback(true);
+      this.activateFallback();
     }
   }
 
-  private activateFallback(retryLastFrame: boolean) {
+  private activateFallback() {
     if (this.disposed || this.canvas.dataset.previewRenderer === "main-thread") return;
-    const fallbackFrame = retryLastFrame ? this.lastFrame : null;
+    const hadValidRequest = this.frameRecovery.hasValidRequest();
+    const fallbackFrame = this.frameRecovery.takeUnpresented();
     this.queue?.cancel();
     for (const worker of this.workers) worker.terminate();
     this.workers = [];
     this.queue = null;
     this.bitmapPair.close();
+    this.canvas.dataset.pendingDepth = "0";
+    this.canvas.dataset.retainedBitmaps = "0";
     this.activeFrame = null;
     this.activeFrameId = 0;
     this.context = this.canvas.getContext("2d");
     this.canvas.dataset.previewRenderer = "main-thread";
     if (fallbackFrame) this.paintFallback(fallbackFrame);
-    else this.clearSurface();
+    else if (!hadValidRequest) this.clearSurface();
   }
 
   private sendWorkerFrame(message: WorkerFrame) {
@@ -265,6 +301,7 @@ export class ConnectorPreviewCanvas {
     pair[1].close();
     this.canvas.dataset.retainedBitmaps = "0";
     this.activeFrame = null;
+    this.frameRecovery.presented(message.frameId);
     this.canvas.dataset.presentedFrame = `${message.frameId}`;
     this.canvas.dispatchEvent(new CustomEvent("connector-preview-presented", {
       detail: { frameId: message.frameId },
@@ -307,7 +344,7 @@ export class ConnectorPreviewCanvas {
   }
 
   private dropRequestedFrame() {
-    this.lastFrame = null;
+    this.frameRecovery.clear();
     this.queue?.cancel();
     this.bitmapPair.close();
     this.activeFrame = null;
@@ -319,6 +356,7 @@ export class ConnectorPreviewCanvas {
   }
 
   private dropActiveWorkerFrame() {
+    this.frameRecovery.drop(this.activeFrameId);
     this.bitmapPair.close();
     this.activeFrame = null;
     this.activeFrameId = 0;

@@ -494,7 +494,9 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
             return;
           }
           if (!current.onCreateArrow(pending.elementId, pending.startEndpoint, pending.currentEndpoint)) {
-            current.onArrowStatusChange("Arrow is unavailable on this page.");
+            current.onArrowStatusChange(
+              "Arrow could not be created because its resolved endpoints exceed the safe canvas boundary.",
+            );
             return;
           }
           arrowSession.current = null;

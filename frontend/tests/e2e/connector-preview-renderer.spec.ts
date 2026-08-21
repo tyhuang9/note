@@ -124,6 +124,78 @@ test("rapid cancellation terminates both workers and removes every preview canva
   }
 });
 
+test("worker runtime failure presents only the newest pending valid frame once on fallback", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async () => {
+    type WorkerHandler = ((event: Event) => void) | null;
+    class HangingWorker {
+      static instances: HangingWorker[] = [];
+      onerror: WorkerHandler = null;
+      onmessageerror: WorkerHandler = null;
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      terminated = false;
+      constructor() { HangingWorker.instances.push(this); }
+      postMessage() {}
+      terminate() { this.terminated = true; }
+    }
+    Object.defineProperty(globalThis, "Worker", { configurable: true, value: HangingWorker });
+    const module = await import("/src/canvas/rendering/connectorPreviewCanvas.ts");
+    const canvas = document.createElement("canvas");
+    document.body.append(canvas);
+    const renderer = new module.ConnectorPreviewCanvas(canvas);
+    const baseCommand = {
+      end: { x: 160, y: 90 }, endArrowhead: "arrow" as const, opacity: 1, roughness: 1,
+      sceneIndex: 1, seed: 501, start: { x: 20, y: 20 }, stroke: "#111827",
+      strokeStyle: "solid" as const, strokeWidth: 2, visualScale: 1, zIndex: 1,
+    };
+    const first = { commands: [baseCommand], devicePixelRatio: 1, height: 140, width: 220 };
+    const latest = {
+      ...first,
+      commands: [{ ...baseCommand, end: { x: 200, y: 115 }, seed: 777, stroke: "#7c3aed" }],
+    };
+    let presentations = 0;
+    canvas.addEventListener("connector-preview-presented", () => { presentations += 1; });
+    renderer.render(first);
+    renderer.render(latest);
+    const workers = [...HangingWorker.instances];
+    workers[0].onerror?.(new Event("error"));
+    workers[1].onmessageerror?.(new Event("messageerror"));
+    const actual = canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height).data;
+
+    Object.defineProperty(globalThis, "Worker", { configurable: true, value: undefined });
+    const expectedCanvas = document.createElement("canvas");
+    document.body.append(expectedCanvas);
+    const expectedRenderer = new module.ConnectorPreviewCanvas(expectedCanvas);
+    expectedRenderer.render(latest);
+    const expected = expectedCanvas.getContext("2d")!.getImageData(0, 0, expectedCanvas.width, expectedCanvas.height).data;
+    let differentChannels = 0;
+    for (let index = 0; index < actual.length; index += 1) {
+      if (actual[index] !== expected[index]) differentChannels += 1;
+    }
+    const diagnostics = {
+      differentChannels,
+      pendingDepth: canvas.dataset.pendingDepth,
+      presentations,
+      renderer: canvas.dataset.previewRenderer,
+      retainedBitmaps: canvas.dataset.retainedBitmaps,
+      terminatedWorkers: workers.filter((worker) => worker.terminated).length,
+    };
+    renderer.dispose();
+    expectedRenderer.dispose();
+    return diagnostics;
+  });
+
+  expect(result).toEqual({
+    differentChannels: 0,
+    pendingDepth: "0",
+    presentations: 1,
+    renderer: "main-thread",
+    retainedBitmaps: "0",
+    terminatedWorkers: 2,
+  });
+  await expect(page.locator("canvas[data-preview-renderer]")).toHaveCount(0);
+});
+
 for (const rendererMode of ["worker", "fallback"] as const) {
   test(`${rendererMode} renderer clips mixed-opacity extreme spans and drops oversized frames without stale pixels`, async ({ page }) => {
     await installComparisonWorkspace(page, false);

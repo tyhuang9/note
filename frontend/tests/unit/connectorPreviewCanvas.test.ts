@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { arrowheadPoints, roughOptions } from "../../src/canvas/components/PrimitiveElementView";
 import {
   createLatestWorkerFrameQueue,
+  LatestWorkerFrameRecovery,
   MatchingWorkerBitmapPair,
 } from "../../src/canvas/rendering/connectorPreviewCanvas";
 import {
@@ -217,6 +218,25 @@ describe("connector transform preview canvas", () => {
     queue.complete();
     queue.enqueue(4);
     expect(sent).toEqual([1, 3, 4]);
+  });
+
+  it("recovers only the newest valid unpresented worker frame once", () => {
+    const recovery = new LatestWorkerFrameRecovery<string>();
+    recovery.request(1, "active");
+    recovery.request(2, "pending-latest");
+    recovery.drop(1);
+    expect(recovery.takeUnpresented()).toBe("pending-latest");
+    expect(recovery.takeUnpresented()).toBeNull();
+
+    recovery.request(3, "explicitly-dropped");
+    recovery.drop(3);
+    expect(recovery.hasValidRequest()).toBe(false);
+    expect(recovery.takeUnpresented()).toBeNull();
+
+    recovery.request(4, "already-presented");
+    recovery.presented(4);
+    expect(recovery.hasValidRequest()).toBe(true);
+    expect(recovery.takeUnpresented()).toBeNull();
   });
 
   it("presents only a complete same-frame bitmap pair in range order", () => {

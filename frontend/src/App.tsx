@@ -2948,6 +2948,13 @@ function App() {
     setData(nextData);
   }
 
+  function isLiveConnectorBindingPersistable(
+    candidate: ConnectorElement,
+    currentElements: readonly CanvasElement[] = dataRef.current.elements,
+  ) {
+    return isConnectorBindingPersistable(candidate, indexCanvasElements(currentElements));
+  }
+
   function drawingPropertyPreviewOwnerKey() {
     return `${selectedPageIdRef.current}\u0000${[...selectedBlockIdsRef.current].sort().join("\u0000")}`;
   }
@@ -7240,8 +7247,7 @@ function App() {
           const candidate = session.connectorEndpoint === "start"
             ? { ...liveConnector, start: proposedEndpoint }
             : { ...liveConnector, end: proposedEndpoint };
-          const currentElementsById = indexCanvasElements(currentBlocks);
-          if (!isConnectorBindingPersistable(candidate, currentElementsById)) return currentBlocks;
+          if (!isLiveConnectorBindingPersistable(candidate, currentBlocks)) return currentBlocks;
           return currentBlocks.map((element) => element.id === candidate.id
             ? { ...candidate, updatedAt: Date.now() }
             : element);
@@ -7573,11 +7579,18 @@ function App() {
       targetElementId: target.id,
       gap: 0,
     };
+    const candidate = chooser.endpoint === "start"
+      ? { ...connector, start: next }
+      : { ...connector, end: next };
+    if (!isLiveConnectorBindingPersistable(candidate)) {
+      setConnectorBindingAnnouncement(
+        `Could not bind ${chooser.endpoint} endpoint because the connector's visible stroke would exceed the safe canvas boundary.`,
+      );
+      return;
+    }
     setBlocksWithHistory((currentBlocks) => currentBlocks.map((element) => {
       if (element.id !== connector.id || element.type !== "connector") return element;
-      return chooser.endpoint === "start"
-        ? { ...element, start: next, updatedAt: Date.now() }
-        : { ...element, end: next, updatedAt: Date.now() };
+      return { ...candidate, updatedAt: Date.now() };
     }));
     setConnectorBindingAnnouncement(
       `${previous.kind === "element" ? "Rebound" : "Bound"} ${chooser.endpoint} endpoint to ${getBindableTargetLabel(target)}. The connector will follow the nearest facing visible boundaries automatically.`,
@@ -7957,6 +7970,7 @@ function App() {
       updatedAt: timestamp,
       zIndex: dataRef.current.elements.length,
     };
+    if (!isLiveConnectorBindingPersistable(connector)) return false;
     setBlocksWithHistory((currentElements) => [...currentElements, {
       ...connector,
       zIndex: currentElements.length,

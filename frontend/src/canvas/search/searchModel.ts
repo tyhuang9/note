@@ -16,6 +16,15 @@ export type CanvasTextSearchMatch = Readonly<{
   end: number;
 }>;
 
+export const EMPTY_CANVAS_SEARCH_RANGES: readonly CanvasTextSearchMatch[] = Object.freeze([]);
+
+export function getCanvasSearchRangesForElement(
+  matchesByElementId: ReadonlyMap<string, readonly CanvasTextSearchMatch[]>,
+  elementId: string,
+): readonly CanvasTextSearchMatch[] {
+  return matchesByElementId.get(elementId) ?? EMPTY_CANVAS_SEARCH_RANGES;
+}
+
 export function getSearchableText(
   element: CanvasElement,
   projectRichText: typeof projectRichTextForSearch = projectRichTextForSearch,

@@ -111,6 +111,7 @@ import {
   createCanvasSearchTextIndex,
   findCanvasTextSearchResult,
   findTextSearchRanges,
+  getCanvasSearchRangesForElement,
   MAX_CANVAS_SEARCH_MATCHES,
 } from "./canvas/search/searchModel";
 import {
@@ -8372,7 +8373,7 @@ function App() {
                     onKeyboardMove={moveCanvasElementByKeyboard}
                     onSelect={selectBlock}
                     onTextCommit={updateShapeText}
-                    searchRanges={searchMatchesByElementId.get(shape.id) ?? []}
+                    searchRanges={getCanvasSearchRangesForElement(searchMatchesByElementId, shape.id)}
                     searchableText={canvasSearchTextIndex.get(shape.id) ?? ""}
                   />
                 )}
@@ -8406,7 +8407,7 @@ function App() {
                 onVisualDragEnd={endVisualDrag}
                 onVisualDragMove={moveVisualDrag}
                 onVisualDragStart={startVisualDrag}
-                searchRanges={searchMatchesByElementId.get(block.id) ?? []}
+                searchRanges={getCanvasSearchRangesForElement(searchMatchesByElementId, block.id)}
                 searchableText={canvasSearchTextIndex.get(block.id) ?? ""}
                 shouldFocusEnd={focusEndBlockId === block.id}
                 zoomLevel={zoomLevel}

@@ -3,9 +3,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { CanvasElement, RoughStyle } from "../../src/canvas/model/elements";
 import {
   createCanvasSearchTextIndex,
+  EMPTY_CANVAS_SEARCH_RANGES,
   findCanvasTextSearchMatches,
   findCanvasTextSearchResult,
   findTextSearchRanges,
+  getCanvasSearchRangesForElement,
   getSearchableText,
   MAX_CANVAS_SEARCH_MATCHES,
   MAX_CANVAS_SEARCH_MATCHES_PER_ELEMENT,
@@ -82,6 +84,20 @@ describe("canvas text search", () => {
     expect(projectionCount).toBe(2);
     expect(findCanvasTextSearchResult(elements, "needle", activeIndex).matches).toHaveLength(3);
     expect(projectionCount).toBe(2);
+  });
+
+  it("reuses one empty range reference across unmatched renders and passes matched updates through", () => {
+    const firstUnmatched = getCanvasSearchRangesForElement(new Map(), "missing");
+    const secondUnmatched = getCanvasSearchRangesForElement(new Map(), "missing");
+    expect(firstUnmatched).toBe(EMPTY_CANVAS_SEARCH_RANGES);
+    expect(secondUnmatched).toBe(firstUnmatched);
+    expect(Object.isFrozen(firstUnmatched)).toBe(true);
+
+    const firstMatch = [{ elementId: "matched", source: "text" as const, start: 0, end: 6 }];
+    const secondMatch = [{ elementId: "matched", source: "text" as const, start: 7, end: 13 }];
+    expect(getCanvasSearchRangesForElement(new Map([["matched", firstMatch]]), "matched")).toBe(firstMatch);
+    expect(getCanvasSearchRangesForElement(new Map([["matched", secondMatch]]), "matched")).toBe(secondMatch);
+    expect(secondMatch).not.toBe(firstMatch);
   });
 
   it("maps one match across differently marked text leaves without changing the tree", () => {

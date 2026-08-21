@@ -531,20 +531,54 @@ export function getConnectorEndpointDetachPoint(
   const unit = { x: direction.x / length, y: direction.y / length };
   const endpointSource = getEndpointSupportSource(endpoint, elementsById, connector.pageId);
   const oppositeSource = getEndpointSupportSource(opposite, elementsById, connector.pageId);
-  const endpointSupport = endpointSource ? getEndpointSupportPoint(endpointSource, unit.x, unit.y) : null;
-  const oppositeSupport = oppositeSource ? getEndpointSupportPoint(oppositeSource, unit.x, unit.y) : null;
-  const support = endpointSupport && oppositeSupport
-    ? endpointSupport.x * unit.x + endpointSupport.y * unit.y
-        >= oppositeSupport.x * unit.x + oppositeSupport.y * unit.y
-      ? endpointSupport
-      : oppositeSupport
-    : endpointSupport ?? oppositeSupport ?? targetCenter;
   const targetOutline = target.type === "shape" ? target.style.strokeWidth / 2 : 0;
   const clearance = Math.max(8, endpoint.gap + targetOutline + connector.style.strokeWidth / 2 + 4);
-  return normalizeFreeConnectorEndpoint({
-    x: support.x + unit.x * clearance,
-    y: support.y + unit.y * clearance,
-  });
+  const directions = getDetachCandidateDirections(unit);
+  for (const candidateDirection of directions) {
+    const candidateSupport = [endpointSource, oppositeSource]
+      .filter((source): source is EndpointSupportSource => source !== null)
+      .map((source) => getEndpointSupportPoint(source, candidateDirection.x, candidateDirection.y))
+      .filter((point): point is CanvasPoint => point !== null)
+      .reduce<CanvasPoint | null>((furthest, point) => (
+        !furthest
+        || point.x * candidateDirection.x + point.y * candidateDirection.y
+          > furthest.x * candidateDirection.x + furthest.y * candidateDirection.y
+          ? point
+          : furthest
+      ), null);
+    if (!candidateSupport) continue;
+    const candidate = {
+      x: candidateSupport.x + candidateDirection.x * clearance,
+      y: candidateSupport.y + candidateDirection.y * clearance,
+    };
+    if (!isSafeResolvedPoint(candidate)) continue;
+    const detachedConnector = endpointName === "start"
+      ? { ...connector, start: { kind: "free" as const, ...candidate } }
+      : { ...connector, end: { kind: "free" as const, ...candidate } };
+    if (resolveConnectorPoints(detachedConnector, elementsById)) return candidate;
+  }
+  return null;
+}
+
+function getDetachCandidateDirections(preferred: CanvasPoint): CanvasPoint[] {
+  const candidates = [
+    preferred,
+    { x: -preferred.y, y: preferred.x },
+    { x: preferred.y, y: -preferred.x },
+    { x: -preferred.x, y: -preferred.y },
+    { x: 1, y: 0 },
+    { x: 0, y: 1 },
+    { x: -1, y: 0 },
+    { x: 0, y: -1 },
+    { x: Math.SQRT1_2, y: Math.SQRT1_2 },
+    { x: -Math.SQRT1_2, y: Math.SQRT1_2 },
+    { x: -Math.SQRT1_2, y: -Math.SQRT1_2 },
+    { x: Math.SQRT1_2, y: -Math.SQRT1_2 },
+  ];
+  return candidates.filter((candidate, index) => candidates.findIndex((other) => (
+    Math.abs(candidate.x - other.x) <= 1e-12
+    && Math.abs(candidate.y - other.y) <= 1e-12
+  )) === index);
 }
 
 /**
@@ -555,19 +589,16 @@ export function getConnectorEndpointDetachPoint(
 export function detachConnectorEndpointsForDeletedTargets(
   elements: readonly CanvasElement[],
   deletedIds: ReadonlySet<ElementId>,
-): CanvasElement[] {
+): CanvasElement[] | null {
   const elementsById = Object.fromEntries(elements.map((element) => [element.id, element]));
+  let refused = false;
   const detach = (endpoint: ConnectorEndpoint, resolved: CanvasPoint | null): ConnectorEndpoint => {
     if (endpoint.kind !== "element" || !deletedIds.has(endpoint.targetElementId)) return endpoint;
     if (resolved) return { kind: "free", ...resolved };
-    const target = elementsById[endpoint.targetElementId];
-    if (!isBindableElement(target)) return endpoint;
-    return normalizeFreeConnectorEndpoint({
-      x: target.x + target.width / 2,
-      y: target.y + target.height / 2,
-    }) ?? endpoint;
+    refused = true;
+    return endpoint;
   };
-  return elements.map((element) => {
+  const detached = elements.map((element) => {
     if (element.type !== "connector" || deletedIds.has(element.id)) return element;
     const points = resolveConnectorPoints(element, elementsById);
     const start = detach(
@@ -588,6 +619,7 @@ export function detachConnectorEndpointsForDeletedTargets(
       ? element
       : { ...element, start, end, updatedAt: Date.now() };
   });
+  return refused ? null : detached;
 }
 
 type SupportVertex = Readonly<{

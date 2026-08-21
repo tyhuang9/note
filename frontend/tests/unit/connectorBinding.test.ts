@@ -626,7 +626,7 @@ describe("connector shape binding", () => {
     expect(getTextAnchorPoint(target, { t: 0 })).toEqual({ x: 90, y: 50 });
     expect(resolveConnectorEndpoint(connector.start, { [target.id]: target })).toEqual({ x: 94, y: 50 });
     const beforeDelete = resolveConnectorPoints(connector, { [target.id]: target })!;
-    const [, detached] = detachConnectorEndpointsForDeletedTargets([target, connector], new Set([target.id]));
+    const [, detached] = detachConnectorEndpointsForDeletedTargets([target, connector], new Set([target.id]))!;
     expect(detached).toMatchObject({ start: { kind: "free", ...beforeDelete.start } });
   });
 
@@ -698,7 +698,7 @@ describe("connector shape binding", () => {
     const [, retained] = detachConnectorEndpointsForDeletedTargets(
       [first, connector, overlapping],
       new Set([first.id]),
-    );
+    )!;
     expect(retained.type).toBe("connector");
     if (retained.type !== "connector") throw new Error("Expected retained connector");
     expect(retained.start.kind).toBe("free");
@@ -753,6 +753,69 @@ describe("connector shape binding", () => {
     expect(getConnectorGeometryCacheDiagnostics()).toEqual({ hits: 1, misses: 2 });
   });
 
+  it("finds an unclamped perpendicular detach route at the positive canvas edge", () => {
+    const first = shape("rectangle", {
+      height: 100,
+      id: "edge-first",
+      width: 100,
+      x: MAX_CANVAS_VALUE - 100,
+      y: 20,
+    });
+    const overlapping = shape("ellipse", {
+      height: 100,
+      id: "edge-second",
+      width: 100,
+      x: MAX_CANVAS_VALUE - 100,
+      y: 20,
+    });
+    const connector = arrow(
+      { kind: "element", targetElementId: first.id, gap: 0 },
+      { kind: "element", targetElementId: overlapping.id, gap: 0 },
+    );
+    const elementsById = { [first.id]: first, [overlapping.id]: overlapping };
+    expect(resolveConnectorPoints(connector, elementsById)).toBeNull();
+    const point = getConnectorEndpointDetachPoint(connector, "start", elementsById);
+    expect(point).not.toBeNull();
+    expect(point!.x).toBeLessThanOrEqual(MAX_CANVAS_VALUE);
+    expect(point!.x).toBeGreaterThanOrEqual(-MAX_CANVAS_VALUE);
+    expect(point!.y).toBeLessThanOrEqual(MAX_CANVAS_VALUE);
+    expect(point!.y).toBeGreaterThanOrEqual(-MAX_CANVAS_VALUE);
+    const detached = { ...connector, start: { kind: "free" as const, ...point! } };
+    expect(resolveConnectorPoints(detached, elementsById)).not.toBeNull();
+    expect(canvasElementContainsPoint(first, point!, 0, elementsById)).toBe(false);
+    expect(canvasElementContainsPoint(overlapping, point!, 0, elementsById)).toBe(false);
+    const deleted = detachConnectorEndpointsForDeletedTargets(
+      [first, connector, overlapping],
+      new Set([first.id]),
+    );
+    expect(deleted).not.toBeNull();
+    expect((deleted![1] as ConnectorElement).start).toEqual({ kind: "free", ...point! });
+    expect(resolveConnectorPoints(deleted![1] as ConnectorElement, {
+      [overlapping.id]: overlapping,
+    })).not.toBeNull();
+  });
+
+  it("refuses an atomic delete when maximum gap leaves no in-envelope detach point", () => {
+    const first = shape("rectangle", {
+      height: MAX_CANVAS_VALUE,
+      id: "envelope-first",
+      width: MAX_CANVAS_VALUE,
+      x: -MAX_CANVAS_VALUE / 2,
+      y: -MAX_CANVAS_VALUE / 2,
+    });
+    const overlapping = { ...first, id: "envelope-second" };
+    const connector = arrow(
+      { kind: "element", targetElementId: first.id, gap: MAX_CANVAS_VALUE },
+      { kind: "element", targetElementId: overlapping.id, gap: 0 },
+    );
+    const elementsById = { [first.id]: first, [overlapping.id]: overlapping };
+    expect(getConnectorEndpointDetachPoint(connector, "start", elementsById)).toBeNull();
+    expect(detachConnectorEndpointsForDeletedTargets(
+      [first, connector, overlapping],
+      new Set([first.id]),
+    )).toBeNull();
+  });
+
   it("keeps a bound endpoint bound during connector transforms and detaches it before target deletion", () => {
     const rectangle = shape("rectangle");
     const connector = arrow(
@@ -765,7 +828,7 @@ describe("connector shape binding", () => {
     const scaled = scaleSelection([connector], new Set([connector.id]), { x: 110, y: 50, width: 80, height: 10 }, "se", 2)[0] as ConnectorElement;
     expect(scaled.start).toEqual(connector.start);
     const beforeDelete = resolveConnectorPoints(connector, { [rectangle.id]: rectangle })!;
-    const detached = detachConnectorEndpointsForDeletedTargets([rectangle, connector], new Set([rectangle.id]));
+    const detached = detachConnectorEndpointsForDeletedTargets([rectangle, connector], new Set([rectangle.id]))!;
     expect(detached[1]).toMatchObject({ start: { kind: "free", ...beforeDelete.start } });
   });
 
@@ -816,7 +879,7 @@ describe("connector shape binding", () => {
       { kind: "free", x: 1, y: 1 },
     );
     const beforeDelete = resolveConnectorPoints(connector, { [edge.id]: edge })!;
-    const [, detached] = detachConnectorEndpointsForDeletedTargets([edge, connector], new Set([edge.id]));
+    const [, detached] = detachConnectorEndpointsForDeletedTargets([edge, connector], new Set([edge.id]))!;
     expect(detached).toMatchObject({ start: { kind: "free", ...beforeDelete.start } });
   });
 });

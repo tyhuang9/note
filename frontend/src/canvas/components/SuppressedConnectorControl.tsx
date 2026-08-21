@@ -195,6 +195,7 @@ export function SuppressedConnectorControl({
           className="suppressed-connector-management"
           id={managementId}
           onClick={stopPointerPropagation}
+          onPointerDown={stopPointerPropagation}
           role="group"
         >
           <span className="suppressed-connector-management-status">{label} hidden</span>

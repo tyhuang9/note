@@ -3526,11 +3526,16 @@ function App() {
     const deletedShapeTextCount = dataRef.current.elements.filter(
       (element) => blockIdsToDelete.has(element.id) && hasShapeContainedText(element),
     ).length;
-
-    setBlocksWithHistory((currentBlocks) =>
-      detachConnectorEndpointsForDeletedTargets(currentBlocks, blockIdsToDelete)
-        .filter((block) => !blockIdsToDelete.has(block.id)),
+    const detachedBlocks = detachConnectorEndpointsForDeletedTargets(
+      dataRef.current.elements,
+      blockIdsToDelete,
     );
+    if (!detachedBlocks) {
+      setConnectorBindingAnnouncement("Could not delete because a connector endpoint has no safe in-canvas detach position.");
+      return false;
+    }
+
+    setBlocksWithHistory(() => detachedBlocks.filter((block) => !blockIdsToDelete.has(block.id)));
     setSelectedBlockIds((currentBlockIds) =>
       currentBlockIds.filter((blockId) => !blockIdsToDelete.has(blockId)),
     );
@@ -4605,7 +4610,9 @@ function App() {
       throw new Error("User denied approval for note.deleteBlock.");
     }
 
-    deleteBlocks([blockId]);
+    if (!deleteBlocks([blockId])) {
+      throw new Error("Block could not be deleted because a connector endpoint has no safe in-canvas detach position.");
+    }
 
     return { deletedBlockId: blockId };
   }
@@ -5987,9 +5994,13 @@ function App() {
   const eraseCanvasElements = useCallback((elementIds: readonly string[]) => {
     const ids = new Set(elementIds);
     if (ids.size === 0) return;
-    setBlocksWithHistory((currentElements) =>
-      detachConnectorEndpointsForDeletedTargets(currentElements, ids)
-        .filter((element) => element.locked || !ids.has(element.id)),
+    const detachedElements = detachConnectorEndpointsForDeletedTargets(dataRef.current.elements, ids);
+    if (!detachedElements) {
+      setConnectorBindingAnnouncement("Could not erase because a connector endpoint has no safe in-canvas detach position.");
+      return;
+    }
+    setBlocksWithHistory(() =>
+      detachedElements.filter((element) => element.locked || !ids.has(element.id)),
     );
     const nextSelection = selectedBlockIdsRef.current.filter((id) => !ids.has(id));
     selectedBlockIdsRef.current = nextSelection;
@@ -7390,29 +7401,42 @@ function App() {
       event.stopPropagation();
       const selectedId = selectedBlockIdsRef.current.length === 1 ? selectedBlockIdsRef.current[0] : null;
       if (!selectedId) return;
-      const elementsById = Object.fromEntries(dataRef.current.elements.map((element) => [element.id, element]));
-      setBlocksWithHistory((currentBlocks) => currentBlocks.map((element) => {
-        if (element.id !== selectedId || element.type !== "connector" || element.locked) return element;
-        const currentEndpoint = element[endpoint];
-        const points = resolveConnectorPoints(element, elementsById);
-        const target = currentEndpoint.kind === "element"
-          ? elementsById[currentEndpoint.targetElementId]
-          : undefined;
-        const resolved = points?.[endpoint]
-          ?? (currentEndpoint.kind === "free" ? currentEndpoint : null)
-          ?? (isBindableElement(target)
-            ? { x: target.x + target.width / 2, y: target.y + target.height / 2 }
-            : null);
-        if (!resolved) return element;
-        if (currentEndpoint.kind === "element") {
-          setConnectorBindingAnnouncement(`Detached and moved ${endpoint} endpoint. It is now free.`);
-        }
-        const moved = normalizeFreeConnectorEndpoint({ x: resolved.x + delta.x, y: resolved.y + delta.y });
-        if (!moved) return element;
-        return endpoint === "start"
-          ? { ...element, start: moved, updatedAt: Date.now() }
-          : { ...element, end: moved, updatedAt: Date.now() };
-      }));
+      setBlocksWithHistory((currentBlocks) => {
+        const elementsById = Object.fromEntries(currentBlocks.map((element) => [element.id, element]));
+        return currentBlocks.map((element) => {
+          if (element.id !== selectedId || element.type !== "connector" || element.locked) return element;
+          const currentEndpoint = element[endpoint];
+          const points = resolveConnectorPoints(element, elementsById);
+          const resolved = points?.[endpoint]
+            ?? (currentEndpoint.kind === "free" ? currentEndpoint : null)
+            ?? getConnectorEndpointDetachPoint(element, endpoint, elementsById);
+          if (!resolved) {
+            if (currentEndpoint.kind === "element") {
+              setConnectorBindingAnnouncement(`Could not detach ${endpoint} endpoint because no safe in-canvas position is available.`);
+            }
+            return element;
+          }
+          let moved = normalizeFreeConnectorEndpoint({ x: resolved.x + delta.x, y: resolved.y + delta.y });
+          if (!moved) return element;
+          let candidate = endpoint === "start"
+            ? { ...element, start: moved, updatedAt: Date.now() }
+            : { ...element, end: moved, updatedAt: Date.now() };
+          if (currentEndpoint.kind === "element" && !resolveConnectorPoints(candidate, elementsById)) {
+            moved = { kind: "free", ...resolved };
+            candidate = endpoint === "start"
+              ? { ...element, start: moved, updatedAt: Date.now() }
+              : { ...element, end: moved, updatedAt: Date.now() };
+            if (!resolveConnectorPoints(candidate, elementsById)) {
+              setConnectorBindingAnnouncement(`Could not detach ${endpoint} endpoint because no safe in-canvas position is available.`);
+              return element;
+            }
+          }
+          if (currentEndpoint.kind === "element") {
+            setConnectorBindingAnnouncement(`Detached and moved ${endpoint} endpoint. It is now free.`);
+          }
+          return candidate;
+        });
+      });
       setActiveMode("selected");
     };
   }
@@ -7488,14 +7512,14 @@ function App() {
     const connector = getSelectedArrowConnector();
     if (!connector || connector.locked) return;
     const targets = getConnectorBindingTargetsForEndpoint(connector, endpoint);
-    if (targets.length === 0) {
+    const current = connector[endpoint];
+    if (targets.length === 0 && current.kind !== "element") {
       setConnectorBindingAnnouncement(`No compatible shapes or text blocks are available to bind the ${endpoint} endpoint.`);
       return;
     }
-    const current = connector[endpoint];
     const currentTargetId = current.kind === "element" && targets.some(({ element }) => element.id === current.targetElementId)
       ? current.targetElementId
-      : targets[0].element.id;
+      : targets[0]?.element.id ?? null;
     connectorEndpointOriginFocusRef.current = origin;
     if (connectorEndpointFocusReturnRafRef.current !== null) {
       window.cancelAnimationFrame(connectorEndpointFocusReturnRafRef.current);
@@ -7574,7 +7598,7 @@ function App() {
     const elementsById = Object.fromEntries(dataRef.current.elements.map((element) => [element.id, element]));
     const resolved = getConnectorEndpointDetachPoint(connector, chooser.endpoint, elementsById);
     if (!resolved) {
-      setConnectorBindingAnnouncement(`Could not detach ${chooser.endpoint} endpoint because its target is unavailable.`);
+      setConnectorBindingAnnouncement(`Could not detach ${chooser.endpoint} endpoint because no safe in-canvas position is available.`);
       return;
     }
     const next = normalizeFreeConnectorEndpoint(resolved);

@@ -2,7 +2,7 @@ use super::{assets, database, legacy_import, models::*};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 use serde_json::Value;
-use std::{io::Write, path::Path};
+use std::{collections::HashMap, io::Write, path::Path};
 
 /// These folders are real rows solely to satisfy the page foreign key. They
 /// are not user folders and are filtered from the workspace DTO.
@@ -944,6 +944,8 @@ fn validate_final_connector_bindings(
             .map_err(|error| error.to_string())?;
         rows
     };
+    let target_index = ConnectorBindingTargetIndex::load(transaction, page_id)?;
+    debug_assert_eq!(target_index.load_query_count, 1);
 
     for (connector_id, payload) in connectors {
         let connector: Value = serde_json::from_str(&payload).map_err(|error| {
@@ -976,8 +978,7 @@ fn validate_final_connector_bindings(
                 ));
             }
             let target = validate_bound_connector_target(
-                transaction,
-                page_id,
+                &target_index,
                 target_element_id,
                 endpoint,
                 &context,
@@ -1022,39 +1023,97 @@ fn validate_final_connector_bindings(
     Ok(())
 }
 
+enum IndexedConnectorBindingTarget {
+    Bindable {
+        element_type: String,
+        payload: Result<Value, String>,
+    },
+    Incompatible,
+    OtherPage,
+}
+
+struct ConnectorBindingTargetIndex {
+    by_id: HashMap<String, IndexedConnectorBindingTarget>,
+    load_query_count: usize,
+}
+
+impl ConnectorBindingTargetIndex {
+    fn load(transaction: &Transaction<'_>, page_id: &str) -> Result<Self, String> {
+        let mut statement = transaction
+            .prepare(
+                "SELECT id,page_id,element_type,CASE WHEN page_id=? AND element_type IN ('shape','text') THEN payload_json ELSE '' END FROM elements",
+            )
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([page_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(|error| error.to_string())?;
+        let mut by_id = HashMap::new();
+        for row in rows {
+            let (id, target_page_id, element_type, payload_json) =
+                row.map_err(|error| error.to_string())?;
+            let target = if target_page_id != page_id {
+                IndexedConnectorBindingTarget::OtherPage
+            } else if element_type != "shape" && element_type != "text" {
+                IndexedConnectorBindingTarget::Incompatible
+            } else {
+                IndexedConnectorBindingTarget::Bindable {
+                    element_type,
+                    payload: serde_json::from_str(&payload_json).map_err(|error| error.to_string()),
+                }
+            };
+            by_id.insert(id, target);
+        }
+        Ok(Self {
+            by_id,
+            load_query_count: 1,
+        })
+    }
+
+    #[cfg(test)]
+    fn load_query_count(&self) -> usize {
+        self.load_query_count
+    }
+}
+
 fn validate_bound_connector_target(
-    transaction: &Transaction<'_>,
-    page_id: &str,
+    target_index: &ConnectorBindingTargetIndex,
     target_element_id: &str,
     endpoint: &Value,
     context: &str,
 ) -> Result<ObjectBindingTarget, String> {
-    let target: Option<(String, String, String)> = transaction
-        .query_row(
-            "SELECT page_id,element_type,payload_json FROM elements WHERE id=?",
-            [target_element_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .optional()
-        .map_err(|error| error.to_string())?;
-    let Some((target_page_id, target_type, target_payload)) = target else {
+    let Some(target) = target_index.by_id.get(target_element_id) else {
         return Err(format!(
             "{context}.targetElementId must reference an existing compatible element on this page"
         ));
     };
-    if target_page_id != page_id {
-        return Err(format!(
-            "{context}.targetElementId must reference a compatible element on the same page"
-        ));
-    }
-    if target_type != "shape" && target_type != "text" {
-        return Err(format!(
-            "{context}.targetElementId must reference a rectangle, ellipse, diamond, or text block"
-        ));
-    }
-    let target: Value = serde_json::from_str(&target_payload).map_err(|error| {
-        format!("{context}.targetElementId has invalid stored payload: {error}")
-    })?;
+    let (target_type, target) = match target {
+        IndexedConnectorBindingTarget::OtherPage => {
+            return Err(format!(
+                "{context}.targetElementId must reference a compatible element on the same page"
+            ));
+        }
+        IndexedConnectorBindingTarget::Incompatible => {
+            return Err(format!(
+                "{context}.targetElementId must reference a rectangle, ellipse, diamond, or text block"
+            ));
+        }
+        IndexedConnectorBindingTarget::Bindable {
+            element_type,
+            payload,
+        } => (
+            element_type.as_str(),
+            payload.as_ref().map_err(|error| {
+                format!("{context}.targetElementId has invalid stored payload: {error}")
+            })?,
+        ),
+    };
     if target_type == "shape"
         && !matches!(
             target.get("shape").and_then(Value::as_str),
@@ -1065,8 +1124,8 @@ fn validate_bound_connector_target(
             "{context}.targetElementId must reference a rectangle, ellipse, diamond, or text block"
         ));
     }
-    validate_bound_connector_resolution(&target, &target_type, endpoint, context)?;
-    object_binding_target_from_value(&target, &target_type, target_element_id, context)
+    validate_bound_connector_resolution(target, target_type, endpoint, context)?;
+    object_binding_target_from_value(target, target_type, target_element_id, context)
 }
 
 fn object_binding_endpoint_from_value(value: &Value) -> Result<ObjectBindingEndpoint, String> {
@@ -2328,7 +2387,7 @@ mod tests {
     use super::*;
     use base64::{engine::general_purpose::STANDARD, Engine};
     use serde_json::json;
-    use std::fs;
+    use std::{fs, time::Instant};
 
     fn fixture_endpoint(value: &Value) -> ObjectBindingEndpoint {
         match value.get("kind").and_then(Value::as_str).unwrap() {
@@ -3221,6 +3280,66 @@ mod tests {
                 2
             );
         }
+    }
+
+    #[test]
+    fn connector_binding_validation_loads_targets_once_for_five_thousand_connectors() {
+        let directory = root();
+        seed_page(directory.path());
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![shape_element("shared-target", "p")],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+        {
+            let mut connection = database::open(&directory.path().join("note.db")).unwrap();
+            let transaction = connection.transaction().unwrap();
+            let index = ConnectorBindingTargetIndex::load(&transaction, "p").unwrap();
+            assert_eq!(index.load_query_count(), 1);
+        }
+
+        let connectors = (0..5_000)
+            .map(|index| {
+                connector_element_on_page(
+                    &format!("load-connector-{index}"),
+                    "p",
+                    json!({"kind":"element","targetElementId":"shared-target","gap":index % 7}),
+                    json!({"kind":"free","x":200.0 + (index % 29) as f64,"y":140.0 + (index % 31) as f64}),
+                    true,
+                )
+            })
+            .collect();
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 1,
+                upserts: connectors,
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+
+        let mut connection = database::open(&directory.path().join("note.db")).unwrap();
+        let transaction = connection.transaction().unwrap();
+        let index = ConnectorBindingTargetIndex::load(&transaction, "p").unwrap();
+        assert_eq!(index.load_query_count(), 1);
+        assert!(matches!(
+            index.by_id.get("shared-target"),
+            Some(IndexedConnectorBindingTarget::Bindable { .. })
+        ));
+        let started = Instant::now();
+        validate_final_connector_bindings(&transaction, "p").unwrap();
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed.as_secs_f64() < 10.0,
+            "5k connector validation took {elapsed:?}"
+        );
     }
 
     #[test]

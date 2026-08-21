@@ -10,6 +10,7 @@ import {
   getConnectorCandidateAnnouncementKey,
   getConnectorGeometryCacheDiagnostics,
   getConnectorGjkDiagnostics,
+  isConnectorBindingPersistable,
   getDefaultKeyboardArrowEndpoints,
   getConnectorEndpointDetachPoint,
   getConnectorAuthoringCandidate,
@@ -174,7 +175,10 @@ describe("connector shape binding", () => {
         id: vector.name,
         style: { ...style, strokeWidth: vector.connectorStrokeWidth, endArrowhead: "arrow" as const, startArrowhead: "none" as const },
       };
-      const resolved = resolveConnectorPoints(connector, Object.fromEntries(targets.map((target) => [target.id, target])));
+      const elementsById = Object.fromEntries(targets.map((target) => [target.id, target]));
+      const accepted = isConnectorBindingPersistable(connector, elementsById);
+      const resolved = resolveConnectorPoints(connector, elementsById);
+      expect(accepted, `${vector.name} validation acceptance`).toBe(vector.accepted);
       if (!vector.expected) {
         expect(resolved, vector.name).toBeNull();
       } else {

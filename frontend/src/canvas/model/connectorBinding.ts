@@ -38,7 +38,13 @@ type ConnectorGeometryCacheEntry = Readonly<{
   endTarget: CanvasElement | null;
   points: Readonly<{ start: CanvasPoint; end: CanvasPoint }> | null;
   startTarget: CanvasElement | null;
+  valid: boolean;
 }>;
+
+type ConnectorBindingResolution =
+  | Readonly<{ kind: "invalid" }>
+  | Readonly<{ kind: "overlap" }>
+  | Readonly<{ kind: "separated"; points: Readonly<{ start: CanvasPoint; end: CanvasPoint }> }>;
 
 const connectorGeometryCache = new WeakMap<ConnectorElement, ConnectorGeometryCacheEntry>();
 let connectorGeometryCacheHits = 0;
@@ -172,42 +178,71 @@ export function resolveConnectorPoints(
   connector: ConnectorElement,
   elementsById: Readonly<Record<ElementId, CanvasElement>>,
 ): Readonly<{ start: CanvasPoint; end: CanvasPoint }> | null {
+  return getConnectorBindingCacheEntry(connector, elementsById).points;
+}
+
+/**
+ * Returns whether a connector's endpoint contract is safe to persist. A valid
+ * canonical overlap intentionally has no visible route, so this is stricter
+ * than checking `resolveConnectorPoints()` for a non-null value.
+ */
+export function isConnectorBindingPersistable(
+  connector: ConnectorElement,
+  elementsById: Readonly<Record<ElementId, CanvasElement>>,
+): boolean {
+  return getConnectorBindingCacheEntry(connector, elementsById).valid;
+}
+
+function getConnectorBindingCacheEntry(
+  connector: ConnectorElement,
+  elementsById: Readonly<Record<ElementId, CanvasElement>>,
+): ConnectorGeometryCacheEntry {
   const startTarget = getBoundEndpointTargetReference(connector.start, elementsById);
   const endTarget = getBoundEndpointTargetReference(connector.end, elementsById);
   const cached = connectorGeometryCache.get(connector);
   if (cached && cached.startTarget === startTarget && cached.endTarget === endTarget) {
     connectorGeometryCacheHits += 1;
-    return cached.points;
+    return cached;
   }
   connectorGeometryCacheMisses += 1;
-  const points = computeConnectorPoints(connector, elementsById);
-  connectorGeometryCache.set(connector, { endTarget, points, startTarget });
-  return points;
+  const resolution = computeConnectorBindingResolution(connector, elementsById);
+  const entry = {
+    endTarget,
+    points: resolution.kind === "separated" ? resolution.points : null,
+    startTarget,
+    valid: resolution.kind !== "invalid",
+  };
+  connectorGeometryCache.set(connector, entry);
+  return entry;
 }
 
 /**
  * Callers replace connectors and targets immutably. The WeakMap therefore
  * invalidates only routes whose endpoint object references actually changed.
  */
-function computeConnectorPoints(
+function computeConnectorBindingResolution(
   connector: ConnectorElement,
   elementsById: Readonly<Record<ElementId, CanvasElement>>,
-): Readonly<{ start: CanvasPoint; end: CanvasPoint }> | null {
+): ConnectorBindingResolution {
   const startReference = getEndpointReferencePoint(connector.start, elementsById, connector.pageId);
   const endReference = getEndpointReferencePoint(connector.end, elementsById, connector.pageId);
-  if (!startReference || !endReference) return null;
+  if (!startReference || !endReference) return { kind: "invalid" };
 
   if (
     connector.start.kind === "element"
     && connector.end.kind === "element"
     && connector.start.targetElementId === connector.end.targetElementId
   ) {
-    if (!connector.start.anchor || !connector.end.anchor) return null;
+    if (!connector.start.anchor || !connector.end.anchor) return { kind: "invalid" };
     const start = resolveConnectorEndpoint(connector.start, elementsById, connector.pageId);
     const end = resolveConnectorEndpoint(connector.end, elementsById, connector.pageId);
-    return start && end ? { start, end } : null;
+    return start && end
+      ? { kind: "separated", points: { start, end } }
+      : { kind: "invalid" };
   }
-  if (areCoincidentCanonicalBindings(connector.start, connector.end, elementsById)) return null;
+  if (areCoincidentCanonicalBindings(connector.start, connector.end, elementsById)) {
+    return { kind: "overlap" };
+  }
 
   const fallbackDirection = deterministicCoincidentDirection(connector);
   const closest = getClosestEndpointBoundaryPair(
@@ -217,13 +252,16 @@ function computeConnectorPoints(
     connector.pageId,
     normalizedDirection(startReference, endReference, fallbackDirection),
   );
-  if (!closest || closest.kind === "overlap") return null;
+  if (!closest) return { kind: "invalid" };
+  if (closest.kind === "overlap") return { kind: "overlap" };
   const cleanStart = closest.start;
   const cleanEnd = closest.end;
   const direction = normalizedDirection(cleanStart, cleanEnd, fallbackDirection);
   const start = applyEndpointClearance(connector.start, cleanStart, direction, connector.style.strokeWidth, elementsById);
   const end = applyEndpointClearance(connector.end, cleanEnd, { x: -direction.x, y: -direction.y }, connector.style.strokeWidth, elementsById);
-  return start && end ? { start, end } : null;
+  return start && end
+    ? { kind: "separated", points: { start, end } }
+    : { kind: "invalid" };
 }
 
 function getBoundEndpointTargetReference(

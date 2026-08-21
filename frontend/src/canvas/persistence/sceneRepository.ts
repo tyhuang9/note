@@ -7,6 +7,7 @@ import {
   isSafeCanvasDimension,
   isSafeCanvasRotation,
   isBindableElement,
+  isConnectorBindingPersistable,
   MAX_CANVAS_VALUE,
   resolveConnectorEndpoint,
   resolveConnectorPoints,
@@ -184,7 +185,15 @@ function normalizeLoadedConnectorEndpoints(
     }
     return [{ kind: "free", x: 0, y: 0 }, { kind: "free", x: 0, y: 0 }];
   }
-  if (connector.style.endArrowhead === "arrow") return [start, end];
+  if (connector.style.endArrowhead === "arrow") {
+    const candidate = { ...connector, start, end };
+    return isConnectorBindingPersistable(candidate, elementsById)
+      ? [start, end]
+      : [
+        start.kind === "free" ? start : { kind: "free", x: 0, y: 0 },
+        end.kind === "free" ? end : { kind: "free", x: 0, y: 0 },
+      ];
+  }
   const candidate = { ...connector, start, end };
   const points = resolveConnectorPoints(candidate, elementsById);
   return points

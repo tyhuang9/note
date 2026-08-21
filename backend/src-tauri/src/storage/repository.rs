@@ -1229,7 +1229,8 @@ fn validate_bound_connector_resolution(
     let rotation = required_finite(target, "rotation", context)?;
     validate_canvas_coordinate(x, &format!("{context}.targetElementId.x"))?;
     validate_canvas_coordinate(y, &format!("{context}.targetElementId.y"))?;
-    if !(0.0..=MAX_CANVAS_VALUE).contains(&width) || !(0.0..=MAX_CANVAS_VALUE).contains(&height) {
+    if !(0.0 < width && width <= MAX_CANVAS_VALUE) || !(0.0 < height && height <= MAX_CANVAS_VALUE)
+    {
         return Err(format!("{context}.targetElementId has invalid dimensions"));
     }
     validate_canvas_rotation(rotation, &format!("{context}.targetElementId.rotation"))?;
@@ -1593,6 +1594,13 @@ fn resolve_object_binding_points(
     end: &ObjectBindingEndpoint,
     targets: &[ObjectBindingTarget],
 ) -> Option<ObjectBindingResolution> {
+    if !connector_stroke_width.is_finite()
+        || connector_stroke_width < 0.0
+        || !object_binding_endpoint_is_valid(start, targets)
+        || !object_binding_endpoint_is_valid(end, targets)
+    {
+        return None;
+    }
     if let (
         ObjectBindingEndpoint::Element {
             target_id: start_id,
@@ -1609,8 +1617,8 @@ fn resolve_object_binding_points(
         if start_id == end_id {
             let target = targets.iter().find(|target| target.id == *start_id)?;
             return match (start_t, end_t) {
-                (Some(start_t), Some(end_t)) => Some(ObjectBindingResolution::Separated {
-                    start: resolve_shape_anchor(
+                (Some(start_t), Some(end_t)) => separated_object_binding_resolution(
+                    resolve_shape_anchor(
                         &target.shape,
                         target.x,
                         target.y,
@@ -1621,7 +1629,7 @@ fn resolve_object_binding_points(
                         *start_t,
                         *start_gap,
                     )?,
-                    end: resolve_shape_anchor(
+                    resolve_shape_anchor(
                         &target.shape,
                         target.x,
                         target.y,
@@ -1632,7 +1640,7 @@ fn resolve_object_binding_points(
                         *end_t,
                         *end_gap,
                     )?,
-                }),
+                ),
                 _ => None,
             };
         }
@@ -1664,7 +1672,54 @@ fn resolve_object_binding_points(
         connector_stroke_width,
         targets,
     )?;
-    Some(ObjectBindingResolution::Separated { start, end })
+    separated_object_binding_resolution(start, end)
+}
+
+fn object_binding_endpoint_is_valid(
+    endpoint: &ObjectBindingEndpoint,
+    targets: &[ObjectBindingTarget],
+) -> bool {
+    match endpoint {
+        ObjectBindingEndpoint::Free(point) => object_binding_point_is_safe(*point),
+        ObjectBindingEndpoint::Element { target_id, gap, .. } => {
+            gap.is_finite()
+                && (0.0..=MAX_CANVAS_VALUE).contains(gap)
+                && targets
+                    .iter()
+                    .find(|target| target.id == *target_id)
+                    .is_some_and(object_binding_target_is_valid)
+        }
+    }
+}
+
+fn object_binding_target_is_valid(target: &ObjectBindingTarget) -> bool {
+    object_binding_point_is_safe((target.x, target.y))
+        && target.width.is_finite()
+        && target.height.is_finite()
+        && target.width > 0.0
+        && target.height > 0.0
+        && target.width <= MAX_CANVAS_VALUE
+        && target.height <= MAX_CANVAS_VALUE
+        && target.rotation.is_finite()
+        && target.rotation.abs() <= MAX_CANVAS_ROTATION_DEGREES
+        && target.roundness.is_finite()
+        && target.stroke_width.is_finite()
+        && target.stroke_width >= 0.0
+}
+
+fn object_binding_point_is_safe(point: Point) -> bool {
+    point.0.is_finite()
+        && point.1.is_finite()
+        && point.0.abs() <= MAX_CANVAS_VALUE
+        && point.1.abs() <= MAX_CANVAS_VALUE
+}
+
+fn separated_object_binding_resolution(
+    start: Point,
+    end: Point,
+) -> Option<ObjectBindingResolution> {
+    (object_binding_point_is_safe(start) && object_binding_point_is_safe(end))
+        .then_some(ObjectBindingResolution::Separated { start, end })
 }
 
 fn endpoint_reference(
@@ -2455,13 +2510,18 @@ mod tests {
                 &fixture_endpoint(&vector["end"]),
                 &targets,
             );
+            let accepted = vector["accepted"].as_bool().unwrap();
+            assert_eq!(
+                resolution.is_some(),
+                accepted,
+                "{name} validation acceptance diverged"
+            );
             let Some(expected) = vector
                 .get("expected")
                 .filter(|expected| !expected.is_null())
             else {
                 assert!(
-                    resolution.is_none()
-                        || matches!(resolution, Some(ObjectBindingResolution::Overlap)),
+                    !accepted || matches!(resolution, Some(ObjectBindingResolution::Overlap)),
                     "{name}"
                 );
                 continue;
@@ -3099,6 +3159,49 @@ mod tests {
             load_workspace_data_at(directory.path()).unwrap().pages[0].revision,
             2
         );
+    }
+
+    #[test]
+    fn canonical_binding_rejects_zero_targets_and_post_clearance_overshoot_transactionally() {
+        for case in ["zero-target", "post-clearance-overshoot"] {
+            let directory = root();
+            seed_page(directory.path());
+            let mut target = shape_element("edge-target", "p");
+            let connector = if case == "zero-target" {
+                target["width"] = json!(0.0);
+                connector_element(
+                    json!({"kind":"element","targetElementId":"edge-target","gap":0.0}),
+                    json!({"kind":"free","x":160.0,"y":60.0}),
+                )
+            } else {
+                target["x"] = json!(999_000.0);
+                target["y"] = json!(0.0);
+                target["width"] = json!(100.0);
+                target["height"] = json!(100.0);
+                connector_element(
+                    json!({"kind":"element","targetElementId":"edge-target","gap":MAX_CANVAS_VALUE}),
+                    json!({"kind":"free","x":999_500.0,"y":50.0}),
+                )
+            };
+            let error = apply_scene_changes_at(
+                directory.path(),
+                SceneChangeBatch {
+                    page_id: "p".into(),
+                    base_revision: 0,
+                    upserts: vec![target, connector],
+                    deleted_element_ids: vec![],
+                },
+            )
+            .unwrap_err();
+            assert!(
+                error.contains("invalid dimensions")
+                    || error.contains("invalid or same-target canonical binding"),
+                "{case}: {error}"
+            );
+            let workspace = load_workspace_data_at(directory.path()).unwrap();
+            assert_eq!(workspace.pages[0].revision, 0, "{case}");
+            assert!(workspace.elements.is_empty(), "{case}");
+        }
     }
 
     #[test]

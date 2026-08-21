@@ -7123,7 +7123,7 @@ function App() {
 
   function moveConnectorEndpointByKeyboard(endpoint: "start" | "end") {
     return (event: ReactKeyboardEvent<HTMLButtonElement>) => {
-      if (!event.key.startsWith("Arrow")) return;
+      if (!event.key.startsWith("Arrow") || connectorEndpointChooserRef.current !== null) return;
       const step = (event.shiftKey ? 10 : 1) / zoomLevelRef.current;
       const delta = event.key === "ArrowLeft"
         ? { x: -step, y: 0 }

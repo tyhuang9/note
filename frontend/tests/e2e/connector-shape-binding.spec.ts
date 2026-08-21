@@ -321,6 +321,32 @@ test("endpoint chooser blocks rapid canvas shortcuts and preserves an immediate 
   await expect(firstTarget).toHaveAttribute("aria-pressed", "false");
 });
 
+test("endpoint chooser ignores an immediate endpoint Arrow without a history or persistence write", async ({ page }) => {
+  await installEndpointChooserWorkspace(page);
+  await page.goto("/");
+  const arrow = page.getByRole("button", { name: "Select and move arrow connector" });
+  await arrow.focus();
+  await page.keyboard.press("Enter");
+  const startHandle = page.getByRole("button", { name: "Move connector start endpoint" });
+  await expect(startHandle).toBeVisible();
+  const beforeArrow = await roundedBounds(arrow);
+  await resetEndpointCounts(page);
+
+  await startHandle.focus();
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("ArrowRight");
+  const dialog = page.getByRole("dialog", { name: "Choose start endpoint target" });
+  await expect(dialog).toBeVisible();
+  await expect.poll(() => roundedBounds(arrow)).toEqual(beforeArrow);
+  await expect.poll(() => endpointCounts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
+
+  await dialog.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await page.keyboard.press("Control+z");
+  await expect.poll(() => roundedBounds(arrow)).toEqual(beforeArrow);
+  await expect.poll(() => endpointCounts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
+});
+
 test("compact light endpoint chooser is an in-viewport sheet and Escape restores focus", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 598 });
   await page.getByRole("button", { name: "Dark mode" }).click();
@@ -471,4 +497,76 @@ function round(bounds: { x: number; y: number; width: number; height: number }) 
 
 async function roundedBounds(locator: Locator) {
   return round(await requiredBounds(locator, "element"));
+}
+
+async function endpointCounts(page: Page) {
+  return page.evaluate(() => (window as unknown as {
+    __endpointCounts: { apply: number; persistence: number; session: number };
+  }).__endpointCounts);
+}
+
+async function resetEndpointCounts(page: Page) {
+  await page.evaluate(() => {
+    (window as unknown as {
+      __endpointCounts: { apply: number; persistence: number; session: number };
+    }).__endpointCounts = { apply: 0, persistence: 0, session: 0 };
+  });
+}
+
+async function installEndpointChooserWorkspace(page: Page) {
+  await page.addInitScript(() => {
+    type ElementRecord = Record<string, unknown> & { id: string; pageId: string; type: string };
+    const storageKey = "note-endpoint-chooser-modal-invariant";
+    if (!sessionStorage.getItem(`${storageKey}:initialized`)) {
+      localStorage.removeItem(storageKey);
+      sessionStorage.setItem(`${storageKey}:initialized`, "true");
+    }
+    const style = { fillColor: null, roughness: 1, roundness: 0.18, seed: 17, strokeColor: { kind: "fixed", value: "#4c6ef5" }, strokeStyle: "solid", strokeWidth: 2 };
+    const initial = {
+      elements: [
+        { createdAt: 1, height: 140, id: "target-shape", locked: false, opacity: 1, pageId: "page", rotation: 0, shape: "rectangle", style, type: "shape", updatedAt: 1, width: 240, x: 420, y: 240, zIndex: 1 },
+        { createdAt: 1, end: { kind: "free", x: 980, y: 420 }, id: "endpoint-connector", locked: false, opacity: 1, pageId: "page", routing: "straight", start: { kind: "free", x: 300, y: 420 }, style: { ...style, endArrowhead: "arrow", startArrowhead: "none" }, type: "connector", updatedAt: 1, zIndex: 2 },
+      ] as ElementRecord[],
+      folders: [], isDarkMode: false,
+      pages: [{ folderId: "", id: "page", isBookmarked: false, revision: 0, title: "Endpoint chooser modal invariant" }],
+      sessionState: { openPageTabIds: ["page"], selectedFolderId: "", selectedPageId: "page" }, warnings: [],
+    };
+    const workspace = (localStorage.getItem(storageKey) ? JSON.parse(localStorage.getItem(storageKey)!) : initial) as typeof initial;
+    const runtime = window as unknown as {
+      __TAURI_INTERNALS__: { invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> };
+      __endpointCounts: { apply: number; persistence: number; session: number };
+      isTauri: boolean;
+    };
+    runtime.isTauri = true;
+    runtime.__endpointCounts = { apply: 0, persistence: 0, session: 0 };
+    const persist = () => {
+      runtime.__endpointCounts.persistence += 1;
+      localStorage.setItem(storageKey, JSON.stringify(workspace));
+    };
+    if (!localStorage.getItem(storageKey)) persist();
+    runtime.__endpointCounts.persistence = 0;
+    runtime.__TAURI_INTERNALS__ = { invoke: async (command, args = {}) => {
+      if (command === "initialize_storage") return { databasePath: "endpoint-chooser.db", importedLegacyData: false, schemaVersion: 1, warnings: [] };
+      if (command === "load_workspace_data") return workspace;
+      if (command === "reconcile_workspace_structure") return { pages: workspace.pages };
+      if (command === "apply_scene_changes") {
+        runtime.__endpointCounts.apply += 1;
+        const batch = args.batch as { deletedElementIds: string[]; pageId: string; upserts: ElementRecord[] };
+        const deleted = new Set(batch.deletedElementIds);
+        const upserts = new Map(batch.upserts.map((element) => [element.id, element]));
+        workspace.elements = workspace.elements.filter((element) => element.pageId !== batch.pageId || !deleted.has(element.id)).map((element) => upserts.get(element.id) ?? element);
+        for (const element of batch.upserts) if (!workspace.elements.some((candidate) => candidate.id === element.id)) workspace.elements.push(element);
+        workspace.pages[0].revision += 1;
+        persist();
+        return { newRevision: workspace.pages[0].revision, pageId: batch.pageId };
+      }
+      if (command === "save_session_state") {
+        runtime.__endpointCounts.session += 1;
+        workspace.sessionState = args.state as typeof workspace.sessionState;
+        persist();
+        return;
+      }
+      throw new Error(`Unexpected ${command}`);
+    }};
+  });
 }

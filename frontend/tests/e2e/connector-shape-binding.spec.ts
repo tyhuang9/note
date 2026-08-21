@@ -465,7 +465,7 @@ test("free arrow with no shapes announces that binding targets are unavailable",
 
 async function createRectangle(page: Page, x: number, y: number): Promise<Locator> {
   await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
-  await page.mouse.click(x, y);
+  await dragRectangle(page, x, y);
   const rectangle = page.getByLabel("rectangle shape").last();
   await expect(rectangle).toBeVisible();
   return rectangle;
@@ -473,10 +473,17 @@ async function createRectangle(page: Page, x: number, y: number): Promise<Locato
 
 async function createRectangleWithTool(page: Page, x: number, y: number): Promise<Locator> {
   await selectTool(page, "rectangle");
-  await page.mouse.click(x, y);
+  await dragRectangle(page, x, y);
   const rectangle = page.getByLabel("rectangle shape").last();
   await expect(rectangle).toBeVisible();
   return rectangle;
+}
+
+async function dragRectangle(page: Page, x: number, y: number) {
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + 160, y + 100, { steps: 4 });
+  await page.mouse.up();
 }
 
 async function selectTool(page: Page, tool: string) {

@@ -53,7 +53,7 @@ export function connectorFromDrag(start: CanvasPoint, current: CanvasPoint, modi
     : { start, end: { x: start.x + dx, y: start.y + dy } };
 }
 
-/** Resolves a pointer session into either constrained drag geometry or a useful click default. */
+/** Resolves a pointer session to geometry; shape no-ops return null while Line retains its click default. */
 export function primitiveGeometryFromSession(
   tool: PrimitiveTool,
   start: CanvasPoint,

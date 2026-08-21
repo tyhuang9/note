@@ -913,7 +913,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
         event.key === "Escape"
         && !(event.target instanceof Element && event.target.closest(".search-panel"))
       ) {
-        cancelArrowAuthoring();
+        cancelTransientPointerInteraction();
       }
     };
     window.addEventListener("blur", handleWindowBlur);
@@ -922,7 +922,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       window.removeEventListener("blur", handleWindowBlur);
       window.removeEventListener("keydown", handleEscape, true);
     };
-  }, [cancelArrowAuthoring, cancelTransientPointerInteraction]);
+  }, [cancelTransientPointerInteraction]);
 
   useEffect(() => {
     if (

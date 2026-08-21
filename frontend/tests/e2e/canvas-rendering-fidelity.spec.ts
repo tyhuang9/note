@@ -140,7 +140,10 @@ test("uses tool-specific native cursors and localized canvas keyboard focus", as
 
   await page.locator('[data-tool="diamond"]').click();
   const diamondStart = { x: bounds.x + 320, y: bounds.y + 320 };
-  await page.mouse.click(diamondStart.x, diamondStart.y);
+  await page.mouse.move(diamondStart.x, diamondStart.y);
+  await page.mouse.down();
+  await page.mouse.move(diamondStart.x + 140, diamondStart.y + 100, { steps: 4 });
+  await page.mouse.up();
   const diamond = page.getByRole("button", {
     name: "Select and move diamond shape. Press F2 to edit contained text.",
   });

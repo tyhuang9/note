@@ -25,7 +25,7 @@ test("creates primitives, applies tool lock, supports temporary hand, and erases
   await expect(lock).toHaveAccessibleName("Turn off drawing tool lock");
   await expect(lock).toHaveAttribute("aria-pressed", "true");
   await rectangleTool.click();
-  await page.mouse.click(bounds.x + 300, bounds.y + 320);
+  await dragShape(page, bounds.x + 300, bounds.y + 320, 160, 100);
   const rectangle = page.locator('svg.primitive-shape[aria-label="rectangle shape"]');
   await expect(rectangle).toHaveCount(1);
   await expect(rectangleTool).toHaveAttribute("aria-pressed", "true");
@@ -129,7 +129,7 @@ test("routes drawing shortcuts from canvas contexts without stealing editable co
   await page.keyboard.press("r");
   await expect(rectangleTool).toHaveAttribute("aria-pressed", "true");
 
-  await page.mouse.click(bounds.x + 450, bounds.y + 330);
+  await dragShape(page, bounds.x + 450, bounds.y + 330, 160, 100);
   const selectedRectangle = page.getByRole("button", { name: "Select and move rectangle shape. Press F2 to edit contained text." });
   await selectedRectangle.focus();
   await page.keyboard.press("o");
@@ -229,9 +229,9 @@ test("renders every geometric primitive and moves connectors with a composite se
   if (!bounds) throw new Error("Canvas bounds were not available.");
 
   await page.getByRole("button", { name: "Diamond (D / 3)" }).click();
-  await page.mouse.click(bounds.x + 330, bounds.y + 300);
+  await dragShape(page, bounds.x + 330, bounds.y + 300, 140, 100);
   await page.getByRole("button", { name: "Ellipse (O / 4)" }).click();
-  await page.mouse.click(bounds.x + 620, bounds.y + 300);
+  await dragShape(page, bounds.x + 620, bounds.y + 300, 140, 100);
 
   await page.getByRole("button", { name: "Line (L / 6)" }).click();
   await page.mouse.move(bounds.x + 330, bounds.y + 520);
@@ -300,7 +300,7 @@ test("selects, moves, and deletes shapes and connectors from the keyboard", asyn
   if (!bounds) throw new Error("Canvas bounds were not available.");
 
   await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
-  await page.mouse.click(bounds.x + 420, bounds.y + 320);
+  await dragShape(page, bounds.x + 420, bounds.y + 320, 160, 100);
   const shape = page.getByRole("button", { name: "Select and move rectangle shape. Press F2 to edit contained text." });
   await page.getByRole("button", { name: "Select (V / 1)" }).click();
   await page.mouse.click(bounds.x + 850, bounds.y + 650);
@@ -417,4 +417,11 @@ async function chooseImage(page: Page, name: string) {
   await page.getByRole("button", { name: "Image (I / 9)" }).click();
   const chooser = await chooserPromise;
   await chooser.setFiles({ buffer: PNG, mimeType: "image/png", name });
+}
+
+async function dragShape(page: Page, x: number, y: number, width: number, height: number) {
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + width, y + height, { steps: 4 });
+  await page.mouse.up();
 }

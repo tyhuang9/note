@@ -71,7 +71,7 @@ test("SQLite bridge reconciles structure before scene changes and reloads text",
   await page.evaluate(() => {
     (window as unknown as { __notePersistenceCalls: string[] }).__notePersistenceCalls = [];
   });
-  await page.mouse.click(bounds.x + 620, bounds.y + 280);
+  await dragShape(page, bounds.x + 620, bounds.y + 280);
   await expect.poll(async () => (await persistenceCommands(page)).filter((command) => command === "apply_scene_changes").length).toBe(1);
   await page.evaluate(() => {
     (window as unknown as { __notePersistenceCalls: string[] }).__notePersistenceCalls = [];
@@ -121,7 +121,7 @@ test("persists a bound arrow endpoint and resolves it from the current target af
   if (!canvasBounds) throw new Error("Canvas bounds were not available.");
 
   await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
-  await page.mouse.click(canvasBounds.x + 360, canvasBounds.y + 300);
+  await dragShape(page, canvasBounds.x + 360, canvasBounds.y + 300);
   const rectangleControl = page.getByRole("button", { name: "Select and move rectangle shape. Press F2 to edit contained text." });
   const targetId = await rectangleControl.getAttribute("data-canvas-element-id");
   if (!targetId) throw new Error("Rectangle target id was unavailable.");
@@ -165,6 +165,13 @@ async function persistenceCommands(page: Page): Promise<string[]> {
   return page.evaluate(
     () => (window as unknown as { __notePersistenceCalls: string[] }).__notePersistenceCalls,
   );
+}
+
+async function dragShape(page: Page, x: number, y: number) {
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + 160, y + 100, { steps: 4 });
+  await page.mouse.up();
 }
 
 async function installTauriStorageMock(page: Page) {

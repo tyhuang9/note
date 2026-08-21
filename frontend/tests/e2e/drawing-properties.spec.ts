@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 test("renders authoring chrome only after a live page canvas is available", async ({ page }) => {
   await page.goto("/");
@@ -67,7 +67,7 @@ test("applies tool defaults, edits compatible selections, and commits opacity on
   await expect(properties.getByRole("button", { name: "Rounded corners" })).toHaveAttribute("aria-pressed", "true");
   await properties.getByRole("button", { name: "Stroke color #e03131" }).click();
   await properties.getByRole("button", { name: "Thick stroke" }).click();
-  await page.mouse.click(canvasBounds.x + 390, canvasBounds.y + 310);
+  await dragShape(page, canvasBounds.x + 390, canvasBounds.y + 310);
 
   const rectangleShape = page.locator('svg.primitive-shape[aria-label="rectangle shape"]');
   const rectangle = page.locator(".primitive-element").filter({ has: rectangleShape });
@@ -405,7 +405,7 @@ test("keeps compact properties reachable at narrow width and effective 200% zoom
   const canvas = page.getByRole("tabpanel");
   const canvasBounds = await canvas.boundingBox();
   if (!canvasBounds) throw new Error("Canvas bounds were not available.");
-  await page.mouse.click(canvasBounds.x + 160, canvasBounds.y + 260);
+  await dragShape(page, canvasBounds.x + 160, canvasBounds.y + 260);
   const properties = page.getByRole("complementary", { name: "Drawing properties" });
   const adjustments = page.getByRole("button", { name: "Drawing properties" });
   await expect(adjustments).toBeVisible();
@@ -453,7 +453,7 @@ test("keeps compact properties reachable at narrow width and effective 200% zoom
     const zoomedCanvas = zoomedPage.getByRole("tabpanel");
     const zoomedCanvasBounds = await zoomedCanvas.boundingBox();
     if (!zoomedCanvasBounds) throw new Error("Zoomed canvas bounds were not available.");
-    await zoomedPage.mouse.click(zoomedCanvasBounds.x + 160, zoomedCanvasBounds.y + 260);
+    await dragShape(zoomedPage, zoomedCanvasBounds.x + 160, zoomedCanvasBounds.y + 260);
     const zoomedProperties = zoomedPage.getByRole("complementary", { name: "Drawing properties" });
     await zoomedPage.getByRole("button", { name: "Drawing properties" }).click();
     await expect(zoomedProperties).toBeVisible();
@@ -516,7 +516,7 @@ test("cancels interrupted opacity previews and commits lost pointer capture once
   const bounds = await canvas.boundingBox();
   if (!bounds) throw new Error("Canvas bounds were not available.");
   await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
-  await page.mouse.click(bounds.x + 420, bounds.y + 320);
+  await dragShape(page, bounds.x + 420, bounds.y + 320);
   const rectangle = page.getByRole("button", { name: "Select and move rectangle shape. Press F2 to edit contained text." });
   const opacity = page.getByRole("slider", { name: "Opacity" });
 
@@ -546,7 +546,7 @@ test("shows text formatting only for selected or edited text", async ({ page }) 
   if (!canvasBounds) throw new Error("Canvas bounds were not available.");
 
   await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
-  await page.mouse.click(canvasBounds.x + 380, canvasBounds.y + 300);
+  await dragShape(page, canvasBounds.x + 380, canvasBounds.y + 300);
   await expect(page.getByRole("toolbar", { name: "Text formatting" })).toHaveCount(0);
 
   await page.getByRole("button", { name: "Text (T / 8)" }).click();
@@ -559,3 +559,10 @@ test("shows text formatting only for selected or edited text", async ({ page }) 
   await page.mouse.click(canvasBounds.x + 760, canvasBounds.y + 520);
   await expect(page.getByRole("toolbar", { name: "Text formatting" })).toHaveCount(0);
 });
+
+async function dragShape(page: Page, x: number, y: number) {
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + 160, y + 100, { steps: 4 });
+  await page.mouse.up();
+}

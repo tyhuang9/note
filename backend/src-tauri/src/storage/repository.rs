@@ -261,10 +261,11 @@ fn validate_primitive_style(value: &Value, context: &str) -> Result<(), String> 
     Ok(())
 }
 
-fn validate_rich_text_value(value: &Value, context: &str) -> Result<(), String> {
+fn validate_shape_rich_text_value(value: &Value, context: &str) -> Result<(), String> {
     let value = value
         .as_object()
         .ok_or_else(|| format!("{context} must be an object"))?;
+    validate_known_keys(value, &["content", "richContent"], context)?;
     let content = value
         .get("content")
         .and_then(Value::as_str)
@@ -588,13 +589,8 @@ fn validate_rich_image_attrs(
 }
 
 fn validate_rich_image_source(src: &str, context: &str) -> Result<(), String> {
-    if is_safe_absolute_url(src, &["http", "https"]) {
-        return Ok(());
-    }
     let Some((header, payload)) = src.split_once(',') else {
-        return Err(format!(
-            "{context} must use http(s) or a supported raster data URL"
-        ));
+        return Err(format!("{context} must use a supported raster data URL"));
     };
     if !matches!(
         header.to_ascii_lowercase().as_str(),
@@ -603,9 +599,7 @@ fn validate_rich_image_source(src: &str, context: &str) -> Result<(), String> {
             | "data:image/gif;base64"
             | "data:image/webp;base64"
     ) {
-        return Err(format!(
-            "{context} must use http(s) or a supported raster data URL"
-        ));
+        return Err(format!("{context} must use a supported raster data URL"));
     }
     let decoded = STANDARD
         .decode(payload)
@@ -858,7 +852,9 @@ fn validate_element(value: &Value, page_id: &str) -> Result<(), String> {
     }
     match kind {
         "text" => {
-            validate_rich_text_value(value, "text element")?;
+            if value.get("content").and_then(Value::as_str).is_none() {
+                return Err("text element.content must be a string".into());
+            }
             if let Some(background_mode) = value.get("backgroundMode") {
                 if !matches!(background_mode.as_str(), Some("surface" | "transparent")) {
                     return Err("text element.backgroundMode is invalid".into());
@@ -884,7 +880,7 @@ fn validate_element(value: &Value, page_id: &str) -> Result<(), String> {
             }
             validate_primitive_style(value, "shape")?;
             if let Some(text) = value.get("text") {
-                validate_rich_text_value(text, "shape element.text")?;
+                validate_shape_rich_text_value(text, "shape element.text")?;
             }
         }
         "connector" => {
@@ -2066,6 +2062,7 @@ mod tests {
             json!({"content":"label","richContent":{"type":"paragraph"}}),
             json!({"content":"label","richContent":{"type":"doc","content":[{"type":"script","text":"bad"}]}}),
             json!({"content":"label","richContent":{"type":"doc","content":[{"type":"heading","attrs":{"level":9}}]}}),
+            json!({"content":"label","richContent":{"type":"doc","content":[{"type":"paragraph"}]},"legacy":true}),
         ] {
             let mut invalid = shape_element("invalid", "p");
             invalid["text"] = invalid_text;
@@ -2112,15 +2109,34 @@ mod tests {
     }
 
     #[test]
-    fn standalone_text_uses_the_shared_rich_document_validator() {
-        let mut valid = element("rich-text", 1);
-        valid["richContent"] = json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"ok","marks":[{"type":"italic"}]}]}]});
-        assert!(validate_element(&valid, "p").is_ok());
+    fn legacy_standalone_rich_text_remains_permissive_and_byte_equivalent() {
+        let directory = root();
+        seed_page(directory.path());
+        let legacy_rich = json!({"type":"doc","content":[
+            {"type":"paragraph","content":[{"type":"text","text":"legacy","marks":[
+                {"type":"link","attrs":{"href":"custom:destination","title":null}},
+                {"type":"textStyle","attrs":{"fontFamily":"arbitrary-family","fontSize":"144px","legacy":true}}
+            ]}]},
+            {"type":"image","attrs":{"src":"data:image/svg+xml;base64,PHN2Zz4=","alt":null}}
+        ]});
+        let mut standalone = element("legacy-rich-text", 1);
+        standalone["richContent"] = legacy_rich.clone();
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![standalone],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+        let loaded = load_workspace_data_at(directory.path()).unwrap();
+        assert_eq!(loaded.elements[0]["richContent"], legacy_rich);
 
-        valid["richContent"] = json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"no","marks":[{"type":"blink"}]}]}]});
-        assert!(validate_element(&valid, "p")
-            .unwrap_err()
-            .contains("not supported"));
+        let mut shape = shape_element("strict-shape", "p");
+        shape["text"] = json!({"content":"legacy","richContent":legacy_rich});
+        assert!(validate_element(&shape, "p").is_err());
     }
 
     #[test]

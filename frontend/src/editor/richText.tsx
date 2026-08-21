@@ -48,52 +48,57 @@ const TextStyle = Mark.create({
   },
 });
 
-const RichImage = TiptapNode.create({
-  name: "image",
-  group: "block",
-  atom: true,
-  draggable: false,
-  selectable: true,
+function createRichImageExtension(mode: "legacy" | "shape") {
+  return TiptapNode.create({
+    name: "image",
+    group: "block",
+    atom: true,
+    draggable: false,
+    selectable: true,
 
-  addAttributes() {
-    return {
-      alt: { default: null },
-      height: {
-        default: null,
-        parseHTML: (element: HTMLElement) => positiveNumberAttribute(element, "height"),
-      },
-      src: { default: null },
-      title: { default: null },
-      width: {
-        default: null,
-        parseHTML: (element: HTMLElement) => positiveNumberAttribute(element, "width"),
-      },
-    };
-  },
+    addAttributes() {
+      return {
+        alt: { default: null },
+        height: {
+          default: null,
+          parseHTML: (element: HTMLElement) => positiveNumberAttribute(element, "height"),
+        },
+        src: { default: null },
+        title: { default: null },
+        width: {
+          default: null,
+          parseHTML: (element: HTMLElement) => positiveNumberAttribute(element, "width"),
+        },
+      };
+    },
 
-  parseHTML() {
-    return [{
-      tag: "img[src]",
-      getAttrs: (node) => node instanceof HTMLElement && isSafeRichImageSource(node.getAttribute("src") ?? "")
-        ? null
-        : false,
-    }];
-  },
+    parseHTML() {
+      return [{
+        tag: "img[src]",
+        getAttrs: (node) => mode === "legacy"
+          || node instanceof HTMLElement && isSafeRichImageSource(node.getAttribute("src") ?? "")
+          ? null
+          : false,
+      }];
+    },
 
-  renderHTML({ HTMLAttributes }) {
-    const src = typeof HTMLAttributes.src === "string" && isSafeRichImageSource(HTMLAttributes.src)
-      ? HTMLAttributes.src
-      : undefined;
-    return ["img", mergeAttributes(HTMLAttributes, { src })];
-  },
-});
+    renderHTML({ HTMLAttributes }) {
+      const src = typeof HTMLAttributes.src === "string"
+        && (mode === "legacy" || isSafeRichImageSource(HTMLAttributes.src))
+        ? HTMLAttributes.src
+        : undefined;
+      return ["img", mergeAttributes(HTMLAttributes, { src })];
+    },
+  });
+}
 
 function positiveNumberAttribute(element: HTMLElement, name: string) {
   const value = Number(element.getAttribute(name));
   return Number.isFinite(value) && value > 0 ? value : null;
 }
 
-export const richTextExtensions = [
+export const richTextExtensions = [StarterKit, TextStyle, createRichImageExtension("legacy")];
+export const shapeRichTextExtensions = [
   StarterKit.configure({
     link: {
       isAllowedUri: isSafeLinkHref,
@@ -102,7 +107,7 @@ export const richTextExtensions = [
     },
   }),
   TextStyle,
-  RichImage,
+  createRichImageExtension("shape"),
 ];
 
 export function isSafeLinkHref(href: string): boolean {
@@ -116,14 +121,6 @@ export function isSafeLinkHref(href: string): boolean {
 
 export function isSafeRichImageSource(src: string): boolean {
   if (!src || src.length > MAX_RICH_TEXT_BYTES) return false;
-  if (/^https?:\/\//i.test(src)) {
-    try {
-      const url = new URL(src);
-      return url.protocol === "http:" || url.protocol === "https:";
-    } catch {
-      return false;
-    }
-  }
   const match = SAFE_DATA_IMAGE_PATTERN.exec(src);
   if (!match || match[2].length % 4 !== 0) return false;
   const padding = match[2].endsWith("==") ? 2 : match[2].endsWith("=") ? 1 : 0;
@@ -315,12 +312,17 @@ export function hasTipTapRenderableContent(content: JSONContent): boolean {
 export function getCanonicalRichTextDocument(value: RichTextValue): JSONContent {
   if (
     value.richContent
-    && validateRichTextDocument(value.richContent) === null
     && (!value.content.trim() || hasTipTapRenderableContent(value.richContent))
   ) {
     return value.richContent;
   }
   return plainTextToTipTapDoc(value.content);
+}
+
+export function getCanonicalShapeRichTextDocument(value: RichTextValue): JSONContent {
+  return value.richContent && validateRichTextDocument(value.richContent) === null
+    ? value.richContent
+    : plainTextToTipTapDoc(value.content);
 }
 
 export function richTextToPlainText(content: JSONContent): string {
@@ -357,7 +359,7 @@ function appendInline(lines: string[], text: string) {
 
 export function renderRichTextContent(value: RichTextValue, key = "root"): ReactNode {
   try {
-    return renderTipTapContent(getCanonicalRichTextDocument(value), key);
+    return renderTipTapContent(getCanonicalRichTextDocument(value), key, "legacy");
   } catch {
     return value.content.split("\n").map((line, index) => (
       <p key={`${key}-fallback-${index}`}>{line || <br />}</p>
@@ -365,9 +367,13 @@ export function renderRichTextContent(value: RichTextValue, key = "root"): React
   }
 }
 
-function renderTipTapContent(content: JSONContent, key: string): ReactNode {
-  if (content.type === "text") return renderTextMarks(content.text ?? "", content.marks ?? [], key);
-  const children = content.content?.map((child, index) => renderTipTapContent(child, `${key}-${index}`));
+export function renderShapeRichTextContent(value: RichTextValue, key = "root"): ReactNode {
+  return renderTipTapContent(getCanonicalShapeRichTextDocument(value), key, "shape");
+}
+
+function renderTipTapContent(content: JSONContent, key: string, mode: "legacy" | "shape"): ReactNode {
+  if (content.type === "text") return renderTextMarks(content.text ?? "", content.marks ?? [], key, mode);
+  const children = content.content?.map((child, index) => renderTipTapContent(child, `${key}-${index}`, mode));
   switch (content.type) {
     case "doc": return children;
     case "paragraph": return <p key={key}>{children?.length ? children : <br />}</p>;
@@ -384,7 +390,7 @@ function renderTipTapContent(content: JSONContent, key: string): ReactNode {
     }
     case "image": {
       const src = typeof content.attrs?.src === "string" ? content.attrs.src : "";
-      if (!isSafeRichImageSource(src)) return null;
+      if (!src || mode === "shape" && !isSafeRichImageSource(src)) return null;
       const alt = typeof content.attrs?.alt === "string" ? content.attrs.alt : "Pasted image";
       const title = typeof content.attrs?.title === "string" ? content.attrs.title : undefined;
       const width = Number(content.attrs?.width);
@@ -397,7 +403,12 @@ function renderTipTapContent(content: JSONContent, key: string): ReactNode {
   }
 }
 
-function renderTextMarks(text: string, marks: NonNullable<JSONContent["marks"]>, key: string) {
+function renderTextMarks(
+  text: string,
+  marks: NonNullable<JSONContent["marks"]>,
+  key: string,
+  mode: "legacy" | "shape",
+) {
   return marks.reduce<ReactNode>((node, mark, index) => {
     const markKey = `${key}-mark-${index}`;
     switch (mark.type) {
@@ -414,8 +425,8 @@ function renderTextMarks(text: string, marks: NonNullable<JSONContent["marks"]>,
       }
       case "link": {
         const href = typeof mark.attrs?.href === "string" ? mark.attrs.href : "";
-        return isSafeLinkHref(href)
-          ? <a href={href} key={markKey} rel="noopener noreferrer">{node}</a>
+        return mode === "shape" && isSafeLinkHref(href)
+          ? <span className="shape-text-link" key={markKey}>{node}</span>
           : node;
       }
       default: return node;

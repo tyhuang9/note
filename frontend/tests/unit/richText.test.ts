@@ -3,6 +3,7 @@ import { getSchema } from "@tiptap/core";
 import {
   cloneRichTextValue,
   getCanonicalRichTextDocument,
+  getCanonicalShapeRichTextDocument,
   hasTipTapRenderableContent,
   richTextToPlainText,
   MAX_EMBEDDED_RICH_IMAGE_BYTES,
@@ -68,6 +69,20 @@ describe("shared rich text model", () => {
     for (const vector of vectors.invalid) {
       expect(validateRichTextDocument(vector.doc), vector.name).not.toBeNull();
     }
+  });
+
+  it("preserves legacy standalone rich JSON while strict shape mode rejects it", () => {
+    const legacyRich = {
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "legacy", marks: [{ type: "link", attrs: { href: "custom:destination" } }, { type: "textStyle", attrs: { fontSize: "144px", legacy: true } }] }] },
+        { type: "image", attrs: { src: "data:image/svg+xml;base64,PHN2Zz4=" } },
+      ],
+    };
+    const value = { content: "legacy", richContent: legacyRich };
+    expect(getCanonicalRichTextDocument(value)).toBe(legacyRich);
+    expect(validateRichTextDocument(legacyRich)).not.toBeNull();
+    expect(getCanonicalShapeRichTextDocument(value)).not.toBe(legacyRich);
   });
 
   it("round-trips the editor-default golden through the actual Tiptap schema", () => {

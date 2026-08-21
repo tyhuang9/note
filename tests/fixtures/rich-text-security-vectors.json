@@ -30,6 +30,7 @@
   "invalid": [
     { "name": "javascript link", "doc": { "type": "doc", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "x", "marks": [{ "type": "link", "attrs": { "href": "javascript:alert(1)" } }] }] }] } },
     { "name": "file image", "doc": { "type": "doc", "content": [{ "type": "image", "attrs": { "src": "file:///secret.png" } }] } },
+    { "name": "remote image", "doc": { "type": "doc", "content": [{ "type": "image", "attrs": { "src": "https://example.com/tracker.png" } }] } },
     { "name": "svg data image", "doc": { "type": "doc", "content": [{ "type": "image", "attrs": { "src": "data:image/svg+xml;base64,PHN2Zz4=" } }] } },
     { "name": "malformed base64", "doc": { "type": "doc", "content": [{ "type": "image", "attrs": { "src": "data:image/png;base64,!" } }] } },
     { "name": "wrong list child", "doc": { "type": "doc", "content": [{ "type": "bulletList", "content": [{ "type": "paragraph" }] }] } },

@@ -198,6 +198,9 @@ test("desktop dark endpoint chooser traps focus, stays below the toolbar, and bi
   await expect(dialog).toHaveAttribute("aria-modal", "true");
   await expect(page.locator("#root")).toHaveAttribute("inert", "");
   await expect(page.locator(".connector-endpoint-chooser-layer")).toHaveAttribute("data-theme", "dark");
+  const darkHeadingContrast = await textContrast(dialog.getByRole("heading", { level: 2 }));
+  expect(darkHeadingContrast.color).toBe("rgb(245, 243, 255)");
+  expect(darkHeadingContrast.ratio).toBeGreaterThanOrEqual(4.5);
   await page.keyboard.press("r");
   await expect(dialog).toBeVisible();
   await expect(page.getByRole("button", { name: "Select (V / 1)" })).toHaveAttribute("aria-pressed", "true");
@@ -405,6 +408,9 @@ test("compact light endpoint chooser is an in-viewport sheet and Escape restores
   expect(dialogBounds.x + dialogBounds.width).toBeLessThanOrEqual(320);
   expect(dialogBounds.y + dialogBounds.height).toBeLessThanOrEqual(598);
   expect(await dialog.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe("rgb(255, 255, 255)");
+  const lightHeadingContrast = await textContrast(dialog.getByRole("heading", { level: 2 }));
+  expect(lightHeadingContrast.color).toBe("rgb(21, 28, 39)");
+  expect(lightHeadingContrast.ratio).toBeGreaterThanOrEqual(4.5);
   const longTarget = dialog.getByRole("button", { name: /Text 1 \(Long compact binding target lab/ });
   await expect(longTarget).toBeVisible();
   const compactTargetMetrics = await longTarget.evaluate((element) => {
@@ -541,6 +547,27 @@ async function endpointCounts(page: Page) {
   return page.evaluate(() => (window as unknown as {
     __endpointCounts: { apply: number; persistence: number; session: number };
   }).__endpointCounts);
+}
+
+async function textContrast(locator: Locator) {
+  return locator.evaluate((element) => {
+    const parse = (color: string) => {
+      const channels = color.match(/[\d.]+/g)?.slice(0, 3).map(Number);
+      if (!channels || channels.length !== 3) throw new Error(`Could not parse ${color}.`);
+      return channels;
+    };
+    const luminance = (color: string) => parse(color).map((channel) => {
+      const normalized = channel / 255;
+      return normalized <= 0.03928 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+    }).reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index], 0);
+    const style = getComputedStyle(element);
+    const foreground = luminance(style.color);
+    const background = luminance(getComputedStyle(element.closest(".connector-endpoint-chooser")!).backgroundColor);
+    return {
+      color: style.color,
+      ratio: (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05),
+    };
+  });
 }
 
 async function resetEndpointCounts(page: Page) {

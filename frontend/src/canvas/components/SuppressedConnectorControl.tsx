@@ -1,4 +1,4 @@
-import { useId, type MouseEvent } from "react";
+import { useId, useLayoutEffect, useRef, useState, type MouseEvent } from "react";
 import type { CanvasSize, PanOffset } from "../../appTypes";
 import type { CanvasElement, ConnectorElement, ElementId } from "../model/elements";
 import { isBindableElement, resolveConnectorPoints } from "../model/connectorBinding";
@@ -160,7 +160,54 @@ export function SuppressedConnectorControl({
   top,
 }: SuppressedConnectorControlProps) {
   const managementId = useId();
+  const markerContainerRef = useRef<HTMLDivElement>(null);
+  const managementRef = useRef<HTMLDivElement>(null);
+  const [managementPosition, setManagementPosition] = useState({ left, top });
   const stopPointerPropagation = (event: MouseEvent<HTMLElement>) => event.stopPropagation();
+
+  useLayoutEffect(() => {
+    if (!isSelected) return;
+    const marker = markerContainerRef.current;
+    const management = managementRef.current;
+    const overlay = marker?.closest<HTMLElement>(".canvas-interaction-overlay");
+    if (!marker || !management || !overlay) return;
+
+    const updatePosition = () => {
+      const overlayBounds = overlay.getBoundingClientRect();
+      const markerBounds = marker.getBoundingClientRect();
+      const managementBounds = management.getBoundingClientRect();
+      const inset = CANVAS_EDGE_INSET_PX;
+      const gap = CONTROL_GAP_PX;
+      let nextLeft = markerBounds.left - overlayBounds.left;
+      let nextTop = markerBounds.top - overlayBounds.top;
+      if (side === "left") nextLeft += markerBounds.width + gap;
+      if (side === "right") nextLeft -= managementBounds.width + gap;
+      if (side === "top") nextTop += markerBounds.height + gap;
+      if (side === "bottom") nextTop -= managementBounds.height + gap;
+      if (side === "top" || side === "bottom") {
+        nextLeft += (markerBounds.width - managementBounds.width) / 2;
+      } else {
+        nextTop += (markerBounds.height - managementBounds.height) / 2;
+      }
+      const maximumLeft = Math.max(inset, overlayBounds.width - inset - managementBounds.width);
+      const maximumTop = Math.max(inset, overlayBounds.height - inset - managementBounds.height);
+      setManagementPosition({
+        left: Math.min(Math.max(nextLeft, inset), maximumLeft),
+        top: Math.min(Math.max(nextTop, inset), maximumTop),
+      });
+    };
+
+    updatePosition();
+    const resizeObserver = typeof ResizeObserver === "function" ? new ResizeObserver(updatePosition) : null;
+    resizeObserver?.observe(overlay);
+    resizeObserver?.observe(management);
+    window.addEventListener("resize", updatePosition);
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", updatePosition);
+    };
+  }, [isSelected, left, side, top]);
+
   return (
     <>
       <div
@@ -168,6 +215,7 @@ export function SuppressedConnectorControl({
         data-side={side}
         data-suppressed-connector-id={connectorId}
         onPointerDown={stopPointerPropagation}
+        ref={markerContainerRef}
         style={{ left, top }}
       >
         <button
@@ -196,7 +244,9 @@ export function SuppressedConnectorControl({
           id={managementId}
           onClick={stopPointerPropagation}
           onPointerDown={stopPointerPropagation}
+          ref={managementRef}
           role="group"
+          style={managementPosition}
         >
           <span className="suppressed-connector-management-status">{label} hidden</span>
           <button

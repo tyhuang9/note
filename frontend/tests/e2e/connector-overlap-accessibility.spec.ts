@@ -40,6 +40,11 @@ test("an overlap-suppressed connector stays visibly keyboard-manageable for rebi
   await expect(start).toBeVisible();
   await expect(end).toBeVisible();
   await expect(remove).toBeVisible();
+  const canvasBounds = await requiredBounds(canvas, "canvas");
+  const management = page.getByRole("group", { name: "Arrow connector 1 endpoint management" });
+  const managementBounds = await requiredBounds(management, "connector management");
+  assertContained(managementBounds, canvasBounds);
+  expect(rectangleDistance(markerBounds, managementBounds)).toBeLessThanOrEqual(12);
   for (const control of [start, end, remove]) {
     const bounds = await requiredBounds(control, "suppressed connector management control");
     expect(bounds.width).toBeGreaterThanOrEqual(44);
@@ -103,8 +108,8 @@ test("an overlap-suppressed connector stays visibly keyboard-manageable for rebi
   await page.keyboard.press("Enter");
   const compactManagement = page.getByRole("group", { name: "Arrow connector 1 endpoint management" });
   const compactManagementBounds = await requiredBounds(compactManagement, "compact connector management");
-  expect(compactManagementBounds.x).toBeGreaterThanOrEqual(compactCanvasBounds.x);
-  expect(compactManagementBounds.x + compactManagementBounds.width).toBeLessThanOrEqual(compactCanvasBounds.x + compactCanvasBounds.width);
+  assertContained(compactManagementBounds, compactCanvasBounds);
+  expect(rectangleDistance(compactMarkerBounds, compactManagementBounds)).toBeLessThanOrEqual(12);
   const deleteButton = page.getByRole("button", { name: "Delete Arrow connector 1" });
   await deleteButton.focus();
   await resetCounts(page);
@@ -233,6 +238,19 @@ function rectanglesIntersect(first: { height: number; width: number; x: number; 
     && first.x + first.width > second.x
     && first.y < second.y + second.height
     && first.y + first.height > second.y;
+}
+
+function rectangleDistance(first: { height: number; width: number; x: number; y: number }, second: { height: number; width: number; x: number; y: number }) {
+  const horizontal = Math.max(first.x - (second.x + second.width), second.x - (first.x + first.width), 0);
+  const vertical = Math.max(first.y - (second.y + second.height), second.y - (first.y + first.height), 0);
+  return Math.hypot(horizontal, vertical);
+}
+
+function assertContained(inner: { height: number; width: number; x: number; y: number }, outer: { height: number; width: number; x: number; y: number }) {
+  expect(inner.x).toBeGreaterThanOrEqual(outer.x);
+  expect(inner.y).toBeGreaterThanOrEqual(outer.y);
+  expect(inner.x + inner.width).toBeLessThanOrEqual(outer.x + outer.width);
+  expect(inner.y + inner.height).toBeLessThanOrEqual(outer.y + outer.height);
 }
 
 async function requiredBounds(locator: Locator, label: string) {

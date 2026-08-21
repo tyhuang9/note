@@ -1,6 +1,66 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
-type FixtureMode = "detachable" | "blocked";
+type FixtureMode = "detachable" | "blocked" | "binding";
+
+test("two-click creation and chooser binding reject post-clearance maximum-envelope overshoot atomically", async ({ page }) => {
+  await installExtremeOverlapWorkspace(page, "binding");
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await page.goto("/");
+
+  const canvas = page.getByRole("tabpanel");
+  const status = page.locator('.canvas-accessibility-status[role="status"]');
+  const targetBounds = await requiredBounds(
+    page.locator('[data-canvas-element-id="edge-first"]'),
+    "maximum-envelope target",
+  );
+  const targetCenter = {
+    x: targetBounds.x + targetBounds.width / 2,
+    y: targetBounds.y + targetBounds.height * 0.3,
+  };
+  const outsideTarget = { x: targetBounds.x + targetBounds.width + 40, y: targetCenter.y };
+  await page.locator('.canvas-tool-palette [data-tool="arrow"]').click();
+  await page.waitForTimeout(650);
+  await resetCounts(page);
+  await page.mouse.click(outsideTarget.x, outsideTarget.y);
+  await page.mouse.move(targetCenter.x, targetCenter.y, { steps: 4 });
+  await expect(page.locator('[data-connector-target-id="edge-first"]')).toHaveAttribute(
+    "data-connector-binding-state",
+    "snapped",
+  );
+  await page.mouse.click(targetCenter.x, targetCenter.y);
+
+  await expect(status).toHaveText(
+    "Arrow could not be created because its resolved endpoints exceed the safe canvas boundary.",
+  );
+  await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
+  await expect.poll(() => currentIds(page)).toEqual(["edge-connector", "edge-first"]);
+
+  await page.locator('.canvas-tool-palette [data-tool="select"]').click();
+  const connector = page.locator('[data-canvas-element-id="edge-connector"]');
+  await connector.focus();
+  await page.keyboard.press("Enter");
+  const startHandle = page.getByRole("button", { name: "Move connector start endpoint" });
+  await startHandle.focus();
+  await page.keyboard.press("Enter");
+  const dialog = page.getByRole("dialog", { name: "Choose start endpoint target" });
+  await dialog.getByRole("button", { name: /^Rectangle 1 / }).click();
+  const before = await currentConnector(page);
+  await page.waitForTimeout(650);
+  await resetCounts(page);
+  await dialog.getByRole("button", { name: "Bind start endpoint" }).click();
+
+  await expect(status).toHaveText(
+    "Could not bind start endpoint because the connector's visible stroke would exceed the safe canvas boundary.",
+  );
+  await expect(dialog).toBeVisible();
+  await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
+  await expect.poll(() => currentConnector(page)).toEqual(before);
+  await dialog.press("Escape");
+  await canvas.focus();
+  await page.keyboard.press("Control+z");
+  await expect.poll(() => currentConnector(page)).toEqual(before);
+  await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
+});
 
 test("a suppressed connector detaches safely at the positive canvas boundary and undo restores it", async ({ page }) => {
   await installExtremeOverlapWorkspace(page, "detachable");
@@ -19,6 +79,14 @@ test("a suppressed connector detaches safely at the positive canvas boundary and
   // Pointer-select the marker, then detach through the keyboard chooser path.
   await marker.click();
   const start = page.getByRole("button", { name: "Manage Arrow connector 1 start endpoint" });
+  const management = page.getByRole("group", { name: "Arrow connector 1 endpoint management" });
+  const [canvasBounds, markerBounds, managementBounds] = await Promise.all([
+    requiredBounds(canvas, "canvas"),
+    requiredBounds(marker, "maximum-edge marker"),
+    requiredBounds(management, "maximum-edge management"),
+  ]);
+  assertContained(managementBounds, canvasBounds);
+  expect(rectangleDistance(markerBounds, managementBounds)).toBeLessThanOrEqual(12);
   await start.click();
   const dialog = page.getByRole("dialog", { name: "Choose start endpoint target" });
   await expect(dialog).toBeVisible();
@@ -119,6 +187,25 @@ async function currentIds(page: Page) {
   ));
 }
 
+function rectangleDistance(first: { height: number; width: number; x: number; y: number }, second: { height: number; width: number; x: number; y: number }) {
+  const horizontal = Math.max(first.x - (second.x + second.width), second.x - (first.x + first.width), 0);
+  const vertical = Math.max(first.y - (second.y + second.height), second.y - (first.y + first.height), 0);
+  return Math.hypot(horizontal, vertical);
+}
+
+function assertContained(inner: { height: number; width: number; x: number; y: number }, outer: { height: number; width: number; x: number; y: number }) {
+  expect(inner.x).toBeGreaterThanOrEqual(outer.x);
+  expect(inner.y).toBeGreaterThanOrEqual(outer.y);
+  expect(inner.x + inner.width).toBeLessThanOrEqual(outer.x + outer.width);
+  expect(inner.y + inner.height).toBeLessThanOrEqual(outer.y + outer.height);
+}
+
+async function requiredBounds(locator: Locator, label: string) {
+  const bounds = await locator.boundingBox();
+  if (!bounds) throw new Error(`${label} bounds were unavailable.`);
+  return bounds;
+}
+
 async function installExtremeOverlapWorkspace(page: Page, mode: FixtureMode) {
   await page.addInitScript((fixtureMode: FixtureMode) => {
     type ElementRecord = Record<string, unknown> & { id: string; pageId: string; type: string };
@@ -134,16 +221,20 @@ async function installExtremeOverlapWorkspace(page: Page, mode: FixtureMode) {
       strokeWidth: 2,
     };
     const blocked = fixtureMode === "blocked";
+    const binding = fixtureMode === "binding";
     const shapeGeometry = blocked
       ? { height: 1_000_000, width: 1_000_000, x: -500_000, y: -500_000 }
-      : { height: 100, width: 100, x: 999_900, y: 300 };
+      : { height: 100, width: 100, x: binding ? 999_899 : 999_900, y: 300 };
     const gap = blocked ? 1_000_000 : 0;
     const initial = {
-      elements: [
+      elements: (binding ? [
+        { createdAt: 1, id: "edge-first", locked: false, opacity: 1, pageId: "page", rotation: 0, shape: "rectangle", style, type: "shape", updatedAt: 1, ...shapeGeometry, zIndex: 2 },
+        { createdAt: 1, end: { kind: "free", x: 1_000_000, y: 350 }, id: "edge-connector", locked: false, opacity: 1, pageId: "page", routing: "straight", start: { kind: "free", x: 999_700, y: 350 }, style: { ...style, endArrowhead: "arrow", fillColor: null, seed: 75, startArrowhead: "none" }, type: "connector", updatedAt: 1, zIndex: 8 },
+      ] : [
         { createdAt: 1, id: "edge-first", locked: false, opacity: 1, pageId: "page", rotation: 0, shape: "rectangle", style, type: "shape", updatedAt: 1, ...shapeGeometry, zIndex: 2 },
         { createdAt: 1, id: "edge-second", locked: false, opacity: 1, pageId: "page", rotation: 0, shape: "ellipse", style: { ...style, seed: 74 }, type: "shape", updatedAt: 1, ...shapeGeometry, zIndex: 3 },
         { createdAt: 1, end: { gap: 0, kind: "element", targetElementId: "edge-second" }, id: "edge-connector", locked: false, opacity: 1, pageId: "page", routing: "straight", start: { gap, kind: "element", targetElementId: "edge-first" }, style: { ...style, endArrowhead: "arrow", fillColor: null, seed: 75, startArrowhead: "none" }, type: "connector", updatedAt: 1, zIndex: 8 },
-      ] as ElementRecord[],
+      ]) as ElementRecord[],
       folders: [],
       isDarkMode: false,
       pages: [{ folderId: "", id: "page", isBookmarked: false, revision: 0, title: "Boundary overlap" }],

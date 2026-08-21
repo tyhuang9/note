@@ -3235,8 +3235,6 @@ h2 {
 
 .suppressed-connector-management {
   position: absolute;
-  top: 112px;
-  left: 50%;
   z-index: 1;
   display: flex;
   align-items: center;
@@ -3252,7 +3250,6 @@ h2 {
   background: rgba(255, 255, 255, 0.98);
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.24);
   pointer-events: auto;
-  transform: translateX(-50%);
 }
 
 .suppressed-connector-management-status {
@@ -3412,6 +3409,10 @@ h2 {
 .connector-endpoint-chooser h2 {
   font-size: 16px;
   line-height: 22px;
+}
+
+.connector-endpoint-chooser-layer[data-theme="dark"] .connector-endpoint-chooser h2 {
+  color: var(--connector-chooser-text);
 }
 
 .connector-endpoint-chooser p {

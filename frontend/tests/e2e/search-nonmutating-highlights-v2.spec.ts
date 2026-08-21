@@ -191,6 +191,64 @@ test("dense one-character query is visibly capped without writes", async ({ page
   expect(await persistenceCounts(page)).toEqual({ apply: 0, session: 0 });
 });
 
+for (const tool of [
+  { label: "Pen (P / 7)", name: "pen" },
+  { label: "Highlighter (H)", name: "highlighter" },
+  { label: "Eraser (E / 0)", name: "eraser" },
+  { label: "Rectangle (R / 2)", name: "rectangle" },
+  { label: "Line (L / 6)", name: "line" },
+  { label: "Arrow (A / 5)", name: "arrow" },
+  { label: "Hand (Space)", name: "hand" },
+] as const) {
+  test(`search controls never author with the ${tool.name} tool`, async ({ page }) => {
+    await installSearchWorkspace(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/");
+    await expect(page.locator('[data-canvas-element-id="text-rich"]')).toBeVisible();
+
+    const textControl = page
+      .locator('[data-canvas-element-id="text-rich"]')
+      .getByRole("button", { name: /Select and move text block/ });
+    await textControl.focus();
+    await textControl.press("Enter");
+    await textControl.press("Shift+ArrowRight");
+    await expect.poll(() => elementX(page, "text-rich")).toBe(330);
+    await page.waitForTimeout(700);
+
+    const toolButton = page.getByRole("button", { name: tool.label });
+    await toolButton.click();
+    await expect(toolButton).toHaveAttribute("aria-pressed", "true");
+    await resetPersistenceCounts(page);
+    const baselineJson = await workspaceJson(page);
+    const baselineTransform = await page.locator(".canvas-content").getAttribute("style");
+
+    await page.getByRole("button", { name: "Find in canvas" }).click();
+    const search = page.getByRole("textbox", { name: "Find in canvas" });
+    await search.click();
+    await search.pressSequentially("needle");
+    await expect(search).toHaveValue("needle");
+    await page.getByRole("button", { name: "Next match" }).click();
+    await expect(page.locator('[data-canvas-element-id="text-rich"] .canvas-search-match.is-active-search-match')).toHaveCount(2);
+    await page.getByRole("button", { name: "Previous match" }).click();
+    await expect(page.locator(".canvas-search-match.is-active-search-match")).toHaveCount(0);
+    await expect(page.locator(".canvas-content")).toHaveAttribute("style", baselineTransform ?? "");
+    await page.getByRole("button", { name: "Close search", exact: true }).click();
+
+    await page.waitForTimeout(700);
+    await expect(toolButton).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator('[data-testid="canvas-live-draft-layer"] > *')).toHaveCount(0);
+    await expect(page.locator(".text-block-editor-content, .shape-contained-text-editor-content")).toHaveCount(0);
+    expect(await workspaceJson(page)).toBe(baselineJson);
+    expect(await persistenceCounts(page)).toEqual({ apply: 0, session: 0 });
+
+    await page.getByRole("tabpanel").focus();
+    await page.keyboard.press("Control+z");
+    await expect.poll(() => elementX(page, "text-rich")).toBe(320);
+    await expect.poll(async () => (await persistenceCounts(page)).apply).toBe(1);
+    expect((await workspaceElements(page)).find((element) => element.id === "text-rich")?.updatedAt).toBe(1);
+  });
+}
+
 async function assertRichTreesRemainFormatted(page: Page) {
   for (const id of ["text-rich", "shape-rectangle", "shape-ellipse", "shape-diamond"]) {
     const element = page.locator(`[data-canvas-element-id="${id}"]`);

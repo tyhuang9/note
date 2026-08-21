@@ -97,10 +97,11 @@ test("find entry paths cannot steal an editor or slash-command draft", async ({ 
   const inertShapeGeometry = await shape.boundingBox();
 
   // The whole canvas is inert while Find is open, including nested editor entry handlers.
-  await text.dblclick();
+  await text.dblclick({ force: true });
   await expect(text.locator(".text-block-editor-content")).toHaveCount(0);
-  await shape.focus();
-  await shape.press("F2");
+  await shape.evaluate((element) => (element as HTMLElement).focus());
+  await expect(searchInput).toBeFocused();
+  await page.keyboard.press("F2");
   await expect(shape.locator(".shape-contained-text-editor-content")).toHaveCount(0);
   await expect(page.locator(".search-panel")).toBeVisible();
   expect(await workspaceJson(page)).toBe(inertWorkspaceJson);
@@ -216,16 +217,51 @@ test("search exposes keyboard focus, live status, contrast, and deterministic fo
   await page.goto("/");
   await expect(page.locator('[data-canvas-element-id="text-rich"]')).toBeVisible();
 
+  const connectorControl = page.getByRole("button", { name: "Select and move arrow connector" });
+  await connectorControl.focus();
+  await connectorControl.press("Enter");
+  await expect(page.locator("[data-connector-endpoint-handle]")).toHaveCount(2);
+
   const findButton = page.getByRole("button", { name: "Find in canvas" });
   await findButton.click();
   const panel = page.locator(".search-panel");
   const search = page.getByRole("textbox", { name: "Find in canvas" });
   const status = page.locator("#canvas-search-status");
   await expect(search).toBeFocused();
-  await expect(search).toHaveAttribute("aria-describedby", "canvas-search-status");
+  await expect(search).toHaveAttribute(
+    "aria-describedby",
+    "canvas-search-paused-description canvas-search-status",
+  );
   await expect(status).toHaveAttribute("aria-atomic", "true");
   await expect(status).toHaveAttribute("aria-live", "polite");
-  await expect(page.getByText("Canvas interactions paused while Find is open.")).toBeVisible();
+  const pausedDescription = page.locator("#canvas-search-paused-description");
+  await expect(pausedDescription).toBeVisible();
+  await expect(pausedDescription).not.toHaveAttribute("aria-hidden", "true");
+  for (const selector of [
+    ".canvas-authoring-controls",
+    ".canvas-content",
+    ".canvas-interaction-overlay",
+  ]) {
+    await expect(page.locator(selector)).toHaveAttribute("inert", "");
+  }
+  const optionalCanvasSubtrees = page.locator(
+    ".drawing-properties-panel, .offscreen-indicators, .canvas-starter",
+  );
+  expect(await optionalCanvasSubtrees.evaluateAll((elements) => (
+    elements.every((element) => element.hasAttribute("inert"))
+  ))).toBe(true);
+  expect(await page.locator("[data-canvas-element-id]").evaluateAll((elements) => (
+    elements.every((element) => element.closest("[inert]") !== null)
+  ))).toBe(true);
+  expect(await page.locator("[data-connector-endpoint-handle]").evaluateAll((elements) => (
+    elements.every((element) => element.closest("[inert]") !== null)
+  ))).toBe(true);
+  await connectorControl.evaluate((element) => element.focus());
+  await expect(search).toBeFocused();
+  await page.locator('[data-connector-endpoint-handle="start"]').evaluate((element) => (
+    (element as HTMLElement).focus()
+  ));
+  await expect(search).toBeFocused();
   const focusStyle = await search.evaluate((element) => {
     const inputStyle = getComputedStyle(element);
     const queryStyle = getComputedStyle(element.closest(".search-panel-query")!);
@@ -259,21 +295,37 @@ test("search exposes keyboard focus, live status, contrast, and deterministic fo
   const activeTitle = page.locator(".page-title-search-match.is-active-search-match");
   await expect(activeTitle).toHaveCount(1);
   expect(await contrastRatio(activeTitle, activeTitle)).toBeGreaterThanOrEqual(4.5);
+
+  await search.press("Shift+Tab");
+  const close = page.getByRole("button", { name: "Close search", exact: true });
+  await expect(close).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(search).toBeFocused();
   await search.press("Tab");
   const previous = page.getByRole("button", { name: "Previous match" });
   await expect(previous).toBeFocused();
   await page.keyboard.press("Tab");
   const next = page.getByRole("button", { name: "Next match" });
   await expect(next).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(close).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(search).toBeFocused();
+
+  await next.focus();
   await next.press("Enter");
+  await expect(search).toBeFocused();
   await expect(status.locator(".search-status-announcement")).toHaveText("Result 2 of 5, Text");
   const inactiveTitle = page.locator(".page-title-search-match:not(.is-active-search-match)");
   await expect(inactiveTitle).toHaveCount(1);
   expect(await contrastRatio(inactiveTitle, inactiveTitle)).toBeGreaterThanOrEqual(4.5);
   await search.fill("not-present-anywhere");
   await expect(status.locator(".search-status-announcement")).toHaveText("No results.");
-  await page.getByRole("button", { name: "Close search", exact: true }).click();
+  await close.click();
   await expect(findButton).toBeFocused();
+  await expect(connectorControl).toHaveCount(1);
+  await connectorControl.focus();
+  await expect(connectorControl).toBeFocused();
 
   await page.getByRole("button", { name: "Dark mode" }).click();
   await findButton.click();

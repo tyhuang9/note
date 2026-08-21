@@ -3,6 +3,7 @@ import type { SelectionCorner } from "../model/selectionBounds";
 
 type CanvasInteractionOverlayProps = {
   children?: ReactNode;
+  isInert?: boolean;
   marqueeRef: Ref<HTMLDivElement>;
   textResizeHandle?: {
     cursorClass: string;
@@ -51,13 +52,14 @@ type CanvasInteractionOverlayProps = {
 /** Screen-space interaction UI layered outside CanvasWorldLayer's transform. */
 export function CanvasInteractionOverlay({
   children,
+  isInert = false,
   marqueeRef,
   selectionFrame,
   selectionFrameRef,
   textResizeHandle,
 }: CanvasInteractionOverlayProps) {
   return (
-    <div className="canvas-interaction-overlay">
+    <div className="canvas-interaction-overlay" inert={isInert ? true : undefined}>
       <div className="selection-rectangle" ref={marqueeRef} />
       {selectionFrame ? (
         <div

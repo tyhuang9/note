@@ -13,6 +13,7 @@ type DrawingPropertiesPanelProps = {
   contextLabel: string;
   isBackgroundModeDisabled: boolean;
   isCompactOpen: boolean;
+  isInert?: boolean;
   isSelection: boolean;
   onCancelPreview: () => void;
   onLayerAction: (action: LayerAction) => void;
@@ -30,6 +31,7 @@ export function DrawingPropertiesPanel({
   contextLabel,
   isBackgroundModeDisabled,
   isCompactOpen,
+  isInert = false,
   isSelection,
   onCancelPreview,
   onLayerAction,
@@ -92,6 +94,7 @@ export function DrawingPropertiesPanel({
       aria-label="Drawing properties"
       className={`drawing-properties-panel ${isCompactOpen ? "is-compact-open" : ""}`}
       id="drawing-properties-panel"
+      inert={isInert ? true : undefined}
       onPointerDown={(event) => event.stopPropagation()}
     >
       <header className="drawing-properties-header">

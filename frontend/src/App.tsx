@@ -8099,7 +8099,11 @@ function App() {
           ref={canvasRef}
         >
           {isCanvasAuthoringAvailable ? <>
-            <div onPointerDown={(event) => event.stopPropagation()}>
+            <div
+              className="canvas-authoring-controls"
+              inert={isSearchOpen ? true : undefined}
+              onPointerDown={(event) => event.stopPropagation()}
+            >
               <CanvasToolPalette
                 activeTool={activeTool}
                 isPropertiesPanelAvailable={Boolean(availableDrawingPropertiesContext)}
@@ -8129,6 +8133,7 @@ function App() {
                 contextLabel={availableDrawingPropertiesContext.contextLabel}
                 isBackgroundModeDisabled={availableDrawingPropertiesContext.isBackgroundModeDisabled}
                 isCompactOpen={isPropertiesPanelOpen}
+                isInert={isSearchOpen}
                 isSelection={availableDrawingPropertiesContext.isSelection}
                 onCancelPreview={cancelDrawingPropertyPreview}
                 onLayerAction={updateSelectedLayer}
@@ -8146,6 +8151,7 @@ function App() {
                 isSearchOpen ? "has-search-panel" : ""
               }`}
               aria-label="Offscreen textboxes"
+              inert={isSearchOpen ? true : undefined}
             >
               {offscreenGroups.map((group) => (
                 <button
@@ -8177,12 +8183,30 @@ function App() {
                   event.stopPropagation();
                 }
               }}
+              onKeyDown={(event) => {
+                if (event.key !== "Tab" || isCanvasSearchInteractionBlocked()) return;
+                const focusableControls = Array.from(
+                  event.currentTarget.querySelectorAll<HTMLElement>(
+                    'input:not([disabled]), button:not([disabled])',
+                  ),
+                );
+                const firstControl = focusableControls[0];
+                const lastControl = focusableControls[focusableControls.length - 1];
+                if (!firstControl || !lastControl) return;
+                if (event.shiftKey && document.activeElement === firstControl) {
+                  event.preventDefault();
+                  lastControl.focus();
+                } else if (!event.shiftKey && document.activeElement === lastControl) {
+                  event.preventDefault();
+                  firstControl.focus();
+                }
+              }}
               onPointerDown={(event) => event.stopPropagation()}
             >
               <div className="search-panel-query">
                 <HeroIcon name="magnifying-glass" />
                 <input
-                  aria-describedby="canvas-search-status"
+                  aria-describedby="canvas-search-paused-description canvas-search-status"
                   aria-label="Find in canvas"
                   disabled={isCanvasSearchUnavailable}
                   onChange={(event) => {
@@ -8255,13 +8279,14 @@ function App() {
                   <HeroIcon name="x-mark" />
                 </button>
               </div>
-              <span aria-hidden="true" className="search-panel-paused-cue">
+              <span className="search-panel-paused-cue" id="canvas-search-paused-description">
                 Canvas interactions paused while Find is open.
               </span>
             </div>
           ) : null}
           <CanvasWorldLayer
             isGridVisible={isGridVisible}
+            isInert={isSearchOpen}
             liveDraftLayerRef={liveDraftLayerRef}
             panOffset={searchPanOffset ?? panOffset}
             ref={canvasContentRef}
@@ -8416,6 +8441,7 @@ function App() {
             ) : null}
           </CanvasWorldLayer>
           <CanvasInteractionOverlay
+            isInert={isSearchOpen}
             marqueeRef={selectionRectRef}
             selectionFrameRef={selectionFrameRef}
             textResizeHandle={(() => {
@@ -8566,6 +8592,7 @@ function App() {
             <div
               className="canvas-starter"
               aria-label="Empty workspace shortcuts"
+              inert={isSearchOpen ? true : undefined}
               onPointerDown={(event) => {
                 event.preventDefault();
                 event.stopPropagation();

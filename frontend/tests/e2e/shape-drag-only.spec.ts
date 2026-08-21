@@ -6,6 +6,11 @@ const TOOL_NAMES = {
   ellipse: "Ellipse (O / 4)",
   diamond: "Diamond (D / 3)",
 } as const;
+const DEFAULT_SHAPE_SIZES = {
+  rectangle: { height: 100, width: 160 },
+  ellipse: { height: 100, width: 140 },
+  diamond: { height: 100, width: 140 },
+} as const;
 
 type ShapeName = keyof typeof TOOL_NAMES;
 
@@ -120,6 +125,128 @@ test("pointerup applies the final screen-space threshold without an intervening 
   await releaseCapturedWithoutMove(page, { x: start.x + 40, y: start.y + 40 }, { x: start.x + 44, y: start.y + 40 });
   await expect(page.locator('[data-canvas-element-type="shape"]')).toHaveCount(3);
   await expect.poll(() => counts(page)).toEqual({ apply: 1, persistence: 2, session: 1 });
+});
+
+test("focused canvas Enter creates accessible viewport-centered shapes", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  const status = page.locator('.canvas-accessibility-status[role="status"]');
+  let expectedShapeCount = 1;
+  let lastCreatedId = "";
+
+  for (const zoom of [50, 100, 200]) {
+    await setZoom(page, canvas, zoom);
+    if (zoom === 100) await panCanvas(page, canvas, { x: 90, y: 55 });
+    for (const shape of Object.keys(TOOL_NAMES) as ShapeName[]) {
+      await page.getByRole("button", { name: TOOL_NAMES[shape] }).click();
+      await canvas.focus();
+      await settleAndResetCounts(page);
+      await page.keyboard.press("Enter");
+      expectedShapeCount += 1;
+
+      await expect(page.locator('[data-canvas-element-type="shape"]')).toHaveCount(expectedShapeCount);
+      await expect.poll(() => counts(page)).toEqual({ apply: 1, persistence: 2, session: 1 });
+      const created = await newestShape(page);
+      if (!created) throw new Error("Keyboard-created shape was unavailable.");
+      lastCreatedId = created.id;
+      expect(created.shape).toBe(shape);
+      expect({ height: created.height, width: created.width }).toEqual(DEFAULT_SHAPE_SIZES[shape]);
+      const createdLocator = page.locator(`[data-canvas-element-id="${created.id}"]`);
+      await expect(createdLocator).toHaveAttribute("aria-pressed", "true");
+      await expect(canvas).toBeFocused();
+      await expect(page.getByRole("button", { name: "Select (V / 1)" })).toHaveAttribute("aria-pressed", "true");
+      await expect(status).toHaveText(`${shapeLabel(shape)} created at the center of the viewport. Switched to Select.`);
+      const canvasBounds = await requiredBounds(canvas, "canvas");
+      const createdBounds = await requiredBounds(createdLocator, "keyboard-created shape");
+      expect(createdBounds.x + createdBounds.width / 2).toBeCloseTo(canvasBounds.x + canvasBounds.width / 2, 0);
+      expect(createdBounds.y + createdBounds.height / 2).toBeCloseTo(canvasBounds.y + canvasBounds.height / 2, 0);
+    }
+  }
+
+  const lock = page.locator("[data-tool-lock]");
+  await lock.click();
+  await page.getByRole("button", { name: TOOL_NAMES.diamond }).click();
+  await canvas.focus();
+  await settleAndResetCounts(page);
+  await page.keyboard.press("Enter");
+  expectedShapeCount += 1;
+  await expect.poll(() => counts(page)).toEqual({ apply: 1, persistence: 2, session: 1 });
+  lastCreatedId = (await newestShape(page))?.id ?? "";
+  await expect(page.getByRole("button", { name: TOOL_NAMES.diamond })).toHaveAttribute("aria-pressed", "true");
+  await expect(status).toHaveText("Diamond created at the center of the viewport. Tool lock kept Diamond active.");
+
+  await page.keyboard.press("Control+z");
+  await expect(page.locator('[data-canvas-element-type="shape"]')).toHaveCount(expectedShapeCount - 1);
+  await page.keyboard.press("Control+y");
+  await expect(page.locator('[data-canvas-element-type="shape"]')).toHaveCount(expectedShapeCount);
+  await expect.poll(async () => (await workspaceElements(page)).some((element) => element.id === lastCreatedId)).toBe(true);
+  await page.reload();
+  await expect(page.locator('[data-canvas-element-type="shape"]')).toHaveCount(expectedShapeCount);
+});
+
+test("keyboard shape creation guards text, modal, modified, repeated, and unsafe contexts", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  const status = page.locator('.canvas-accessibility-status[role="status"]');
+  await page.getByRole("button", { name: TOOL_NAMES.rectangle }).click();
+  await canvas.focus();
+  await settleAndResetCounts(page);
+
+  for (const init of [
+    { isComposing: true },
+    { repeat: true },
+    { altKey: true },
+    { ctrlKey: true },
+    { metaKey: true },
+    { shiftKey: true },
+  ]) await dispatchCanvasEnter(canvas, init);
+  await page.evaluate(() => {
+    const input = document.createElement("input");
+    input.id = "shape-keyboard-guard-input";
+    document.body.append(input);
+    input.focus();
+    input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
+    input.remove();
+    const editor = document.createElement("div");
+    editor.contentEditable = "true";
+    editor.id = "shape-keyboard-guard-editor";
+    document.body.append(editor);
+    editor.focus();
+    editor.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
+    editor.remove();
+  });
+  await expect(page.locator('[data-canvas-element-type="shape"]')).toHaveCount(1);
+  await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
+
+  await page.setViewportSize({ width: 760, height: 700 });
+  await page.getByRole("button", { name: "AI assistant" }).click();
+  await expect(page.getByRole("complementary", { name: "AI assistant" })).toBeVisible();
+  await dispatchCanvasEnter(canvas, {});
+  await expect(page.locator('[data-canvas-element-type="shape"]')).toHaveCount(1);
+  await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
+  await page.locator(".assistant-close-button").click();
+  await page.setViewportSize({ width: 1440, height: 900 });
+
+  const canvasBounds = await requiredBounds(canvas, "canvas");
+  await persistViewportCenter(page, canvasBounds, { x: 1_000_000 - 20, y: 1_000_000 - 20 });
+  await page.reload();
+  const reloadedCanvas = page.getByRole("tabpanel");
+  await page.getByRole("button", { name: TOOL_NAMES.rectangle }).click();
+  await reloadedCanvas.focus();
+  await settleAndResetCounts(page);
+  await page.keyboard.press("Enter");
+  await expect.poll(() => counts(page)).toEqual({ apply: 1, persistence: 2, session: 1 });
+  const edgeShape = await newestShape(page);
+  expect(Number(edgeShape?.x) + Number(edgeShape?.width)).toBeLessThanOrEqual(1_000_000);
+  expect(Number(edgeShape?.y) + Number(edgeShape?.height)).toBeLessThanOrEqual(1_000_000);
+
+  await persistViewportCenter(page, await requiredBounds(reloadedCanvas, "canvas"), { x: 1_000_500, y: 0 });
+  await page.reload();
+  const unsafeCanvas = page.getByRole("tabpanel");
+  await page.getByRole("button", { name: TOOL_NAMES.ellipse }).click();
+  await unsafeCanvas.focus();
+  await settleAndResetCounts(page);
+  await page.keyboard.press("Enter");
+  await expect(status).toHaveText("Ellipse is unavailable at the current canvas position.");
+  await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
 });
 
 test("reverse, Shift, and Alt drags preserve geometry while tool lock remains explicit", async ({ page }) => {
@@ -258,6 +385,60 @@ async function drag(page: Page, start: { x: number; y: number }, end: { x: numbe
   await page.mouse.down();
   await page.mouse.move(end.x, end.y, { steps: 3 });
   await page.mouse.up();
+}
+
+async function dispatchCanvasEnter(
+  canvas: Locator,
+  init: Readonly<Partial<Pick<KeyboardEvent, "altKey" | "ctrlKey" | "isComposing" | "metaKey" | "repeat" | "shiftKey">>>,
+) {
+  await canvas.evaluate((element, eventInit) => {
+    element.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter", ...eventInit }));
+  }, init);
+}
+
+async function panCanvas(page: Page, canvas: Locator, delta: { x: number; y: number }) {
+  const bounds = await requiredBounds(canvas, "canvas");
+  const start = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+  await canvas.focus();
+  await page.keyboard.down("Space");
+  await drag(page, start, { x: start.x + delta.x, y: start.y + delta.y });
+  await page.keyboard.up("Space");
+  await page.waitForTimeout(600);
+  await resetCounts(page);
+}
+
+async function persistViewportCenter(
+  page: Page,
+  canvasBounds: Readonly<{ height: number; width: number }>,
+  center: Readonly<{ x: number; y: number }>,
+) {
+  await page.evaluate(({ canvasBounds, center, storageKey }) => {
+    const runtime = window as unknown as {
+      __shapeDragIgnoreSessionWrites?: number;
+      __shapeDragWorkspace?: {
+        sessionState?: { pageViewports?: Record<string, unknown> };
+      };
+    };
+    const workspace = runtime.__shapeDragWorkspace ?? JSON.parse(localStorage.getItem(storageKey) ?? "{}") as {
+      sessionState?: { pageViewports?: Record<string, unknown> };
+    };
+    workspace.sessionState ??= {};
+    workspace.sessionState.pageViewports ??= {};
+    workspace.sessionState.pageViewports["page-one"] = {
+      panOffset: {
+        x: canvasBounds.width / 2 - center.x,
+        y: canvasBounds.height / 2 - center.y,
+      },
+      zoomLevel: 1,
+    };
+    runtime.__shapeDragWorkspace = workspace;
+    runtime.__shapeDragIgnoreSessionWrites = 10;
+    localStorage.setItem(storageKey, JSON.stringify(workspace));
+  }, { canvasBounds, center, storageKey: STORAGE_KEY });
+}
+
+function shapeLabel(shape: ShapeName) {
+  return shape === "rectangle" ? "Rectangle" : shape === "ellipse" ? "Ellipse" : "Diamond";
 }
 
 async function beginCapturedDrag(page: Page, start: { x: number; y: number }, end: { x: number; y: number }) {
@@ -437,11 +618,13 @@ async function installWorkspace(page: Page) {
     const persist = () => localStorage.setItem(storageKey, JSON.stringify(workspace));
     const runtime = window as unknown as {
       __shapeDragCounts: { apply: number; persistence: number; session: number };
+      __shapeDragIgnoreSessionWrites: number;
       __shapeDragWorkspace: Workspace;
       __TAURI_INTERNALS__: { invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> };
       isTauri: boolean;
     };
     runtime.__shapeDragCounts = { apply: 0, persistence: 0, session: 0 };
+    runtime.__shapeDragIgnoreSessionWrites = 0;
     runtime.__shapeDragWorkspace = workspace;
     runtime.isTauri = true;
     runtime.__TAURI_INTERNALS__ = { invoke: async (command, args = {}) => {
@@ -472,6 +655,10 @@ async function installWorkspace(page: Page) {
         return { newRevision: storedPage?.revision ?? 0, pageId: batch.pageId };
       }
       if (command === "save_session_state") {
+        if (runtime.__shapeDragIgnoreSessionWrites > 0) {
+          runtime.__shapeDragIgnoreSessionWrites -= 1;
+          return undefined;
+        }
         runtime.__shapeDragCounts.session += 1;
         runtime.__shapeDragCounts.persistence += 1;
         workspace.sessionState = args.state as Record<string, unknown>;

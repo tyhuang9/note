@@ -1,4 +1,5 @@
 import type { CanvasPoint, CanvasRect } from "../model/geometry";
+import { MAX_CANVAS_VALUE, isSafeCanvasCoordinate } from "../model/connectorBinding";
 
 export type PrimitiveModifiers = Readonly<{ alt: boolean; shift: boolean }>;
 export type ShapeTool = "rectangle" | "ellipse" | "diamond";
@@ -9,6 +10,11 @@ export type PrimitiveGeometry =
   | Readonly<{ kind: "connector"; start: CanvasPoint; end: CanvasPoint }>;
 
 const DEFAULT_CONNECTOR_LENGTH = 160;
+const DEFAULT_SHAPE_SIZE: Readonly<Record<ShapeTool, Readonly<{ width: number; height: number }>>> = {
+  rectangle: { width: 160, height: 100 },
+  ellipse: { width: 140, height: 100 },
+  diamond: { width: 140, height: 100 },
+};
 export const SHAPE_DRAG_THRESHOLD_PX = 3;
 
 /** Keeps shape authoring intent stable across canvas zoom levels. */
@@ -20,6 +26,39 @@ export function isMeaningfulShapeDrag(
     currentClient.x - startClient.x,
     currentClient.y - startClient.y,
   ) >= SHAPE_DRAG_THRESHOLD_PX;
+}
+
+/** Returns a persistence-safe default shape centered in the visible viewport when possible. */
+export function getDefaultKeyboardShapeGeometry(
+  tool: ShapeTool,
+  viewport: Readonly<{ x: number; y: number; width: number; height: number }>,
+): Extract<PrimitiveGeometry, { kind: "shape" }> | null {
+  if (
+    !Number.isFinite(viewport.x)
+    || !Number.isFinite(viewport.y)
+    || !Number.isFinite(viewport.width)
+    || !Number.isFinite(viewport.height)
+    || viewport.width <= 0
+    || viewport.height <= 0
+  ) return null;
+  const center = {
+    x: viewport.x + viewport.width / 2,
+    y: viewport.y + viewport.height / 2,
+  };
+  if (!isSafeCanvasCoordinate(center.x) || !isSafeCanvasCoordinate(center.y)) return null;
+  const defaults = DEFAULT_SHAPE_SIZE[tool];
+  const width = Math.min(defaults.width, viewport.width);
+  const height = Math.min(defaults.height, viewport.height);
+  if (width <= 0 || height <= 0) return null;
+  return {
+    kind: "shape",
+    rect: {
+      x: Math.max(-MAX_CANVAS_VALUE, Math.min(MAX_CANVAS_VALUE - width, center.x - width / 2)),
+      y: Math.max(-MAX_CANVAS_VALUE, Math.min(MAX_CANVAS_VALUE - height, center.y - height / 2)),
+      width,
+      height,
+    },
+  };
 }
 
 /** Normalizes a drag into a positive box; Shift locks aspect ratio, Alt expands from center. */

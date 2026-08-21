@@ -53,8 +53,10 @@ import { compareConnectorPreviewStack, type ConnectorPreviewCommand } from "./ca
 import { resolveCanvasColor } from "./canvas/rendering/canvasColor";
 import {
   deterministicSeed,
+  getDefaultKeyboardShapeGeometry,
   type PrimitiveGeometry,
   type PrimitiveTool,
+  type ShapeTool,
 } from "./canvas/interaction/primitiveGeometry";
 import {
   drawingToolAfterCreation,
@@ -1428,6 +1430,7 @@ function App() {
     states: ReadonlyMap<string, string>;
   }> | null>(null);
   const keyboardArrowCreationRef = useRef<() => boolean>(() => false);
+  const keyboardShapeCreationRef = useRef<(tool: ShapeTool) => boolean>(() => false);
   const keyboardArrowEndpointFocusRafRef = useRef<number | null>(null);
 
   const setSelectedPageId = useCallback((nextPageId: string) => {
@@ -3741,6 +3744,30 @@ function App() {
         }
 
         selectAllVisibleBlocks();
+        return;
+      }
+
+      if (
+        event.key === "Enter"
+        && event.target === canvasRef.current
+        && document.activeElement === canvasRef.current
+        && (
+          activeToolRef.current === "rectangle"
+          || activeToolRef.current === "ellipse"
+          || activeToolRef.current === "diamond"
+        )
+        && isCanvasAuthoringAvailableRef.current
+        && connectorEndpointChooserRef.current === null
+        && !currentEditingBlockId
+        && !event.isComposing
+        && !event.repeat
+        && !event.altKey
+        && !event.ctrlKey
+        && !event.metaKey
+        && !event.shiftKey
+      ) {
+        event.preventDefault();
+        keyboardShapeCreationRef.current(activeToolRef.current);
         return;
       }
 
@@ -7899,6 +7926,22 @@ function App() {
     setIsCanvasKeyboardActive(false);
   }
 
+  const getPrimitiveAppearance = useCallback((tool: PrimitiveTool, elementId: string) => {
+    const preference = drawingPreferencesRef.current[tool];
+    return {
+      opacity: preference.opacity,
+      style: {
+        fillColor: tool === "line" ? null : preference.backgroundColor,
+        roughness: preference.roughness,
+        roundness: tool === "rectangle" ? preference.roundness : 0,
+        seed: deterministicSeed(elementId),
+        strokeColor: preference.strokeColor,
+        strokeStyle: preference.strokeStyle,
+        strokeWidth: preference.strokeWidth,
+      },
+    };
+  }, []);
+
   const completePrimitiveCreation = useCallback(
     (elementId: string, tool: PrimitiveTool, geometry: PrimitiveGeometry, appearance: Readonly<{ opacity: number; style: RoughStyle }>) => {
       const pageId = selectedPageIdRef.current;
@@ -8049,21 +8092,7 @@ function App() {
       };
     },
     getArrowTargetLabel: getBindableTargetLabel,
-    getPrimitivePreviewAppearance: (tool, elementId) => {
-      const preference = drawingPreferencesRef.current[tool];
-      return {
-        opacity: preference.opacity,
-        style: {
-          fillColor: tool === "line" ? null : preference.backgroundColor,
-          roughness: preference.roughness,
-          roundness: tool === "rectangle" ? preference.roundness : 0,
-          seed: deterministicSeed(elementId),
-          strokeColor: preference.strokeColor,
-          strokeStyle: preference.strokeStyle,
-          strokeWidth: preference.strokeWidth,
-        },
-      };
-    },
+    getPrimitivePreviewAppearance: getPrimitiveAppearance,
     hasPendingImage: () => pendingImagePlacementRef.current !== null,
     interactionCancellationKey: `${activeTool}:${selectedPageId ?? ""}`,
     isTemporaryHandActiveRef,
@@ -8105,6 +8134,26 @@ function App() {
     zoomStep: ZOOM_STEP,
   });
   cancelCanvasSelectionRef.current = canvasInteraction.cancelCapturedPointerInteraction;
+  keyboardShapeCreationRef.current = (tool) => {
+    canvasInteraction.cancelArrowAuthoring();
+    canvasInteraction.cancelCapturedPointerInteraction();
+    const geometry = canvasViewportRef.current
+      ? getDefaultKeyboardShapeGeometry(tool, canvasViewportRef.current)
+      : null;
+    const label = tool === "rectangle" ? "Rectangle" : tool === "ellipse" ? "Ellipse" : "Diamond";
+    if (!geometry) {
+      setConnectorBindingAnnouncement(`${label} is unavailable at the current canvas position.`);
+      return false;
+    }
+    const elementId = createId("shape");
+    const keepsToolActive = isToolLockedRef.current;
+    completePrimitiveCreation(elementId, tool, geometry, getPrimitiveAppearance(tool, elementId));
+    setConnectorBindingAnnouncement(keepsToolActive
+      ? `${label} created at the center of the viewport. Tool lock kept ${label} active.`
+      : `${label} created at the center of the viewport. Switched to Select.`);
+    canvasRef.current?.focus({ preventScroll: true });
+    return true;
+  };
   keyboardArrowCreationRef.current = () => {
     canvasInteraction.cancelArrowAuthoring();
     const endpoints = canvasViewportRef.current

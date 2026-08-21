@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   connectorFromDrag,
   deterministicSeed,
+  getDefaultKeyboardShapeGeometry,
   isMeaningfulShapeDrag,
   primitiveGeometryFromSession,
   SHAPE_DRAG_THRESHOLD_PX,
@@ -42,6 +43,33 @@ describe("primitive drag geometry", () => {
       { alt: false, shift: false },
       false,
     )).toEqual({ kind: "connector", start: { x: 20, y: 30 }, end: { x: 180, y: 30 } });
+  });
+
+  it("centers default keyboard shapes and keeps them inside the persistence envelope", () => {
+    expect(getDefaultKeyboardShapeGeometry("rectangle", { x: 100, y: 200, width: 800, height: 400 })).toEqual({
+      kind: "shape",
+      rect: { x: 420, y: 350, width: 160, height: 100 },
+    });
+    expect(getDefaultKeyboardShapeGeometry("ellipse", { x: 0, y: 0, width: 80, height: 60 })).toEqual({
+      kind: "shape",
+      rect: { x: 0, y: 0, width: 80, height: 60 },
+    });
+    expect(getDefaultKeyboardShapeGeometry("diamond", {
+      x: 1_000_000 - 200,
+      y: 1_000_000 - 100,
+      width: 400,
+      height: 200,
+    })).toEqual({
+      kind: "shape",
+      rect: { x: 1_000_000 - 140, y: 1_000_000 - 100, width: 140, height: 100 },
+    });
+    expect(getDefaultKeyboardShapeGeometry("rectangle", {
+      x: 1_000_001,
+      y: 0,
+      width: 100,
+      height: 100,
+    })).toBeNull();
+    expect(getDefaultKeyboardShapeGeometry("rectangle", { x: 0, y: 0, width: 0, height: 100 })).toBeNull();
   });
 
   it("retains Shift and Alt modifiers through committed session geometry", () => {

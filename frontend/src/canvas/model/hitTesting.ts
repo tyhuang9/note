@@ -7,7 +7,7 @@ import type {
 } from "./elements";
 import { isBoxCanvasElement } from "./elements";
 import { resolveConnectorEndpoint } from "./connectorBinding";
-import { containsPointInsideShapeBoundary } from "./shapeBoundary";
+import { containsPointInsideShapeBoundaryFast } from "./shapeBoundary";
 import type { CanvasPoint, CanvasRect } from "./geometry";
 
 export type Bounds = CanvasRect;
@@ -289,19 +289,15 @@ function directBindableContainsPoint(element: ShapeElement | TextElement, worldP
   const localX = centerX + dx * cos - dy * sin - element.x;
   const localY = centerY + dx * sin + dy * cos - element.y;
 
-  // Reject outside the inverse-rotated local AABB before invoking the more
-  // expensive rounded boundary containment calculation.
+  // Reject outside the inverse-rotated local AABB before the allocation-free
+  // exact rounded-boundary containment calculation.
   if (localX < 0 || localY < 0 || localX > element.width || localY > element.height) return false;
-  if (element.type === "text" || element.shape === "rectangle") {
-    return element.type === "text"
-      ? true
-      : containsPointInsideShapeBoundary(element.shape, element.width, element.height, element.style.roundness, {
-        x: localX,
-        y: localY,
-      });
-  }
-  return containsPointInsideShapeBoundary(element.shape, element.width, element.height, element.style.roundness, {
-    x: localX,
-    y: localY,
-  });
+  return element.type === "text" || containsPointInsideShapeBoundaryFast(
+    element.shape,
+    element.width,
+    element.height,
+    element.style.roundness,
+    localX,
+    localY,
+  );
 }

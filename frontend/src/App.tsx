@@ -184,6 +184,8 @@ import { getDrawingToolLockPreference } from "./canvas/state/drawingToolLock";
 import { getDirectBindableTargetAtPoint } from "./canvas/model/hitTesting";
 import {
   detachConnectorEndpointsForDeletedTargets,
+  getConnectorCandidateAnnouncement,
+  getConnectorCandidateAnnouncementKey,
   getDefaultKeyboardArrowEndpoints,
   getConnectorAuthoringCandidate,
   getNearestBindableBoundaryAnchor,
@@ -1308,6 +1310,7 @@ function App() {
   const isCanvasAuthoringAvailableRef = useRef(false);
   const isWorkbenchOverlayOpenRef = useRef(false);
   const connectorEndpointChooserRef = useRef<ConnectorEndpointChooserState | null>(null);
+  const connectorEndpointRetargetAnnouncementRef = useRef<string | null>(null);
   const connectorEndpointOriginFocusRef = useRef<HTMLButtonElement | null>(null);
   const connectorEndpointFocusReturnRafRef = useRef<number | null>(null);
   const keyboardArrowCreationRef = useRef<() => boolean>(() => false);
@@ -6570,6 +6573,9 @@ function App() {
       setSelectionFramePreview(null);
       setConnectorEndpointChooser(null);
     }
+    if (session?.connectorEndpoint) {
+      cancelConnectorEndpointRetargetAnnouncement();
+    }
     setIsConnectorEndpointRetargeting(false);
     if (updateMode && session) setActiveMode(selectedBlockIdsRef.current.length > 0 ? "selected" : "canvas");
   }
@@ -6647,6 +6653,7 @@ function App() {
         element.id === selectedBlockIdsRef.current[0] && element.type === "connector",
       )
       : null;
+    connectorEndpointRetargetAnnouncementRef.current = null;
     setIsConnectorEndpointRetargeting(selectedConnector?.style.endArrowhead === "arrow");
   }
 
@@ -6685,6 +6692,25 @@ function App() {
     setActiveMode("resizing");
   }
 
+  function announceConnectorEndpointRetargetCandidate(
+    candidate: ReturnType<typeof getConnectorAuthoringCandidate>,
+  ) {
+    const nextKey = getConnectorCandidateAnnouncementKey(candidate);
+    const previousKey = connectorEndpointRetargetAnnouncementRef.current;
+    if (nextKey === previousKey) return;
+    connectorEndpointRetargetAnnouncementRef.current = nextKey;
+    if (candidate) {
+      setConnectorBindingAnnouncement(getConnectorCandidateAnnouncement(candidate, getBindableTargetLabel(candidate.target)));
+    } else if (previousKey !== null) {
+      setConnectorBindingAnnouncement(getConnectorCandidateAnnouncement(null));
+    }
+  }
+
+  function cancelConnectorEndpointRetargetAnnouncement() {
+    connectorEndpointRetargetAnnouncementRef.current = null;
+    setConnectorBindingAnnouncement("Endpoint retargeting canceled. Existing binding remains unchanged.");
+  }
+
   function getConnectorEndpointPreview(
     endpoint: "start" | "end",
     clientX: number,
@@ -6706,6 +6732,7 @@ function App() {
     const candidate = connector.style.endArrowhead === "arrow"
       ? getConnectorAuthoringCandidate(point, targets, zoomLevelRef.current, directTargetId)
       : null;
+    announceConnectorEndpointRetargetCandidate(candidate);
     setConnectorEndpointRetargetVisual(candidate ? {
       anchor: candidate.activeAnchor,
       isSnapped: candidate.endpoint.kind === "element",
@@ -6795,6 +6822,7 @@ function App() {
       setConnectorEndpointRetargetVisual(null);
       setSelectionFramePreview(null);
       setConnectorEndpointChooser(null);
+      if (session.connectorEndpoint) cancelConnectorEndpointRetargetAnnouncement();
       setIsConnectorEndpointRetargeting(false);
       setIsCanvasKeyboardActive(true);
       setActiveMode(selectedBlockIdsRef.current.length > 0 ? "selected" : "canvas");
@@ -6854,6 +6882,7 @@ function App() {
 
     setConnectorEndpointPreview(null);
     setConnectorEndpointRetargetVisual(null);
+    connectorEndpointRetargetAnnouncementRef.current = null;
     setSelectionFramePreview(null);
     setConnectorEndpointChooser(null);
     setIsConnectorEndpointRetargeting(false);
@@ -6957,16 +6986,18 @@ function App() {
         if (!resolved) return element;
         if (element[endpoint].kind === "element") {
           const target = elementsById[element[endpoint].targetElementId];
-          const anchor = isBindableElement(target)
-            ? getNearestBindableBoundaryAnchor(target, { x: resolved.x + delta.x, y: resolved.y + delta.y })
-            : null;
-          if (anchor) {
-            if (Math.abs(anchor.anchor.t - element[endpoint].anchor.t) < 1e-10) return element;
-            const moved = { ...element[endpoint], anchor: anchor.anchor };
-            setConnectorBindingAnnouncement(`Moved ${endpoint} endpoint along its target boundary to ${Math.round(anchor.anchor.t * 360)} degrees.`);
-            return endpoint === "start"
-              ? { ...element, start: moved, updatedAt: Date.now() }
-              : { ...element, end: moved, updatedAt: Date.now() };
+          if (isBindableElement(target)) {
+            const anchor = getNearestBindableBoundaryAnchor(target, { x: resolved.x + delta.x, y: resolved.y + delta.y });
+            if (anchor) {
+              if (Math.abs(anchor.anchor.t - element[endpoint].anchor.t) < 1e-10) return element;
+              const moved = { ...element[endpoint], anchor: anchor.anchor };
+              setConnectorBindingAnnouncement(
+                `Moved ${endpoint} endpoint along ${getBindableTargetLabel(target)} at target-relative boundary position ${Math.round(anchor.anchor.t * 360)} degrees.`,
+              );
+              return endpoint === "start"
+                ? { ...element, start: moved, updatedAt: Date.now() }
+                : { ...element, end: moved, updatedAt: Date.now() };
+            }
           }
         }
         const moved = { kind: "free" as const, x: resolved.x + delta.x, y: resolved.y + delta.y };

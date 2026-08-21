@@ -122,19 +122,20 @@ describe("direct bindable hit testing", () => {
     expect(getDirectBindableTargetAtPoint([sameZEarlier, sameZLater], { x: 50, y: 50 })).toBe(sameZLater);
   });
 
-  it("returns the same deterministic winner for a 5,000-element scene", () => {
+  it("returns the deterministic topmost winner across 5,000 overlapping rounded candidates", () => {
     const elements: CanvasElement[] = Array.from({ length: 5000 }, (_, index) => shape(`shape-${index}`, {
-      height: 10,
-      width: 10,
-      x: 1000 + index,
-      y: 1000,
-      zIndex: index % 7,
+      height: 100,
+      rotation: index % 2 === 0 ? 19 : -27,
+      shape: index % 2 === 0 ? "rectangle" : "diamond",
+      style: { ...style, roundness: index % 2 === 0 ? 0.8 : 0 },
+      width: 100,
+      x: 0,
+      y: 0,
+      zIndex: index,
     }));
-    const winner = shape("winner", { height: 100, width: 100, x: 0, y: 0, zIndex: 5000 });
-    elements.push(winner);
 
     const point = { x: 50, y: 50 };
-    expect(getDirectBindableTargetAtPoint(elements, point)).toBe(winner);
-    expect(getDirectBindableTargetAtPoint(elements, point)).toBe(winner);
+    expect(getDirectBindableTargetAtPoint(elements, point)).toBe(elements[4999]);
+    expect(getDirectBindableTargetAtPoint(elements, point)).toBe(elements[4999]);
   });
 });

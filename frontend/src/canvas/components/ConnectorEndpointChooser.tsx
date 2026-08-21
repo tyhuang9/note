@@ -153,7 +153,6 @@ export function ConnectorEndpointChooser({
               Choose a shape or text block, then a target-relative boundary position. Cardinal presets and the one-degree range rotate with the target. Bind commits the choice.
             </p>
           </div>
-          <button aria-label="Close endpoint chooser" onClick={onClose} type="button">Close</button>
         </header>
         <div aria-label="Target element" className="connector-endpoint-chooser-group" role="group">
           {targets.map(({ id, label }) => (
@@ -188,6 +187,9 @@ export function ConnectorEndpointChooser({
           Boundary position: {anchorDegrees} degrees{selectedTarget ? `${targetRotationDescription(selectedTarget.rotation)}` : ""}
           <input
             aria-label={selectedTarget ? `Target-relative boundary position on ${selectedTarget.label}${targetRotationDescription(selectedTarget.rotation)}` : "Target-relative boundary position"}
+            aria-valuetext={selectedTarget
+              ? `${anchorDegrees} degrees target-relative boundary position on ${selectedTarget.label}${targetRotationDescription(selectedTarget.rotation)}`
+              : `${anchorDegrees} degrees target-relative boundary position; select a target`}
             disabled={!selectedTarget}
             id="connector-boundary-position"
             max="359"
@@ -201,6 +203,7 @@ export function ConnectorEndpointChooser({
         <div className="connector-endpoint-chooser-actions">
           <button disabled={!selectedTarget} onClick={() => onBind(anchorDegrees / 360)} type="button">Bind {endpoint} endpoint</button>
           <button disabled={!isBound} onClick={onDetach} type="button">Detach {endpoint} endpoint</button>
+          <button aria-label="Close endpoint chooser" onClick={onClose} type="button">Close</button>
         </div>
       </section>
     </div>,

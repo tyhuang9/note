@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  containsPointInsideShapeBoundary,
+  containsPointInsideShapeBoundaryFast,
   ELLIPSE_STATIONARY_BRACKET_COUNT,
   getShapeBoundaryPoint,
   projectPointToShapeBoundary,
@@ -348,6 +350,25 @@ describe("shape boundary geometry", () => {
 
   it("uses a bounded bracketed ellipse solver", () => {
     expect(ELLIPSE_STATIONARY_BRACKET_COUNT).toBe(64);
+  });
+
+  it("keeps the allocation-free containment predicate exactly aligned with the shared perimeter", () => {
+    for (const [shape, width, height, roundness] of [
+      ["rectangle", 180, 60, 0],
+      ["rectangle", 180, 60, 0.6],
+      ["rectangle", 60, 180, 1],
+      ["diamond", 160, 100, 0],
+      ["diamond", 100, 160, 0],
+      ["ellipse", 160, 100, 0],
+    ] as const) {
+      for (let x = -12; x <= width + 12; x += 3) {
+        for (let y = -12; y <= height + 12; y += 3) {
+          expect(containsPointInsideShapeBoundaryFast(shape, width, height, roundness, x, y)).toBe(
+            containsPointInsideShapeBoundary(shape, width, height, roundness, { x, y }),
+          );
+        }
+      }
+    }
   });
 
   it("normalizes path dimensions and rejects degenerate public boundaries", () => {

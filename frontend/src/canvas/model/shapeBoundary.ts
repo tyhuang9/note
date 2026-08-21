@@ -81,6 +81,161 @@ export function containsPointInsideShapeBoundary(
   return Boolean(boundary && Math.hypot(dx, dy) <= Math.hypot(boundary.x - center.x, boundary.y - center.y) + 1e-10);
 }
 
+/**
+ * Allocation-free containment for tight model hit-testing loops. It uses the
+ * exact same quadratic perimeter segments as `boundarySegments`, but keeps
+ * every segment and root scalar so a scene scan never constructs segment or
+ * root arrays. Projection and rendering may still use the richer helpers.
+ */
+export function containsPointInsideShapeBoundaryFast(
+  shape: ShapeBoundaryKind,
+  width: number,
+  height: number,
+  roundness: number,
+  x: number,
+  y: number,
+): boolean {
+  if (!(width > 0 && height > 0)) return false;
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const directionX = x - centerX;
+  const directionY = y - centerY;
+  if (shape === "ellipse") {
+    return (directionX / centerX) ** 2 + (directionY / centerY) ** 2 <= 1;
+  }
+  if (directionX === 0 && directionY === 0) return true;
+  return shape === "rectangle"
+    ? roundedRectangleRayContainsPoint(width, height, roundness, centerX, centerY, directionX, directionY)
+    : roundedDiamondRayContainsPoint(width, height, centerX, centerY, directionX, directionY);
+}
+
+function roundedRectangleRayContainsPoint(
+  width: number,
+  height: number,
+  roundness: number,
+  centerX: number,
+  centerY: number,
+  directionX: number,
+  directionY: number,
+) {
+  const radius = roundedRectangleRadius(width, height, roundness);
+  return rayLineContainsPoint(centerX, centerY, directionX, directionY, radius, 0, width - radius, 0)
+    || rayQuadraticContainsPoint(centerX, centerY, directionX, directionY, width - radius, 0, width, 0, width, radius)
+    || rayLineContainsPoint(centerX, centerY, directionX, directionY, width, radius, width, height - radius)
+    || rayQuadraticContainsPoint(centerX, centerY, directionX, directionY, width, height - radius, width, height, width - radius, height)
+    || rayLineContainsPoint(centerX, centerY, directionX, directionY, width - radius, height, radius, height)
+    || rayQuadraticContainsPoint(centerX, centerY, directionX, directionY, radius, height, 0, height, 0, height - radius)
+    || rayLineContainsPoint(centerX, centerY, directionX, directionY, 0, height - radius, 0, radius)
+    || rayQuadraticContainsPoint(centerX, centerY, directionX, directionY, 0, radius, 0, 0, radius, 0);
+}
+
+function roundedDiamondRayContainsPoint(
+  width: number,
+  height: number,
+  centerX: number,
+  centerY: number,
+  directionX: number,
+  directionY: number,
+) {
+  // Keep these scalar in the direct hit path: `diamondMeasures` is useful for
+  // path construction but returns an object for the richer geometry helpers.
+  const cornerInset = Math.min(width, height) * DIAMOND_CORNER_INSET;
+  const diagonal = Math.max(1, Math.hypot(width, height));
+  const horizontalInset = cornerInset * width / diagonal;
+  const verticalInset = cornerInset * height / diagonal;
+  const control = 0.45;
+  return rayQuadraticContainsPoint(centerX, centerY, directionX, directionY, centerX, 0, centerX + horizontalInset * control, 0, centerX + horizontalInset, verticalInset)
+    || rayLineContainsPoint(centerX, centerY, directionX, directionY, centerX + horizontalInset, verticalInset, width - horizontalInset, centerY - verticalInset)
+    || rayQuadraticContainsPoint(centerX, centerY, directionX, directionY, width - horizontalInset, centerY - verticalInset, width, centerY - verticalInset * control, width, centerY)
+    || rayQuadraticContainsPoint(centerX, centerY, directionX, directionY, width, centerY, width, centerY + verticalInset * control, width - horizontalInset, centerY + verticalInset)
+    || rayLineContainsPoint(centerX, centerY, directionX, directionY, width - horizontalInset, centerY + verticalInset, centerX + horizontalInset, height - verticalInset)
+    || rayQuadraticContainsPoint(centerX, centerY, directionX, directionY, centerX + horizontalInset, height - verticalInset, centerX + horizontalInset * control, height, centerX, height)
+    || rayQuadraticContainsPoint(centerX, centerY, directionX, directionY, centerX, height, centerX - horizontalInset * control, height, centerX - horizontalInset, height - verticalInset)
+    || rayLineContainsPoint(centerX, centerY, directionX, directionY, centerX - horizontalInset, height - verticalInset, horizontalInset, centerY + verticalInset)
+    || rayQuadraticContainsPoint(centerX, centerY, directionX, directionY, horizontalInset, centerY + verticalInset, 0, centerY + verticalInset * control, 0, centerY)
+    || rayQuadraticContainsPoint(centerX, centerY, directionX, directionY, 0, centerY, 0, centerY - verticalInset * control, horizontalInset, centerY - verticalInset)
+    || rayLineContainsPoint(centerX, centerY, directionX, directionY, horizontalInset, centerY - verticalInset, centerX - horizontalInset, verticalInset)
+    || rayQuadraticContainsPoint(centerX, centerY, directionX, directionY, centerX - horizontalInset, verticalInset, centerX - horizontalInset * control, 0, centerX, 0);
+}
+
+function rayLineContainsPoint(
+  originX: number,
+  originY: number,
+  directionX: number,
+  directionY: number,
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number,
+) {
+  const edgeX = endX - startX;
+  const edgeY = endY - startY;
+  const denominator = directionX * edgeY - directionY * edgeX;
+  if (Math.abs(denominator) < 1e-12) return false;
+  const deltaX = startX - originX;
+  const deltaY = startY - originY;
+  const ray = (deltaX * edgeY - deltaY * edgeX) / denominator;
+  const segment = (deltaX * directionY - deltaY * directionX) / denominator;
+  return ray >= 1 - 1e-10 && segment >= -1e-12 && segment <= 1 + 1e-12;
+}
+
+function rayQuadraticContainsPoint(
+  originX: number,
+  originY: number,
+  directionX: number,
+  directionY: number,
+  startX: number,
+  startY: number,
+  controlX: number,
+  controlY: number,
+  endX: number,
+  endY: number,
+) {
+  const ax = startX - 2 * controlX + endX;
+  const ay = startY - 2 * controlY + endY;
+  const bx = 2 * (controlX - startX);
+  const by = 2 * (controlY - startY);
+  const cx = startX - originX;
+  const cy = startY - originY;
+  const coefficientA = ax * directionY - ay * directionX;
+  const coefficientB = bx * directionY - by * directionX;
+  const coefficientC = cx * directionY - cy * directionX;
+  if (Math.abs(coefficientA) < 1e-12) {
+    return Math.abs(coefficientB) >= 1e-12
+      && quadraticRayRatioContainsPoint(-coefficientC / coefficientB, originX, originY, directionX, directionY, startX, startY, controlX, controlY, endX, endY);
+  }
+  const discriminant = coefficientB * coefficientB - 4 * coefficientA * coefficientC;
+  if (discriminant < -1e-12) return false;
+  const root = Math.sqrt(Math.max(0, discriminant));
+  return quadraticRayRatioContainsPoint((-coefficientB - root) / (2 * coefficientA), originX, originY, directionX, directionY, startX, startY, controlX, controlY, endX, endY)
+    || quadraticRayRatioContainsPoint((-coefficientB + root) / (2 * coefficientA), originX, originY, directionX, directionY, startX, startY, controlX, controlY, endX, endY);
+}
+
+function quadraticRayRatioContainsPoint(
+  ratio: number,
+  originX: number,
+  originY: number,
+  directionX: number,
+  directionY: number,
+  startX: number,
+  startY: number,
+  controlX: number,
+  controlY: number,
+  endX: number,
+  endY: number,
+) {
+  if (ratio < -1e-12 || ratio > 1 + 1e-12) return false;
+  const clampedRatio = Math.max(0, Math.min(1, ratio));
+  const reverse = 1 - clampedRatio;
+  const pointX = reverse * reverse * startX + 2 * reverse * clampedRatio * controlX + clampedRatio * clampedRatio * endX;
+  const pointY = reverse * reverse * startY + 2 * reverse * clampedRatio * controlY + clampedRatio * clampedRatio * endY;
+  const pointDirectionX = pointX - originX;
+  const pointDirectionY = pointY - originY;
+  const directionLengthSquared = directionX * directionX + directionY * directionY;
+  const ray = (pointDirectionX * directionX + pointDirectionY * directionY) / directionLengthSquared;
+  return ray >= 1 - 1e-10;
+}
+
 function roundedRectangleRadius(width: number, height: number, roundness: number) {
   const boundedRoundness = Math.max(MIN_VISUAL_RECTANGLE_ROUNDNESS, Math.min(1, roundness));
   return Math.min(width, height) * boundedRoundness / 2;

@@ -70,16 +70,53 @@ test("keyboard chooser commits an arbitrary one-degree perimeter binding", async
   await startHandle.focus();
   await page.keyboard.press("Enter");
   const arbitraryDialog = page.getByRole("dialog", { name: "Choose start endpoint target" });
-  await arbitraryDialog.getByRole("button", { name: /^Rectangle 1 / }).click();
-  await arbitraryDialog.getByRole("button", { name: /^Top anchor/ }).click();
+  const targets = arbitraryDialog.locator("[data-connector-target]");
+  await expect(targets.first()).toBeFocused();
+  for (let index = 1; index < await targets.count(); index += 1) {
+    await page.keyboard.press("Tab");
+    await expect(targets.nth(index)).toBeFocused();
+  }
+  const top = arbitraryDialog.getByRole("button", { name: /^Top anchor/ });
+  const right = arbitraryDialog.getByRole("button", { name: /^Right anchor/ });
+  const bottom = arbitraryDialog.getByRole("button", { name: /^Bottom anchor/ });
+  const left = arbitraryDialog.getByRole("button", { name: /^Left anchor/ });
+  await page.keyboard.press("Tab");
+  await expect(top).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(right).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(bottom).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(left).toBeFocused();
   const range = arbitraryDialog.getByRole("slider", { name: /Target-relative boundary position/ });
-  await range.focus();
-  await page.keyboard.press("Shift+Tab");
-  await expect(arbitraryDialog.getByRole("button", { name: /^Left anchor/ })).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(range).toBeFocused();
+  await expect(range).toHaveAttribute("aria-valuetext", /0 degrees target-relative boundary position on Rectangle 1/);
+  const bind = arbitraryDialog.getByRole("button", { name: "Bind start endpoint" });
+  const detach = arbitraryDialog.getByRole("button", { name: "Detach start endpoint" });
+  const close = arbitraryDialog.getByRole("button", { name: "Close endpoint chooser" });
+  await page.keyboard.press("Tab");
+  await expect(bind).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(detach).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(close).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(targets.first()).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(close).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(startHandle).toBeFocused();
+
+  await startHandle.focus();
+  await page.keyboard.press("Enter");
+  const reopenedDialog = page.getByRole("dialog", { name: "Choose start endpoint target" });
+  await reopenedDialog.getByRole("button", { name: /^Top anchor/ }).click();
+  const reopenedRange = reopenedDialog.getByRole("slider", { name: /Target-relative boundary position/ });
+  await reopenedRange.focus();
   for (let index = 0; index < 37; index += 1) await page.keyboard.press("ArrowRight");
-  await arbitraryDialog.getByRole("button", { name: "Bind start endpoint" }).click();
+  await expect(reopenedRange).toHaveAttribute("aria-valuetext", /37 degrees target-relative boundary position on Rectangle 1/);
+  await reopenedDialog.getByRole("button", { name: "Bind start endpoint" }).click();
   await expect(startHandle).toBeFocused();
 
   await expect.poll(() => newestConnector(page)).toMatchObject({
@@ -92,6 +129,49 @@ test("keyboard chooser commits an arbitrary one-degree perimeter binding", async
     const start = (await newestConnector(page))?.start as { anchor: { t: number }; kind: string; targetElementId: string };
     return start?.kind === "element" && start.targetElementId === "rounded-rectangle" && start.anchor.t !== 37 / 360;
   }).toBe(true);
+  await expect(page.locator('[role="status"].canvas-accessibility-status')).toHaveText(
+    /Moved start endpoint along Rectangle 1 .*target-relative boundary position \d+ degrees\./,
+  );
+});
+
+test("retarget status announces each near, snap, loss, and cancellation transition once", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  await canvas.focus();
+  await page.keyboard.press("a");
+  await page.keyboard.press("Enter");
+  await selectTool(page, "select");
+  const endHandle = page.getByRole("button", { name: "Move connector end endpoint" });
+  const handle = await requiredBounds(endHandle, "free end endpoint");
+  const perimeter = await modelToScreen(page, seededRoundedRectangleBoundaryPoint(0.18));
+  const freePoint = await modelToScreen(page, { x: 100, y: 780 });
+  const status = page.locator('[role="status"].canvas-accessibility-status');
+  await observeConnectorStatus(page);
+
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(perimeter.x + 23, perimeter.y);
+  await expect(status).toHaveText(/Near Rectangle 1 .*target-relative boundary position/);
+  const nearMarker = page.locator('[data-connector-target-id="rounded-rectangle"]');
+  await expect(nearMarker).toHaveCount(1);
+  await expect(nearMarker).not.toHaveClass(/is-snapped/);
+  await expect.poll(() => markerCssWidth(nearMarker)).toBe(10);
+  await page.mouse.move(perimeter.x, perimeter.y);
+  await expect(status).toHaveText(/Snapped to Rectangle 1 .*target-relative boundary position/);
+  const snappedMarker = page.locator('[data-connector-target-id="rounded-rectangle"].is-active');
+  await expect(snappedMarker).toHaveCount(1);
+  await expect(snappedMarker).toHaveClass(/is-snapped/);
+  await expect.poll(() => markerCssWidth(snappedMarker)).toBe(14);
+  await page.mouse.move(freePoint.x, freePoint.y);
+  await expect(status).toHaveText("No binding target. Endpoint will remain free.");
+  await endHandle.dispatchEvent("pointercancel", { pointerId: 1 });
+  await page.mouse.up();
+  await expect(status).toHaveText("Endpoint retargeting canceled. Existing binding remains unchanged.");
+
+  const announcements = await readConnectorStatus(page);
+  expect(announcements.filter((message) => message.startsWith("Near Rectangle 1") && message.includes("target-relative boundary position"))).toHaveLength(1);
+  expect(announcements.filter((message) => message.startsWith("Snapped to Rectangle 1") && message.includes("target-relative boundary position"))).toHaveLength(1);
+  expect(announcements.filter((message) => message === "No binding target. Endpoint will remain free.")).toHaveLength(1);
+  expect(announcements.filter((message) => message === "Endpoint retargeting canceled. Existing binding remains unchanged.")).toHaveLength(1);
 });
 
 test("continuous authoring binds one arbitrary perimeter target at 50%, 100%, and 200%", async ({ page }) => {
@@ -217,6 +297,29 @@ async function counts(page: Page) {
 
 async function resetCounts(page: Page) {
   await page.evaluate(() => { (window as unknown as { __perimeterCounts: { apply: number; session: number } }).__perimeterCounts = { apply: 0, session: 0 }; });
+}
+
+async function observeConnectorStatus(page: Page) {
+  await page.evaluate(() => {
+    const status = document.querySelector<HTMLElement>('[role="status"].canvas-accessibility-status');
+    if (!status) throw new Error("Connector status region was unavailable.");
+    const runtime = window as typeof window & { __perimeterAnnouncements?: string[]; __perimeterStatusObserver?: MutationObserver };
+    runtime.__perimeterAnnouncements = [];
+    runtime.__perimeterStatusObserver?.disconnect();
+    runtime.__perimeterStatusObserver = new MutationObserver(() => {
+      const message = status.textContent?.trim() ?? "";
+      if (message) runtime.__perimeterAnnouncements?.push(message);
+    });
+    runtime.__perimeterStatusObserver.observe(status, { characterData: true, childList: true, subtree: true });
+  });
+}
+
+async function readConnectorStatus(page: Page) {
+  return page.evaluate(() => {
+    const runtime = window as typeof window & { __perimeterAnnouncements?: string[]; __perimeterStatusObserver?: MutationObserver };
+    runtime.__perimeterStatusObserver?.disconnect();
+    return runtime.__perimeterAnnouncements ?? [];
+  });
 }
 
 async function modelToScreen(page: Page, point: Readonly<{ x: number; y: number }>) {

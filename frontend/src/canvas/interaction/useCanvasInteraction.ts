@@ -16,6 +16,8 @@ import { getSelectionRect, rectsIntersect } from "../../editorUtils";
 import type { CanvasElement, ConnectorElement, ConnectorEndpoint, RoughStyle, ShapeElement } from "../model/elements";
 import {
   getConnectorAuthoringCandidate,
+  getConnectorCandidateAnnouncement,
+  getConnectorCandidateAnnouncementKey,
   normalizeFreeConnectorEndpoint,
   snapConnectorPointToAngle,
   type BindableElement,
@@ -249,19 +251,15 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
           targetId: candidate.target.id,
         }
       : null;
-    const announcementKey = next
-      ? `${next.targetId}:${next.anchor.anchor.t}:${next.isSnapped ? "snapped" : "near"}`
-      : null;
+    const announcementKey = getConnectorCandidateAnnouncementKey(candidate);
     const previousAnnouncementKey = lastArrowCandidateAnnouncementRef.current;
     if (announcementKey !== previousAnnouncementKey) {
       lastArrowCandidateAnnouncementRef.current = announcementKey;
       if (candidate) {
         const targetLabel = optionsRef.current.getArrowTargetLabel(candidate.target);
-        optionsRef.current.onArrowStatusChange(candidate.endpoint.kind === "element"
-          ? `Snapped to ${targetLabel} at target-relative boundary position ${Math.round(candidate.activeAnchor.anchor.t * 360)} degrees.`
-          : `Near ${targetLabel} at target-relative boundary position ${Math.round(candidate.activeAnchor.anchor.t * 360)} degrees; move closer to snap.`);
+        optionsRef.current.onArrowStatusChange(getConnectorCandidateAnnouncement(candidate, targetLabel));
       } else if (previousAnnouncementKey !== null) {
-        optionsRef.current.onArrowStatusChange("No binding target. Endpoint will remain free.");
+        optionsRef.current.onArrowStatusChange(getConnectorCandidateAnnouncement(null));
       }
     }
     setArrowAuthoringVisual((current) =>

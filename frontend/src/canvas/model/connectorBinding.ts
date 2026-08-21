@@ -48,6 +48,25 @@ export type ConnectorAuthoringCandidate = Readonly<{
   target: BindableElement;
 }>;
 
+/** Stable key and wording shared by arrow authoring and endpoint retargeting. */
+export function getConnectorCandidateAnnouncementKey(candidate: ConnectorAuthoringCandidate | null): string | null {
+  return candidate
+    ? `${candidate.target.id}:${candidate.activeAnchor.anchor.t}:${candidate.endpoint.kind === "element" ? "snapped" : "near"}`
+    : null;
+}
+
+export function getConnectorCandidateAnnouncement(
+  candidate: ConnectorAuthoringCandidate | null,
+  targetLabel: string | null = null,
+): string {
+  if (!candidate) return "No binding target. Endpoint will remain free.";
+  const label = targetLabel ?? candidate.target.id;
+  const degrees = Math.round(candidate.activeAnchor.anchor.t * 360);
+  return candidate.endpoint.kind === "element"
+    ? `Snapped to ${label} at target-relative boundary position ${degrees} degrees.`
+    : `Near ${label} at target-relative boundary position ${degrees} degrees; move closer to snap.`;
+}
+
 export function isBindableShape(element: CanvasElement | undefined): element is ShapeElement {
   return element?.type === "shape" && (
     element.shape === "rectangle" || element.shape === "ellipse" || element.shape === "diamond"

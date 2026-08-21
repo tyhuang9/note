@@ -544,6 +544,116 @@ test("mixed resize preview and frame return to their original geometry on pointe
   await expect.poll(() => Promise.all([readWorldWidth(elements.shape), readWorldWidth(elements.text)])).toEqual(originalWidths);
 });
 
+test("opening Find cancels mixed selection resize without stale geometry and allows a later resize", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  const bounds = await requiredBounds(canvas, "canvas");
+  const elements = await createMixedSelection(page, bounds);
+  await marqueeSelect(page, bounds, [elements.shape, elements.text]);
+  const frame = page.locator(".selection-frame");
+  const originalFrame = await roundedBounds(frame);
+  const originalWidths = await Promise.all([readWorldWidth(elements.shape), readWorldWidth(elements.text)]);
+  let interactive = await interactiveResizeHandle(page);
+  let start = {
+    x: interactive.bounds.x + interactive.bounds.width / 2,
+    y: interactive.bounds.y + interactive.bounds.height / 2,
+  };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    start.x + (interactive.corner.includes("e") ? 72 : -72),
+    start.y + (interactive.corner.includes("s") ? 48 : -48),
+    { steps: 5 },
+  );
+  await expect(page.locator(".resize-layer-clone")).not.toHaveCount(0);
+
+  await page.getByRole("button", { name: "Find in canvas" }).dispatchEvent("click");
+  await expect(page.getByRole("textbox", { name: "Find in canvas" })).toBeFocused();
+  await expect(page.locator(".resize-layer-clone")).toHaveCount(0);
+  await expect(page.locator("body")).not.toHaveClass(/is-interacting/);
+  await page.mouse.move(start.x + 140, start.y + 100, { steps: 3 });
+  await page.mouse.up();
+  await expect.poll(() => roundedBounds(frame)).toEqual(originalFrame);
+  await expect.poll(() => Promise.all([readWorldWidth(elements.shape), readWorldWidth(elements.text)])).toEqual(originalWidths);
+
+  await page.getByRole("button", { name: "Close search", exact: true }).click();
+  interactive = await interactiveResizeHandle(page);
+  start = {
+    x: interactive.bounds.x + interactive.bounds.width / 2,
+    y: interactive.bounds.y + interactive.bounds.height / 2,
+  };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    start.x + (interactive.corner.includes("e") ? 60 : -60),
+    start.y + (interactive.corner.includes("s") ? 40 : -40),
+    { steps: 4 },
+  );
+  await page.mouse.up();
+  await expect.poll(() => Promise.all([readWorldWidth(elements.shape), readWorldWidth(elements.text)])).not.toEqual(originalWidths);
+});
+
+test("mixed resize previews a selected free connector with the exact committed transform once", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  const bounds = await requiredBounds(canvas, "canvas");
+  const elements = await createMixedSelection(page, bounds);
+  await page.getByRole("button", { name: "Line (L / 6)" }).click();
+  await page.mouse.move(bounds.x + 500, bounds.y + 240);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + 720, bounds.y + 420, { steps: 4 });
+  await page.mouse.up();
+  const connector = page.locator('[data-canvas-element-type="connector"]:not(.connector-transform-preview)').last();
+  await expect(connector).toBeVisible();
+  const connectorId = await connector.getAttribute("data-canvas-element-id");
+  if (!connectorId) throw new Error("Free connector id was unavailable.");
+  const original = await readConnectorEndpoints(connector);
+
+  await marqueeSelect(page, bounds, [elements.shape, elements.text, connector]);
+  let interactive = await interactiveResizeHandle(page);
+  let start = {
+    x: interactive.bounds.x + interactive.bounds.width / 2,
+    y: interactive.bounds.y + interactive.bounds.height / 2,
+  };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    start.x + (interactive.corner.includes("e") ? 84 : -84),
+    start.y + (interactive.corner.includes("s") ? 64 : -64),
+    { steps: 5 },
+  );
+  let preview = page.locator(`.connector-transform-preview[data-connector-id="${connectorId}"]`);
+  await expect(preview).toHaveCount(1);
+  expect(await readConnectorEndpoints(preview)).not.toEqual(original);
+  await interactive.handle.dispatchEvent("pointercancel", {
+    bubbles: true,
+    button: 0,
+    clientX: start.x,
+    clientY: start.y,
+    pointerId: 1,
+  });
+  await page.mouse.up();
+  await expect(preview).toHaveCount(0);
+  expect(await readConnectorEndpoints(connector)).toEqual(original);
+
+  interactive = await interactiveResizeHandle(page);
+  start = {
+    x: interactive.bounds.x + interactive.bounds.width / 2,
+    y: interactive.bounds.y + interactive.bounds.height / 2,
+  };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    start.x + (interactive.corner.includes("e") ? 84 : -84),
+    start.y + (interactive.corner.includes("s") ? 64 : -64),
+    { steps: 5 },
+  );
+  preview = page.locator(`.connector-transform-preview[data-connector-id="${connectorId}"]`);
+  await expect(preview).toHaveCount(1);
+  const previewEndpoints = await readConnectorEndpoints(preview);
+  await page.mouse.up();
+  await expect(preview).toHaveCount(0);
+  await expect.poll(() => readConnectorEndpoints(connector)).toEqual(previewEndpoints);
+});
+
 for (const cancelPath of ["Escape", "tool change", "page change", "window blur", "pointer cancel", "lost pointer capture"] as const) {
   test(`header mixed drag cleanup restores the frame on ${cancelPath}`, async ({ page }) => {
     const canvas = page.getByRole("tabpanel");
@@ -853,5 +963,18 @@ async function readWorldSize(locator: Locator) {
   return locator.evaluate((element) => ({
     height: Number.parseFloat((element as HTMLElement).style.height),
     width: Number.parseFloat((element as HTMLElement).style.width),
+  }));
+}
+
+async function readConnectorEndpoints(locator: Locator) {
+  return locator.evaluate((element) => ({
+    end: {
+      x: Number((element as HTMLElement).dataset.connectorEndX),
+      y: Number((element as HTMLElement).dataset.connectorEndY),
+    },
+    start: {
+      x: Number((element as HTMLElement).dataset.connectorStartX),
+      y: Number((element as HTMLElement).dataset.connectorStartY),
+    },
   }));
 }

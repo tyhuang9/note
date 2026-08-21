@@ -520,6 +520,81 @@ for (const focusTarget of ["input", "previous", "next", "close"] as const) {
   });
 }
 
+for (const family of ["primitive", "ink", "pan", "resize"] as const) {
+  test(`opening Find synchronously cancels a captured ${family} session without writes or resurrection`, async ({ page }) => {
+    await installSearchWorkspace(page);
+    await page.setViewportSize({ width: 1_440, height: 1_200 });
+    await page.goto("/");
+    await resetPersistenceCounts(page);
+    const baselineJson = await workspaceJson(page);
+    const gesture = await beginCapturedGesture(page, family);
+    await gesture.assertActive();
+    expect(await hasCapturedPointer(page, gesture.pointerId)).toBe(true);
+
+    await page.getByRole("button", { name: "Find in canvas" }).dispatchEvent("click");
+    await expect(page.getByRole("textbox", { name: "Find in canvas" })).toBeFocused();
+    await gesture.assertCancelled();
+    expect(await hasCapturedPointer(page, gesture.pointerId)).toBe(false);
+    await page.mouse.move(gesture.stalePoint.x + 120, gesture.stalePoint.y + 90, { steps: 3 });
+    await page.mouse.up();
+    await gesture.assertCancelled();
+    expect(await workspaceJson(page)).toBe(baselineJson);
+    expect(await persistenceCounts(page)).toEqual({ apply: 0, session: 0 });
+
+    await page.getByRole("button", { name: "Close search", exact: true }).click();
+    await gesture.performLaterGesture();
+  });
+}
+
+for (const scenario of [
+  { family: "primitive", interruption: "tool" },
+  { family: "ink", interruption: "page" },
+  { family: "pan", interruption: "pointercancel" },
+  { family: "resize", interruption: "lostcapture" },
+] as const) {
+  test(`${scenario.interruption} cancellation releases a captured ${scenario.family} session without stale commit`, async ({ page }) => {
+    await installSearchWorkspace(page);
+    await page.setViewportSize({ width: 1_440, height: 1_200 });
+    await page.goto("/");
+    let originalTab: Locator | null = null;
+    let alternateTab: Locator | null = null;
+    if (scenario.interruption === "page") {
+      await page.getByRole("button", { name: "Create root page" }).click();
+      const tabs = page.getByRole("tablist", { name: "Open pages" }).getByRole("tab");
+      await expect(tabs).toHaveCount(2);
+      originalTab = tabs.first();
+      alternateTab = tabs.nth(1);
+      await originalTab.click();
+    }
+    await resetPersistenceCounts(page);
+    const baselineElements = JSON.stringify(await workspaceElements(page));
+    const gesture = await beginCapturedGesture(page, scenario.family);
+    await gesture.assertActive();
+    expect(await hasCapturedPointer(page, gesture.pointerId)).toBe(true);
+
+    if (scenario.interruption === "tool") {
+      await page.getByRole("button", { name: /Pen \(P/ }).dispatchEvent("click");
+    } else if (scenario.interruption === "page") {
+      await alternateTab!.dispatchEvent("click");
+    } else if (scenario.interruption === "pointercancel") {
+      await dispatchCapturedTermination(page, gesture.pointerId, "pointercancel", gesture.stalePoint);
+    } else {
+      await dispatchCapturedTermination(page, gesture.pointerId, "lostpointercapture", gesture.stalePoint);
+    }
+
+    await gesture.assertCancelled();
+    expect(await hasCapturedPointer(page, gesture.pointerId)).toBe(false);
+    await page.mouse.move(gesture.stalePoint.x + 100, gesture.stalePoint.y + 80, { steps: 3 });
+    await page.mouse.up();
+    await gesture.assertCancelled();
+    expect(JSON.stringify(await workspaceElements(page))).toBe(baselineElements);
+    expect((await persistenceCounts(page)).apply).toBe(0);
+    if (scenario.interruption !== "page") expect((await persistenceCounts(page)).session).toBe(0);
+    if (originalTab) await originalTab.click();
+    await gesture.performLaterGesture();
+  });
+}
+
 for (const focusTarget of ["input", "previous", "next", "close"] as const) {
   test(`search ${focusTarget} Escape preserves a pending two-click Arrow`, async ({ page }) => {
     await installSearchWorkspace(page);
@@ -745,6 +820,143 @@ async function resetPersistenceCounts(page: Page) {
       __searchPersistenceCounts: { apply: number; session: number };
     }).__searchPersistenceCounts = { apply: 0, session: 0 };
   });
+}
+
+type CapturedGestureFamily = "primitive" | "ink" | "pan" | "resize";
+
+type CapturedGesture = {
+  assertActive: () => Promise<void>;
+  assertCancelled: () => Promise<void>;
+  performLaterGesture: () => Promise<void>;
+  pointerId: number;
+  stalePoint: { x: number; y: number };
+};
+
+async function beginCapturedGesture(page: Page, family: CapturedGestureFamily): Promise<CapturedGesture> {
+  const canvas = page.getByRole("tabpanel");
+  const canvasBounds = await canvas.boundingBox();
+  if (!canvasBounds) throw new Error("Canvas bounds were unavailable.");
+  const primitivePreview = page.locator(".primitive-authoring-preview");
+  const inkPreview = page.locator(".canvas-live-draft-layer > path");
+  const textBlock = page.locator('[data-block-id="text-rich"]');
+  const baselineTransform = await page.locator(".canvas-content").evaluate((element) => (element as HTMLElement).style.transform);
+  const baselineTextWidth = await textBlock.evaluate((element) => Number.parseFloat((element as HTMLElement).style.width));
+  const beforePrimitiveCount = await page.locator('[data-canvas-element-type="shape"]').count();
+  const beforeInkCount = await page.locator('[data-canvas-element-type="ink"]').count();
+  let start = { x: canvasBounds.x + canvasBounds.width - 210, y: canvasBounds.y + 250 };
+  let stalePoint = { x: start.x + 90, y: start.y + 70 };
+
+  if (family === "primitive") {
+    await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
+  } else if (family === "ink") {
+    await page.getByRole("button", { name: "Pen (P / 7)" }).click();
+  } else if (family === "pan") {
+    await page.getByRole("button", { name: "Hand (Space)" }).click();
+  } else {
+    await textBlock.locator(".text-block-display").click();
+    const handle = page.getByRole("button", { name: "Resize text width" });
+    const handleBounds = await handle.boundingBox();
+    if (!handleBounds) throw new Error("Text resize handle bounds were unavailable.");
+    start = { x: handleBounds.x + handleBounds.width / 2, y: handleBounds.y + handleBounds.height / 2 };
+    stalePoint = { x: start.x - 72, y: start.y };
+  }
+
+  await page.evaluate(() => {
+    document.addEventListener("pointerdown", (event) => {
+      document.body.dataset.capturedLifecyclePointerId = String(event.pointerId);
+    }, { capture: true, once: true });
+  });
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(stalePoint.x, stalePoint.y, { steps: 5 });
+  const pointerId = Number(await page.locator("body").getAttribute("data-captured-lifecycle-pointer-id"));
+  await page.locator("body").evaluate((element) => delete (element as HTMLElement).dataset.capturedLifecyclePointerId);
+  if (!Number.isFinite(pointerId)) throw new Error("Captured lifecycle pointer id was unavailable.");
+
+  return {
+    pointerId,
+    stalePoint,
+    assertActive: async () => {
+      if (family === "primitive") await expect(primitivePreview).toHaveCount(1);
+      else if (family === "ink") await expect(inkPreview).toHaveCount(1);
+      else if (family === "pan") await expect(canvas).toHaveClass(/is-panning/);
+      else await expect(textBlock).toHaveClass(/is-resizing/);
+    },
+    assertCancelled: async () => {
+      await expect(primitivePreview).toHaveCount(0);
+      await expect(inkPreview).toHaveCount(0);
+      await expect(canvas).not.toHaveClass(/is-panning/);
+      await expect(page.locator("body")).not.toHaveClass(/is-interacting/);
+      if (family === "pan") {
+        await expect.poll(() => page.locator(".canvas-content").evaluate((element) => (element as HTMLElement).style.transform)).toBe(baselineTransform);
+      }
+      if (family === "resize" && await textBlock.count()) {
+        await expect(textBlock).not.toHaveClass(/is-resizing/);
+        await expect.poll(() => textBlock.evaluate((element) => Number.parseFloat((element as HTMLElement).style.width))).toBe(baselineTextWidth);
+      }
+    },
+    performLaterGesture: async () => {
+      if (family === "primitive") {
+        await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
+        await page.mouse.move(start.x, start.y);
+        await page.mouse.down();
+        await page.mouse.move(stalePoint.x, stalePoint.y, { steps: 3 });
+        await page.mouse.up();
+        await expect(page.locator('[data-canvas-element-type="shape"]')).toHaveCount(beforePrimitiveCount + 1);
+      } else if (family === "ink") {
+        await page.getByRole("button", { name: "Pen (P / 7)" }).click();
+        await page.mouse.move(start.x, start.y);
+        await page.mouse.down();
+        await page.mouse.move(stalePoint.x, stalePoint.y, { steps: 3 });
+        await page.mouse.up();
+        await expect(page.locator('[data-canvas-element-type="ink"]')).toHaveCount(beforeInkCount + 1);
+      } else if (family === "pan") {
+        await page.getByRole("button", { name: "Hand (Space)" }).click();
+        await page.mouse.move(start.x, start.y);
+        await page.mouse.down();
+        await page.mouse.move(stalePoint.x, stalePoint.y, { steps: 3 });
+        await page.mouse.up();
+        await expect.poll(() => page.locator(".canvas-content").evaluate((element) => (element as HTMLElement).style.transform)).not.toBe(baselineTransform);
+      } else {
+        await textBlock.locator(".text-block-display").click();
+        const handle = page.getByRole("button", { name: "Resize text width" });
+        const bounds = await handle.boundingBox();
+        if (!bounds) throw new Error("Later text resize handle bounds were unavailable.");
+        const point = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+        await page.mouse.move(point.x, point.y);
+        await page.mouse.down();
+        await page.mouse.move(point.x + 60, point.y, { steps: 3 });
+        await page.mouse.up();
+        await expect.poll(() => textBlock.evaluate((element) => Number.parseFloat((element as HTMLElement).style.width))).toBeGreaterThan(baselineTextWidth);
+      }
+    },
+  };
+}
+
+async function hasCapturedPointer(page: Page, pointerId: number) {
+  return page.evaluate((id) => Array.from(document.querySelectorAll<HTMLElement>("*"))
+    .some((element) => element.hasPointerCapture(id)), pointerId);
+}
+
+async function dispatchCapturedTermination(
+  page: Page,
+  pointerId: number,
+  type: "lostpointercapture" | "pointercancel",
+  point: { x: number; y: number },
+) {
+  await page.evaluate(({ id, type, x, y }) => {
+    const target = Array.from(document.querySelectorAll<HTMLElement>("*"))
+      .find((element) => element.hasPointerCapture(id));
+    if (!target) throw new Error("Captured lifecycle target was unavailable.");
+    if (type === "lostpointercapture") target.releasePointerCapture(id);
+    target.dispatchEvent(new PointerEvent(type, {
+      bubbles: true,
+      button: 0,
+      clientX: x,
+      clientY: y,
+      pointerId: id,
+    }));
+  }, { id: pointerId, type, x: point.x, y: point.y });
 }
 
 async function contrastRatio(foreground: Locator, background: Locator) {

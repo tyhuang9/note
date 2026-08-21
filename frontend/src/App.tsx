@@ -184,6 +184,7 @@ import {
   getOppositeCorner,
   getSelectionElementBounds,
   getSelectionBounds,
+  getSelectionResizePreviewConnectorIds,
   scaleSelection,
   translateSelection,
   type SelectionCorner,
@@ -385,6 +386,7 @@ type DragLayerSession = {
 
 type ResizeLayerSession = {
   blockIds: string[];
+  connectorIds: ReadonlySet<string>;
   items: {
     cloneElement: HTMLElement;
     element: CanvasElement & BoxCanvasElement;
@@ -1195,7 +1197,7 @@ function applyFormatStateToBlock(
 function App() {
   const [data, setData] = useState<AppData>(emptyData);
   const [selectedFolderId, setSelectedFolderId] = useState("");
-  const [selectedPageId, setSelectedPageId] = useState("");
+  const [selectedPageId, setSelectedPageIdState] = useState("");
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
   const [editingPageId, setEditingPageId] = useState<string | null>(null);
   const [isEditingHeaderTitle, setIsEditingHeaderTitle] = useState(false);
@@ -1295,6 +1297,8 @@ function App() {
   const textResizeSessionRef = useRef<TextResizeSession | null>(null);
   const cancelCanvasSelectionRef = useRef<() => void>(() => undefined);
   const cancelVisualDragRef = useRef<(updateState?: boolean) => void>(() => undefined);
+  const cancelCapturedCanvasInteractionsRef = useRef<() => void>(() => undefined);
+  const cancelCanvasInteractionTransitionRef = useRef<() => void>(() => undefined);
   const canvasSearchButtonRef = useRef<HTMLButtonElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const searchReturnFocusRef = useRef<HTMLElement | null>(null);
@@ -1360,6 +1364,11 @@ function App() {
   const connectorEndpointFocusReturnRafRef = useRef<number | null>(null);
   const keyboardArrowCreationRef = useRef<() => boolean>(() => false);
   const keyboardArrowEndpointFocusRafRef = useRef<number | null>(null);
+
+  const setSelectedPageId = useCallback((nextPageId: string) => {
+    cancelCanvasInteractionTransitionRef.current();
+    setSelectedPageIdState(nextPageId);
+  }, []);
 
   useLayoutEffect(() => {
     const bounds = selectionFrameVisualBoundsRef.current;
@@ -1986,9 +1995,7 @@ function App() {
 
   useEffect(() => {
     function handleWindowBlur() {
-      cancelCanvasSelectionSession();
-      cancelSelectionFrameInteraction();
-      cancelVisualDragRef.current();
+      cancelCapturedCanvasInteractionsRef.current();
     }
 
     window.addEventListener("blur", handleWindowBlur);
@@ -1997,9 +2004,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    cancelCanvasSelectionSession();
-    cancelSelectionFrameInteraction();
-    cancelVisualDragRef.current();
+    cancelCanvasInteractionTransitionRef.current();
   }, [activeTool, selectedPageId]);
 
   useEffect(() => {
@@ -3466,9 +3471,7 @@ function App() {
       }
 
       if (event.key === "Escape") {
-        cancelCanvasSelectionSession();
-        cancelSelectionFrameInteraction();
-        cancelVisualDragRef.current();
+        cancelCapturedCanvasInteractionsRef.current();
         clearPendingImagePlacement();
       }
 
@@ -4155,6 +4158,7 @@ function App() {
 
   function focusCanvasSearch(trigger?: HTMLElement | null) {
     if (isCanvasSearchInteractionBlocked()) return;
+    cancelCapturedCanvasInteractionsRef.current();
     searchReturnFocusRef.current = trigger?.isConnected && trigger !== document.body
       ? trigger
       : canvasRef.current;
@@ -5602,6 +5606,7 @@ function App() {
   }
 
   function selectDrawingTool(tool: DrawingTool) {
+    cancelCanvasInteractionTransitionRef.current();
     finishActiveShapeTextEdit();
     isCanvasKeyboardActiveRef.current = true;
     setIsCanvasKeyboardActive(true);
@@ -5956,6 +5961,11 @@ function App() {
       wrapper.style.height = `${height}px`;
       wrapper.style.opacity = String(connector.opacity);
       wrapper.style.zIndex = String(connector.zIndex);
+      wrapper.dataset.connectorId = connector.id;
+      wrapper.dataset.connectorStartX = String(points.start.x);
+      wrapper.dataset.connectorStartY = String(points.start.y);
+      wrapper.dataset.connectorEndX = String(points.end.x);
+      wrapper.dataset.connectorEndY = String(points.end.y);
       const svg = wrapper.firstElementChild as SVGSVGElement;
       svg.setAttribute("width", String(width));
       svg.setAttribute("height", String(height));
@@ -6554,8 +6564,9 @@ function App() {
           Boolean(entry.element && entry.model && !entry.model.locked && isBoxCanvasElement(entry.model)),
       );
     if (sourceEntries.length === 0) return false;
-    const affectedConnectorIds = getBoundConnectorIdsForTargets(
+    const connectorIds = getSelectionResizePreviewConnectorIds(
       dataRef.current.elements,
+      new Set(selectedBlockIdsRef.current),
       new Set(sourceEntries.map((entry) => entry.blockId)),
     );
 
@@ -6591,11 +6602,12 @@ function App() {
     canvasElement.append(overlayElement);
     const session = {
       blockIds: sourceEntries.map((entry) => entry.blockId),
+      connectorIds,
       items,
       overlayElement,
       sourceElements: sourceEntries.map((entry) => entry.element),
       connectorPreviewElements: new Map<string, HTMLDivElement>(),
-      connectorSourceElements: Array.from(affectedConnectorIds).flatMap((id) => {
+      connectorSourceElements: Array.from(connectorIds).flatMap((id) => {
         const element = blockElementsRef.current.get(id);
         return element ? [element] : [];
       }),
@@ -6608,7 +6620,7 @@ function App() {
     for (const sourceElement of session.connectorSourceElements) {
       sourceElement.classList.add("is-drag-source-hidden");
     }
-    renderTransientConnectorPreviews(dataRef.current.elements, affectedConnectorIds, session.connectorPreviewElements);
+    renderTransientConnectorPreviews(dataRef.current.elements, connectorIds, session.connectorPreviewElements);
     return true;
   }
 
@@ -6633,7 +6645,7 @@ function App() {
     }
     renderTransientConnectorPreviews(
       previewElements,
-      getBoundConnectorIdsForTargets(dataRef.current.elements, new Set(session.blockIds)),
+      session.connectorIds,
       session.connectorPreviewElements,
     );
   }
@@ -7748,7 +7760,7 @@ function App() {
     zoomLevelRef,
     zoomStep: ZOOM_STEP,
   });
-  cancelCanvasSelectionRef.current = canvasInteraction.cancelMarquee;
+  cancelCanvasSelectionRef.current = canvasInteraction.cancelCapturedPointerInteraction;
   keyboardArrowCreationRef.current = () => {
     canvasInteraction.cancelArrowAuthoring();
     const endpoints = canvasViewportRef.current
@@ -7853,6 +7865,19 @@ function App() {
     ),
     zoomLevelRef,
   });
+  cancelCapturedCanvasInteractionsRef.current = () => {
+    canvasInteraction.cancelCapturedPointerInteraction();
+    inkInteraction.cancelCapturedPointerInteraction();
+    cancelSelectionFrameInteraction();
+    cancelVisualDragRef.current();
+    isTemporaryHandActiveRef.current = false;
+    canvasRef.current?.removeAttribute("data-temporary-hand");
+    document.body.classList.remove("is-interacting");
+  };
+  cancelCanvasInteractionTransitionRef.current = () => {
+    cancelCapturedCanvasInteractionsRef.current();
+    canvasInteraction.cancelArrowAuthoring();
+  };
 
   function focusSearchMatch(matchIndex: number) {
     if (searchMatches.length === 0 || isCanvasSearchInteractionBlocked()) {
@@ -8108,7 +8133,10 @@ function App() {
           id={WORKSPACE_PAGE_PANEL_ID}
           isInteractionDisabled={isSearchOpen}
           onDoubleClick={canvasInteraction.handleDoubleClick}
-          onLostPointerCapture={canvasInteraction.handlePointerCancel}
+          onLostPointerCapture={(event) => {
+            inkInteraction.handlePointerCancelCapture(event);
+            canvasInteraction.handlePointerCancel(event);
+          }}
           onPointerCancel={canvasInteraction.handlePointerCancel}
           onPointerCancelCapture={inkInteraction.handlePointerCancelCapture}
           onPointerDown={canvasInteraction.handlePointerDown}
@@ -8362,6 +8390,7 @@ function App() {
                     activeSearchRange={
                       activeSearchMatch?.elementId === shape.id ? activeSearchMatch : null
                     }
+                    canvasTheme={isDarkMode ? "dark" : "light"}
                     element={shape}
                     isEditing={shape.id === editingBlockId}
                     isSelected={selectedBlockIds.includes(shape.id)}

@@ -5,6 +5,7 @@ import {
   getProportionalScale,
   getSelectionBounds,
   getSelectionElementBounds,
+  getSelectionResizePreviewConnectorIds,
   scaleSelection,
   translateSelection,
 } from "../../src/canvas/model/selectionBounds";
@@ -130,6 +131,28 @@ describe("composite transforms", () => {
     expect(scaledInk.points).toEqual([[0, 0, 0.5], [80, 40, 0.7]]);
     expect(scaledInk.brush.size).toBe(8);
     expect(result[2]).toMatchObject({ start: { kind: "free", x: 190, y: 100 }, end: { kind: "free", x: 430, y: 200 } });
+  });
+
+  it("deduplicates selected free connectors and bound-follow connectors for mixed resize previews", () => {
+    const bound: ConnectorElement = {
+      ...connector,
+      id: "bound",
+      start: { kind: "element", targetElementId: text.id, anchor: { t: 0.25 }, gap: 0 },
+    };
+    const selectedAndBound: ConnectorElement = {
+      ...bound,
+      id: "selected-and-bound",
+    };
+    const lockedSelected: ConnectorElement = {
+      ...connector,
+      id: "locked-selected",
+      locked: true,
+    };
+    expect(getSelectionResizePreviewConnectorIds(
+      [text, connector, bound, selectedAndBound, lockedSelected],
+      new Set([text.id, connector.id, selectedAndBound.id, lockedSelected.id]),
+      new Set([text.id]),
+    )).toEqual(new Set([connector.id, bound.id, selectedAndBound.id]));
   });
 
   it("uses supplied rich-content reflow sizes without changing rich text", () => {

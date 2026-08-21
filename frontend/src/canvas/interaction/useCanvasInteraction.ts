@@ -47,6 +47,11 @@ type PrimitiveSession = {
   tool: PrimitiveTool;
 };
 
+type CapturedPointer = Readonly<{
+  pointerId: number;
+  target: HTMLElement;
+}>;
+
 type ArrowAuthoringSession = {
   cancellationKey: string;
   currentEndpoint: ConnectorEndpoint;
@@ -157,6 +162,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
   const panState = useRef<PanState | null>(null);
   const selectionState = useRef<SelectionState | null>(null);
   const primitiveSession = useRef<PrimitiveSession | null>(null);
+  const capturedPointerRef = useRef<CapturedPointer | null>(null);
   const primitivePreviewRef = useRef<SVGSVGElement | null>(null);
   const arrowSession = useRef<ArrowAuthoringSession | null>(null);
   const arrowPreviewRef = useRef<SVGSVGElement | null>(null);
@@ -359,6 +365,24 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
     [],
   );
 
+  const capturePointer = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    capturedPointerRef.current = {
+      pointerId: event.pointerId,
+      target: event.currentTarget,
+    };
+  }, []);
+
+  const releaseCapturedPointer = useCallback((pointerId?: number) => {
+    const captured = capturedPointerRef.current;
+    if (!captured || (pointerId !== undefined && captured.pointerId !== pointerId)) return;
+    capturedPointerRef.current = null;
+    ignoredLostCapturePointerIdRef.current = captured.pointerId;
+    if (captured.target.hasPointerCapture(captured.pointerId)) {
+      captured.target.releasePointerCapture(captured.pointerId);
+    }
+  }, []);
+
   const startPan = useCallback((event: ReactPointerEvent<HTMLElement>) => {
     const current = optionsRef.current;
     event.preventDefault();
@@ -375,8 +399,8 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
     current.setInsertionPoint(null);
     current.setIsCanvasKeyboardActive(true);
     current.setActiveMode("panning");
-    event.currentTarget.setPointerCapture(event.pointerId);
-  }, []);
+    capturePointer(event);
+  }, [capturePointer]);
 
   const handlePointerDownCapture = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
@@ -499,10 +523,10 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
         tool,
       };
       paintPrimitivePreview(primitiveSession.current);
-      event.currentTarget.setPointerCapture(event.pointerId);
+      capturePointer(event);
       event.currentTarget.focus({ preventScroll: true });
     },
-    [clearArrowPreview, getCanvasPoint, paintArrowPreview, paintPrimitivePreview, resolveArrowEndpoint, startPan, updateArrowVisual],
+    [capturePointer, clearArrowPreview, getCanvasPoint, paintArrowPreview, paintPrimitivePreview, resolveArrowEndpoint, startPan, updateArrowVisual],
   );
 
   const handlePointerMoveCapture = useCallback(
@@ -594,9 +618,9 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
         current.cleanupMarquee();
       }
 
-      event.currentTarget.setPointerCapture(event.pointerId);
+      capturePointer(event);
     },
-    [getCanvasPoint, startPan],
+    [capturePointer, getCanvasPoint, startPan],
   );
 
   const handleDoubleClick = useCallback(
@@ -685,14 +709,9 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
     (event: ReactPointerEvent<HTMLElement>) => {
       const currentPrimitive = primitiveSession.current;
       if (currentPrimitive?.pointerId === event.pointerId) {
-        const point = getCanvasPoint(event.clientX, event.clientY);
-        if (point) currentPrimitive.current = point;
-        currentPrimitive.modifiers = { alt: event.altKey, shift: event.shiftKey };
         primitiveSession.current = null;
         clearPrimitivePreview();
-        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-          event.currentTarget.releasePointerCapture(event.pointerId);
-        }
+        releaseCapturedPointer(event.pointerId);
         optionsRef.current.onCreatePrimitive(
           currentPrimitive.elementId,
           currentPrimitive.tool,
@@ -750,31 +769,41 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
 
       panState.current = null;
       cancelMarquee();
+      releaseCapturedPointer(event.pointerId);
     },
-    [cancelMarquee, clearPrimitivePreview, getCanvasPoint],
+    [cancelMarquee, clearPrimitivePreview, releaseCapturedPointer],
   );
 
-  const cancelTransientPointerInteraction = useCallback(
-    () => {
+  const cancelCapturedPointerInteraction = useCallback(
+    (updateUi = true) => {
       const currentPan = panState.current;
       const currentSelection = selectionState.current;
       const currentPrimitive = primitiveSession.current;
-      const hadArrow = Boolean(arrowSession.current);
-      if (!currentPan && !currentSelection && !currentPrimitive && !hadArrow) return;
-      if (currentPan) {
+      const hadCapturedSession = Boolean(currentPan || currentSelection || currentPrimitive);
+      if (!hadCapturedSession && !capturedPointerRef.current) return false;
+      if (currentPan && updateUi) {
         const startPan = { x: currentPan.startPanX, y: currentPan.startPanY };
         optionsRef.current.panOffsetRef.current = startPan;
         optionsRef.current.scheduleCanvasContentTransform(startPan);
-        optionsRef.current.setPanOffset(startPan);
       }
       panState.current = null;
       primitiveSession.current = null;
       clearPrimitivePreview();
       cancelMarquee();
-      cancelArrowAuthoring();
-      if (!hadArrow) optionsRef.current.setActiveMode("canvas");
+      releaseCapturedPointer();
+      if (updateUi && hadCapturedSession) optionsRef.current.setActiveMode("canvas");
+      return true;
     },
-    [cancelArrowAuthoring, cancelMarquee, clearPrimitivePreview],
+    [cancelMarquee, clearPrimitivePreview, releaseCapturedPointer],
+  );
+
+  const cancelTransientPointerInteraction = useCallback(
+    (updateUi = true) => {
+      const captured = cancelCapturedPointerInteraction(updateUi);
+      const arrow = cancelArrowAuthoring("Arrow canceled.", updateUi);
+      return captured || arrow;
+    },
+    [cancelArrowAuthoring, cancelCapturedPointerInteraction],
   );
 
   const handlePointerCancel = useCallback(
@@ -788,9 +817,6 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       ) {
         ignoredLostCapturePointerIdRef.current = null;
         return;
-      }
-      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-        event.currentTarget.releasePointerCapture(event.pointerId);
       }
       cancelTransientPointerInteraction();
     },
@@ -822,10 +848,9 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
   }, [cancelArrowAuthoring, options.interactionCancellationKey]);
 
   useEffect(() => () => {
-    primitiveSession.current = null;
-    clearPrimitivePreview();
+    cancelCapturedPointerInteraction(false);
     cancelArrowAuthoring("", false);
-  }, [cancelArrowAuthoring, clearPrimitivePreview]);
+  }, [cancelArrowAuthoring, cancelCapturedPointerInteraction]);
 
   const handleWheel = useCallback((event: ReactWheelEvent<HTMLElement>) => {
     const current = optionsRef.current;
@@ -894,6 +919,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
     handleWheel,
     arrowAuthoringVisual,
     cancelArrowAuthoring,
+    cancelCapturedPointerInteraction,
     cancelMarquee,
     startPan,
   };

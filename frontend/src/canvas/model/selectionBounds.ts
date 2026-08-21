@@ -186,6 +186,28 @@ export function scaleSelection(
   });
 }
 
+/**
+ * Connector previews for a mixed resize are the union of selected unlocked
+ * connectors and connectors that visually follow a resized bound target.
+ */
+export function getSelectionResizePreviewConnectorIds(
+  elements: readonly CanvasElement[],
+  selectedIds: ReadonlySet<ElementId>,
+  resizedTargetIds: ReadonlySet<ElementId>,
+): Set<ElementId> {
+  const connectorIds = new Set<ElementId>();
+  for (const element of elements) {
+    if (element.type !== "connector") continue;
+    const followsResizedTarget = [element.start, element.end].some((endpoint) =>
+      endpoint.kind === "element" && resizedTargetIds.has(endpoint.targetElementId),
+    );
+    if (followsResizedTarget || selectedIds.has(element.id) && !element.locked) {
+      connectorIds.add(element.id);
+    }
+  }
+  return connectorIds;
+}
+
 function getScaledTextSize(
   element: TextElement,
   factor: number,

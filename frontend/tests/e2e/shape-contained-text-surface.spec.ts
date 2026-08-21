@@ -6,6 +6,18 @@ const surfaceBackgrounds: Record<string, string> = {
   "labeled-rectangle": "rgb(232, 226, 255)",
 };
 
+const defaultFillCases = [
+  { fillColor: { kind: "fixed", value: "#e8e2ff" }, id: "rectangle", shape: "rectangle" },
+  { fillColor: { kind: "fixed", value: "#0f4c5c" }, id: "ellipse", shape: "ellipse" },
+  { fillColor: { kind: "fixed", value: "#e8e2ff" }, id: "diamond", shape: "diamond" },
+] as const;
+
+const edgeFillCases = [
+  { fillColor: { kind: "fixed", value: "#ff000080" }, id: "alpha", shape: "rectangle" },
+  { fillColor: { kind: "theme", token: "foreground" }, id: "theme-foreground", shape: "ellipse" },
+  { fillColor: { kind: "theme", token: "muted" }, id: "theme-muted", shape: "diamond" },
+] as const;
+
 for (const dark of [false, true]) {
   for (const zoom of [1, 2]) {
     test(`keeps ${dark ? "dark" : "light"} contained rich text quiet and readable at ${zoom * 100}%`, async ({ page }, testInfo) => {
@@ -72,6 +84,38 @@ for (const dark of [false, true]) {
         await expect(shape.locator(".shape-contained-text-display")).toBeVisible();
         await assertReadableQuietSurface(shape, surfaceBackgrounds[id]);
         expect(await svgSnapshot(shape.locator("svg.primitive-shape"))).toEqual(initialSvg.get(id));
+      }
+    });
+  }
+}
+
+for (const dark of [false, true]) {
+  for (const zoom of [1, 2]) {
+    test(`matches alpha and theme contained-text surfaces to the ${dark ? "dark" : "light"} canvas at ${zoom * 100}%`, async ({ page }) => {
+      await installWorkspace(page, dark, edgeFillCases);
+      await page.setViewportSize({ width: 3_000, height: 1_600 });
+      await page.goto("/");
+      if (zoom === 2) await page.evaluate(() => { document.documentElement.style.zoom = "2"; });
+      const expectedBackgrounds = dark
+        ? ["rgb(139, 11, 11)", "rgb(245, 245, 245)", "rgb(155, 155, 155)"]
+        : ["rgb(250, 123, 125)", "rgb(32, 41, 54)", "rgb(155, 155, 155)"];
+
+      for (const [index, fillCase] of edgeFillCases.entries()) {
+        await assertReadableQuietSurface(
+          page.locator(`[data-canvas-element-id="labeled-${fillCase.id}"]`),
+          expectedBackgrounds[index],
+        );
+      }
+
+      await page.getByRole("button", { name: "Find in canvas" }).click();
+      await page.getByRole("textbox", { name: "Find in canvas" }).fill("Quiet");
+      for (const [index, fillCase] of edgeFillCases.entries()) {
+        if (index > 0) await page.getByRole("button", { name: "Next match" }).click();
+        const shape = page.locator(`[data-canvas-element-id="labeled-${fillCase.id}"]`);
+        await assertReadableQuietSurface(shape, expectedBackgrounds[index]);
+        const match = shape.locator(".canvas-search-match.is-active-search-match");
+        await expect(match).toHaveCount(1);
+        expect(await contrastRatio(match, match)).toBeGreaterThanOrEqual(4.5);
       }
     });
   }
@@ -152,8 +196,16 @@ async function svgSnapshot(svg: Locator) {
   }));
 }
 
-async function installWorkspace(page: Page, isDarkMode: boolean) {
-  await page.addInitScript(({ isDarkMode }) => {
+async function installWorkspace(
+  page: Page,
+  isDarkMode: boolean,
+  fillCases: readonly {
+    fillColor: { kind: string; token?: string; value?: string };
+    id: string;
+    shape: string;
+  }[] = defaultFillCases,
+) {
+  await page.addInitScript(({ fillCases, isDarkMode }) => {
     const richContent = {
       type: "doc",
       content: [
@@ -163,9 +215,8 @@ async function installWorkspace(page: Page, isDarkMode: boolean) {
         { type: "paragraph", content: [{ type: "text", text: "Readable body" }] },
       ],
     };
-    const fills = ["#e8e2ff", "#0f4c5c", "#e8e2ff"] as const;
-    const style = (seed: number, fillColor: string) => ({
-      fillColor: { kind: "fixed", value: fillColor },
+    const style = (seed: number, fillColor: { kind: string; token?: string; value?: string }) => ({
+      fillColor,
       roughness: 1,
       roundness: 0.45,
       seed,
@@ -173,16 +224,16 @@ async function installWorkspace(page: Page, isDarkMode: boolean) {
       strokeStyle: "solid",
       strokeWidth: 2,
     });
-    const shapes = ["rectangle", "ellipse", "diamond"].flatMap((shape, index) => [
+    const shapes = fillCases.flatMap(({ fillColor, id, shape }, index) => [
       {
-        createdAt: 1, height: 300, id: `labeled-${shape}`, locked: false, opacity: 1, pageId: "page",
-        rotation: [-8, 7, 12][index], shape, style: style(71 + index, fills[index]),
+        createdAt: 1, height: 300, id: `labeled-${id}`, locked: false, opacity: 1, pageId: "page",
+        rotation: [-8, 7, 12][index], shape, style: style(71 + index, fillColor),
         text: { content: "Quiet heading\nKeep it calm\nList detail\nReadable body", richContent: structuredClone(richContent) },
         type: "shape", updatedAt: 1, width: 360, x: 50 + index * 390, y: 110, zIndex: 1 + index,
       },
       {
-        createdAt: 1, height: 170, id: `unlabeled-${shape}`, locked: false, opacity: 1, pageId: "page",
-        rotation: [-8, 7, 12][index], shape, style: style(81 + index, fills[index]), type: "shape",
+        createdAt: 1, height: 170, id: `unlabeled-${id}`, locked: false, opacity: 1, pageId: "page",
+        rotation: [-8, 7, 12][index], shape, style: style(81 + index, fillColor), type: "shape",
         updatedAt: 1, width: 300, x: 80 + index * 390, y: 510, zIndex: 5 + index,
       },
     ]);
@@ -206,5 +257,5 @@ async function installWorkspace(page: Page, isDarkMode: boolean) {
       if (command === "save_session_state" || command === "apply_scene_changes") return { newRevision: 1, pageId: "page" };
       throw new Error(`Unexpected command ${command}`);
     } };
-  }, { isDarkMode });
+  }, { fillCases, isDarkMode });
 }

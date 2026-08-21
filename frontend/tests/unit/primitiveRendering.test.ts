@@ -126,6 +126,21 @@ describe("primitive rendering", () => {
     expect(shapeTextInsetStyle({ ...labeled, shape: "ellipse" })["--shape-text-surface-radius"]).toBe("999px");
     expect(shapeTextInsetStyle({ ...labeled, shape: "rectangle" })["--shape-text-surface-radius"]).toBe("6px");
     expect(shapeTextSurfaceColors({ kind: "fixed", value: "#123" })).toEqual({ color: "#ffffff", fill: "#123" });
+    expect(shapeTextSurfaceColors({ kind: "fixed", value: "#e8e2ff" }, "dark")).toEqual({ color: "#000000", fill: "#e8e2ff" });
+    expect(shapeTextSurfaceColors({ kind: "fixed", value: "#ff000080" }, "light")).toEqual({ color: "#000000", fill: "#fa7b7d" });
+    expect(shapeTextSurfaceColors({ kind: "fixed", value: "#ff000080" }, "dark")).toEqual({ color: "#ffffff", fill: "#8b0b0b" });
+    expect(shapeTextSurfaceColors({ kind: "theme", token: "foreground" }, "light")).toEqual({
+      color: "#ffffff",
+      fill: "var(--canvas-tool-text)",
+    });
+    expect(shapeTextSurfaceColors({ kind: "theme", token: "foreground" }, "dark")).toEqual({
+      color: "#000000",
+      fill: "var(--canvas-tool-text)",
+    });
+    expect(shapeTextSurfaceColors({ kind: "theme", token: "muted" }, "dark")).toEqual({
+      color: "#000000",
+      fill: "var(--workbench-text-secondary)",
+    });
     expect(shapeTextSurfaceColors({ kind: "fixed", value: "invalid" })).toEqual({
       color: "var(--canvas-tool-text)",
       fill: "var(--canvas-shape-text-surface)",

@@ -8,7 +8,14 @@ import type { SearchMatch } from "../../appTypes";
 import { resolveConnectorPoints } from "../model/connectorBinding";
 import { roundedDiamondPath, roundedRectanglePath } from "../model/shapeBoundary";
 export { roundedDiamondPath, roundedRectanglePath } from "../model/shapeBoundary";
-import { canvasColorToCss } from "../rendering/canvasColor";
+import {
+  canvasColorToCss,
+  compositeCanvasFill,
+  readableTextColor,
+  resolveCanvasColor,
+  rgbColorToHex,
+  type CanvasTheme,
+} from "../rendering/canvasColor";
 import { createSlashCommandExtension } from "../../editor/SlashCommandExtension";
 import {
   getCanonicalShapeRichTextDocument,
@@ -30,6 +37,7 @@ type PrimitiveElementViewProps<T extends ShapeElement | ConnectorElement> = {
 
 type ShapeElementViewProps = PrimitiveElementViewProps<ShapeElement> & {
   activeSearchRange: SearchMatch | null;
+  canvasTheme: CanvasTheme;
   isEditing: boolean;
   onActiveEditorChange: (editor: Editor | null) => void;
   onEdit: (elementId: string) => void;
@@ -155,7 +163,7 @@ function primitiveKeyDown(
   onKeyboardMove(element.id, delta);
 }
 
-export function ShapeElementView({ activeSearchRange, element, isDragSourceHidden = false, isEditing, isSelected, onActiveEditorChange, onEdit, onEditEnd, onEditSessionChange, onElementChange, onKeyboardMove, onSelect, onTextCommit, searchRanges, searchableText }: ShapeElementViewProps) {
+export function ShapeElementView({ activeSearchRange, canvasTheme, element, isDragSourceHidden = false, isEditing, isSelected, onActiveEditorChange, onEdit, onEditEnd, onEditSessionChange, onElementChange, onKeyboardMove, onSelect, onTextCommit, searchRanges, searchableText }: ShapeElementViewProps) {
   const ref = useRef<SVGSVGElement | null>(null);
   const rootRef = createPrimitiveRootRef(element.id, onElementChange);
   const renderPadding = shapeRenderPadding(element.style);
@@ -203,6 +211,7 @@ export function ShapeElementView({ activeSearchRange, element, isDragSourceHidde
       {isEditing ? (
         <ShapeContainedTextEditor
           element={element}
+          canvasTheme={canvasTheme}
           onActiveEditorChange={onActiveEditorChange}
           onCancel={(restoreFocus) => onEditEnd(element.id, "canceled", restoreFocus)}
           onCommit={(text, outcome, restoreFocus) => {
@@ -215,7 +224,7 @@ export function ShapeElementView({ activeSearchRange, element, isDragSourceHidde
         <div
           aria-hidden="true"
           className="shape-contained-text shape-contained-text-display text-block-rich-content"
-          style={shapeTextInsetStyle(element)}
+          style={shapeTextInsetStyle(element, canvasTheme)}
         >
           <div className="shape-contained-text-content">
             {renderShapeRichTextContent(
@@ -254,37 +263,31 @@ type ShapeTextInsetCss = CSSProperties & {
   "--shape-text-surface-radius": string;
 };
 
-export function shapeTextSurfaceColors(fillColor: CanvasColor | null | undefined) {
-  if (fillColor?.kind !== "fixed") {
+export function shapeTextSurfaceColors(
+  fillColor: CanvasColor | null | undefined,
+  theme: CanvasTheme = "light",
+) {
+  if (!fillColor) {
     return {
       color: "var(--canvas-tool-text)",
       fill: "var(--canvas-shape-text-surface)",
     };
   }
-  const shorthand = /^#([\da-f])([\da-f])([\da-f])$/i.exec(fillColor.value);
-  const full = /^#([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i.exec(fillColor.value);
-  const channels = shorthand
-    ? shorthand.slice(1).map((channel) => Number.parseInt(`${channel}${channel}`, 16))
-    : full?.slice(1).map((channel) => Number.parseInt(channel, 16));
-  if (!channels) {
+  const resolved = resolveCanvasColor(fillColor, theme);
+  const composited = compositeCanvasFill(fillColor, theme);
+  if (!resolved || !composited) {
     return {
       color: "var(--canvas-tool-text)",
       fill: "var(--canvas-shape-text-surface)",
     };
   }
-  const luminance = channels
-    .map((channel) => {
-      const normalized = channel / 255;
-      return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
-    })
-    .reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index], 0);
   return {
-    color: luminance > 0.179 ? "#000000" : "#ffffff",
-    fill: fillColor.value,
+    color: readableTextColor(composited),
+    fill: resolved.alpha === 1 ? canvasColorToCss(fillColor) : rgbColorToHex(composited),
   };
 }
 
-export function shapeTextInsetStyle(element: ShapeElement): ShapeTextInsetCss {
+export function shapeTextInsetStyle(element: ShapeElement, theme: CanvasTheme = "light"): ShapeTextInsetCss {
   const horizontal = element.shape === "rectangle"
     ? 12
     : element.shape === "ellipse"
@@ -295,7 +298,7 @@ export function shapeTextInsetStyle(element: ShapeElement): ShapeTextInsetCss {
     : element.shape === "ellipse"
       ? Math.max(8, element.height * 0.14645)
       : Math.max(8, element.height * 0.25);
-  const surfaceColors = shapeTextSurfaceColors(element.style.fillColor);
+  const surfaceColors = shapeTextSurfaceColors(element.style.fillColor, theme);
   return {
     inset: `${Math.min(vertical, Math.max(0, element.height / 2 - 2))}px ${Math.min(horizontal, Math.max(0, element.width / 2 - 2))}px`,
     "--shape-text-surface-color": surfaceColors.color,
@@ -305,6 +308,7 @@ export function shapeTextInsetStyle(element: ShapeElement): ShapeTextInsetCss {
 }
 
 type ShapeContainedTextEditorProps = {
+  canvasTheme: CanvasTheme;
   element: ShapeElement;
   onActiveEditorChange: (editor: Editor | null) => void;
   onCancel: (restoreFocus: boolean) => void;
@@ -312,7 +316,7 @@ type ShapeContainedTextEditorProps = {
   onEditSessionChange: ShapeElementViewProps["onEditSessionChange"];
 };
 
-function ShapeContainedTextEditor({ element, onActiveEditorChange, onCancel, onCommit, onEditSessionChange }: ShapeContainedTextEditorProps) {
+function ShapeContainedTextEditor({ canvasTheme, element, onActiveEditorChange, onCancel, onCommit, onEditSessionChange }: ShapeContainedTextEditorProps) {
   const initialText = useMemo(() => element.text ?? { content: "" }, [element.id]);
   const baselineDocument = useRef(getCanonicalShapeRichTextDocument(initialText));
   const finalized = useRef(false);
@@ -427,7 +431,7 @@ function ShapeContainedTextEditor({ element, onActiveEditorChange, onCancel, onC
   }, [editor, element.id, onActiveEditorChange, onEditSessionChange]);
 
   return (
-    <div className="shape-contained-text shape-contained-text-editor" style={shapeTextInsetStyle(element)}>
+    <div className="shape-contained-text shape-contained-text-editor" style={shapeTextInsetStyle(element, canvasTheme)}>
       <EditorContent className="shape-contained-text-editor-surface" editor={editor} />
       <div aria-hidden="true" className="shape-contained-text-editor-hint">
         Esc cancels · Ctrl/⌘+Enter saves
@@ -483,6 +487,10 @@ function FreeConnectorElementView({ element, isDragSourceHidden = false, isSelec
       className={`primitive-element ${isDragSourceHidden ? "is-drag-source-hidden" : ""}`}
       data-canvas-element-id={element.id}
       data-canvas-element-type="connector"
+      data-connector-end-x={element.end.x}
+      data-connector-end-y={element.end.y}
+      data-connector-start-x={element.start.x}
+      data-connector-start-y={element.start.y}
       onKeyDown={(event) => primitiveKeyDown(event, element, onKeyboardMove, onSelect)}
       ref={rootRef}
       role="button"

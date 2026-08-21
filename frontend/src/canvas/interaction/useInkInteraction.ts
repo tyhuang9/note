@@ -28,6 +28,7 @@ type PointerSampleLike = Readonly<{
 }>;
 
 type InkSession = {
+  captureTarget: HTMLElement;
   kind: "drawing";
   pointerId: number;
   points: RawInkPoint[];
@@ -37,6 +38,7 @@ type InkSession = {
 };
 
 type EraserSession = {
+  captureTarget: HTMLElement;
   elementIds: Set<string>;
   kind: "erasing";
   pointerId: number;
@@ -244,8 +246,8 @@ export function useInkInteraction({
     const viewport = content && readViewportMetrics(content);
     if (!viewport) return;
     const session: InkInteractionSession = isDrawingTool(tool)
-      ? { kind: "drawing", pointerId: event.pointerId, points: [], previewRaf: null, tool, viewport }
-      : { elementIds: new Set(), kind: "erasing", pointerId: event.pointerId, viewport };
+      ? { captureTarget: event.currentTarget, kind: "drawing", pointerId: event.pointerId, points: [], previewRaf: null, tool, viewport }
+      : { captureTarget: event.currentTarget, elementIds: new Set(), kind: "erasing", pointerId: event.pointerId, viewport };
     sessionRef.current = session;
     if (session.kind === "drawing") appendSamples(event, session);
     else collectEraserTargets(event, session);
@@ -264,15 +266,27 @@ export function useInkInteraction({
     event.stopPropagation();
   }, [appendSamples, collectEraserTargets]);
 
+  const cancelCapturedPointerInteraction = useCallback(() => {
+    const session = sessionRef.current;
+    if (!session) return false;
+    sessionRef.current = null;
+    if (session.kind === "drawing" && session.previewRaf !== null) {
+      window.cancelAnimationFrame(session.previewRaf);
+      session.previewRaf = null;
+    }
+    clearPreview();
+    if (session.captureTarget.hasPointerCapture(session.pointerId)) {
+      session.captureTarget.releasePointerCapture(session.pointerId);
+    }
+    return true;
+  }, [clearPreview]);
+
   const finishSession = useCallback((event: ReactPointerEvent<HTMLElement>, commit: boolean) => {
     const session = sessionRef.current;
     if (!session || session.pointerId !== event.pointerId) return;
     if (commit && session.kind === "drawing") appendSamples(event, session);
     if (commit && session.kind === "erasing") collectEraserTargets(event, session);
-    if (session.kind === "drawing" && session.previewRaf !== null) window.cancelAnimationFrame(session.previewRaf);
-    sessionRef.current = null;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-    clearPreview();
+    cancelCapturedPointerInteraction();
     if (commit && session.kind === "drawing" && session.points.length > 0) {
       optionsRef.current.onCompleteStroke(session.tool, session.points);
     }
@@ -281,19 +295,15 @@ export function useInkInteraction({
     }
     event.preventDefault();
     event.stopPropagation();
-  }, [appendSamples, clearPreview, collectEraserTargets]);
+  }, [appendSamples, cancelCapturedPointerInteraction, collectEraserTargets]);
 
   useEffect(() => () => {
-    const session = sessionRef.current;
-    if (session?.kind === "drawing" && session.previewRaf !== null && session.previewRaf !== undefined) {
-      window.cancelAnimationFrame(session.previewRaf);
-    }
-    sessionRef.current = null;
-    clearPreview();
+    cancelCapturedPointerInteraction();
     previewPathRef.current = null;
-  }, [clearPreview]);
+  }, [cancelCapturedPointerInteraction]);
 
   return {
+    cancelCapturedPointerInteraction,
     handlePointerCancelCapture: useCallback((event: ReactPointerEvent<HTMLElement>) => finishSession(event, false), [finishSession]),
     handlePointerDownCapture,
     handlePointerMoveCapture,

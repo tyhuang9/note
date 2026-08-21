@@ -3592,6 +3592,16 @@ h2 {
   box-shadow: 0 0 0 1px rgba(159, 92, 0, 0.38);
 }
 
+.canvas-search-image-match {
+  outline: 2px solid #ffe66d;
+  outline-offset: 2px;
+}
+
+.canvas-search-image-match.is-active-search-match {
+  outline-color: #ffb84d;
+  box-shadow: 0 0 0 1px rgba(159, 92, 0, 0.38);
+}
+
 .text-block-image {
   display: block;
   width: 100%;
@@ -4518,6 +4528,14 @@ h2 {
 .app-shell.is-dark .canvas-search-match.is-active-search-match {
   background: rgba(245, 158, 11, 0.68);
   box-shadow: 0 0 0 1px rgba(255, 219, 140, 0.34);
+}
+
+.app-shell.is-dark .canvas-search-image-match {
+  outline-color: rgba(234, 179, 8, 0.72);
+}
+
+.app-shell.is-dark .canvas-search-image-match.is-active-search-match {
+  outline-color: rgba(245, 158, 11, 0.92);
 }
 
 @media (max-width: 899px) {

@@ -37,6 +37,7 @@ type ShapeElementViewProps = PrimitiveElementViewProps<ShapeElement> & {
   onEditSessionChange: (elementId: string, session: ShapeTextEditSession | null) => void;
   onTextCommit: (elementId: string, text: RichTextValue | undefined) => void;
   searchRanges: readonly SearchMatch[];
+  searchableText: string;
 };
 
 export type ShapeTextEditOutcome = "canceled" | "committed" | "unchanged";
@@ -150,7 +151,7 @@ function primitiveKeyDown(
   onKeyboardMove(element.id, delta);
 }
 
-export function ShapeElementView({ activeSearchRange, element, isDragSourceHidden = false, isEditing, isSelected, onActiveEditorChange, onEdit, onEditEnd, onEditSessionChange, onElementChange, onKeyboardMove, onSelect, onTextCommit, searchRanges }: ShapeElementViewProps) {
+export function ShapeElementView({ activeSearchRange, element, isDragSourceHidden = false, isEditing, isSelected, onActiveEditorChange, onEdit, onEditEnd, onEditSessionChange, onElementChange, onKeyboardMove, onSelect, onTextCommit, searchRanges, searchableText }: ShapeElementViewProps) {
   const ref = useRef<SVGSVGElement | null>(null);
   const rootRef = createPrimitiveRootRef(element.id, onElementChange);
   const renderPadding = shapeRenderPadding(element.style);
@@ -217,7 +218,7 @@ export function ShapeElementView({ activeSearchRange, element, isDragSourceHidde
               element.text,
               `${element.id}-shape-text`,
               searchRanges.length > 0 ? {
-                searchableText: element.text.content,
+                searchableText,
                 ranges: searchRanges.map((range) => ({
                   start: range.start,
                   end: range.end,

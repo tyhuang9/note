@@ -2,6 +2,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { Mark, Node as TiptapNode, mergeAttributes, type JSONContent } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import type { RichTextValue } from "../canvas/model/elements";
+import { projectRichTextForSearch } from "./richTextSearch";
 
 export const MAX_RICH_TEXT_BYTES = 16 * 1024 * 1024;
 export const MAX_RICH_TEXT_DEPTH = 64;
@@ -31,6 +32,11 @@ export type RichTextLeafSegment = Readonly<{
 export type RichTextHighlightOptions = Readonly<{
   searchableText: string;
   ranges: readonly RichTextHighlightRange[];
+}>;
+
+type RichTextHighlightMapping = Readonly<{
+  images: readonly Readonly<{ isHighlighted: boolean; isActive: boolean; start: number; end: number }>[];
+  leaves: RichTextLeafSegment[][];
 }>;
 
 const TextStyle = Mark.create({
@@ -447,81 +453,68 @@ export function mapRichTextHighlightLeaves(
   searchableText: string,
   ranges: readonly RichTextHighlightRange[],
 ): RichTextLeafSegment[][] | null {
-  const leaves: string[] = [];
-  collectTextLeaves(document, leaves);
-  const normalizedRanges = ranges.filter((range) => (
+  return mapRichTextHighlights(document, searchableText, ranges)?.leaves ?? null;
+}
+
+function mapRichTextHighlights(
+  document: JSONContent,
+  searchableText: string,
+  ranges: readonly RichTextHighlightRange[],
+): RichTextHighlightMapping | null {
+  const projection = projectRichTextForSearch(document);
+  if (!projection || projection.text !== searchableText) return null;
+  const normalizedRanges = [...ranges].sort((first, second) => first.start - second.start);
+  if (normalizedRanges.some((range, index) => (
     Number.isInteger(range.start)
     && Number.isInteger(range.end)
     && range.start >= 0
     && range.end > range.start
     && range.end <= searchableText.length
-  ));
-  if (normalizedRanges.length !== ranges.length) return null;
+    && (index === 0 || normalizedRanges[index - 1].end <= range.start)
+  ) === false)) return null;
 
-  const positions: Array<Readonly<{ start: number; end: number }>> = [];
-  let cursor = 0;
-  for (const leaf of leaves) {
-    const start = searchableText.indexOf(leaf, cursor);
-    if (start === -1 || !isStructuralWhitespace(searchableText.slice(cursor, start))) return null;
-    positions.push({ start, end: start + leaf.length });
-    cursor = start + leaf.length;
-  }
-  if (!isStructuralWhitespace(searchableText.slice(cursor))) return null;
-
-  const mappedCoverage = positions.map(({ start, end }) => ({ start, end }));
-  if (normalizedRanges.some((range) => !rangeCoveredByLeaves(range, mappedCoverage))) return null;
-
-  return leaves.map((leaf, leafIndex) => {
-    const leafStart = positions[leafIndex].start;
-    const leafEnd = positions[leafIndex].end;
-    const boundaries = new Set([leafStart, leafEnd]);
-    for (const range of normalizedRanges) {
-      if (range.end <= leafStart || range.start >= leafEnd) continue;
-      boundaries.add(Math.max(leafStart, range.start));
-      boundaries.add(Math.min(leafEnd, range.end));
+  const leaves: RichTextLeafSegment[][] = [];
+  const images: Array<{ isHighlighted: boolean; isActive: boolean; start: number; end: number }> = [];
+  let rangeIndex = 0;
+  for (const token of projection.tokens) {
+    while (normalizedRanges[rangeIndex]?.end <= token.start) rangeIndex += 1;
+    if (token.kind === "separator") continue;
+    if (token.kind === "image-alt") {
+      let imageRangeIndex = rangeIndex;
+      let isHighlighted = false;
+      let isActive = false;
+      while (normalizedRanges[imageRangeIndex]?.start < token.end) {
+        const range = normalizedRanges[imageRangeIndex];
+        if (range.end > token.start) {
+          isHighlighted = true;
+          isActive ||= range.isActive === true;
+        }
+        imageRangeIndex += 1;
+      }
+      images.push({ start: token.start, end: token.end, isHighlighted, isActive });
+      continue;
     }
-    const orderedBoundaries = [...boundaries].sort((first, second) => first - second);
-    return orderedBoundaries.slice(0, -1).map((start, segmentIndex) => {
-      const end = orderedBoundaries[segmentIndex + 1];
-      const matchingRange = normalizedRanges.find((range) => range.start <= start && range.end >= end);
-      return {
-        start,
-        end,
-        text: leaf.slice(start - leafStart, end - leafStart),
-        isHighlighted: Boolean(matchingRange),
-        isActive: matchingRange?.isActive === true,
-      };
-    });
-  });
-}
-
-function collectTextLeaves(content: JSONContent, leaves: string[]) {
-  if (content.type === "text") {
-    if (content.text) leaves.push(content.text);
-    return;
+    const segments: RichTextLeafSegment[] = [];
+    let cursor = token.start;
+    let localRangeIndex = rangeIndex;
+    while (normalizedRanges[localRangeIndex]?.start < token.end) {
+      const range = normalizedRanges[localRangeIndex];
+      const start = Math.max(cursor, range.start, token.start);
+      const end = Math.min(token.end, range.end);
+      if (start > cursor) segments.push({ start: cursor, end: start, text: token.text.slice(cursor - token.start, start - token.start), isHighlighted: false, isActive: false });
+      if (end > start) segments.push({ start, end, text: token.text.slice(start - token.start, end - token.start), isHighlighted: true, isActive: range.isActive === true });
+      cursor = Math.max(cursor, end);
+      localRangeIndex += 1;
+    }
+    if (cursor < token.end) segments.push({ start: cursor, end: token.end, text: token.text.slice(cursor - token.start), isHighlighted: false, isActive: false });
+    leaves.push(segments);
   }
-  content.content?.forEach((child) => collectTextLeaves(child, leaves));
-}
-
-function isStructuralWhitespace(value: string) {
-  return /^\s*$/.test(value);
-}
-
-function rangeCoveredByLeaves(
-  range: RichTextHighlightRange,
-  leaves: readonly Readonly<{ start: number; end: number }>[],
-) {
-  let cursor = range.start;
-  for (const leaf of leaves) {
-    if (leaf.end <= cursor || leaf.start >= range.end) continue;
-    if (leaf.start > cursor) return false;
-    cursor = Math.max(cursor, Math.min(range.end, leaf.end));
-    if (cursor === range.end) return true;
-  }
-  return false;
+  return { images, leaves };
 }
 
 type HighlightRenderPlan = {
+  imageIndex: number;
+  images: RichTextHighlightMapping["images"];
   leafIndex: number;
   leaves: RichTextLeafSegment[][];
 };
@@ -531,8 +524,8 @@ function createHighlightRenderPlan(
   highlights?: RichTextHighlightOptions,
 ): HighlightRenderPlan | undefined {
   if (!highlights || highlights.ranges.length === 0) return undefined;
-  const leaves = mapRichTextHighlightLeaves(document, highlights.searchableText, highlights.ranges);
-  return leaves ? { leafIndex: 0, leaves } : undefined;
+  const mapping = mapRichTextHighlights(document, highlights.searchableText, highlights.ranges);
+  return mapping ? { imageIndex: 0, images: mapping.images, leafIndex: 0, leaves: mapping.leaves } : undefined;
 }
 
 function renderTipTapContent(
@@ -562,13 +555,15 @@ function renderTipTapContent(
       return <Heading key={key}>{children}</Heading>;
     }
     case "image": {
+      const imageHighlight = highlightPlan?.images[highlightPlan.imageIndex++];
       const src = typeof content.attrs?.src === "string" ? content.attrs.src : "";
       if (!src || mode === "shape" && !isSafeRichImageSource(src)) return null;
       const alt = typeof content.attrs?.alt === "string" ? content.attrs.alt : "Pasted image";
       const title = typeof content.attrs?.title === "string" ? content.attrs.title : undefined;
       const width = Number(content.attrs?.width);
       const height = Number(content.attrs?.height);
-      return <img alt={alt} className="text-block-rich-image" height={Number.isFinite(height) && height > 0 ? height : undefined} key={key} src={src} title={title} width={Number.isFinite(width) && width > 0 ? width : undefined} />;
+      const className = `text-block-rich-image${imageHighlight?.isHighlighted ? " canvas-search-image-match" : ""}${imageHighlight?.isActive ? " is-active-search-match" : ""}`;
+      return <img alt={alt} className={className} height={Number.isFinite(height) && height > 0 ? height : undefined} key={key} src={src} title={title} width={Number.isFinite(width) && width > 0 ? width : undefined} />;
     }
     case "hardBreak": return <br key={key} />;
     case "horizontalRule": return <hr key={key} />;

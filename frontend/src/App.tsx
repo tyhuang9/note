@@ -107,7 +107,12 @@ import {
   isTextEntryTarget,
 } from "./editorUtils";
 import { cloneRichTextValue } from "./editor/richText";
-import { findCanvasTextSearchMatches } from "./canvas/search/searchModel";
+import {
+  findCanvasTextSearchResult,
+  findTextSearchRanges,
+  getSearchableText,
+  MAX_CANVAS_SEARCH_MATCHES,
+} from "./canvas/search/searchModel";
 import {
   callOpenAICompatibleWhisperTranscription,
   DEFAULT_LOCAL_STT_CONFIG,
@@ -1630,54 +1635,46 @@ function App() {
       ];
     });
   }, [blocksByPageId, data.pages, folderNamesById, pageSearchQuery]);
-  const elementSearchMatches = useMemo<SearchMatch[]>(
-    () => findCanvasTextSearchMatches(visibleBlocks, searchQuery),
+  const elementSearchResult = useMemo(
+    () => findCanvasTextSearchResult(visibleBlocks, searchQuery),
     [searchQuery, visibleBlocks],
   );
-  const titleSearchMatches = useMemo<CanvasSearchMatch[]>(() => {
-    const nextQuery = searchQuery.trim().toLowerCase();
-
-    if (!nextQuery || !selectedPage) {
-      return [];
+  const titleSearchResult = useMemo(() => {
+    if (!searchQuery.trim() || !selectedPage) {
+      return { matches: [] as CanvasSearchMatch[], isTruncated: false };
     }
-
-    const title = selectedPage.title.toLowerCase();
-    const matches: CanvasSearchMatch[] = [];
-    let start = title.indexOf(nextQuery);
-
-    while (start !== -1) {
-      matches.push({
-        end: start + nextQuery.length,
-        kind: "title",
-        start,
-      });
-      start = title.indexOf(nextQuery, start + nextQuery.length);
-    }
-
-    return matches;
+    const result = findTextSearchRanges(selectedPage.title, searchQuery, MAX_CANVAS_SEARCH_MATCHES);
+    return {
+      matches: result.ranges.map((range) => ({ ...range, kind: "title" as const })),
+      isTruncated: result.isTruncated,
+    };
   }, [searchQuery, selectedPage]);
   const searchMatches = useMemo<CanvasSearchMatch[]>(
     () => [
-      ...titleSearchMatches,
-      ...elementSearchMatches.map((match) => ({
+      ...titleSearchResult.matches,
+      ...elementSearchResult.matches.map((match) => ({
         ...match,
         kind: "element" as const,
       })),
-    ],
-    [elementSearchMatches, titleSearchMatches],
+    ].slice(0, MAX_CANVAS_SEARCH_MATCHES),
+    [elementSearchResult.matches, titleSearchResult.matches],
   );
+  const isSearchTruncated = titleSearchResult.isTruncated
+    || elementSearchResult.isTruncated
+    || titleSearchResult.matches.length + elementSearchResult.matches.length > MAX_CANVAS_SEARCH_MATCHES;
   const activeCanvasSearchMatch = searchMatches[activeSearchIndex] ?? null;
   const activeSearchMatch =
     activeCanvasSearchMatch?.kind === "element" ? activeCanvasSearchMatch : null;
   const searchMatchesByElementId = useMemo(() => {
     const matchesByElementId = new Map<string, SearchMatch[]>();
-    for (const match of elementSearchMatches) {
+    for (const match of searchMatches) {
+      if (match.kind !== "element") continue;
       const matches = matchesByElementId.get(match.elementId);
       if (matches) matches.push(match);
       else matchesByElementId.set(match.elementId, [match]);
     }
     return matchesByElementId;
-  }, [elementSearchMatches]);
+  }, [searchMatches]);
   const canvasViewport = useMemo<ViewportRect | null>(() => {
     if (canvasSize.width === 0 || canvasSize.height === 0) {
       return null;
@@ -3668,10 +3665,17 @@ function App() {
       canvasRef.current?.removeAttribute("data-temporary-hand");
     };
   }, [
+    activeNarrowOverlay,
+    activeTextEditor,
     activeWorkbenchOverlay,
+    connectorEndpointChooser,
     deleteBlocks,
+    editingFolderId,
+    editingPageId,
     insertionPoint,
     isCanvasKeyboardActive,
+    isEditingHeaderTitle,
+    isAIProvidersOpen,
     isStarterDismissed,
     isWorkspaceEmpty,
     selectAllVisibleBlocks,
@@ -7868,7 +7872,7 @@ function App() {
       : 0;
   const canvasSearchResultLabel =
     hasCanvasSearchQuery && searchMatches.length > 0
-      ? `${activeSearchDisplayIndex} / ${searchMatches.length}`
+      ? `${activeSearchDisplayIndex} / ${searchMatches.length}${isSearchTruncated ? "+" : ""}`
       : "0 / 0";
   const canvasSearchSourceLabel =
     activeCanvasSearchMatch?.kind === "title"
@@ -7886,6 +7890,10 @@ function App() {
     || activeNarrowOverlay
     || isAIProvidersOpen
   );
+
+  useEffect(() => {
+    if (isSearchOpen && isCanvasSearchUnavailable) closeCanvasSearch();
+  }, [isCanvasSearchUnavailable, isSearchOpen]);
 
   return (
     <WorkbenchShell
@@ -8028,6 +8036,7 @@ function App() {
           activeMode={activeMode}
           activeTool={activeTool}
           id={WORKSPACE_PAGE_PANEL_ID}
+          isInteractionDisabled={searchPanOffset !== null}
           onDoubleClick={canvasInteraction.handleDoubleClick}
           onLostPointerCapture={canvasInteraction.handlePointerCancel}
           onPointerCancel={canvasInteraction.handlePointerCancel}
@@ -8117,12 +8126,29 @@ function App() {
             </div>
           ) : null}
           {isSearchOpen ? (
-            <div className="search-panel" onPointerDown={(event) => event.stopPropagation()}>
+            <div
+              className="search-panel"
+              inert={isCanvasSearchUnavailable ? true : undefined}
+              onPointerDownCapture={(event) => {
+                if (isCanvasSearchInteractionBlocked()) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                }
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
+            >
               <HeroIcon name="magnifying-glass" />
               <input
                 aria-label="Find in canvas"
-                onChange={(event) => setSearchQuery(event.currentTarget.value)}
+                disabled={isCanvasSearchUnavailable}
+                onChange={(event) => {
+                  if (!isCanvasSearchInteractionBlocked()) setSearchQuery(event.currentTarget.value);
+                }}
                 onKeyDown={(event) => {
+                  if (isCanvasSearchInteractionBlocked()) {
+                    event.preventDefault();
+                    return;
+                  }
                   if (event.key === "Enter") {
                     event.preventDefault();
                     focusSearchMatch(
@@ -8164,6 +8190,7 @@ function App() {
               </button>
               <button
                 aria-label="Close search"
+                disabled={isCanvasSearchUnavailable}
                 onClick={() => {
                   closeCanvasSearch();
                 }}
@@ -8231,6 +8258,7 @@ function App() {
                     onSelect={selectBlock}
                     onTextCommit={updateShapeText}
                     searchRanges={searchMatchesByElementId.get(shape.id) ?? []}
+                    searchableText={getSearchableText(shape) ?? ""}
                   />
                 )}
                 renderText={(block) => (
@@ -8264,6 +8292,7 @@ function App() {
                 onVisualDragMove={moveVisualDrag}
                 onVisualDragStart={startVisualDrag}
                 searchRanges={searchMatchesByElementId.get(block.id) ?? []}
+                searchableText={getSearchableText(block) ?? ""}
                 shouldFocusEnd={focusEndBlockId === block.id}
                 zoomLevel={zoomLevel}
                   />
@@ -9550,7 +9579,21 @@ const PageHeader = memo(function PageHeader({
             className="header-toggle icon-button"
             data-tooltip="Find in canvas (Ctrl+F)"
             disabled={isCanvasSearchUnavailable}
-            onClick={onFocusCanvasSearch}
+            onClick={(event) => {
+              if (isCanvasSearchUnavailable) {
+                event.preventDefault();
+                event.stopPropagation();
+                return;
+              }
+
+              onFocusCanvasSearch();
+            }}
+            onPointerDown={(event) => {
+              if (isCanvasSearchUnavailable) {
+                event.preventDefault();
+                event.stopPropagation();
+              }
+            }}
             type="button"
           >
             <HeroIcon name="magnifying-glass" />

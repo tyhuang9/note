@@ -47,6 +47,7 @@ type TextBlockViewProps = {
   block: TextElement;
   activeSearchRange: SearchMatch | null;
   searchRanges: readonly SearchMatch[];
+  searchableText: string;
   isEditing: boolean;
   isDragSourceHidden: boolean;
   interactionCancellationKey: string;
@@ -90,6 +91,7 @@ export const TextBlockView = memo(function TextBlockView({
   block,
   activeSearchRange,
   searchRanges,
+  searchableText,
   isEditing,
   isDragSourceHidden,
   interactionCancellationKey,
@@ -985,7 +987,7 @@ export const TextBlockView = memo(function TextBlockView({
             block,
             `${block.id}-display`,
             searchRanges.length > 0 ? {
-              searchableText: block.content,
+              searchableText,
               ranges: searchRanges.map((range) => ({
                 start: range.start,
                 end: range.end,
@@ -1700,6 +1702,7 @@ function areTextBlockViewPropsEqual(
     previousProps.isMultiSelected === nextProps.isMultiSelected &&
     previousProps.isSelected === nextProps.isSelected &&
     previousProps.searchRanges === nextProps.searchRanges &&
+    previousProps.searchableText === nextProps.searchableText &&
     previousProps.shouldFocusEnd === nextProps.shouldFocusEnd &&
     previousProps.zoomLevel === nextProps.zoomLevel &&
     areSearchRangesEqual(

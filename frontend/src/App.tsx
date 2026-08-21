@@ -7080,6 +7080,18 @@ function App() {
     setConnectorBindingAnnouncement("Endpoint retargeting canceled. Existing binding remains unchanged.");
   }
 
+  function announceConnectorBindingRefusal(
+    endpoint: "start" | "end",
+    reason: "same-target" | "safe-boundary",
+  ) {
+    const refusalKey = `refusal:${endpoint}:${reason}`;
+    if (connectorEndpointRetargetAnnouncementRef.current === refusalKey) return;
+    connectorEndpointRetargetAnnouncementRef.current = refusalKey;
+    setConnectorBindingAnnouncement(reason === "same-target"
+      ? `Could not bind ${endpoint} endpoint. Choose a different target for each connector endpoint.`
+      : `Could not bind ${endpoint} endpoint because the connector's visible stroke would exceed the safe canvas boundary.`);
+  }
+
   function getConnectorEndpointPreview(
     endpoint: "start" | "end",
     clientX: number,
@@ -7104,7 +7116,7 @@ function App() {
       ? getConnectorAuthoringCandidate(point, targets, zoomLevelRef.current, directTargetId)
       : null;
     if (oppositeTargetId && unfilteredCandidate?.target.id === oppositeTargetId) {
-      announceConnectorEndpointRetargetCandidate(null);
+      announceConnectorBindingRefusal(endpoint, "same-target");
       setConnectorEndpointRetargetVisual(null);
       return null;
     }
@@ -7126,10 +7138,7 @@ function App() {
       ? { ...connector, start: nextEndpoint }
       : { ...connector, end: nextEndpoint };
     if (!isLiveConnectorBindingPersistable(preview)) {
-      connectorEndpointRetargetAnnouncementRef.current = null;
-      setConnectorBindingAnnouncement(
-        `Could not bind ${endpoint} endpoint because the connector's visible stroke would exceed the safe canvas boundary.`,
-      );
+      announceConnectorBindingRefusal(endpoint, "safe-boundary");
       setConnectorEndpointRetargetVisual(null);
       return null;
     }
@@ -7243,34 +7252,29 @@ function App() {
     }
 
     if (session.connectorEndpoint && session.didMove) {
-      const preview = getConnectorEndpointPreview(session.connectorEndpoint, event.clientX, event.clientY);
+      const connectorEndpoint = session.connectorEndpoint;
+      const preview = getConnectorEndpointPreview(connectorEndpoint, event.clientX, event.clientY);
       if (preview) {
         if (!isLiveConnectorBindingPersistable(preview)) {
-          connectorEndpointRetargetAnnouncementRef.current = null;
-          setConnectorBindingAnnouncement(
-            `Could not bind ${session.connectorEndpoint} endpoint because the connector's visible stroke would exceed the safe canvas boundary.`,
-          );
+          announceConnectorBindingRefusal(connectorEndpoint, "safe-boundary");
         } else {
           setBlocksWithHistory((currentBlocks) => {
             const liveConnector = currentBlocks.find((element): element is ConnectorElement =>
               element.id === preview.id && element.type === "connector",
             );
             if (!liveConnector || liveConnector.style.endArrowhead !== "arrow") return currentBlocks;
-            const proposedEndpoint = preview[session.connectorEndpoint!];
-            const oppositeEndpoint = liveConnector[session.connectorEndpoint === "start" ? "end" : "start"];
+            const proposedEndpoint = preview[connectorEndpoint];
+            const oppositeEndpoint = liveConnector[connectorEndpoint === "start" ? "end" : "start"];
             if (
               proposedEndpoint.kind === "element"
               && oppositeEndpoint.kind === "element"
               && proposedEndpoint.targetElementId === oppositeEndpoint.targetElementId
             ) return currentBlocks;
-            const candidate = session.connectorEndpoint === "start"
+            const candidate = connectorEndpoint === "start"
               ? { ...liveConnector, start: proposedEndpoint }
               : { ...liveConnector, end: proposedEndpoint };
             if (!isLiveConnectorBindingPersistable(candidate, currentBlocks)) {
-              connectorEndpointRetargetAnnouncementRef.current = null;
-              setConnectorBindingAnnouncement(
-                `Could not bind ${session.connectorEndpoint} endpoint because the connector's visible stroke would exceed the safe canvas boundary.`,
-              );
+              announceConnectorBindingRefusal(connectorEndpoint, "safe-boundary");
               return currentBlocks;
             }
             return currentBlocks.map((element) => element.id === candidate.id

@@ -231,7 +231,7 @@ test("retargeting through a connector overlay binds, survives transforms and per
   await page.mouse.move(end.x - 32, end.y, { steps: 3 });
   await boundHandle.dispatchEvent("pointercancel", { pointerId: 1 });
   await page.mouse.up();
-  expect(await counts(page)).toEqual({ apply: 0, session: 0 });
+  expect(await counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
 
   await selectTool(page, "arrow");
   await page.waitForTimeout(650);
@@ -239,7 +239,7 @@ test("retargeting through a connector overlay binds, survives transforms and per
   const start = await modelToScreen(page, { x: 980, y: 720 });
   await dispatchCanvasPointer(page, "pointerdown", start);
   await page.keyboard.press("Escape");
-  expect(await counts(page)).toEqual({ apply: 0, session: 0 });
+  expect(await counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
 });
 
 test("pointer retarget rejects the opposite endpoint target without data, persistence, or history mutation", async ({ page }) => {
@@ -251,12 +251,12 @@ test("pointer retarget rejects the opposite endpoint target without data, persis
   await page.waitForTimeout(650);
   await resetCounts(page);
 
-  const target = await modelToScreen(page, seededRoundedRectangleBoundaryPoint(0.18));
+  const oppositeTarget = await modelToScreen(page, { x: 540, y: 310 });
   const endHandle = page.getByRole("button", { name: "Move connector end endpoint" });
   const endBounds = await requiredBounds(endHandle, "free end endpoint");
   await page.mouse.move(endBounds.x + endBounds.width / 2, endBounds.y + endBounds.height / 2);
   await page.mouse.down();
-  await page.mouse.move(target.x, target.y, { steps: 5 });
+  await page.mouse.move(oppositeTarget.x, oppositeTarget.y);
   await page.mouse.up();
   await expect.poll(async () => (await newestConnector(page))?.end).toEqual({
     gap: 0,
@@ -268,20 +268,63 @@ test("pointer retarget rejects the opposite endpoint target without data, persis
 
   const beforeRejectedDrop = await newestConnector(page);
   await resetCounts(page);
+  await observeConnectorStatus(page);
   const startHandle = page.getByRole("button", { name: "Move connector start endpoint" });
   const startBounds = await requiredBounds(startHandle, "free start endpoint");
+  const safeTarget = await modelToScreen(page, perimeterPoint({ x: 720, y: 230, width: 190, height: 130, rotation: -24, kind: "ellipse" }, 0.18));
   await page.mouse.move(startBounds.x + startBounds.width / 2, startBounds.y + startBounds.height / 2);
   await page.mouse.down();
-  await page.mouse.move(target.x, target.y, { steps: 5 });
+  await startHandle.dispatchEvent("pointermove", { button: 0, clientX: safeTarget.x, clientY: safeTarget.y, pointerId: 1 });
+  await expect(page.locator('[data-connector-target-id="ellipse"]')).toHaveAttribute("data-connector-binding-state", "snapped");
+  await expect(page.locator('[role="status"].canvas-accessibility-status')).toHaveText(
+    /Snapped to Ellipse 1 .*nearest facing visible boundary/,
+  );
+  const previewBounds = await requiredBounds(startHandle, "previewed start endpoint");
+  expect(Math.hypot(previewBounds.x - startBounds.x, previewBounds.y - startBounds.y)).toBeGreaterThan(20);
+
+  await page.mouse.move(oppositeTarget.x, oppositeTarget.y, { steps: 5 });
+  await startHandle.dispatchEvent("pointermove", { button: 0, clientX: oppositeTarget.x, clientY: oppositeTarget.y, pointerId: 1 });
+  const refusal = "Could not bind start endpoint. Choose a different target for each connector endpoint.";
+  const status = page.locator('[role="status"].canvas-accessibility-status');
+  await expect(status).toHaveText(refusal);
+  expect(await status.evaluate((element) => !element.closest("[inert]"))).toBe(true);
   await expect(page.locator('[data-connector-target-id="rounded-rectangle"]')).toHaveCount(0);
+  await expect(page.locator('[data-connector-target-id="ellipse"]')).toHaveCount(0);
+  const restoredBounds = await requiredBounds(startHandle, "restored start endpoint");
+  expect(restoredBounds.x).toBeCloseTo(startBounds.x, 1);
+  expect(restoredBounds.y).toBeCloseTo(startBounds.y, 1);
+  await startHandle.dispatchEvent("pointermove", { button: 0, clientX: oppositeTarget.x, clientY: oppositeTarget.y, pointerId: 1 });
+  await expect(status).toHaveText(refusal);
+  expect((await peekConnectorStatus(page)).filter((message) => message === refusal)).toHaveLength(1);
   await page.mouse.up();
   await page.waitForTimeout(650);
   expect(await newestConnector(page)).toEqual(beforeRejectedDrop);
-  expect(await counts(page)).toEqual({ apply: 0, session: 0 });
+  expect(await counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
+  expect((await readConnectorStatus(page)).filter((message) => message === refusal)).toHaveLength(1);
 
   await canvas.focus();
   await page.keyboard.press("Control+z");
   await expect.poll(async () => (await newestConnector(page))?.end).toMatchObject({ kind: "free" });
+  await page.keyboard.press("Control+y");
+  await expect.poll(async () => (await newestConnector(page))?.end).toMatchObject({
+    kind: "element", targetElementId: "rounded-rectangle",
+  });
+
+  await page.waitForTimeout(650);
+  await resetCounts(page);
+  const recoveredStartBounds = await requiredBounds(startHandle, "recovered start endpoint");
+  await page.mouse.move(
+    recoveredStartBounds.x + recoveredStartBounds.width / 2,
+    recoveredStartBounds.y + recoveredStartBounds.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(safeTarget.x, safeTarget.y, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(async () => (await newestConnector(page))?.start).toEqual({
+    gap: 0, kind: "element", targetElementId: "ellipse",
+  });
+  await page.waitForTimeout(650);
+  expect(await counts(page)).toEqual({ apply: 1, persistence: 2, session: 1 });
 });
 
 async function selectTool(page: Page, tool: string) {
@@ -314,11 +357,17 @@ async function newestConnector(page: Page) {
 }
 
 async function counts(page: Page) {
-  return page.evaluate(() => (window as unknown as { __perimeterCounts: { apply: number; session: number } }).__perimeterCounts);
+  return page.evaluate(() => (window as unknown as {
+    __perimeterCounts: { apply: number; persistence: number; session: number };
+  }).__perimeterCounts);
 }
 
 async function resetCounts(page: Page) {
-  await page.evaluate(() => { (window as unknown as { __perimeterCounts: { apply: number; session: number } }).__perimeterCounts = { apply: 0, session: 0 }; });
+  await page.evaluate(() => {
+    (window as unknown as {
+      __perimeterCounts: { apply: number; persistence: number; session: number };
+    }).__perimeterCounts = { apply: 0, persistence: 0, session: 0 };
+  });
 }
 
 async function observeConnectorStatus(page: Page) {
@@ -342,6 +391,12 @@ async function readConnectorStatus(page: Page) {
     runtime.__perimeterStatusObserver?.disconnect();
     return runtime.__perimeterAnnouncements ?? [];
   });
+}
+
+async function peekConnectorStatus(page: Page) {
+  return page.evaluate(() => (
+    window as typeof window & { __perimeterAnnouncements?: string[] }
+  ).__perimeterAnnouncements ?? []);
 }
 
 async function modelToScreen(page: Page, point: Readonly<{ x: number; y: number }>) {
@@ -468,12 +523,12 @@ async function installPerimeterWorkspace(page: Page) {
     if (!localStorage.getItem(storageKey)) persist();
     const runtime = window as unknown as {
       __TAURI_INTERNALS__: { invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> };
-      __perimeterCounts: { apply: number; session: number };
+      __perimeterCounts: { apply: number; persistence: number; session: number };
       __perimeterWorkspace: typeof workspace;
       isTauri: boolean;
     };
     runtime.isTauri = true;
-    runtime.__perimeterCounts = { apply: 0, session: 0 };
+    runtime.__perimeterCounts = { apply: 0, persistence: 0, session: 0 };
     runtime.__perimeterWorkspace = workspace;
     runtime.__TAURI_INTERNALS__ = { invoke: async (command, args = {}) => {
       if (command === "initialize_storage") return { databasePath: "perimeter.db", importedLegacyData: false, schemaVersion: 1, warnings: [] };
@@ -488,9 +543,10 @@ async function installPerimeterWorkspace(page: Page) {
         for (const element of batch.upserts) if (!workspace.elements.some((candidate) => candidate.id === element.id)) workspace.elements.push(element);
         workspace.pages[0].revision += 1;
         persist();
+        runtime.__perimeterCounts.persistence += 1;
         return { newRevision: workspace.pages[0].revision, pageId: batch.pageId };
       }
-      if (command === "save_session_state") { runtime.__perimeterCounts.session += 1; workspace.sessionState = args.state as typeof workspace.sessionState; persist(); return; }
+      if (command === "save_session_state") { runtime.__perimeterCounts.session += 1; workspace.sessionState = args.state as typeof workspace.sessionState; persist(); runtime.__perimeterCounts.persistence += 1; return; }
       throw new Error(`Unexpected ${command}`);
     } };
   });

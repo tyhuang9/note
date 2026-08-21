@@ -48,10 +48,17 @@ export type ConnectorAuthoringCandidate = Readonly<{
   target: BindableElement;
 }>;
 
+/** Converts a perimeter fraction to the spoken integer degree, with the seam at 0°. */
+export function getConnectorBoundaryDegrees(anchorT: number): number {
+  if (!Number.isFinite(anchorT)) return 0;
+  const rounded = Math.round(anchorT * 360);
+  return ((rounded % 360) + 360) % 360;
+}
+
 /** Stable key and wording shared by arrow authoring and endpoint retargeting. */
 export function getConnectorCandidateAnnouncementKey(candidate: ConnectorAuthoringCandidate | null): string | null {
   return candidate
-    ? `${candidate.target.id}:${candidate.activeAnchor.anchor.t}:${candidate.endpoint.kind === "element" ? "snapped" : "near"}`
+    ? `${candidate.target.id}:${candidate.endpoint.kind === "element" ? "snapped" : "near"}`
     : null;
 }
 
@@ -61,7 +68,7 @@ export function getConnectorCandidateAnnouncement(
 ): string {
   if (!candidate) return "No binding target. Endpoint will remain free.";
   const label = targetLabel ?? candidate.target.id;
-  const degrees = Math.round(candidate.activeAnchor.anchor.t * 360);
+  const degrees = getConnectorBoundaryDegrees(candidate.activeAnchor.anchor.t);
   return candidate.endpoint.kind === "element"
     ? `Snapped to ${label} at target-relative boundary position ${degrees} degrees.`
     : `Near ${label} at target-relative boundary position ${degrees} degrees; move closer to snap.`;

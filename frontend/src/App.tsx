@@ -188,6 +188,7 @@ import {
   getConnectorCandidateAnnouncementKey,
   getDefaultKeyboardArrowEndpoints,
   getConnectorAuthoringCandidate,
+  getConnectorBoundaryDegrees,
   getNearestBindableBoundaryAnchor,
   isBindableElement,
   resolveConnectorEndpoint,
@@ -6992,7 +6993,7 @@ function App() {
               if (Math.abs(anchor.anchor.t - element[endpoint].anchor.t) < 1e-10) return element;
               const moved = { ...element[endpoint], anchor: anchor.anchor };
               setConnectorBindingAnnouncement(
-                `Moved ${endpoint} endpoint along ${getBindableTargetLabel(target)} at target-relative boundary position ${Math.round(anchor.anchor.t * 360)} degrees.`,
+                `Moved ${endpoint} endpoint along ${getBindableTargetLabel(target)} at target-relative boundary position ${getConnectorBoundaryDegrees(anchor.anchor.t)} degrees.`,
               );
               return endpoint === "start"
                 ? { ...element, start: moved, updatedAt: Date.now() }
@@ -7052,7 +7053,7 @@ function App() {
     const anchorName = (["top", "right", "bottom", "left"] as const).find(
       (_name, index) => Math.abs(anchor.t - index / 4) < 1e-8,
     );
-    return anchorName ? `${anchorName} anchor` : `boundary position ${Math.round(anchor.t * 360)} degrees`;
+    return anchorName ? `${anchorName} anchor` : `boundary position ${getConnectorBoundaryDegrees(anchor.t)} degrees`;
   }
 
   function getTargetRotationDescription(rotation: number): string {

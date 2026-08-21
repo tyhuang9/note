@@ -5,6 +5,9 @@ import {
   CONNECTOR_BINDING_SNAP_RADIUS_PX,
   CONNECTOR_BINDING_REVEAL_RADIUS_PX,
   detachConnectorEndpointsForDeletedTargets,
+  getConnectorBoundaryDegrees,
+  getConnectorCandidateAnnouncement,
+  getConnectorCandidateAnnouncementKey,
   getDefaultKeyboardArrowEndpoints,
   getConnectorAuthoringCandidate,
   getNearbyBindableTargets,
@@ -74,6 +77,25 @@ function arrow(start: ConnectorElement["start"], end: ConnectorElement["end"]): 
 }
 
 describe("connector shape binding", () => {
+  it("canonicalizes spoken boundary degrees at the seam", () => {
+    expect(getConnectorBoundaryDegrees(0)).toBe(0);
+    expect(Object.is(getConnectorBoundaryDegrees(-0), -0)).toBe(false);
+    expect(getConnectorBoundaryDegrees(359.6 / 360)).toBe(0);
+    expect(getConnectorBoundaryDegrees(1)).toBe(0);
+    expect(getConnectorBoundaryDegrees(-1 / 360)).toBe(359);
+    expect(getConnectorBoundaryDegrees(37 / 360)).toBe(37);
+  });
+
+  it("dedupes candidate announcements by target and binding state", () => {
+    const target = shape("rectangle");
+    const first = getConnectorAuthoringCandidate({ x: 110, y: 20 }, [target], 1);
+    const second = getConnectorAuthoringCandidate({ x: 110, y: 23 }, [target], 1);
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    expect(getConnectorCandidateAnnouncementKey(first)).toBe(getConnectorCandidateAnnouncementKey(second));
+    expect(getConnectorCandidateAnnouncement(first)).toContain("degrees");
+  });
+
   it("matches the shared persisted boundary vectors", () => {
     for (const vector of boundaryVectors.vectors) {
       const target = vector.kind === "text"

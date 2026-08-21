@@ -1,6 +1,6 @@
 import { createPortal } from "react-dom";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { ShapeAnchorName } from "../model/connectorBinding";
+import { getConnectorBoundaryDegrees, type ShapeAnchorName } from "../model/connectorBinding";
 
 type ConnectorEndpointChooserProps = {
   anchorT: number;
@@ -44,10 +44,10 @@ export function ConnectorEndpointChooser({
 }: ConnectorEndpointChooserProps) {
   const dialogRef = useRef<HTMLElement | null>(null);
   const [toolbarPosition, setToolbarPosition] = useState({ left: 0, top: 0 });
-  const [anchorDegrees, setAnchorDegrees] = useState(Math.round(anchorT * 360) % 360);
+  const [anchorDegrees, setAnchorDegrees] = useState(getConnectorBoundaryDegrees(anchorT));
   const selectedTarget = targets.find(({ id }) => id === targetElementId) ?? null;
 
-  useEffect(() => setAnchorDegrees(Math.round(anchorT * 360) % 360), [anchorT]);
+  useEffect(() => setAnchorDegrees(getConnectorBoundaryDegrees(anchorT)), [anchorT]);
 
   useLayoutEffect(() => {
     function updateToolbarPosition() {

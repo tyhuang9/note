@@ -36,7 +36,9 @@ test("captures drawing editor visual QA states", async ({ page }) => {
 
   await page.getByRole("button", { name: "Ellipse (O / 4)" }).click();
   await draw(page, 730, 245, 930, 375);
-  const ellipses = page.getByRole("button", { name: "Select and move ellipse element" });
+  const ellipses = page.getByRole("button", {
+    name: "Select and move ellipse shape. Press F2 to edit contained text.",
+  });
   await expect(ellipses).toHaveCount(2);
   const firstEllipse = ellipses.first();
   const secondEllipse = ellipses.last();
@@ -52,14 +54,14 @@ test("captures drawing editor visual QA states", async ({ page }) => {
   );
   const firstAnchors = page.locator(`[data-connector-target-id="${firstId}"]`);
   const secondAnchors = page.locator(`[data-connector-target-id="${secondId}"]`);
-  await expect(firstAnchors).toHaveCount(4);
+  await expect(firstAnchors).toHaveCount(1);
   await expect(secondAnchors).toHaveCount(0);
   await expect(firstAnchors.first()).toBeVisible();
   await page.screenshot({ path: `${evidenceRoot}/implementation-arrow-anchors-dark-1069x598.png` });
 
-  const firstRight = await requiredBounds(
-    page.locator(`[data-connector-target-id="${firstId}"][data-connector-anchor="right"]`),
-    "first ellipse right anchor",
+  const firstPerimeter = await requiredBounds(
+    firstAnchors,
+    "first ellipse active boundary anchor",
   );
   const secondEllipseBounds = await requiredBounds(secondEllipse, "second ellipse");
   await page.mouse.move(
@@ -68,13 +70,13 @@ test("captures drawing editor visual QA states", async ({ page }) => {
     { steps: 6 },
   );
   await expect(firstAnchors).toHaveCount(0);
-  await expect(secondAnchors).toHaveCount(4);
-  const secondLeft = await requiredBounds(
-    page.locator(`[data-connector-target-id="${secondId}"][data-connector-anchor="left"]`),
-    "second ellipse left anchor",
+  await expect(secondAnchors).toHaveCount(1);
+  const secondPerimeter = await requiredBounds(
+    secondAnchors,
+    "second ellipse active boundary anchor",
   );
-  const start = center(firstRight);
-  const end = center(secondLeft);
+  const start = center(firstPerimeter);
+  const end = center(secondPerimeter);
   await page.mouse.move(end.x, end.y, { steps: 6 });
   const preview = canvas.getByTestId("canvas-live-draft-layer").locator(".arrow-authoring-preview");
   await expect(preview).toHaveAttribute("opacity", "1");

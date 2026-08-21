@@ -137,7 +137,9 @@ test("uses tool-specific native cursors and localized canvas keyboard focus", as
   await page.locator('[data-tool="diamond"]').click();
   const diamondStart = { x: bounds.x + 320, y: bounds.y + 320 };
   await page.mouse.click(diamondStart.x, diamondStart.y);
-  const diamond = page.getByRole("button", { name: "Select and move diamond element" });
+  const diamond = page.getByRole("button", {
+    name: "Select and move diamond shape. Press F2 to edit contained text.",
+  });
   await expect(diamond).toBeVisible();
   const diamondId = await diamond.getAttribute("data-canvas-element-id");
   if (!diamondId) throw new Error("Diamond id was unavailable.");

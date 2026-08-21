@@ -58,7 +58,7 @@ test("applies tool defaults, edits compatible selections, and commits opacity on
   const canvasBounds = await canvas.boundingBox();
   if (!canvasBounds) throw new Error("Canvas bounds were not available.");
 
-  await page.getByRole("button", { name: "Turn off drawing tool lock" }).click();
+  await expect(page.getByRole("button", { name: "Turn on drawing tool lock" })).toHaveAttribute("aria-pressed", "false");
   await expect(page.getByRole("toolbar", { name: "Text formatting" })).toHaveCount(0);
   await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
   const properties = page.getByRole("complementary", { name: "Drawing properties" });
@@ -69,7 +69,7 @@ test("applies tool defaults, edits compatible selections, and commits opacity on
   await properties.getByRole("button", { name: "Thick stroke" }).click();
   await page.mouse.click(canvasBounds.x + 390, canvasBounds.y + 310);
 
-  const rectangleShape = page.getByLabel("rectangle shape");
+  const rectangleShape = page.locator('svg.primitive-shape[aria-label="rectangle shape"]');
   const rectangle = page.locator(".primitive-element").filter({ has: rectangleShape });
   await expect(rectangle).toHaveCount(1);
   await expect(properties).toContainText("shape");

@@ -19,11 +19,14 @@ test("creates primitives, applies tool lock, supports temporary hand, and erases
   const rectangleTool = page.getByRole("button", { name: "Rectangle (R / 2)" });
   const lock = page.locator("[data-tool-lock]");
 
+  await expect(lock).toHaveAccessibleName("Turn on drawing tool lock");
+  await expect(lock).toHaveAttribute("aria-pressed", "false");
+  await lock.click();
   await expect(lock).toHaveAccessibleName("Turn off drawing tool lock");
   await expect(lock).toHaveAttribute("aria-pressed", "true");
   await rectangleTool.click();
   await page.mouse.click(bounds.x + 300, bounds.y + 320);
-  const rectangle = page.getByLabel("rectangle shape");
+  const rectangle = page.locator('svg.primitive-shape[aria-label="rectangle shape"]');
   await expect(rectangle).toHaveCount(1);
   await expect(rectangleTool).toHaveAttribute("aria-pressed", "true");
   await select.click();
@@ -189,7 +192,7 @@ test("keeps live primitive previews solid and fully opaque", async ({ page }) =>
   await expect(preview).not.toHaveAttribute("stroke-dasharray", /./);
   await page.mouse.up();
 
-  const ellipse = page.getByLabel("ellipse shape");
+  const ellipse = page.locator('svg.primitive-shape[aria-label="ellipse shape"]');
   await expect(ellipse).toBeVisible();
   await expect(ellipse).toHaveCSS("overflow", "visible");
   const renderBounds = await ellipse.evaluate((svg) => {
@@ -242,8 +245,10 @@ test("renders every geometric primitive and moves connectors with a composite se
   await page.mouse.click(bounds.x + 790, bounds.y + 590);
   await page.getByRole("button", { name: "Select (V / 1)" }).click();
 
-  await expect(page.getByLabel("diamond shape")).toHaveCount(1);
-  await expect(page.getByLabel("ellipse shape")).toHaveCount(1);
+  const diamondShape = page.locator('svg.primitive-shape[aria-label="diamond shape"]');
+  const ellipseShape = page.locator('svg.primitive-shape[aria-label="ellipse shape"]');
+  await expect(diamondShape).toHaveCount(1);
+  await expect(ellipseShape).toHaveCount(1);
   const connectors = page.locator("svg.primitive-connector");
   await expect(connectors).toHaveCount(2);
   await expect(page.locator(".primitive-connector > g")).toHaveCount(3);
@@ -270,7 +275,7 @@ test("renders every geometric primitive and moves connectors with a composite se
 
   const moveSurface = page.getByRole("button", { name: "Move selected elements" });
   await expect(moveSurface).toBeVisible();
-  const diamondBefore = await page.getByLabel("diamond shape").boundingBox();
+  const diamondBefore = await diamondShape.boundingBox();
   const connectorBefore = await connectors.first().boundingBox();
   const moveBounds = await moveSurface.boundingBox();
   if (!diamondBefore || !connectorBefore || !moveBounds) throw new Error("Composite primitive selection was not available.");
@@ -280,7 +285,7 @@ test("renders every geometric primitive and moves connectors with a composite se
   await page.mouse.move(moveBounds.x + moveBounds.width / 2 + 72, moveBounds.y + moveBounds.height / 2 + 48, { steps: 5 });
   await page.mouse.up();
 
-  const diamondAfter = await page.getByLabel("diamond shape").boundingBox();
+  const diamondAfter = await diamondShape.boundingBox();
   const connectorAfter = await connectors.first().boundingBox();
   if (!diamondAfter || !connectorAfter) throw new Error("Moved primitive bounds were not available.");
   expect(diamondAfter.x - diamondBefore.x).toBeCloseTo(72, 0);
@@ -333,7 +338,7 @@ test("creates editable text and places a picked image only on the next canvas cl
   const bounds = await canvas.boundingBox();
   if (!bounds) throw new Error("Canvas bounds were not available.");
   const select = page.getByRole("button", { name: "Select (V / 1)" });
-  await page.locator("[data-tool-lock]").click();
+  await expect(page.locator("[data-tool-lock]")).toHaveAccessibleName("Turn on drawing tool lock");
 
   await page.getByRole("button", { name: "Text (T / 8)" }).click();
   await page.mouse.click(bounds.x + 300, bounds.y + 300);
@@ -372,7 +377,7 @@ test("moves and resizes a selected text block from its keyboard-accessible heade
 
   const beforeWidth = await textBlock.boundingBox();
   await expect(textBlock.locator(".resize-e")).toHaveCount(0);
-  await expect(moveControl).toHaveAttribute("aria-keyshortcuts", "Alt+Shift+ArrowLeft Alt+Shift+ArrowRight");
+  await expect(moveControl).toHaveAttribute("aria-keyshortcuts", "F2 Alt+Shift+ArrowLeft Alt+Shift+ArrowRight");
   await moveControl.press("Alt+Shift+ArrowRight");
   await expect.poll(async () => (await textBlock.boundingBox())?.width ?? 0).toBeCloseTo((beforeWidth?.width ?? 0) + 10, 0);
 });

@@ -172,10 +172,15 @@ test("canvas search and assistant controls share a raised viewport-safe dock", a
 
   const controls = page.getByRole("toolbar", { name: "Canvas controls" });
   const assistantToggle = page.getByRole("button", { name: "AI assistant" });
+  const findButton = controls.getByRole("button", { name: "Find in canvas" });
 
   await expect(assistantToggle).toHaveCount(1);
   await expect(controls.getByRole("button", { name: "AI assistant" })).toBeVisible();
-  await controls.getByRole("button", { name: "Find in canvas" }).click();
+  await expect(page.getByRole("textbox", { name: "Page title" })).toBeFocused();
+  await expect(findButton).toBeDisabled();
+  await page.getByRole("textbox", { name: "Page title" }).press("Escape");
+  await expect(findButton).toBeEnabled();
+  await findButton.click();
 
   const search = page.locator(".search-panel");
   await expect(search).toBeVisible();
@@ -192,7 +197,6 @@ test("canvas search and assistant controls share a raised viewport-safe dock", a
   expect(900 - controlsBottom).toBeGreaterThanOrEqual(48);
   expect(controlsBounds.y - searchBottom).toBeGreaterThanOrEqual(10);
 
-  const findButton = controls.getByRole("button", { name: "Find in canvas" });
   await findButton.hover();
   await expect
     .poll(() =>

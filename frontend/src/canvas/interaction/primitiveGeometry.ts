@@ -8,12 +8,19 @@ export type PrimitiveGeometry =
   | Readonly<{ kind: "shape"; rect: CanvasRect }>
   | Readonly<{ kind: "connector"; start: CanvasPoint; end: CanvasPoint }>;
 
-const DEFAULT_SHAPE_SIZE: Readonly<Record<ShapeTool, Readonly<{ width: number; height: number }>>> = {
-  rectangle: { width: 160, height: 100 },
-  ellipse: { width: 140, height: 100 },
-  diamond: { width: 140, height: 100 },
-};
 const DEFAULT_CONNECTOR_LENGTH = 160;
+export const SHAPE_DRAG_THRESHOLD_PX = 3;
+
+/** Keeps shape authoring intent stable across canvas zoom levels. */
+export function isMeaningfulShapeDrag(
+  startClient: CanvasPoint,
+  currentClient: CanvasPoint,
+): boolean {
+  return Math.hypot(
+    currentClient.x - startClient.x,
+    currentClient.y - startClient.y,
+  ) >= SHAPE_DRAG_THRESHOLD_PX;
+}
 
 /** Normalizes a drag into a positive box; Shift locks aspect ratio, Alt expands from center. */
 export function shapeRectFromDrag(start: CanvasPoint, current: CanvasPoint, modifiers: PrimitiveModifiers): CanvasRect {
@@ -53,7 +60,7 @@ export function primitiveGeometryFromSession(
   current: CanvasPoint,
   modifiers: PrimitiveModifiers,
   didMove: boolean,
-): PrimitiveGeometry {
+): PrimitiveGeometry | null {
   if (tool === "line") {
     if (!didMove) {
       return {
@@ -66,11 +73,7 @@ export function primitiveGeometryFromSession(
   }
 
   if (!didMove) {
-    const size = DEFAULT_SHAPE_SIZE[tool];
-    return {
-      kind: "shape",
-      rect: { x: start.x, y: start.y, width: size.width, height: size.height },
-    };
+    return null;
   }
   return { kind: "shape", rect: shapeRectFromDrag(start, current, modifiers) };
 }

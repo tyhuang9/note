@@ -28,6 +28,7 @@ import { screenToleranceToWorld } from "../model/geometry";
 import { getDirectBindableTargetAtPoint, getElementBounds, getTopmostElementAtPoint } from "../model/hitTesting";
 import { renderConnectorRoughSvg, renderShapeRoughSvg, shapeRenderPadding } from "../components/PrimitiveElementView";
 import {
+  isMeaningfulShapeDrag,
   primitiveGeometryFromSession,
   type PrimitiveGeometry,
   type PrimitiveModifiers,
@@ -36,13 +37,16 @@ import {
 import type { DrawingTool } from "./useInkInteraction";
 
 type PrimitiveSession = {
+  cancellationKey: string;
   current: CanvasPoint;
   didMove: boolean;
   elementId: string;
   modifiers: PrimitiveModifiers;
   opacity: number;
   pointerId: number;
+  previousSelection: readonly string[];
   start: CanvasPoint;
+  startClient: CanvasPoint;
   style: RoughStyle;
   tool: PrimitiveTool;
 };
@@ -111,6 +115,10 @@ type CanvasInteractionOptions = {
 
 function isDragPrimitiveTool(tool: DrawingTool): tool is PrimitiveTool {
   return tool === "rectangle" || tool === "ellipse" || tool === "diamond" || tool === "line";
+}
+
+function isShapePrimitiveTool(tool: PrimitiveTool) {
+  return tool !== "line";
 }
 
 function directHoveredElementId(
@@ -322,6 +330,11 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       session.modifiers,
       session.didMove,
     );
+    if (!geometry) {
+      primitivePreviewRef.current?.remove();
+      primitivePreviewRef.current = null;
+      return;
+    }
     const svg = primitivePreviewRef.current ?? document.createElementNS("http://www.w3.org/2000/svg", "svg");
     primitivePreviewRef.current = svg;
     svg.setAttribute("aria-hidden", "true");
@@ -536,23 +549,32 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       current.leaveTextEditing();
       current.cleanupMarquee();
       current.setInsertionPoint(null);
-      current.setSelectedElementIds([]);
+      const previousSelection = [...current.selectedElementIdsRef.current];
+      if (tool === "line") {
+        current.selectedElementIdsRef.current = [];
+        current.setSelectedElementIds([]);
+      }
       current.setIsCanvasKeyboardActive(true);
-      current.setActiveMode("canvas");
+      if (tool === "line" || previousSelection.length === 0) {
+        current.setActiveMode("canvas");
+      }
       const elementId = current.createPrimitiveId(tool);
       const appearance = current.getPrimitivePreviewAppearance(tool, elementId);
       primitiveSession.current = {
+        cancellationKey: current.interactionCancellationKey,
         current: point,
         didMove: false,
         elementId,
         modifiers: { alt: event.altKey, shift: event.shiftKey },
         opacity: appearance.opacity,
         pointerId: event.pointerId,
+        previousSelection,
         start: point,
+        startClient: { x: event.clientX, y: event.clientY },
         style: appearance.style,
         tool,
       };
-      paintPrimitivePreview(primitiveSession.current);
+      if (tool === "line") paintPrimitivePreview(primitiveSession.current);
       capturePointer(event);
       event.currentTarget.focus({ preventScroll: true });
     },
@@ -684,10 +706,23 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
         if (!point) return;
         currentPrimitive.current = point;
         currentPrimitive.modifiers = { alt: event.altKey, shift: event.shiftKey };
-        currentPrimitive.didMove ||= Math.hypot(
-          point.x - currentPrimitive.start.x,
-          point.y - currentPrimitive.start.y,
-        ) >= 2;
+        if (isShapePrimitiveTool(currentPrimitive.tool)) {
+          const wasMeaningful = currentPrimitive.didMove;
+          currentPrimitive.didMove = isMeaningfulShapeDrag(
+            currentPrimitive.startClient,
+            { x: event.clientX, y: event.clientY },
+          );
+          if (!wasMeaningful && currentPrimitive.didMove) {
+            optionsRef.current.selectedElementIdsRef.current = [];
+            optionsRef.current.setSelectedElementIds([]);
+            optionsRef.current.setActiveMode("canvas");
+          }
+        } else {
+          currentPrimitive.didMove ||= Math.hypot(
+            point.x - currentPrimitive.start.x,
+            point.y - currentPrimitive.start.y,
+          ) >= 2;
+        }
         paintPrimitivePreview(currentPrimitive);
         event.preventDefault();
         event.stopPropagation();
@@ -742,18 +777,28 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
         primitiveSession.current = null;
         clearPrimitivePreview();
         releaseCapturedPointer(event.pointerId);
-        optionsRef.current.onCreatePrimitive(
-          currentPrimitive.elementId,
+        const geometry = primitiveGeometryFromSession(
           currentPrimitive.tool,
-          primitiveGeometryFromSession(
-            currentPrimitive.tool,
-            currentPrimitive.start,
-            currentPrimitive.current,
-            currentPrimitive.modifiers,
-            currentPrimitive.didMove,
-          ),
-          { opacity: currentPrimitive.opacity, style: currentPrimitive.style },
+          currentPrimitive.start,
+          currentPrimitive.current,
+          currentPrimitive.modifiers,
+          currentPrimitive.didMove,
         );
+        if (geometry) {
+          optionsRef.current.onCreatePrimitive(
+            currentPrimitive.elementId,
+            currentPrimitive.tool,
+            geometry,
+            { opacity: currentPrimitive.opacity, style: currentPrimitive.style },
+          );
+        } else {
+          const restorableSelection = currentPrimitive.previousSelection.filter((id) =>
+            optionsRef.current.visibleElements.some((element) => element.id === id)
+          );
+          optionsRef.current.selectedElementIdsRef.current = restorableSelection;
+          optionsRef.current.setSelectedElementIds(restorableSelection);
+          optionsRef.current.setActiveMode(restorableSelection.length > 0 ? "selected" : "canvas");
+        }
         event.preventDefault();
         event.stopPropagation();
         return;
@@ -820,7 +865,16 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       clearPrimitivePreview();
       cancelMarquee();
       releaseCapturedPointer();
-      if (updateUi && hadCapturedSession) optionsRef.current.setActiveMode("canvas");
+      if (updateUi && hadCapturedSession) {
+        const restorableSelection = currentPrimitive && isShapePrimitiveTool(currentPrimitive.tool)
+          ? currentPrimitive.previousSelection.filter((id) =>
+              optionsRef.current.visibleElements.some((element) => element.id === id)
+            )
+          : [];
+        optionsRef.current.selectedElementIdsRef.current = restorableSelection;
+        optionsRef.current.setSelectedElementIds(restorableSelection);
+        optionsRef.current.setActiveMode(restorableSelection.length > 0 ? "selected" : "canvas");
+      }
       return true;
     },
     [cancelMarquee, clearPrimitivePreview, releaseCapturedPointer],
@@ -871,10 +925,16 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
   }, [cancelArrowAuthoring, cancelTransientPointerInteraction]);
 
   useEffect(() => {
+    if (
+      primitiveSession.current
+      && primitiveSession.current.cancellationKey !== options.interactionCancellationKey
+    ) {
+      cancelCapturedPointerInteraction();
+    }
     if (arrowSession.current?.cancellationKey !== options.interactionCancellationKey) {
       cancelArrowAuthoring();
     }
-  }, [cancelArrowAuthoring, options.interactionCancellationKey]);
+  }, [cancelArrowAuthoring, cancelCapturedPointerInteraction, options.interactionCancellationKey]);
 
   useEffect(() => () => {
     cancelCapturedPointerInteraction(false);

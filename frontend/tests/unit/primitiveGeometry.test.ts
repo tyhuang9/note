@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   connectorFromDrag,
   deterministicSeed,
+  isMeaningfulShapeDrag,
   primitiveGeometryFromSession,
+  SHAPE_DRAG_THRESHOLD_PX,
   shapeRectFromDrag,
 } from "../../src/canvas/interaction/primitiveGeometry";
 
@@ -20,14 +22,19 @@ describe("primitive drag geometry", () => {
     expect(deterministicSeed("shape-1")).not.toBe(deterministicSeed("shape-2"));
   });
 
-  it("creates useful click defaults for every primitive family", () => {
-    expect(primitiveGeometryFromSession(
-      "rectangle",
-      { x: 20, y: 30 },
-      { x: 20, y: 30 },
-      { alt: false, shift: false },
-      false,
-    )).toEqual({ kind: "shape", rect: { x: 20, y: 30, width: 160, height: 100 } });
+  it("requires a fixed screen-space drag for shapes while preserving the line click default", () => {
+    expect(SHAPE_DRAG_THRESHOLD_PX).toBe(3);
+    expect(isMeaningfulShapeDrag({ x: 20, y: 30 }, { x: 22, y: 30 })).toBe(false);
+    expect(isMeaningfulShapeDrag({ x: 20, y: 30 }, { x: 23, y: 30 })).toBe(true);
+    for (const shape of ["rectangle", "ellipse", "diamond"] as const) {
+      expect(primitiveGeometryFromSession(
+        shape,
+        { x: 20, y: 30 },
+        { x: 20, y: 30 },
+        { alt: false, shift: false },
+        false,
+      )).toBeNull();
+    }
     expect(primitiveGeometryFromSession(
       "line",
       { x: 20, y: 30 },

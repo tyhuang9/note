@@ -38,6 +38,11 @@ import { ConnectorElementView, renderConnectorRoughSvg, ShapeElementView, type S
 import { ConnectorBindingTargetHighlight } from "./canvas/components/ConnectorBindingTargetHighlight";
 import { useCanvasInteraction, type ArrowAuthoringVisual } from "./canvas/interaction/useCanvasInteraction";
 import { cleanupMarquee } from "./canvas/interaction/marqueeCleanup";
+import { createLatestFrameQueue, type LatestFrameQueue } from "./canvas/interaction/latestFrame";
+import {
+  overlayTransformedElements,
+  resolveAffectedConnectorGeometry,
+} from "./canvas/interaction/transformPreview";
 import {
   deterministicSeed,
   type PrimitiveGeometry,
@@ -366,7 +371,9 @@ type ClipboardReadItem = {
 };
 
 type DragLayerSession = {
+  affectedConnectorIds: ReadonlySet<string>;
   autoPanRafId: number | null;
+  baseElementsById: Readonly<Record<string, CanvasElement>>;
   blockIds: string[];
   currentClientX: number;
   currentClientY: number;
@@ -376,6 +383,8 @@ type DragLayerSession = {
   connectorPreviewElements: Map<string, HTMLDivElement>;
   connectorSourceElements: HTMLElement[];
   selectedBlockIds: string[];
+  selectedElements: readonly CanvasElement[];
+  selectedIds: ReadonlySet<string>;
   startClientX: number;
   startClientY: number;
   startPanOffset: PanOffset;
@@ -383,6 +392,7 @@ type DragLayerSession = {
 };
 
 type ResizeLayerSession = {
+  baseElementsById: Readonly<Record<string, CanvasElement>>;
   connectorIds: ReadonlySet<string>;
   items: {
     cloneElement: HTMLElement;
@@ -393,9 +403,13 @@ type ResizeLayerSession = {
   sourceElements: HTMLElement[];
   connectorPreviewElements: Map<string, HTMLDivElement>;
   connectorSourceElements: HTMLElement[];
+  selectedElements: readonly CanvasElement[];
+  selectedIds: ReadonlySet<string>;
 };
 
 type TextResizeSession = {
+  affectedConnectorIds: ReadonlySet<string>;
+  baseElementsById: Readonly<Record<string, CanvasElement>>;
   block: TextElement;
   connectorPreviewElements: Map<string, HTMLDivElement>;
   connectorSourceElements: HTMLElement[];
@@ -410,11 +424,13 @@ type TextResizeSession = {
 };
 
 type SelectionTransformSession = {
+  baseElementsById: Readonly<Record<string, CanvasElement>>;
   captureTarget: HTMLElement;
   corner: SelectionCorner | null;
   connectorEndpoint: "start" | "end" | null;
   didMove: boolean;
   pointerId: number;
+  previewFrame: LatestFrameQueue<Readonly<{ clientX: number; clientY: number }>>;
   startBounds: SelectionRect;
   startClientX: number;
   startClientY: number;
@@ -5926,8 +5942,12 @@ function App() {
     }));
   }
 
+  function indexCanvasElements(elements: readonly CanvasElement[]) {
+    return Object.fromEntries(elements.map((element) => [element.id, element]));
+  }
+
   function renderTransientConnectorPreviews(
-    previewElements: readonly CanvasElement[],
+    elementsById: Readonly<Record<string, CanvasElement>>,
     connectorIds: ReadonlySet<string>,
     previewElementsById: Map<string, HTMLDivElement>,
   ) {
@@ -5935,17 +5955,13 @@ function App() {
     if (!canvas) return;
     const zoom = zoomLevelRef.current;
     const pan = panOffsetRef.current;
-    const elementsById = Object.fromEntries(previewElements.map((element) => [element.id, element]));
-    for (const connectorId of connectorIds) {
-      const connector = elementsById[connectorId];
-      if (!connector || connector.type !== "connector") continue;
-      const points = resolveConnectorPoints(connector, elementsById);
+    for (const { connector, points } of resolveAffectedConnectorGeometry(elementsById, connectorIds)) {
       if (!points) {
-        previewElementsById.get(connectorId)?.remove();
-        previewElementsById.delete(connectorId);
+        previewElementsById.get(connector.id)?.remove();
+        previewElementsById.delete(connector.id);
         continue;
       }
-      let wrapper = previewElementsById.get(connectorId);
+      let wrapper = previewElementsById.get(connector.id);
       if (!wrapper) {
         wrapper = document.createElement("div");
         wrapper.className = "drag-layer-clone connector-transform-preview";
@@ -5955,7 +5971,7 @@ function App() {
         svg.classList.add("primitive-connector");
         wrapper.append(svg);
         canvas.append(wrapper);
-        previewElementsById.set(connectorId, wrapper);
+        previewElementsById.set(connector.id, wrapper);
       }
       const padding = Math.max(8, connector.style.strokeWidth * 2) * zoom;
       const minX = Math.min(points.start.x, points.end.x) * zoom;
@@ -6050,18 +6066,22 @@ function App() {
     }px, ${
       session.currentClientY - session.startClientY
     }px, 0)`;
-    const selectedIds = new Set(session.selectedBlockIds);
     const previewElements = translateSelection(
-      dataRef.current.elements,
-      selectedIds,
+      session.selectedElements,
+      session.selectedIds,
       getDragCommitOffset(session),
     );
+    const previewElementsById = overlayTransformedElements(session.baseElementsById, previewElements);
     renderTransientConnectorPreviews(
-      previewElements,
-      getBoundConnectorIdsForTargets(dataRef.current.elements, new Set(session.blockIds)),
+      previewElementsById,
+      session.affectedConnectorIds,
       session.connectorPreviewElements,
     );
-    const previewBounds = getPreviewSelectionBounds(previewElements, selectedIds);
+    const previewBounds = getPreviewSelectionBounds(
+      previewElements,
+      session.selectedIds,
+      previewElementsById,
+    );
     if (previewBounds) previewSelectionFrameVisualBounds(previewBounds);
   }
 
@@ -6080,7 +6100,7 @@ function App() {
     };
   }
 
-  function scheduleDragAutoPan(session: DragLayerSession) {
+  function scheduleDragFrame(session: DragLayerSession) {
     if (session.autoPanRafId !== null) {
       return;
     }
@@ -6097,17 +6117,23 @@ function App() {
         session.currentClientY,
       );
 
-      if (panDelta.x === 0 && panDelta.y === 0) {
-        return;
+      if (panDelta.x !== 0 || panDelta.y !== 0) {
+        scheduleCanvasContentTransform({
+          x: panOffsetRef.current.x + panDelta.x,
+          y: panOffsetRef.current.y + panDelta.y,
+        });
       }
-
-      scheduleCanvasContentTransform({
-        x: panOffsetRef.current.x + panDelta.x,
-        y: panOffsetRef.current.y + panDelta.y,
-      });
       updateDragLayerVisual(session);
-      scheduleDragAutoPan(session);
+      if (panDelta.x !== 0 || panDelta.y !== 0) scheduleDragFrame(session);
     });
+  }
+
+  function flushDragFrame(session: DragLayerSession) {
+    if (session.autoPanRafId !== null) {
+      window.cancelAnimationFrame(session.autoPanRafId);
+      session.autoPanRafId = null;
+    }
+    updateDragLayerVisual(session);
   }
 
   const startVisualDrag = useCallback(
@@ -6131,6 +6157,12 @@ function App() {
         dataRef.current.elements,
         new Set(requestedBlockIds),
       );
+      const baseElementsById = indexCanvasElements(dataRef.current.elements);
+      const selectedIds = new Set(selectedBlockIds);
+      const selectedElements = selectedBlockIds.flatMap((id) => {
+        const element = baseElementsById[id];
+        return element ? [element] : [];
+      });
       const sourceEntries = requestedBlockIds
         .map((blockId) => ({
           blockId,
@@ -6193,7 +6225,9 @@ function App() {
       canvasElement.append(overlayElement);
 
       const dragSession: DragLayerSession = {
+        affectedConnectorIds,
         autoPanRafId: null,
+        baseElementsById,
         blockIds: sourceEntries.map((entry) => entry.blockId),
         currentClientX: clientX,
         currentClientY: clientY,
@@ -6206,6 +6240,8 @@ function App() {
           return element ? [element] : [];
         }),
         selectedBlockIds,
+        selectedElements,
+        selectedIds,
         startClientX: clientX,
         startClientY: clientY,
         startPanOffset: { ...panOffsetRef.current },
@@ -6222,7 +6258,7 @@ function App() {
         sourceElement.classList.add("is-drag-source-hidden");
       }
       renderTransientConnectorPreviews(
-        dataRef.current.elements,
+        dragSession.baseElementsById,
         affectedConnectorIds,
         dragSession.connectorPreviewElements,
       );
@@ -6241,8 +6277,7 @@ function App() {
 
     dragSession.currentClientX = clientX;
     dragSession.currentClientY = clientY;
-    updateDragLayerVisual(dragSession);
-    scheduleDragAutoPan(dragSession);
+    scheduleDragFrame(dragSession);
   }, []);
 
   const endVisualDrag = useCallback((clientX: number, clientY: number) => {
@@ -6254,6 +6289,7 @@ function App() {
 
     dragSession.currentClientX = clientX;
     dragSession.currentClientY = clientY;
+    flushDragFrame(dragSession);
 
     const offset = getDragCommitOffset(dragSession);
     const movedEnough = Math.abs(offset.x) > 0.01 || Math.abs(offset.y) > 0.01;
@@ -6450,8 +6486,11 @@ function App() {
       dataRef.current.elements,
       new Set([block.id]),
     );
+    const baseElementsById = indexCanvasElements(dataRef.current.elements);
     const handleElement = textResizeHandleRef.current;
     const session: TextResizeSession = {
+      affectedConnectorIds,
+      baseElementsById,
       block: getRenderedTextResizeBlock(block, sourceElement),
       connectorPreviewElements: new Map(),
       connectorSourceElements: Array.from(affectedConnectorIds).flatMap((id) => {
@@ -6473,7 +6512,7 @@ function App() {
       connectorElement.classList.add("is-drag-source-hidden");
     }
     document.body.classList.add("is-interacting");
-    renderTransientConnectorPreviews(dataRef.current.elements, affectedConnectorIds, session.connectorPreviewElements);
+    renderTransientConnectorPreviews(baseElementsById, affectedConnectorIds, session.connectorPreviewElements);
     return true;
   }
 
@@ -6500,12 +6539,10 @@ function App() {
     session.sourceElement.style.width = `${preview.width}px`;
     session.sourceElement.style.height = `${preview.height}px`;
     positionTextResizeHandle(session.handleElement, preview);
-    const previewElements = dataRef.current.elements.map((element) =>
-      element.id === preview.id ? preview : element,
-    );
+    const previewElementsById = overlayTransformedElements(session.baseElementsById, [preview]);
     renderTransientConnectorPreviews(
-      previewElements,
-      getBoundConnectorIdsForTargets(dataRef.current.elements, new Set([preview.id])),
+      previewElementsById,
+      session.affectedConnectorIds,
       session.connectorPreviewElements,
     );
     return preview;
@@ -6579,6 +6616,12 @@ function App() {
       new Set(selectedBlockIdsRef.current),
       new Set(sourceEntries.map((entry) => entry.blockId)),
     );
+    const baseElementsById = indexCanvasElements(dataRef.current.elements);
+    const selectedIds = new Set(selectedBlockIdsRef.current);
+    const selectedElements = selectedBlockIdsRef.current.flatMap((id) => {
+      const element = baseElementsById[id];
+      return element ? [element] : [];
+    });
 
     const overlayElement = document.createElement("div");
     const groupElement = document.createElement("div");
@@ -6611,6 +6654,7 @@ function App() {
 
     canvasElement.append(overlayElement);
     const session = {
+      baseElementsById,
       connectorIds,
       items,
       overlayElement,
@@ -6620,6 +6664,8 @@ function App() {
         const element = blockElementsRef.current.get(id);
         return element ? [element] : [];
       }),
+      selectedElements,
+      selectedIds,
     };
     resizeLayerSessionRef.current = session;
     document.body.classList.add("is-interacting");
@@ -6629,13 +6675,14 @@ function App() {
     for (const sourceElement of session.connectorSourceElements) {
       sourceElement.classList.add("is-drag-source-hidden");
     }
-    renderTransientConnectorPreviews(dataRef.current.elements, connectorIds, session.connectorPreviewElements);
+    renderTransientConnectorPreviews(baseElementsById, connectorIds, session.connectorPreviewElements);
     return true;
   }
 
   function updateSelectionResizePreview(
     scale: number,
     previewElements: readonly CanvasElement[],
+    previewElementsById: Readonly<Record<string, CanvasElement>>,
   ) {
     const session = resizeLayerSessionRef.current;
     if (!session) return;
@@ -6653,7 +6700,7 @@ function App() {
       item.wrapperElement.style.transform = `translate3d(${pan.x + preview.x * zoom}px, ${pan.y + preview.y * zoom}px, 0) scale(${visualScale})`;
     }
     renderTransientConnectorPreviews(
-      previewElements,
+      previewElementsById,
       session.connectorIds,
       session.connectorPreviewElements,
     );
@@ -6696,8 +6743,8 @@ function App() {
   function getPreviewSelectionBounds(
     elements: readonly CanvasElement[],
     selectedIds: ReadonlySet<string>,
+    elementsById = indexCanvasElements(elements),
   ) {
-    const elementsById = Object.fromEntries(elements.map((element) => [element.id, element]));
     return getSelectionBounds(
       elements.filter((element) => selectedIds.has(element.id)),
       elementsById,
@@ -6706,6 +6753,7 @@ function App() {
 
   function cancelSelectionFrameInteraction(updateMode = true) {
     const session = selectionTransformRef.current;
+    session?.previewFrame.cancel();
     selectionTransformRef.current = null;
     if (session) releaseSelectionPointerCapture(session);
     if (session?.textResize) {
@@ -6739,32 +6787,41 @@ function App() {
     const anchor = getOppositeCorner(bounds, corner);
     const width = bounds.width * scale;
     const height = bounds.height * scale;
-    const selectedIds = new Set(selectedBlockIdsRef.current);
     const resizeSession = resizeLayerSessionRef.current;
+    if (!resizeSession) return null;
     const textSources = new Map(
       resizeSession?.items
         .filter((item) => item.element.type === "text")
         .map((item) => [item.element.id, item.cloneElement]) ?? [],
     );
     const textSizes = getTextSelectionSizes(
-      dataRef.current.elements,
-      selectedIds,
+      resizeSession.selectedElements,
+      resizeSession.selectedIds,
       scale,
       textSources,
     );
     const previewElements = scaleSelection(
-      dataRef.current.elements,
-      selectedIds,
+      resizeSession.selectedElements,
+      resizeSession.selectedIds,
       bounds,
       corner,
       scale,
       textSizes,
     );
+    const previewElementsById = overlayTransformedElements(
+      resizeSession.baseElementsById,
+      previewElements,
+    );
     return {
       scale,
       textSizes,
       elements: previewElements,
-      bounds: getPreviewSelectionBounds(previewElements, selectedIds) ?? {
+      elementsById: previewElementsById,
+      bounds: getPreviewSelectionBounds(
+        previewElements,
+        resizeSession.selectedIds,
+        previewElementsById,
+      ) ?? {
         x: corner.includes("e") ? anchor.x : anchor.x - width,
         y: corner.includes("s") ? anchor.y : anchor.y - height,
         width,
@@ -6783,12 +6840,17 @@ function App() {
     event.preventDefault();
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
-    selectionTransformRef.current = {
+    let session: SelectionTransformSession;
+    session = {
+      baseElementsById: indexCanvasElements(dataRef.current.elements),
       captureTarget: event.currentTarget,
       corner,
       connectorEndpoint,
       didMove: false,
       pointerId: event.pointerId,
+      previewFrame: createLatestFrameQueue(({ clientX, clientY }) => {
+        applySelectionFrameInteractionMove(session, clientX, clientY);
+      }),
       startBounds: bounds,
       startClientX: event.clientX,
       startClientY: event.clientY,
@@ -6796,6 +6858,7 @@ function App() {
       textResize: false,
       textSizes: null,
     };
+    selectionTransformRef.current = session;
     const selectedConnector = connectorEndpoint
       ? dataRef.current.elements.find((element): element is ConnectorElement =>
         element.id === selectedBlockIdsRef.current[0] && element.type === "connector",
@@ -6819,12 +6882,17 @@ function App() {
     event.stopPropagation();
     if (!startTextResizePreview(block)) return;
     event.currentTarget.setPointerCapture(event.pointerId);
-    selectionTransformRef.current = {
+    let session: SelectionTransformSession;
+    session = {
+      baseElementsById: indexCanvasElements(dataRef.current.elements),
       captureTarget: event.currentTarget,
       connectorEndpoint: null,
       corner: null,
       didMove: false,
       pointerId: event.pointerId,
+      previewFrame: createLatestFrameQueue(({ clientX, clientY }) => {
+        applySelectionFrameInteractionMove(session, clientX, clientY);
+      }),
       startBounds: getSelectionElementBounds(block) ?? {
         height: block.height,
         width: block.width,
@@ -6837,6 +6905,7 @@ function App() {
       textResize: true,
       textSizes: null,
     };
+    selectionTransformRef.current = session;
     setActiveMode("resizing");
   }
 
@@ -6893,12 +6962,12 @@ function App() {
       : { ...connector, end: nextEndpoint };
   }
 
-  function moveSelectionFrameInteraction(event: ReactPointerEvent<HTMLElement>) {
-    const session = selectionTransformRef.current;
-    if (!session || session.pointerId !== event.pointerId) return;
-    const movedEnough = Math.hypot(event.clientX - session.startClientX, event.clientY - session.startClientY) >= 3;
-    if (!movedEnough) return;
-    event.preventDefault();
+  function applySelectionFrameInteractionMove(
+    session: SelectionTransformSession,
+    clientX: number,
+    clientY: number,
+  ) {
+    if (selectionTransformRef.current !== session) return;
     session.didMove = true;
 
     if (session.textResize) {
@@ -6908,8 +6977,8 @@ function App() {
         textResize,
         session.startClientX,
         session.startClientY,
-        event.clientX,
-        event.clientY,
+        clientX,
+        clientY,
       );
       session.didMove = Math.abs(preview.width - textResize.block.width) > 0.01 ||
         Math.abs(preview.height - textResize.block.height) > 0.01 ||
@@ -6919,27 +6988,36 @@ function App() {
     }
 
     if (session.connectorEndpoint) {
-      const preview = getConnectorEndpointPreview(session.connectorEndpoint, event.clientX, event.clientY);
+      const preview = getConnectorEndpointPreview(session.connectorEndpoint, clientX, clientY);
       if (!preview) return;
       setConnectorEndpointPreview(preview);
-      const previewElementsById = {
-        ...Object.fromEntries(dataRef.current.elements.map((element) => [element.id, element])),
-        [preview.id]: preview,
-      };
+      const previewElementsById = overlayTransformedElements(session.baseElementsById, [preview]);
       setSelectionFramePreview(getSelectionElementBounds(preview, previewElementsById));
       return;
     }
 
     if (session.corner) {
       if (!startSelectionResizePreview()) return;
-      const preview = selectionResizePreview(session.startBounds, session.corner, event.clientX, event.clientY, session);
+      const preview = selectionResizePreview(session.startBounds, session.corner, clientX, clientY, session);
+      if (!preview) return;
       session.selectionScale = preview.scale;
       session.textSizes = preview.textSizes;
-      updateSelectionResizePreview(preview.scale, preview.elements);
+      updateSelectionResizePreview(preview.scale, preview.elements, preview.elementsById);
       previewSelectionFrameVisualBounds(preview.bounds);
+    }
+  }
+
+  function moveSelectionFrameInteraction(event: ReactPointerEvent<HTMLElement>) {
+    const session = selectionTransformRef.current;
+    if (!session || session.pointerId !== event.pointerId) return;
+    const movedEnough = Math.hypot(event.clientX - session.startClientX, event.clientY - session.startClientY) >= 3;
+    if (!movedEnough) return;
+    event.preventDefault();
+    if (session.textResize || session.connectorEndpoint || session.corner) {
+      session.previewFrame.schedule({ clientX: event.clientX, clientY: event.clientY });
       return;
     }
-
+    session.didMove = true;
     if (!dragLayerSessionRef.current) {
       const movableId = selectedBlockIdsRef.current.find((id) => {
         const element = dataRef.current.elements.find((candidate) => candidate.id === id);
@@ -6953,6 +7031,16 @@ function App() {
   function finishSelectionFrameInteraction(event: ReactPointerEvent<HTMLElement>, cancelled = false) {
     const session = selectionTransformRef.current;
     if (!session || session.pointerId !== event.pointerId) return;
+    const usesQueuedPreview = Boolean(session.textResize || session.connectorEndpoint || session.corner);
+    const movedEnough = Math.hypot(
+      event.clientX - session.startClientX,
+      event.clientY - session.startClientY,
+    ) >= 3;
+    if (!cancelled && usesQueuedPreview && movedEnough) {
+      session.previewFrame.flush({ clientX: event.clientX, clientY: event.clientY });
+    } else {
+      session.previewFrame.cancel();
+    }
     selectionTransformRef.current = null;
     releaseSelectionPointerCapture(session);
 

@@ -98,6 +98,30 @@ test("meaningful shape drags commit once with zoom-invariant screen intent", asy
   await expect(page.locator('[data-canvas-element-type="shape"]')).toHaveCount(expectedShapeCount);
 });
 
+test("pointerup applies the final screen-space threshold without an intervening move", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  const bounds = await requiredBounds(canvas, "canvas");
+  const start = { x: bounds.x + 540, y: bounds.y + 240 };
+
+  await page.getByRole("button", { name: TOOL_NAMES.rectangle }).click();
+  await settleAndResetCounts(page);
+  await releaseCapturedWithoutMove(page, start, { x: start.x + 2, y: start.y });
+  await expect(page.locator(".primitive-authoring-preview")).toHaveCount(0);
+  await expect(page.locator('[data-canvas-element-type="shape"]')).toHaveCount(1);
+  await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
+
+  await releaseCapturedWithoutMove(page, start, { x: start.x + 3, y: start.y });
+  await expect(page.locator(".primitive-authoring-preview")).toHaveCount(0);
+  await expect(page.locator('[data-canvas-element-type="shape"]')).toHaveCount(2);
+  await expect.poll(() => counts(page)).toEqual({ apply: 1, persistence: 2, session: 1 });
+
+  await page.getByRole("button", { name: TOOL_NAMES.diamond }).click();
+  await settleAndResetCounts(page);
+  await releaseCapturedWithoutMove(page, { x: start.x + 40, y: start.y + 40 }, { x: start.x + 44, y: start.y + 40 });
+  await expect(page.locator('[data-canvas-element-type="shape"]')).toHaveCount(3);
+  await expect.poll(() => counts(page)).toEqual({ apply: 1, persistence: 2, session: 1 });
+});
+
 test("reverse, Shift, and Alt drags preserve geometry while tool lock remains explicit", async ({ page }) => {
   const canvas = page.getByRole("tabpanel");
   const canvasBounds = await requiredBounds(canvas, "canvas");
@@ -248,6 +272,36 @@ async function beginCapturedDrag(page: Page, start: { x: number; y: number }, en
   const pointerId = Number(await page.locator("body").getAttribute("data-shape-drag-pointer-id"));
   if (!Number.isFinite(pointerId)) throw new Error("Shape drag pointer id was unavailable.");
   return pointerId;
+}
+
+async function releaseCapturedWithoutMove(
+  page: Page,
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+) {
+  await page.evaluate(() => {
+    document.addEventListener("pointerdown", (event) => {
+      document.body.dataset.shapeDragPointerId = String(event.pointerId);
+    }, { capture: true, once: true });
+  });
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  const pointerId = Number(await page.locator("body").getAttribute("data-shape-drag-pointer-id"));
+  if (!Number.isFinite(pointerId)) throw new Error("Shape drag pointer id was unavailable.");
+  await page.evaluate(({ end, pointerId }) => {
+    const target = Array.from(document.querySelectorAll<HTMLElement>("*"))
+      .find((element) => element.hasPointerCapture(pointerId));
+    if (!target) throw new Error("Captured shape target was unavailable.");
+    target.dispatchEvent(new PointerEvent("pointerup", {
+      bubbles: true,
+      button: 0,
+      buttons: 0,
+      clientX: end.x,
+      clientY: end.y,
+      pointerId,
+    }));
+  }, { end, pointerId });
+  await page.mouse.up();
 }
 
 async function dispatchCapturedTermination(

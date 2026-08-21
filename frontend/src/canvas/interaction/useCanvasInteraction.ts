@@ -774,6 +774,17 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
     (event: ReactPointerEvent<HTMLElement>) => {
       const currentPrimitive = primitiveSession.current;
       if (currentPrimitive?.pointerId === event.pointerId) {
+        if (isShapePrimitiveTool(currentPrimitive.tool)) {
+          const finalPoint = getCanvasPoint(event.clientX, event.clientY);
+          if (finalPoint) {
+            currentPrimitive.current = finalPoint;
+            currentPrimitive.modifiers = { alt: event.altKey, shift: event.shiftKey };
+            currentPrimitive.didMove = isMeaningfulShapeDrag(
+              currentPrimitive.startClient,
+              { x: event.clientX, y: event.clientY },
+            );
+          }
+        }
         primitiveSession.current = null;
         clearPrimitivePreview();
         releaseCapturedPointer(event.pointerId);
@@ -845,7 +856,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       cancelMarquee();
       releaseCapturedPointer(event.pointerId);
     },
-    [cancelMarquee, clearPrimitivePreview, releaseCapturedPointer],
+    [cancelMarquee, clearPrimitivePreview, getCanvasPoint, releaseCapturedPointer],
   );
 
   const cancelCapturedPointerInteraction = useCallback(

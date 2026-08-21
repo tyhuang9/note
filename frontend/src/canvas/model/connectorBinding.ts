@@ -32,6 +32,25 @@ export type ConnectorAuthoringCandidate = Readonly<{
   target: BindableElement;
 }>;
 
+type ConnectorGeometryCacheEntry = Readonly<{
+  endTarget: CanvasElement | null;
+  points: Readonly<{ start: CanvasPoint; end: CanvasPoint }> | null;
+  startTarget: CanvasElement | null;
+}>;
+
+const connectorGeometryCache = new WeakMap<ConnectorElement, ConnectorGeometryCacheEntry>();
+let connectorGeometryCacheHits = 0;
+let connectorGeometryCacheMisses = 0;
+
+export function getConnectorGeometryCacheDiagnostics(): Readonly<{ hits: number; misses: number }> {
+  return { hits: connectorGeometryCacheHits, misses: connectorGeometryCacheMisses };
+}
+
+export function resetConnectorGeometryCacheDiagnostics(): void {
+  connectorGeometryCacheHits = 0;
+  connectorGeometryCacheMisses = 0;
+}
+
 /** Stable key and wording shared by arrow authoring and endpoint retargeting. */
 export function getConnectorCandidateAnnouncementKey(candidate: ConnectorAuthoringCandidate | null): string | null {
   return candidate
@@ -134,6 +153,27 @@ export function resolveConnectorPoints(
   connector: ConnectorElement,
   elementsById: Readonly<Record<ElementId, CanvasElement>>,
 ): Readonly<{ start: CanvasPoint; end: CanvasPoint }> | null {
+  const startTarget = getBoundEndpointTargetReference(connector.start, elementsById);
+  const endTarget = getBoundEndpointTargetReference(connector.end, elementsById);
+  const cached = connectorGeometryCache.get(connector);
+  if (cached && cached.startTarget === startTarget && cached.endTarget === endTarget) {
+    connectorGeometryCacheHits += 1;
+    return cached.points;
+  }
+  connectorGeometryCacheMisses += 1;
+  const points = computeConnectorPoints(connector, elementsById);
+  connectorGeometryCache.set(connector, { endTarget, points, startTarget });
+  return points;
+}
+
+/**
+ * Callers replace connectors and targets immutably. The WeakMap therefore
+ * invalidates only routes whose endpoint object references actually changed.
+ */
+function computeConnectorPoints(
+  connector: ConnectorElement,
+  elementsById: Readonly<Record<ElementId, CanvasElement>>,
+): Readonly<{ start: CanvasPoint; end: CanvasPoint }> | null {
   const startReference = getEndpointReferencePoint(connector.start, elementsById, connector.pageId);
   const endReference = getEndpointReferencePoint(connector.end, elementsById, connector.pageId);
   if (!startReference || !endReference) return null;
@@ -165,6 +205,13 @@ export function resolveConnectorPoints(
   const start = applyEndpointClearance(connector.start, cleanStart, direction, connector.style.strokeWidth, elementsById);
   const end = applyEndpointClearance(connector.end, cleanEnd, { x: -direction.x, y: -direction.y }, connector.style.strokeWidth, elementsById);
   return start && end ? { start, end } : null;
+}
+
+function getBoundEndpointTargetReference(
+  endpoint: ConnectorEndpoint,
+  elementsById: Readonly<Record<ElementId, CanvasElement>>,
+): CanvasElement | null {
+  return endpoint.kind === "element" ? elementsById[endpoint.targetElementId] ?? null : null;
 }
 
 function areCoincidentCanonicalBindings(

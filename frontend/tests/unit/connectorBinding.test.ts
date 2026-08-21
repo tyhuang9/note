@@ -8,6 +8,7 @@ import {
   detachConnectorEndpointsForDeletedTargets,
   getConnectorCandidateAnnouncement,
   getConnectorCandidateAnnouncementKey,
+  getConnectorGeometryCacheDiagnostics,
   getDefaultKeyboardArrowEndpoints,
   getConnectorAuthoringCandidate,
   getNearbyBindableTargets,
@@ -18,6 +19,7 @@ import {
   normalizeFreeConnectorEndpoint,
   resolveConnectorEndpoint,
   resolveConnectorPoints,
+  resetConnectorGeometryCacheDiagnostics,
   snapConnectorEndpoint,
   snapConnectorPointToAngle,
 } from "../../src/canvas/model/connectorBinding";
@@ -606,6 +608,54 @@ describe("connector shape binding", () => {
       x: (restored!.start.x + restored!.end.x) / 2,
       y: (restored!.start.y + restored!.end.y) / 2,
     }, 0, elementsById)).toBe(true);
+  });
+
+  it("reuses paired geometry across consumers and invalidates immutable connector or target replacements", () => {
+    const target = shape("rectangle", { id: "cache-target" });
+    const connector = arrow(
+      { kind: "element", targetElementId: target.id, gap: 0 },
+      { kind: "free", x: 240, y: 50 },
+    );
+    const elementsById = { [target.id]: target, [connector.id]: connector };
+    resetConnectorGeometryCacheDiagnostics();
+
+    const first = resolveConnectorPoints(connector, elementsById);
+    expect(getSelectionElementBounds(connector, elementsById)).not.toBeNull();
+    expect(getElementBounds(connector, elementsById)).not.toBeNull();
+    expect(canvasElementContainsPoint(connector, { x: 170, y: 50 }, 100, elementsById)).toBe(true);
+    expect(resolveConnectorPoints(connector, elementsById)).toBe(first);
+    expect(getConnectorGeometryCacheDiagnostics()).toEqual({ hits: 4, misses: 1 });
+
+    const movedTarget = { ...target, x: target.x + 40 };
+    const moved = resolveConnectorPoints(connector, { ...elementsById, [target.id]: movedTarget });
+    expect(moved).not.toBe(first);
+    expect(getConnectorGeometryCacheDiagnostics()).toEqual({ hits: 4, misses: 2 });
+
+    const replacedConnector = { ...connector, end: { kind: "free" as const, x: 260, y: 50 } };
+    expect(resolveConnectorPoints(replacedConnector, {
+      ...elementsById,
+      [target.id]: movedTarget,
+      [connector.id]: replacedConnector,
+    })).not.toBe(moved);
+    expect(getConnectorGeometryCacheDiagnostics()).toEqual({ hits: 4, misses: 3 });
+  });
+
+  it("caches suppressed overlap routes and reappears after a target reference changes", () => {
+    const first = shape("rectangle", { id: "cache-overlap-first" });
+    const second = shape("ellipse", { id: "cache-overlap-second", x: 40 });
+    const connector = arrow(
+      { kind: "element", targetElementId: first.id, gap: 0 },
+      { kind: "element", targetElementId: second.id, gap: 0 },
+    );
+    const elementsById = { [first.id]: first, [second.id]: second };
+    resetConnectorGeometryCacheDiagnostics();
+    expect(resolveConnectorPoints(connector, elementsById)).toBeNull();
+    expect(resolveConnectorPoints(connector, elementsById)).toBeNull();
+    expect(getConnectorGeometryCacheDiagnostics()).toEqual({ hits: 1, misses: 1 });
+
+    const movedSecond = { ...second, x: 300 };
+    expect(resolveConnectorPoints(connector, { ...elementsById, [second.id]: movedSecond })).not.toBeNull();
+    expect(getConnectorGeometryCacheDiagnostics()).toEqual({ hits: 1, misses: 2 });
   });
 
   it("keeps a bound endpoint bound during connector transforms and detaches it before target deletion", () => {

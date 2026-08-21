@@ -302,6 +302,24 @@ test("pointer retarget rejects the opposite endpoint target without data, persis
   expect(await counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
   expect((await readConnectorStatus(page)).filter((message) => message === refusal)).toHaveLength(1);
 
+  await resetCounts(page);
+  await observeConnectorStatus(page);
+  const secondStartBounds = await requiredBounds(startHandle, "second free start endpoint");
+  await page.mouse.move(
+    secondStartBounds.x + secondStartBounds.width / 2,
+    secondStartBounds.y + secondStartBounds.height / 2,
+  );
+  await page.mouse.down();
+  await expect(status).toBeEmpty();
+  await page.mouse.move(oppositeTarget.x, oppositeTarget.y);
+  await expect(status).toHaveText(refusal);
+  expect(await status.evaluate((element) => !element.closest("[inert]"))).toBe(true);
+  await page.mouse.up();
+  await page.waitForTimeout(650);
+  expect(await newestConnector(page)).toEqual(beforeRejectedDrop);
+  expect(await counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
+  expect((await readConnectorStatus(page)).filter((message) => message === refusal)).toHaveLength(1);
+
   await canvas.focus();
   await page.keyboard.press("Control+z");
   await expect.poll(async () => (await newestConnector(page))?.end).toMatchObject({ kind: "free" });

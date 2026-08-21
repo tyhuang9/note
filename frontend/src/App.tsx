@@ -6989,6 +6989,10 @@ function App() {
   ) {
     const bounds = selectionWorldBounds;
     if (event.button !== 0 || !bounds) return;
+    if (connectorEndpoint) {
+      connectorEndpointRetargetAnnouncementRef.current = null;
+      setConnectorBindingAnnouncement("");
+    }
     event.preventDefault();
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -7016,7 +7020,6 @@ function App() {
         element.id === selectedBlockIdsRef.current[0] && element.type === "connector",
       )
       : null;
-    connectorEndpointRetargetAnnouncementRef.current = null;
     setIsConnectorEndpointRetargeting(selectedConnector?.style.endArrowhead === "arrow");
   }
 
@@ -7553,6 +7556,7 @@ function App() {
       setConnectorBindingAnnouncement(`No compatible shapes or text blocks are available to bind the ${endpoint} endpoint.`);
       return;
     }
+    setConnectorBindingAnnouncement("");
     const currentTargetId = current.kind === "element" && targets.some(({ element }) => element.id === current.targetElementId)
       ? current.targetElementId
       : targets[0]?.element.id ?? null;

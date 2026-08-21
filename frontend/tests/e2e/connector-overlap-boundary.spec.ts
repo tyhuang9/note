@@ -45,20 +45,40 @@ test("two-click creation and chooser binding reject post-clearance maximum-envel
   const dialog = page.getByRole("dialog", { name: "Choose start endpoint target" });
   await dialog.getByRole("button", { name: /^Rectangle 1 / }).click();
   const before = await currentConnector(page);
+  const chooserRefusal = "Could not bind start endpoint because the connector's visible stroke would exceed the safe canvas boundary.";
   await page.waitForTimeout(650);
   await resetCounts(page);
   await dialog.getByRole("button", { name: "Bind start endpoint" }).click();
 
   const chooserStatus = dialog.getByRole("status");
-  await expect(chooserStatus).toHaveText(
-    "Could not bind start endpoint because the connector's visible stroke would exceed the safe canvas boundary.",
-  );
+  await expect(chooserStatus).toHaveText(chooserRefusal);
   expect(await chooserStatus.evaluate((element) => !element.closest("[inert]"))).toBe(true);
   await expect(dialog).toBeVisible();
   await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
   await expect.poll(() => currentConnector(page)).toEqual(before);
   await dialog.press("Escape");
   await expect(startHandle).toBeFocused();
+
+  await expect(status).toHaveText(chooserRefusal);
+  await page.keyboard.press("Enter");
+  const reopenedDialog = page.getByRole("dialog", { name: "Choose start endpoint target" });
+  const reopenedStatus = reopenedDialog.getByRole("status");
+  await expect(reopenedStatus).toBeEmpty();
+  await observeEdgeStatus(reopenedStatus);
+  await page.waitForTimeout(650);
+  await resetCounts(page);
+  await reopenedDialog.getByRole("button", { name: "Bind start endpoint" }).click();
+  await expect(reopenedStatus).toHaveText(chooserRefusal);
+  expect(await reopenedStatus.evaluate((element) => !element.closest("[inert]"))).toBe(true);
+  await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
+  await expect.poll(() => currentConnector(page)).toEqual(before);
+  expect((await readEdgeStatus(page)).filter((message) => message === chooserRefusal)).toHaveLength(1);
+  await reopenedDialog.press("Escape");
+  await expect(startHandle).toBeFocused();
+  await canvas.focus();
+  await page.keyboard.press("Control+z");
+  await expect.poll(() => currentConnector(page)).toEqual(before);
+  await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
 
   const startHandleBounds = await requiredBounds(startHandle, "free start endpoint");
   await page.waitForTimeout(650);
@@ -272,6 +292,33 @@ async function resetCounts(page: Page) {
     (window as unknown as {
       __edgeCounts: { apply: number; persistence: number; session: number };
     }).__edgeCounts = { apply: 0, persistence: 0, session: 0 };
+  });
+}
+
+async function observeEdgeStatus(status: Locator) {
+  await status.evaluate((element) => {
+    const runtime = window as typeof window & {
+      __edgeStatusAnnouncements?: string[];
+      __edgeStatusObserver?: MutationObserver;
+    };
+    runtime.__edgeStatusAnnouncements = [];
+    runtime.__edgeStatusObserver?.disconnect();
+    runtime.__edgeStatusObserver = new MutationObserver(() => {
+      const message = element.textContent?.trim() ?? "";
+      if (message) runtime.__edgeStatusAnnouncements?.push(message);
+    });
+    runtime.__edgeStatusObserver.observe(element, { characterData: true, childList: true, subtree: true });
+  });
+}
+
+async function readEdgeStatus(page: Page) {
+  return page.evaluate(() => {
+    const runtime = window as typeof window & {
+      __edgeStatusAnnouncements?: string[];
+      __edgeStatusObserver?: MutationObserver;
+    };
+    runtime.__edgeStatusObserver?.disconnect();
+    return runtime.__edgeStatusAnnouncements ?? [];
   });
 }
 

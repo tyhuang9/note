@@ -9,9 +9,11 @@ import type {
 } from "./elements";
 import type { CanvasPoint } from "./geometry";
 import {
+  createShapeSupportDescriptor,
   getShapeBoundaryPoint,
-  getShapeSupportPoint,
+  getShapeSupportPointFromDescriptor,
   projectPointToShapeBoundary,
+  type ShapeSupportDescriptor,
 } from "./shapeBoundary";
 
 /** The screen-space capture radius stays constant as the canvas zooms. */
@@ -41,6 +43,9 @@ type ConnectorGeometryCacheEntry = Readonly<{
 const connectorGeometryCache = new WeakMap<ConnectorElement, ConnectorGeometryCacheEntry>();
 let connectorGeometryCacheHits = 0;
 let connectorGeometryCacheMisses = 0;
+const gjkIterationHistogram = Array.from({ length: 65 }, () => 0);
+let gjkCapHits = 0;
+let gjkResolutions = 0;
 
 export function getConnectorGeometryCacheDiagnostics(): Readonly<{ hits: number; misses: number }> {
   return { hits: connectorGeometryCacheHits, misses: connectorGeometryCacheMisses };
@@ -49,6 +54,20 @@ export function getConnectorGeometryCacheDiagnostics(): Readonly<{ hits: number;
 export function resetConnectorGeometryCacheDiagnostics(): void {
   connectorGeometryCacheHits = 0;
   connectorGeometryCacheMisses = 0;
+}
+
+export function getConnectorGjkDiagnostics(): Readonly<{
+  capHits: number;
+  histogram: readonly number[];
+  resolutions: number;
+}> {
+  return { capHits: gjkCapHits, histogram: [...gjkIterationHistogram], resolutions: gjkResolutions };
+}
+
+export function resetConnectorGjkDiagnostics(): void {
+  gjkCapHits = 0;
+  gjkResolutions = 0;
+  gjkIterationHistogram.fill(0);
 }
 
 /** Stable key and wording shared by arrow authoring and endpoint retargeting. */
@@ -467,12 +486,32 @@ type SupportVertex = Readonly<{
   end: CanvasPoint;
 }>;
 
-type ClosestSimplex = Readonly<{
-  closest: CanvasPoint;
+type ClosestSimplex = {
+  closestX: number;
+  closestY: number;
+  first: SupportVertex;
+  firstWeight: number;
   overlap: boolean;
-  simplex: readonly SupportVertex[];
-  weights: readonly number[];
+  second: SupportVertex | null;
+  secondWeight: number;
+};
+
+type BindableSupportDescriptor = Readonly<{
+  centerX: number;
+  centerY: number;
+  cos: number;
+  height: number;
+  shape: ShapeSupportDescriptor | null;
+  sin: number;
+  width: number;
 }>;
+
+type EndpointSupportSource = Readonly<
+  | { kind: "free"; x: number; y: number }
+  | { descriptor: BindableSupportDescriptor; kind: "bound" }
+>;
+
+const bindableSupportDescriptorCache = new WeakMap<BindableElement, BindableSupportDescriptor>();
 
 /** Exact convex support/GJK distance; center rays are used only for zero-distance degeneracies. */
 function getClosestEndpointBoundaryPair(
@@ -482,134 +521,233 @@ function getClosestEndpointBoundaryPair(
   sourcePageId: string,
   initialDirection: CanvasPoint,
 ): Readonly<{ kind: "overlap" } | { kind: "separated"; start: CanvasPoint; end: CanvasPoint }> | null {
-  const support = (direction: CanvasPoint): SupportVertex | null => {
-    const startPoint = getEndpointSupportPoint(start, direction, elementsById, sourcePageId);
-    const endPoint = getEndpointSupportPoint(end, { x: -direction.x, y: -direction.y }, elementsById, sourcePageId);
+  let iterationCount = 0;
+  const finish = <T>(result: T, capHit = false): T => {
+    gjkResolutions += 1;
+    gjkIterationHistogram[Math.min(64, iterationCount)] += 1;
+    if (capHit) gjkCapHits += 1;
+    return result;
+  };
+  const startSupport = getEndpointSupportSource(start, elementsById, sourcePageId);
+  const endSupport = getEndpointSupportSource(end, elementsById, sourcePageId);
+  if (!startSupport || !endSupport) return finish(null);
+  const support = (directionX: number, directionY: number): SupportVertex | null => {
+    const startPoint = getEndpointSupportPoint(startSupport, directionX, directionY);
+    const endPoint = getEndpointSupportPoint(endSupport, -directionX, -directionY);
     return startPoint && endPoint ? {
       difference: { x: startPoint.x - endPoint.x, y: startPoint.y - endPoint.y },
       start: startPoint,
       end: endPoint,
     } : null;
   };
-  const first = support(initialDirection);
-  if (!first) return null;
-  let state = closestSimplexToOrigin([first]);
+  const first = support(initialDirection.x, initialDirection.y);
+  if (!first) return finish(null);
+  const state: ClosestSimplex = {
+    closestX: first.difference.x,
+    closestY: first.difference.y,
+    first,
+    firstWeight: 1,
+    overlap: false,
+    second: null,
+    secondWeight: 0,
+  };
   for (let iteration = 0; iteration < 64; iteration += 1) {
-    const distanceSquared = dotPoint(state.closest, state.closest);
-    if (state.overlap || distanceSquared <= 1e-20) return { kind: "overlap" };
-    const direction = { x: -state.closest.x, y: -state.closest.y };
-    const next = support(direction);
-    if (!next) return null;
-    const improvement = distanceSquared - dotPoint(state.closest, next.difference);
+    iterationCount = iteration + 1;
+    const distanceSquared = state.closestX * state.closestX + state.closestY * state.closestY;
+    if (state.overlap || distanceSquared <= 1e-20) return finish({ kind: "overlap" as const });
+    const next = support(-state.closestX, -state.closestY);
+    if (!next) return finish(null);
+    const improvement = distanceSquared - state.closestX * next.difference.x - state.closestY * next.difference.y;
     if (improvement <= 1e-12 * Math.max(1, distanceSquared)) {
       const witnesses = witnessPoints(state);
-      return witnesses ? { kind: "separated", ...witnesses } : null;
+      return finish(witnesses ? { kind: "separated" as const, ...witnesses } : null);
     }
-    if (state.simplex.some((vertex) => pointDistance(vertex.difference, next.difference) <= 1e-12)) return null;
-    state = closestSimplexToOrigin([...state.simplex, next]);
+    const firstDeltaX = state.first.difference.x - next.difference.x;
+    const firstDeltaY = state.first.difference.y - next.difference.y;
+    let duplicate = firstDeltaX * firstDeltaX + firstDeltaY * firstDeltaY <= 1e-24;
+    if (!duplicate && state.second) {
+      const secondDeltaX = state.second.difference.x - next.difference.x;
+      const secondDeltaY = state.second.difference.y - next.difference.y;
+      duplicate = secondDeltaX * secondDeltaX + secondDeltaY * secondDeltaY <= 1e-24;
+    }
+    if (duplicate) return finish(null);
+    extendClosestSimplex(state, next);
   }
   const witnesses = witnessPoints(state);
-  return witnesses ? { kind: "separated", ...witnesses } : null;
+  return finish(witnesses ? { kind: "separated" as const, ...witnesses } : null, true);
 }
 
 function getEndpointSupportPoint(
+  source: EndpointSupportSource,
+  directionX: number,
+  directionY: number,
+): CanvasPoint | null {
+  if (source.kind === "free") return source;
+  const { descriptor } = source;
+  const localDirectionX = directionX * descriptor.cos + directionY * descriptor.sin;
+  const localDirectionY = -directionX * descriptor.sin + directionY * descriptor.cos;
+  const local = descriptor.shape
+    ? getShapeSupportPointFromDescriptor(descriptor.shape, localDirectionX, localDirectionY)
+    : getRectangleSupportPoint(descriptor.width, descriptor.height, localDirectionX, localDirectionY);
+  if (!local) return null;
+  const localX = local.x - descriptor.width / 2;
+  const localY = local.y - descriptor.height / 2;
+  const point = {
+    x: descriptor.centerX + localX * descriptor.cos - localY * descriptor.sin,
+    y: descriptor.centerY + localX * descriptor.sin + localY * descriptor.cos,
+  };
+  return isSafeResolvedPoint(point) ? point : null;
+}
+
+function getEndpointSupportSource(
   endpoint: ConnectorEndpoint,
-  direction: CanvasPoint,
   elementsById: Readonly<Record<ElementId, CanvasElement>>,
   sourcePageId: string,
-): CanvasPoint | null {
+): EndpointSupportSource | null {
   if (endpoint.kind === "free") return isSafeResolvedPoint(endpoint) ? endpoint : null;
   if (endpoint.kind !== "element" || !isSafeGap(endpoint.gap)) return null;
   const target = elementsById[endpoint.targetElementId];
   if (!isBindableElement(target) || target.pageId !== sourcePageId) return null;
-  const localDirection = rotateVector(direction, -target.rotation);
-  const local = target.type === "shape"
-    ? getShapeSupportPoint(target.shape, target.width, target.height, target.style.roundness, localDirection)
-    : getRectangleSupportPoint(target.width, target.height, localDirection);
-  if (!local) return null;
-  const center = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
-  const rotated = rotateVector({ x: local.x - target.width / 2, y: local.y - target.height / 2 }, target.rotation);
-  const point = { x: center.x + rotated.x, y: center.y + rotated.y };
-  return isSafeResolvedPoint(point) ? point : null;
+  const descriptor = getBindableSupportDescriptor(target);
+  return descriptor ? { descriptor, kind: "bound" } : null;
 }
 
-function getRectangleSupportPoint(width: number, height: number, direction: CanvasPoint): CanvasPoint {
+function getBindableSupportDescriptor(target: BindableElement): BindableSupportDescriptor | null {
+  const cached = bindableSupportDescriptorCache.get(target);
+  if (cached) return cached;
+  const radians = target.rotation * Math.PI / 180;
+  const descriptor: BindableSupportDescriptor = {
+    centerX: target.x + target.width / 2,
+    centerY: target.y + target.height / 2,
+    cos: Math.cos(radians),
+    height: target.height,
+    shape: target.type === "shape"
+      ? createShapeSupportDescriptor(target.shape, target.width, target.height, target.style.roundness)
+      : null,
+    sin: Math.sin(radians),
+    width: target.width,
+  };
+  if (target.type === "shape" && !descriptor.shape) return null;
+  bindableSupportDescriptorCache.set(target, descriptor);
+  return descriptor;
+}
+
+function getRectangleSupportPoint(
+  width: number,
+  height: number,
+  directionX: number,
+  directionY: number,
+): CanvasPoint {
   return {
-    x: direction.x >= 0 ? width : 0,
-    y: direction.y >= 0 ? height : 0,
+    x: directionX >= 0 ? width : 0,
+    y: directionY >= 0 ? height : 0,
   };
 }
 
-function closestSimplexToOrigin(simplex: readonly SupportVertex[]): ClosestSimplex {
-  if (simplex.length === 1) {
-    return { closest: simplex[0].difference, overlap: false, simplex, weights: [1] };
+function extendClosestSimplex(state: ClosestSimplex, next: SupportVertex): void {
+  if (!state.second) {
+    setClosestSegmentSimplex(state, state.first, next);
+    return;
   }
-  if (simplex.length === 2) return closestSegmentSimplex(simplex[0], simplex[1]);
-  const triangle = simplex.slice(-3);
-  if (originInsideTriangle(triangle[0].difference, triangle[1].difference, triangle[2].difference)) {
-    return { closest: { x: 0, y: 0 }, overlap: true, simplex: triangle, weights: [0, 0, 0] };
+  const { first, second } = state;
+  if (originInsideTriangle(first.difference, second.difference, next.difference)) {
+    state.closestX = 0;
+    state.closestY = 0;
+    state.overlap = true;
+    return;
   }
-  const edges = [
-    closestSegmentSimplex(triangle[0], triangle[1]),
-    closestSegmentSimplex(triangle[1], triangle[2]),
-    closestSegmentSimplex(triangle[2], triangle[0]),
-  ];
-  return edges.reduce((best, candidate) =>
-    dotPoint(candidate.closest, candidate.closest) < dotPoint(best.closest, best.closest) - 1e-16 ? candidate : best,
-  );
+  const firstSecondRatio = getClosestSegmentRatio(first, second);
+  let bestDistance = getSegmentDistanceSquared(first, second, firstSecondRatio);
+  let bestFirst = first;
+  let bestSecond = second;
+  let bestRatio = firstSecondRatio;
+  const secondNextRatio = getClosestSegmentRatio(second, next);
+  let candidateDistance = getSegmentDistanceSquared(second, next, secondNextRatio);
+  if (candidateDistance < bestDistance - 1e-16) {
+    bestDistance = candidateDistance;
+    bestFirst = second;
+    bestSecond = next;
+    bestRatio = secondNextRatio;
+  }
+  const nextFirstRatio = getClosestSegmentRatio(next, first);
+  candidateDistance = getSegmentDistanceSquared(next, first, nextFirstRatio);
+  if (candidateDistance < bestDistance - 1e-16) {
+    bestFirst = next;
+    bestSecond = first;
+    bestRatio = nextFirstRatio;
+  }
+  setClosestSegmentSimplex(state, bestFirst, bestSecond, bestRatio);
 }
 
-function closestSegmentSimplex(first: SupportVertex, second: SupportVertex): ClosestSimplex {
-  const edge = {
-    x: second.difference.x - first.difference.x,
-    y: second.difference.y - first.difference.y,
-  };
-  const size = dotPoint(edge, edge);
-  const ratio = size <= 1e-24
+function getClosestSegmentRatio(first: SupportVertex, second: SupportVertex): number {
+  const edgeX = second.difference.x - first.difference.x;
+  const edgeY = second.difference.y - first.difference.y;
+  const size = edgeX * edgeX + edgeY * edgeY;
+  return size <= 1e-24
     ? 0
-    : Math.max(0, Math.min(1, -dotPoint(first.difference, edge) / size));
-  if (ratio <= 1e-14) return { closest: first.difference, overlap: false, simplex: [first], weights: [1] };
-  if (ratio >= 1 - 1e-14) return { closest: second.difference, overlap: false, simplex: [second], weights: [1] };
-  return {
-    closest: {
-      x: first.difference.x + edge.x * ratio,
-      y: first.difference.y + edge.y * ratio,
-    },
-    overlap: false,
-    simplex: [first, second],
-    weights: [1 - ratio, ratio],
-  };
+    : Math.max(0, Math.min(1, -(first.difference.x * edgeX + first.difference.y * edgeY) / size));
+}
+
+function getSegmentDistanceSquared(first: SupportVertex, second: SupportVertex, ratio: number): number {
+  const closestX = first.difference.x + (second.difference.x - first.difference.x) * ratio;
+  const closestY = first.difference.y + (second.difference.y - first.difference.y) * ratio;
+  return closestX * closestX + closestY * closestY;
+}
+
+function setClosestSegmentSimplex(
+  state: ClosestSimplex,
+  first: SupportVertex,
+  second: SupportVertex,
+  ratio = getClosestSegmentRatio(first, second),
+): void {
+  state.overlap = false;
+  if (ratio <= 1e-14) {
+    state.closestX = first.difference.x;
+    state.closestY = first.difference.y;
+    state.first = first;
+    state.firstWeight = 1;
+    state.second = null;
+    state.secondWeight = 0;
+    return;
+  }
+  if (ratio >= 1 - 1e-14) {
+    state.closestX = second.difference.x;
+    state.closestY = second.difference.y;
+    state.first = second;
+    state.firstWeight = 1;
+    state.second = null;
+    state.secondWeight = 0;
+    return;
+  }
+  state.closestX = first.difference.x + (second.difference.x - first.difference.x) * ratio;
+  state.closestY = first.difference.y + (second.difference.y - first.difference.y) * ratio;
+  state.first = first;
+  state.firstWeight = 1 - ratio;
+  state.second = second;
+  state.secondWeight = ratio;
 }
 
 function originInsideTriangle(first: CanvasPoint, second: CanvasPoint, third: CanvasPoint): boolean {
-  const firstCross = crossPoint(
-    { x: second.x - first.x, y: second.y - first.y },
-    { x: -first.x, y: -first.y },
-  );
-  const secondCross = crossPoint(
-    { x: third.x - second.x, y: third.y - second.y },
-    { x: -second.x, y: -second.y },
-  );
-  const thirdCross = crossPoint(
-    { x: first.x - third.x, y: first.y - third.y },
-    { x: -third.x, y: -third.y },
-  );
+  const firstCross = (second.x - first.x) * -first.y - (second.y - first.y) * -first.x;
+  const secondCross = (third.x - second.x) * -second.y - (third.y - second.y) * -second.x;
+  const thirdCross = (first.x - third.x) * -third.y - (first.y - third.y) * -third.x;
   return (firstCross >= -1e-12 && secondCross >= -1e-12 && thirdCross >= -1e-12)
     || (firstCross <= 1e-12 && secondCross <= 1e-12 && thirdCross <= 1e-12);
 }
 
 function witnessPoints(state: ClosestSimplex): Readonly<{ start: CanvasPoint; end: CanvasPoint }> | null {
-  if (state.overlap || state.simplex.length !== state.weights.length) return null;
-  const result = state.simplex.reduce((points, vertex, index) => ({
-    start: {
-      x: points.start.x + vertex.start.x * state.weights[index],
-      y: points.start.y + vertex.start.y * state.weights[index],
-    },
-    end: {
-      x: points.end.x + vertex.end.x * state.weights[index],
-      y: points.end.y + vertex.end.y * state.weights[index],
-    },
-  }), { start: { x: 0, y: 0 }, end: { x: 0, y: 0 } });
+  if (state.overlap) return null;
+  let startX = state.first.start.x * state.firstWeight;
+  let startY = state.first.start.y * state.firstWeight;
+  let endX = state.first.end.x * state.firstWeight;
+  let endY = state.first.end.y * state.firstWeight;
+  if (state.second) {
+    startX += state.second.start.x * state.secondWeight;
+    startY += state.second.start.y * state.secondWeight;
+    endX += state.second.end.x * state.secondWeight;
+    endY += state.second.end.y * state.secondWeight;
+  }
+  const result = { start: { x: startX, y: startY }, end: { x: endX, y: endY } };
   return isSafeResolvedPoint(result.start) && isSafeResolvedPoint(result.end) ? result : null;
 }
 
@@ -631,14 +769,6 @@ function applyEndpointClearance(
     y: cleanCoordinate(point.y + outwardDirection.y * clearance),
   };
   return isSafeResolvedPoint(cleared) ? cleared : null;
-}
-
-function dotPoint(first: CanvasPoint, second: CanvasPoint): number {
-  return first.x * second.x + first.y * second.y;
-}
-
-function crossPoint(first: CanvasPoint, second: CanvasPoint): number {
-  return first.x * second.y - first.y * second.x;
 }
 
 function getEndpointReferencePoint(

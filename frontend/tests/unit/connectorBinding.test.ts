@@ -9,6 +9,7 @@ import {
   getConnectorCandidateAnnouncement,
   getConnectorCandidateAnnouncementKey,
   getConnectorGeometryCacheDiagnostics,
+  getConnectorGjkDiagnostics,
   getDefaultKeyboardArrowEndpoints,
   getConnectorAuthoringCandidate,
   getNearbyBindableTargets,
@@ -20,6 +21,7 @@ import {
   resolveConnectorEndpoint,
   resolveConnectorPoints,
   resetConnectorGeometryCacheDiagnostics,
+  resetConnectorGjkDiagnostics,
   snapConnectorEndpoint,
   snapConnectorPointToAngle,
 } from "../../src/canvas/model/connectorBinding";
@@ -237,6 +239,69 @@ describe("connector shape binding", () => {
     const points = resolveConnectorPoints(connector, { [first.id]: first, [second.id]: second })!;
     expect(Math.hypot(points.end.x - points.start.x, points.end.y - points.start.y)).toBeCloseTo(2.24919419, 7);
     expect(Math.hypot(points.end.x - points.start.x, points.end.y - points.start.y)).toBeLessThan(3.2793933);
+  });
+
+  it("keeps an adversarial mixed rotated corpus below the GJK iteration cap", () => {
+    const kinds = ["rectangle", "ellipse", "diamond", "text"] as const;
+    resetConnectorGjkDiagnostics();
+    for (let index = 0; index < 1_024; index += 1) {
+      const firstKind = kinds[index % kinds.length];
+      const secondKind = kinds[(index * 7 + 1) % kinds.length];
+      const first = firstKind === "text"
+        ? text({
+          height: 18 + index % 83,
+          id: `gjk-first-${index}`,
+          rotation: (index * 47) % 360 - 180,
+          width: 30 + index % 211,
+          x: index % 19,
+          y: index % 23,
+        })
+        : shape(firstKind, {
+          height: 18 + index % 83,
+          id: `gjk-first-${index}`,
+          rotation: (index * 47) % 360 - 180,
+          style: { ...style, roundness: (index % 101) / 100 },
+          width: 30 + index % 211,
+          x: index % 19,
+          y: index % 23,
+        });
+      const second = secondKind === "text"
+        ? text({
+          height: 22 + index % 97,
+          id: `gjk-second-${index}`,
+          rotation: (index * 83) % 360 - 180,
+          width: 35 + index % 197,
+          x: 420 + index % 127,
+          y: 160 + index % 131,
+        })
+        : shape(secondKind, {
+          height: 22 + index % 97,
+          id: `gjk-second-${index}`,
+          rotation: (index * 83) % 360 - 180,
+          style: { ...style, roundness: ((index * 13) % 101) / 100 },
+          width: 35 + index % 197,
+          x: 420 + index % 127,
+          y: 160 + index % 131,
+        });
+      const connector = { ...arrow(
+        { kind: "element", targetElementId: first.id, gap: index % 7 },
+        { kind: "element", targetElementId: second.id, gap: index % 11 },
+      ), id: `gjk-connector-${index}` };
+      expect(resolveConnectorPoints(connector, { [first.id]: first, [second.id]: second })).not.toBeNull();
+    }
+    const diagnostics = getConnectorGjkDiagnostics();
+    let cumulative = 0;
+    let p99Iterations = 0;
+    for (let iterations = 0; iterations < diagnostics.histogram.length; iterations += 1) {
+      cumulative += diagnostics.histogram[iterations];
+      if (cumulative >= diagnostics.resolutions * 0.99) {
+        p99Iterations = iterations;
+        break;
+      }
+    }
+    expect(diagnostics.resolutions).toBe(1_024);
+    expect(diagnostics.capHits).toBe(0);
+    expect(p99Iterations).toBeLessThan(64);
   });
 
   it("keeps the rendered destination arrow polygon outside rotated visible target strokes", () => {

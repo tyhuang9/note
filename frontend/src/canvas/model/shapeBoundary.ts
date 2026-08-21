@@ -8,6 +8,95 @@ const ROOT_TOLERANCE = 1e-10;
 /** Fixed global bracket count; each bracket uses at most 52 bisection steps. */
 export const ELLIPSE_STATIONARY_BRACKET_COUNT = 64;
 
+export type ShapeSupportDescriptor = Readonly<
+  | { kind: "ellipse"; radiusX: number; radiusY: number }
+  | { kind: "segments"; values: Float64Array }
+>;
+
+/** Precomputes the immutable scalar support data used by the connector GJK loop. */
+export function createShapeSupportDescriptor(
+  shape: ShapeBoundaryKind,
+  width: number,
+  height: number,
+  roundness: number,
+): ShapeSupportDescriptor | null {
+  if (!(width > 0 && height > 0)) return null;
+  if (shape === "ellipse") return { kind: "ellipse", radiusX: width / 2, radiusY: height / 2 };
+  const segments = boundarySegments(shape, width, height, roundness);
+  const values = new Float64Array(segments.length * 7);
+  segments.forEach((segment, index) => {
+    const offset = index * 7;
+    values[offset] = segment.kind === "quadratic" ? 1 : 0;
+    values[offset + 1] = segment.start.x;
+    values[offset + 2] = segment.start.y;
+    values[offset + 3] = segment.kind === "quadratic" ? segment.control.x : 0;
+    values[offset + 4] = segment.kind === "quadratic" ? segment.control.y : 0;
+    values[offset + 5] = segment.end.x;
+    values[offset + 6] = segment.end.y;
+  });
+  return { kind: "segments", values };
+}
+
+/** Allocation-bounded support lookup over a precomputed descriptor. */
+export function getShapeSupportPointFromDescriptor(
+  descriptor: ShapeSupportDescriptor,
+  directionX: number,
+  directionY: number,
+): CanvasPoint | null {
+  if (!Number.isFinite(directionX) || !Number.isFinite(directionY)) return null;
+  if (descriptor.kind === "ellipse") {
+    const denominator = Math.hypot(descriptor.radiusX * directionX, descriptor.radiusY * directionY);
+    if (denominator <= 1e-12) return { x: descriptor.radiusX, y: descriptor.radiusY };
+    return {
+      x: descriptor.radiusX + descriptor.radiusX * descriptor.radiusX * directionX / denominator,
+      y: descriptor.radiusY + descriptor.radiusY * descriptor.radiusY * directionY / denominator,
+    };
+  }
+
+  let bestX = 0;
+  let bestY = 0;
+  let bestProjection = Number.NEGATIVE_INFINITY;
+  for (let offset = 0; offset < descriptor.values.length; offset += 7) {
+    const startX = descriptor.values[offset + 1];
+    const startY = descriptor.values[offset + 2];
+    const endX = descriptor.values[offset + 5];
+    const endY = descriptor.values[offset + 6];
+    const startProjection = startX * directionX + startY * directionY;
+    if (startProjection > bestProjection + 1e-12) {
+      bestX = startX;
+      bestY = startY;
+      bestProjection = startProjection;
+    }
+    const endProjection = endX * directionX + endY * directionY;
+    if (endProjection > bestProjection + 1e-12) {
+      bestX = endX;
+      bestY = endY;
+      bestProjection = endProjection;
+    }
+    if (descriptor.values[offset] !== 1) continue;
+    const controlX = descriptor.values[offset + 3];
+    const controlY = descriptor.values[offset + 4];
+    const coefficientA = (startX - 2 * controlX + endX) * directionX
+      + (startY - 2 * controlY + endY) * directionY;
+    if (coefficientA >= -1e-12) continue;
+    const coefficientB = 2 * (
+      (controlX - startX) * directionX + (controlY - startY) * directionY
+    );
+    const ratio = -coefficientB / (2 * coefficientA);
+    if (ratio <= 0 || ratio >= 1) continue;
+    const reverse = 1 - ratio;
+    const candidateX = reverse * reverse * startX + 2 * reverse * ratio * controlX + ratio * ratio * endX;
+    const candidateY = reverse * reverse * startY + 2 * reverse * ratio * controlY + ratio * ratio * endY;
+    const candidateProjection = candidateX * directionX + candidateY * directionY;
+    if (candidateProjection > bestProjection + 1e-12) {
+      bestX = candidateX;
+      bestY = candidateY;
+      bestProjection = candidateProjection;
+    }
+  }
+  return bestProjection > Number.NEGATIVE_INFINITY ? { x: bestX, y: bestY } : null;
+}
+
 /** The clean intended shape boundary shared by painter and connector binding. */
 export function roundedRectanglePath(width: number, height: number, roundness: number): string {
   const safeWidth = Math.max(1, width);
@@ -74,43 +163,8 @@ export function getShapeSupportPoint(
   roundness: number,
   direction: CanvasPoint,
 ): CanvasPoint | null {
-  if (!(width > 0 && height > 0) || !Number.isFinite(direction.x) || !Number.isFinite(direction.y)) return null;
-  const center = { x: width / 2, y: height / 2 };
-  if (shape === "ellipse") {
-    const denominator = Math.hypot(center.x * direction.x, center.y * direction.y);
-    if (denominator <= 1e-12) return center;
-    return {
-      x: center.x + center.x * center.x * direction.x / denominator,
-      y: center.y + center.y * center.y * direction.y / denominator,
-    };
-  }
-  let best: CanvasPoint | null = null;
-  let bestProjection = Number.NEGATIVE_INFINITY;
-  const consider = (point: CanvasPoint) => {
-    const projection = dot(point, direction);
-    if (projection > bestProjection + 1e-12) {
-      best = point;
-      bestProjection = projection;
-    }
-  };
-  for (const segment of boundarySegments(shape, width, height, roundness)) {
-    consider(segment.start);
-    consider(segment.end);
-    if (segment.kind !== "quadratic") continue;
-    const coefficientA = dot({
-      x: segment.start.x - 2 * segment.control.x + segment.end.x,
-      y: segment.start.y - 2 * segment.control.y + segment.end.y,
-    }, direction);
-    const coefficientB = 2 * dot({
-      x: segment.control.x - segment.start.x,
-      y: segment.control.y - segment.start.y,
-    }, direction);
-    if (coefficientA < -1e-12) {
-      const ratio = -coefficientB / (2 * coefficientA);
-      if (ratio > 0 && ratio < 1) consider(quadraticPoint(segment.start, segment.control, segment.end, ratio));
-    }
-  }
-  return best;
+  const descriptor = createShapeSupportDescriptor(shape, width, height, roundness);
+  return descriptor ? getShapeSupportPointFromDescriptor(descriptor, direction.x, direction.y) : null;
 }
 
 /** Adaptive clean-boundary flattening used by independent geometry verification. */

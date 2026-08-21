@@ -11,6 +11,7 @@ import {
   getConnectorGeometryCacheDiagnostics,
   getConnectorGjkDiagnostics,
   getDefaultKeyboardArrowEndpoints,
+  getConnectorEndpointDetachPoint,
   getConnectorAuthoringCandidate,
   getNearbyBindableTargets,
   getNearestBindableBoundaryAnchor,
@@ -673,6 +674,31 @@ describe("connector shape binding", () => {
       x: (restored!.start.x + restored!.end.x) / 2,
       y: (restored!.start.y + restored!.end.y) / 2,
     }, 0, elementsById)).toBe(true);
+  });
+
+  it("detaches a suppressed endpoint beyond the overlapping objects instead of inside either fill", () => {
+    const first = shape("rectangle", { id: "first", x: 10, y: 20, rotation: 18 });
+    const overlapping = shape("ellipse", { id: "second", x: 40, y: 30, rotation: -21 });
+    const connector = arrow(
+      { kind: "element", targetElementId: first.id, gap: 0 },
+      { kind: "element", targetElementId: overlapping.id, gap: 0 },
+    );
+    const elementsById = { [first.id]: first, [overlapping.id]: overlapping };
+    const detachedPoint = getConnectorEndpointDetachPoint(connector, "start", elementsById);
+    expect(detachedPoint).not.toBeNull();
+    const detached = { ...connector, start: { kind: "free" as const, ...detachedPoint! } };
+    expect(resolveConnectorPoints(detached, elementsById)).not.toBeNull();
+    expect(canvasElementContainsPoint(first, detachedPoint!, 0, elementsById)).toBe(false);
+    expect(canvasElementContainsPoint(overlapping, detachedPoint!, 0, elementsById)).toBe(false);
+
+    const [, retained] = detachConnectorEndpointsForDeletedTargets(
+      [first, connector, overlapping],
+      new Set([first.id]),
+    );
+    expect(retained.type).toBe("connector");
+    if (retained.type !== "connector") throw new Error("Expected retained connector");
+    expect(retained.start.kind).toBe("free");
+    expect(resolveConnectorPoints(retained, { [overlapping.id]: overlapping })).not.toBeNull();
   });
 
   it("reuses paired geometry across consumers and invalidates immutable connector or target replacements", () => {

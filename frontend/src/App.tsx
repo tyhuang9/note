@@ -36,6 +36,11 @@ import { CanvasWorldLayer } from "./canvas/components/CanvasWorldLayer";
 import { InkElementView } from "./canvas/components/InkElementView";
 import { ConnectorElementView, ShapeElementView, type ShapeTextEditSession } from "./canvas/components/PrimitiveElementView";
 import { ConnectorBindingTargetHighlight } from "./canvas/components/ConnectorBindingTargetHighlight";
+import {
+  getSuppressedConnectorControlPlacement,
+  isCanonicalConnectorRouteSuppressed,
+  SuppressedConnectorControl,
+} from "./canvas/components/SuppressedConnectorControl";
 import { useCanvasInteraction, type ArrowAuthoringVisual } from "./canvas/interaction/useCanvasInteraction";
 import { cleanupMarquee } from "./canvas/interaction/marqueeCleanup";
 import { createLatestFrameQueue, type LatestFrameQueue } from "./canvas/interaction/latestFrame";
@@ -205,6 +210,7 @@ import {
   getConnectorCandidateAnnouncement,
   getConnectorCandidateAnnouncementKey,
   getDefaultKeyboardArrowEndpoints,
+  getConnectorEndpointDetachPoint,
   getConnectorAuthoringCandidate,
   isBindableElement,
   normalizeFreeConnectorEndpoint,
@@ -1416,6 +1422,10 @@ function App() {
   const connectorEndpointRetargetAnnouncementRef = useRef<string | null>(null);
   const connectorEndpointOriginFocusRef = useRef<HTMLButtonElement | null>(null);
   const connectorEndpointFocusReturnRafRef = useRef<number | null>(null);
+  const suppressedConnectorStatusRef = useRef<Readonly<{
+    pageId: string | null;
+    states: ReadonlyMap<string, string>;
+  }> | null>(null);
   const keyboardArrowCreationRef = useRef<() => boolean>(() => false);
   const keyboardArrowEndpointFocusRafRef = useRef<number | null>(null);
 
@@ -1859,6 +1869,42 @@ function App() {
     () => Object.fromEntries(renderedCanvasElements.map((element) => [element.id, element])),
     [renderedCanvasElements],
   );
+  const suppressedConnectorCandidates = useMemo(() => {
+    let arrowOrdinal = 0;
+    let lineOrdinal = 0;
+    return visibleCanvasElements.flatMap((element) => {
+      if (element.type !== "connector") return [];
+      const isArrow = element.style.endArrowhead === "arrow";
+      const ordinal = isArrow ? ++arrowOrdinal : ++lineOrdinal;
+      if (!isCanonicalConnectorRouteSuppressed(element, visibleCanvasElementsById)) return [];
+      const semanticLabel = element.semantic?.label?.trim();
+      return [{
+        connector: element,
+        label: semanticLabel || `${isArrow ? "Arrow" : "Line"} connector ${ordinal}`,
+      }];
+    });
+  }, [visibleCanvasElements, visibleCanvasElementsById]);
+  const suppressedConnectorControls = useMemo(() => (
+    suppressedConnectorCandidates.flatMap(({ connector, label }) => {
+      const placement = getSuppressedConnectorControlPlacement(
+        connector,
+        visibleCanvasElementsById,
+        canvasSize,
+        livePanOffset,
+        zoomLevel,
+        isSearchOpen,
+      );
+      if (!placement) return [];
+      return [{ connector, label, placement }];
+    })
+  ), [
+    canvasSize,
+    isSearchOpen,
+    livePanOffset,
+    suppressedConnectorCandidates,
+    visibleCanvasElementsById,
+    zoomLevel,
+  ]);
   const offscreenGroups = useMemo<OffscreenGroup[]>(() => {
     if (!canvasViewport || visibleBlocks.length === 0) {
       return [];
@@ -1881,6 +1927,34 @@ function App() {
       count,
     }));
   }, [canvasViewport, visibleBlocks]);
+  useEffect(() => {
+    const currentStates = new Map(
+      suppressedConnectorCandidates.map(({ connector, label }) => [connector.id, label]),
+    );
+    const previous = suppressedConnectorStatusRef.current;
+    const currentElementIds = new Set(visibleCanvasElements.map((element) => element.id));
+    const announcements: string[] = [];
+
+    if (!previous || previous.pageId !== selectedPageId) {
+      for (const label of currentStates.values()) {
+        announcements.push(`${label} hidden because its bound objects overlap. Use its visible marker to manage endpoints.`);
+      }
+    } else {
+      for (const [connectorId, label] of currentStates) {
+        if (!previous.states.has(connectorId)) {
+          announcements.push(`${label} hidden because its bound objects overlap. Use its visible marker to manage endpoints.`);
+        }
+      }
+      for (const [connectorId, label] of previous.states) {
+        if (!currentStates.has(connectorId) && currentElementIds.has(connectorId)) {
+          announcements.push(`${label} restored. Its route is visible again.`);
+        }
+      }
+    }
+
+    suppressedConnectorStatusRef.current = { pageId: selectedPageId, states: currentStates };
+    if (announcements.length > 0) setConnectorBindingAnnouncement(announcements.join(" "));
+  }, [selectedPageId, suppressedConnectorCandidates, visibleCanvasElements]);
   const activeLlamaHarnessAgents = useMemo(
     () => llamaHarnessCapabilities?.allowedAgents ?? llamaHarnessAgents,
     [llamaHarnessAgents, llamaHarnessCapabilities],
@@ -3502,7 +3576,14 @@ function App() {
       // burst. The ref is set synchronously by the opener and remains the
       // authoritative modal state until close, rather than relying on the
       // current active element to suppress canvas shortcuts.
-      if (connectorEndpointChooserRef.current !== null) return;
+      if (connectorEndpointChooserRef.current !== null) {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          closeConnectorEndpointChooser();
+        }
+        return;
+      }
       if (event.target instanceof Element && event.target.closest(".connector-endpoint-chooser")) {
         return;
       }
@@ -7397,7 +7478,7 @@ function App() {
   }
 
   function closeConnectorEndpointChooser() {
-    const endpoint = connectorEndpointChooser?.endpoint;
+    const endpoint = connectorEndpointChooserRef.current?.endpoint ?? connectorEndpointChooser?.endpoint;
     const origin = connectorEndpointOriginFocusRef.current;
     connectorEndpointOriginFocusRef.current = null;
     connectorEndpointChooserRef.current = null;
@@ -7459,12 +7540,7 @@ function App() {
       return;
     }
     const elementsById = Object.fromEntries(dataRef.current.elements.map((element) => [element.id, element]));
-    const points = resolveConnectorPoints(connector, elementsById);
-    const target = elementsById[current.targetElementId];
-    const resolved = points?.[chooser.endpoint]
-      ?? (isBindableElement(target)
-        ? { x: target.x + target.width / 2, y: target.y + target.height / 2 }
-        : null);
+    const resolved = getConnectorEndpointDetachPoint(connector, chooser.endpoint, elementsById);
     if (!resolved) {
       setConnectorBindingAnnouncement(`Could not detach ${chooser.endpoint} endpoint because its target is unavailable.`);
       return;
@@ -8775,7 +8851,28 @@ function App() {
                 y: panOffset.y + bounds.y * zoomLevel - framePadding,
               };
             })()}
-          />
+          >
+            {suppressedConnectorControls.map(({ connector, label, placement }) => (
+              <SuppressedConnectorControl
+                connectorId={connector.id}
+                isLocked={connector.locked}
+                isSelected={selectedBlockIds.length === 1 && selectedBlockIds[0] === connector.id}
+                key={connector.id}
+                label={label}
+                left={placement.left}
+                onDelete={() => {
+                  if (!deleteBlocks([connector.id])) return;
+                  setConnectorBindingAnnouncement(`Deleted ${label}. Undo is available.`);
+                  setActiveMode("canvas");
+                  window.requestAnimationFrame(() => canvasRef.current?.focus({ preventScroll: true }));
+                }}
+                onManageEndpoint={(endpoint, origin) => openConnectorEndpointChooser(endpoint, origin)}
+                onSelect={() => selectBlock(connector.id)}
+                side={placement.side}
+                top={placement.top}
+              />
+            ))}
+          </CanvasInteractionOverlay>
           {connectorEndpointChooser && (() => {
             const connector = visibleCanvasElements.find((element): element is ConnectorElement =>
               element.id === selectedBlockIds[0] && element.type === "connector" && element.style.endArrowhead === "arrow",
@@ -8800,7 +8897,7 @@ function App() {
               />
             );
           })()}
-          <div aria-live="polite" className="canvas-accessibility-status" role="status">
+          <div aria-atomic="true" aria-live="polite" className="canvas-accessibility-status" role="status">
             {connectorBindingAnnouncement}
           </div>
           {shouldShowStarterShortcuts ? (

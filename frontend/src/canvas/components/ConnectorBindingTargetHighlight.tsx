@@ -16,6 +16,15 @@ export function ConnectorBindingTargetHighlight({
     : target.type === "shape" && target.shape === "diamond"
       ? roundedDiamondPath(target.width, target.height)
       : null;
+  const renderBoundary = (className: string) => (
+    target.type === "shape" && target.shape === "ellipse" ? (
+      <ellipse className={className} cx={target.width / 2} cy={target.height / 2} rx={target.width / 2} ry={target.height / 2} />
+    ) : path ? (
+      <path className={className} d={path} />
+    ) : (
+      <rect className={className} height={target.height} width={target.width} x="0" y="0" />
+    )
+  );
 
   return (
     <svg
@@ -32,13 +41,8 @@ export function ConnectorBindingTargetHighlight({
       viewBox={`0 0 ${target.width} ${target.height}`}
       width={target.width}
     >
-      {target.type === "shape" && target.shape === "ellipse" ? (
-        <ellipse cx={target.width / 2} cy={target.height / 2} rx={target.width / 2} ry={target.height / 2} />
-      ) : path ? (
-        <path d={path} />
-      ) : (
-        <rect height={target.height} width={target.width} x="0" y="0" />
-      )}
+      {renderBoundary("connector-binding-target-halo-outer")}
+      {renderBoundary("connector-binding-target-halo-inner")}
     </svg>
   );
 }

@@ -40,7 +40,9 @@ describe("ConnectorBindingTargetHighlight", () => {
     expect(markup).toContain('data-connector-binding-state="snapped"');
     expect(markup).toContain('viewBox="0 0 140 80"');
     expect(markup).toContain('transform:rotate(27deg)');
-    expect(markup).toContain("<path");
+    expect(markup.match(/<path/g)).toHaveLength(2);
+    expect(markup).toContain('class="connector-binding-target-halo-outer"');
+    expect(markup).toContain('class="connector-binding-target-halo-inner"');
     expect(markup).not.toContain("connector-binding-anchor");
   });
 
@@ -64,6 +66,8 @@ describe("ConnectorBindingTargetHighlight", () => {
     };
     const markup = renderToStaticMarkup(createElement(ConnectorBindingTargetHighlight, { target }));
     expect(markup).toContain('data-connector-binding-state="near"');
-    expect(markup).toContain('<rect height="60" width="200" x="0" y="0"></rect>');
+    expect(markup.match(/<rect/g)).toHaveLength(2);
+    expect(markup).toContain('class="connector-binding-target-halo-outer" height="60" width="200" x="0" y="0"');
+    expect(markup).toContain('class="connector-binding-target-halo-inner" height="60" width="200" x="0" y="0"');
   });
 });

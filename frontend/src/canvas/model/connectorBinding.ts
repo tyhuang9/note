@@ -450,6 +450,66 @@ export function snapConnectorPointToAngle(start: CanvasPoint, point: CanvasPoint
 }
 
 /**
+ * Resolves a bound endpoint for detachment. Suppressed canonical pairs have no
+ * visible witness point, so place the free endpoint beyond a shared support
+ * plane instead of at a target center that may remain inside the other object.
+ */
+export function getConnectorEndpointDetachPoint(
+  connector: ConnectorElement,
+  endpointName: "start" | "end",
+  elementsById: Readonly<Record<ElementId, CanvasElement>>,
+): CanvasPoint | null {
+  const resolved = resolveConnectorPoints(connector, elementsById)?.[endpointName];
+  if (resolved) return resolved;
+  const endpoint = connector[endpointName];
+  if (endpoint.kind === "free") return normalizeFreeConnectorEndpoint(endpoint);
+  if (endpoint.kind !== "element") return null;
+  const target = elementsById[endpoint.targetElementId];
+  if (!isBindableElement(target) || target.pageId !== connector.pageId) return null;
+  if (endpoint.anchor) return resolveConnectorEndpoint(endpoint, elementsById, connector.pageId);
+
+  const oppositeName = endpointName === "start" ? "end" : "start";
+  const opposite = connector[oppositeName];
+  const oppositeTarget = opposite.kind === "element"
+    ? elementsById[opposite.targetElementId]
+    : undefined;
+  const targetCenter = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+  const oppositeCenter = isBindableElement(oppositeTarget)
+    ? { x: oppositeTarget.x + oppositeTarget.width / 2, y: oppositeTarget.y + oppositeTarget.height / 2 }
+    : opposite.kind === "free"
+      ? opposite
+      : null;
+  let direction = oppositeCenter
+    ? { x: targetCenter.x - oppositeCenter.x, y: targetCenter.y - oppositeCenter.y }
+    : endpointName === "start" ? { x: -1, y: 0 } : { x: 1, y: 0 };
+  if (Math.hypot(direction.x, direction.y) <= 1e-10) {
+    const fallback = deterministicCoincidentDirection(connector);
+    direction = endpointName === "start"
+      ? { x: -fallback.x, y: -fallback.y }
+      : fallback;
+  }
+  const length = Math.hypot(direction.x, direction.y);
+  if (!Number.isFinite(length) || length <= 0) return null;
+  const unit = { x: direction.x / length, y: direction.y / length };
+  const endpointSource = getEndpointSupportSource(endpoint, elementsById, connector.pageId);
+  const oppositeSource = getEndpointSupportSource(opposite, elementsById, connector.pageId);
+  const endpointSupport = endpointSource ? getEndpointSupportPoint(endpointSource, unit.x, unit.y) : null;
+  const oppositeSupport = oppositeSource ? getEndpointSupportPoint(oppositeSource, unit.x, unit.y) : null;
+  const support = endpointSupport && oppositeSupport
+    ? endpointSupport.x * unit.x + endpointSupport.y * unit.y
+        >= oppositeSupport.x * unit.x + oppositeSupport.y * unit.y
+      ? endpointSupport
+      : oppositeSupport
+    : endpointSupport ?? oppositeSupport ?? targetCenter;
+  const targetOutline = target.type === "shape" ? target.style.strokeWidth / 2 : 0;
+  const clearance = Math.max(8, endpoint.gap + targetOutline + connector.style.strokeWidth / 2 + 4);
+  return normalizeFreeConnectorEndpoint({
+    x: support.x + unit.x * clearance,
+    y: support.y + unit.y * clearance,
+  });
+}
+
+/**
  * Converts only endpoints whose live target is being removed. The caller uses
  * this before filtering targets so the final free coordinate is exact and the
  * entire delete remains one history/persistence transaction.
@@ -472,8 +532,20 @@ export function detachConnectorEndpointsForDeletedTargets(
   return elements.map((element) => {
     if (element.type !== "connector" || deletedIds.has(element.id)) return element;
     const points = resolveConnectorPoints(element, elementsById);
-    const start = detach(element.start, points?.start ?? null);
-    const end = detach(element.end, points?.end ?? null);
+    const start = detach(
+      element.start,
+      points?.start
+        ?? (element.start.kind === "element" && deletedIds.has(element.start.targetElementId)
+          ? getConnectorEndpointDetachPoint(element, "start", elementsById)
+          : null),
+    );
+    const end = detach(
+      element.end,
+      points?.end
+        ?? (element.end.kind === "element" && deletedIds.has(element.end.targetElementId)
+          ? getConnectorEndpointDetachPoint(element, "end", elementsById)
+          : null),
+    );
     return start === element.start && end === element.end
       ? element
       : { ...element, start, end, updatedAt: Date.now() };

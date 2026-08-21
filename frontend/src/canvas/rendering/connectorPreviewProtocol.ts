@@ -23,6 +23,18 @@ export type ConnectorPreviewFrame = Readonly<{
   width: number;
 }>;
 
+export const MAX_CONNECTOR_PREVIEW_DIMENSION_PX = 8_192;
+export const MAX_CONNECTOR_PREVIEW_PIXELS = 16_777_216;
+export const MAX_CONNECTOR_PREVIEW_BYTES = 64 * 1_024 * 1_024;
+const CONNECTOR_PREVIEW_BYTES_PER_PIXEL = 4;
+const MAX_CONNECTOR_PREVIEW_COORDINATE = 1_000_000_000_000;
+
+export type ConnectorPreviewPixelSize = Readonly<{
+  height: number;
+  pixels: number;
+  width: number;
+}>;
+
 export function compareConnectorPreviewStack(
   left: ConnectorPreviewCommand,
   right: ConnectorPreviewCommand,
@@ -41,6 +53,79 @@ const generator = new RoughGenerator();
 const shaftData = new Float64Array(8);
 const arrowOutlineData = new Float64Array(24);
 const arrowFillData = new Float64Array(6);
+
+function isFinitePreviewCommand(command: ConnectorPreviewCommand): boolean {
+  return [
+    command.end.x,
+    command.end.y,
+    command.opacity,
+    command.roughness,
+    command.sceneIndex,
+    command.seed,
+    command.start.x,
+    command.start.y,
+    command.strokeWidth,
+    command.visualScale,
+    command.zIndex,
+  ].every(Number.isFinite)
+    && Math.abs(command.start.x) <= MAX_CONNECTOR_PREVIEW_COORDINATE
+    && Math.abs(command.start.y) <= MAX_CONNECTOR_PREVIEW_COORDINATE
+    && Math.abs(command.end.x) <= MAX_CONNECTOR_PREVIEW_COORDINATE
+    && Math.abs(command.end.y) <= MAX_CONNECTOR_PREVIEW_COORDINATE
+    && command.opacity >= 0
+    && command.opacity <= 1
+    && command.roughness >= 0
+    && command.strokeWidth >= 0
+    && command.visualScale > 0;
+}
+
+function checkedRasterSize(
+  width: number,
+  height: number,
+  devicePixelRatio: number,
+  round: (value: number) => number,
+): ConnectorPreviewPixelSize | null {
+  if (
+    !Number.isFinite(width)
+    || !Number.isFinite(height)
+    || !Number.isFinite(devicePixelRatio)
+    || width <= 0
+    || height <= 0
+    || devicePixelRatio <= 0
+  ) return null;
+  const pixelWidth = round(width * devicePixelRatio);
+  const pixelHeight = round(height * devicePixelRatio);
+  if (
+    !Number.isSafeInteger(pixelWidth)
+    || !Number.isSafeInteger(pixelHeight)
+    || pixelWidth < 1
+    || pixelHeight < 1
+    || pixelWidth > MAX_CONNECTOR_PREVIEW_DIMENSION_PX
+    || pixelHeight > MAX_CONNECTOR_PREVIEW_DIMENSION_PX
+    || pixelWidth > Math.floor(MAX_CONNECTOR_PREVIEW_PIXELS / pixelHeight)
+  ) return null;
+  const pixels = pixelWidth * pixelHeight;
+  if (pixels > Math.floor(MAX_CONNECTOR_PREVIEW_BYTES / CONNECTOR_PREVIEW_BYTES_PER_PIXEL)) {
+    return null;
+  }
+  return { height: pixelHeight, pixels, width: pixelWidth };
+}
+
+/** Validates every allocation-relevant field before an HTML or offscreen canvas is resized. */
+export function getConnectorPreviewFramePixelSize(
+  frame: ConnectorPreviewFrame,
+): ConnectorPreviewPixelSize | null {
+  if (!frame.commands.every(isFinitePreviewCommand)) return null;
+  return checkedRasterSize(frame.width, frame.height, frame.devicePixelRatio, Math.round);
+}
+
+/** Clears the currently allocated surface without deriving dimensions from an invalid frame. */
+export function clearConnectorPreviewContext(context: PreviewContext) {
+  context.save();
+  context.setTransform(1, 0, 0, 1, 0, 0);
+  context.clearRect(0, 0, context.canvas.width, context.canvas.height);
+  context.restore();
+}
 
 class RoughRandom {
   private seed: number;
@@ -211,26 +296,56 @@ export function generateConnectorPreviewDrawables(command: ConnectorPreviewComma
   return drawables;
 }
 
+type ClippedConnectorBounds = Readonly<{
+  bottom: number;
+  left: number;
+  right: number;
+  top: number;
+}>;
+
+function getClippedConnectorBounds(
+  frame: ConnectorPreviewFrame,
+  command: ConnectorPreviewCommand,
+): ClippedConnectorBounds | null {
+  const padding = Math.ceil(
+    16 * command.visualScale + command.strokeWidth * 4 + command.roughness * 4,
+  );
+  const unclippedLeft = Math.floor(Math.min(command.start.x, command.end.x) - padding);
+  const unclippedTop = Math.floor(Math.min(command.start.y, command.end.y) - padding);
+  const unclippedRight = Math.ceil(Math.max(command.start.x, command.end.x) + padding);
+  const unclippedBottom = Math.ceil(Math.max(command.start.y, command.end.y) + padding);
+  if (![unclippedLeft, unclippedTop, unclippedRight, unclippedBottom].every(Number.isFinite)) return null;
+  const left = Math.max(0, unclippedLeft);
+  const top = Math.max(0, unclippedTop);
+  const right = Math.min(frame.width, unclippedRight);
+  const bottom = Math.min(frame.height, unclippedBottom);
+  return right > left && bottom > top ? { bottom, left, right, top } : null;
+}
+
 /** Clears and paints a complete transform preview in stable scene stacking order. */
-export function paintConnectorPreviewFrame(context: PreviewContext, frame: ConnectorPreviewFrame) {
-  const pixelWidth = Math.max(1, Math.round(frame.width * frame.devicePixelRatio));
-  const pixelHeight = Math.max(1, Math.round(frame.height * frame.devicePixelRatio));
-  context.save();
-  context.setTransform(1, 0, 0, 1, 0, 0);
-  context.clearRect(0, 0, pixelWidth, pixelHeight);
-  context.restore();
+export function paintConnectorPreviewFrame(context: PreviewContext, frame: ConnectorPreviewFrame): boolean {
+  const size = getConnectorPreviewFramePixelSize(frame);
+  if (!size) {
+    clearConnectorPreviewContext(context);
+    return false;
+  }
+  clearConnectorPreviewContext(context);
   context.save();
   context.setTransform(frame.devicePixelRatio, 0, 0, frame.devicePixelRatio, 0, 0);
   context.lineCap = "round";
   context.lineJoin = "round";
   for (const command of frame.commands) {
+    if (command.opacity <= 0) continue;
+    const clippedBounds = getClippedConnectorBounds(frame, command);
+    if (!clippedBounds) continue;
     if (command.opacity >= 1) {
       paintExactConnectorPreview(context, command);
       continue;
     }
-    paintIsolatedConnector(context, frame, command);
+    paintIsolatedConnector(context, frame, command, clippedBounds);
   }
   context.restore();
+  return true;
 }
 
 let scratchFactory: (() => ConnectorPreviewScratch | null) | null = null;
@@ -246,33 +361,30 @@ function paintIsolatedConnector(
   target: PreviewContext,
   frame: ConnectorPreviewFrame,
   command: ConnectorPreviewCommand,
+  bounds: ClippedConnectorBounds,
 ) {
   scratch ??= scratchFactory?.() ?? null;
   if (!scratch) return;
-  const padding = Math.ceil(
-    16 * command.visualScale + command.strokeWidth * 4 + command.roughness * 4,
-  );
-  const left = Math.floor(Math.min(command.start.x, command.end.x) - padding);
-  const top = Math.floor(Math.min(command.start.y, command.end.y) - padding);
-  const width = Math.max(1, Math.ceil(Math.abs(command.end.x - command.start.x) + padding * 2));
-  const height = Math.max(1, Math.ceil(Math.abs(command.end.y - command.start.y) + padding * 2));
-  const pixelWidth = Math.max(1, Math.ceil(width * frame.devicePixelRatio));
-  const pixelHeight = Math.max(1, Math.ceil(height * frame.devicePixelRatio));
-  if (scratch.canvas.width < pixelWidth) scratch.canvas.width = pixelWidth;
-  if (scratch.canvas.height < pixelHeight) scratch.canvas.height = pixelHeight;
+  const width = bounds.right - bounds.left;
+  const height = bounds.bottom - bounds.top;
+  const size = checkedRasterSize(width, height, frame.devicePixelRatio, Math.ceil);
+  if (!size) return;
+  try {
+    if (scratch.canvas.width !== size.width) scratch.canvas.width = size.width;
+    if (scratch.canvas.height !== size.height) scratch.canvas.height = size.height;
+  } catch {
+    return;
+  }
   const context = scratch.context;
-  context.save();
-  context.setTransform(1, 0, 0, 1, 0, 0);
-  context.clearRect(0, 0, scratch.canvas.width, scratch.canvas.height);
-  context.restore();
+  clearConnectorPreviewContext(context);
   context.save();
   context.setTransform(
     frame.devicePixelRatio,
     0,
     0,
     frame.devicePixelRatio,
-    -left * frame.devicePixelRatio,
-    -top * frame.devicePixelRatio,
+    -bounds.left * frame.devicePixelRatio,
+    -bounds.top * frame.devicePixelRatio,
   );
   context.lineCap = "round";
   context.lineJoin = "round";
@@ -280,6 +392,16 @@ function paintIsolatedConnector(
   context.restore();
   target.save();
   target.globalAlpha = command.opacity;
-  target.drawImage(scratch.canvas, 0, 0, pixelWidth, pixelHeight, left, top, width, height);
+  target.drawImage(
+    scratch.canvas,
+    0,
+    0,
+    size.width,
+    size.height,
+    bounds.left,
+    bounds.top,
+    width,
+    height,
+  );
   target.restore();
 }

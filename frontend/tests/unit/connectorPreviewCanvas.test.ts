@@ -8,6 +8,8 @@ import {
 import {
   compareConnectorPreviewStack,
   generateConnectorPreviewDrawables,
+  getConnectorPreviewFramePixelSize,
+  MAX_CONNECTOR_PREVIEW_DIMENSION_PX,
   paintExactConnectorPreview,
   paintConnectorPreviewFrame,
   setConnectorPreviewScratchFactory,
@@ -133,6 +135,74 @@ describe("connector transform preview canvas", () => {
     expect(scratch.fills).toBeGreaterThan(0);
   });
 
+  it("clips translucent extreme spans to the visible viewport before scratch allocation", () => {
+    const target = new RecordingContext();
+    const scratch = new RecordingContext();
+    const scratchCanvas = { height: 1, width: 1 };
+    setConnectorPreviewScratchFactory(() => ({
+      canvas: scratchCanvas as unknown as OffscreenCanvas,
+      context: scratch as unknown as OffscreenCanvasRenderingContext2D,
+    }));
+    const painted = paintConnectorPreviewFrame(target as unknown as CanvasRenderingContext2D, {
+      commands: [{
+        ...command,
+        end: { x: 1_000_000_000, y: 100 },
+        opacity: 0.42,
+        start: { x: -1_000_000_000, y: 100 },
+      }],
+      devicePixelRatio: 2,
+      height: 200,
+      width: 300,
+    });
+    expect(painted).toBe(true);
+    expect(scratchCanvas.width).toBe(600);
+    expect(scratchCanvas.height).toBeLessThanOrEqual(400);
+    expect(target.lastDrawImageArguments?.slice(5)).toEqual([0, 58, 300, 84]);
+  });
+
+  it("skips fully offscreen mixed-opacity commands without creating scratch surfaces", () => {
+    const target = new RecordingContext();
+    let scratchCreations = 0;
+    setConnectorPreviewScratchFactory(() => {
+      scratchCreations += 1;
+      const context = new RecordingContext();
+      return {
+        canvas: { height: 1, width: 1 } as unknown as OffscreenCanvas,
+        context: context as unknown as OffscreenCanvasRenderingContext2D,
+      };
+    });
+    expect(paintConnectorPreviewFrame(target as unknown as CanvasRenderingContext2D, {
+      commands: [
+        { ...command, end: { x: 200, y: -1_000_000 }, opacity: 0.4, start: { x: 100, y: -1_000_000 } },
+        { ...command, end: { x: 200, y: 1_000_000 }, opacity: 1, start: { x: 100, y: 1_000_000 } },
+      ],
+      devicePixelRatio: 2,
+      height: 200,
+      width: 300,
+    })).toBe(true);
+    expect(scratchCreations).toBe(0);
+    expect(target.strokes).toBe(0);
+    expect(target.drawImages).toHaveLength(0);
+  });
+
+  it("rejects oversized or invalid frames before allocation and clears stale pixels", () => {
+    const target = new RecordingContext();
+    const oversized = {
+      commands: [command],
+      devicePixelRatio: 2,
+      height: 200,
+      width: MAX_CONNECTOR_PREVIEW_DIMENSION_PX,
+    };
+    expect(getConnectorPreviewFramePixelSize(oversized)).toBeNull();
+    expect(paintConnectorPreviewFrame(target as unknown as CanvasRenderingContext2D, oversized)).toBe(false);
+    expect(target.clears).toBe(1);
+    expect(getConnectorPreviewFramePixelSize({
+      ...oversized,
+      commands: [{ ...command, start: { x: Number.POSITIVE_INFINITY, y: 0 } }],
+      width: 300,
+    })).toBeNull();
+  });
+
   it("keeps at most one pending worker frame and sends only the latest", () => {
     const sent: number[] = [];
     const queue = createLatestWorkerFrameQueue<number>((value) => sent.push(value));
@@ -196,6 +266,8 @@ class FakeBitmap {
 class RecordingContext {
   canvas = { height: 400, width: 600 };
   drawImages: Array<{ alpha: number; arguments: number }> = [];
+  lastDrawImageArguments: unknown[] | null = null;
+  clears = 0;
   fills = 0;
   globalAlpha = 1;
   lineCap = "butt";
@@ -210,8 +282,11 @@ class RecordingContext {
 
   beginPath() {}
   bezierCurveTo(...data: number[]) { this.operations.push({ data, op: "bcurveTo" }); }
-  clearRect() {}
-  drawImage(...args: unknown[]) { this.drawImages.push({ alpha: this.globalAlpha, arguments: args.length }); }
+  clearRect() { this.clears += 1; }
+  drawImage(...args: unknown[]) {
+    this.lastDrawImageArguments = args;
+    this.drawImages.push({ alpha: this.globalAlpha, arguments: args.length });
+  }
   fill() { this.fills += 1; }
   lineTo(...data: number[]) { this.operations.push({ data, op: "lineTo" }); }
   moveTo(...data: number[]) {

@@ -124,6 +124,111 @@ test("rapid cancellation terminates both workers and removes every preview canva
   }
 });
 
+for (const rendererMode of ["worker", "fallback"] as const) {
+  test(`${rendererMode} renderer clips mixed-opacity extreme spans and drops oversized frames without stale pixels`, async ({ page }) => {
+    await installComparisonWorkspace(page, false);
+    await page.goto("/");
+    const result = await page.evaluate(async (mode) => {
+      if (mode === "fallback") {
+        Object.defineProperty(globalThis, "Worker", { configurable: true, value: undefined });
+      }
+      const module = await import("/src/canvas/rendering/connectorPreviewCanvas.ts");
+      const canvas = document.createElement("canvas");
+      canvas.style.height = "200px";
+      canvas.style.width = "300px";
+      document.body.append(canvas);
+      const renderer = new module.ConnectorPreviewCanvas(canvas);
+      const commands = Array.from({ length: 2_000 }, (_, index) => ({
+        end: {
+          x: index < 20 ? 1_000_000_000 : 1_000_000,
+          y: index < 20 ? 100 + index % 3 : 1_000_000 + index,
+        },
+        endArrowhead: index % 2 === 0 ? "arrow" as const : "none" as const,
+        opacity: index % 3 === 0 ? 0.42 : 1,
+        roughness: 1.2,
+        sceneIndex: index,
+        seed: index + 1,
+        start: {
+          x: index < 20 ? -1_000_000_000 : 999_000,
+          y: index < 20 ? 100 + index % 3 : 1_000_000 + index,
+        },
+        stroke: "rgba(32, 41, 54, 1)",
+        strokeStyle: index % 2 === 0 ? "dashed" as const : "solid" as const,
+        strokeWidth: 2,
+        visualScale: 1,
+        zIndex: index,
+      }));
+      const frame = { commands, devicePixelRatio: 4, height: 200, width: 300 };
+      const scheduling: number[] = [];
+      for (let iteration = 0; iteration < 5; iteration += 1) {
+        const presented = new Promise<void>((resolve, reject) => {
+          const timeout = window.setTimeout(() => reject(new Error("Preview frame timed out.")), 10_000);
+          canvas.addEventListener("connector-preview-presented", () => {
+            window.clearTimeout(timeout);
+            resolve();
+          }, { once: true });
+        });
+        const started = performance.now();
+        renderer.render(frame);
+        scheduling.push(performance.now() - started);
+        await presented;
+      }
+      scheduling.sort((left, right) => left - right);
+      const rendererBeforeDrop = canvas.dataset.previewRenderer;
+      const presentedBeforeDrop = canvas.dataset.presentedFrame;
+      renderer.render({ ...frame, width: 1_000_000_000 });
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("Preview canvas context was unavailable.");
+      const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+      let paintedAfterDrop = false;
+      for (let index = 3; index < pixels.length; index += 4) {
+        if (pixels[index] !== 0) {
+          paintedAfterDrop = true;
+          break;
+        }
+      }
+      const presentedAfterDrop = canvas.dataset.presentedFrame;
+      const nextValidPresented = new Promise<void>((resolve, reject) => {
+        const timeout = window.setTimeout(() => reject(new Error("Next valid preview frame timed out.")), 10_000);
+        canvas.addEventListener("connector-preview-presented", () => {
+          window.clearTimeout(timeout);
+          resolve();
+        }, { once: true });
+      });
+      renderer.render(frame);
+      await nextValidPresented;
+      const diagnostics = {
+        contextLost: context.isContextLost(),
+        droppedFrames: canvas.dataset.droppedFrames,
+        paintedAfterDrop,
+        pendingDepth: canvas.dataset.pendingDepth,
+        presentedAfterDrop,
+        presentedAfterNextValid: canvas.dataset.presentedFrame,
+        presentedBeforeDrop,
+        rendererAfterDrop: canvas.dataset.previewRenderer,
+        rendererBeforeDrop,
+        retainedBitmaps: canvas.dataset.retainedBitmaps,
+        scheduleP95: scheduling[4],
+      };
+      renderer.dispose();
+      return diagnostics;
+    }, rendererMode);
+
+    expect(result.rendererBeforeDrop).toBe(rendererMode === "worker" ? "two-worker" : "main-thread");
+    expect(result.rendererAfterDrop).toBe(result.rendererBeforeDrop);
+    expect(result.scheduleP95).toBeLessThanOrEqual(33.5);
+    expect(result.droppedFrames).toBe("1");
+    expect(result.presentedAfterDrop).toBe(result.presentedBeforeDrop);
+    expect(result.presentedAfterNextValid).not.toBe(result.presentedAfterDrop);
+    expect(result.pendingDepth).toBe("0");
+    expect(result.retainedBitmaps).toBe("0");
+    expect(result.paintedAfterDrop).toBe(false);
+    expect(result.contextLost).toBe(false);
+    await expect(page.locator("canvas[style*='200px']")).toHaveCount(0);
+  });
+}
+
 async function beginGroupDrag(page: Page, offset = 0) {
   const surface = page.getByRole("button", { name: "Move selected elements" });
   const bounds = await requiredBounds(surface, "selection move surface");

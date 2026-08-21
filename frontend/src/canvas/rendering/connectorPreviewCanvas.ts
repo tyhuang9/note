@@ -1,4 +1,6 @@
 import {
+  clearConnectorPreviewContext,
+  getConnectorPreviewFramePixelSize,
   paintConnectorPreviewFrame,
   setConnectorPreviewScratchFactory,
   type ConnectorPreviewFrame,
@@ -11,6 +13,12 @@ setConnectorPreviewScratchFactory(() => {
 });
 
 type WorkerFrame = Readonly<{ frame: ConnectorPreviewFrame; frameId: number }>;
+type WorkerResponse = Readonly<{
+  bitmap?: ImageBitmap;
+  frameId: number;
+  rangeIndex: number;
+  type: "dropped" | "rendered";
+}>;
 
 export type LatestWorkerFrameQueue<T> = Readonly<{
   cancel: () => void;
@@ -114,6 +122,10 @@ export class ConnectorPreviewCanvas {
 
   render(frame: ConnectorPreviewFrame) {
     if (this.disposed) return;
+    if (!getConnectorPreviewFramePixelSize(frame)) {
+      this.dropRequestedFrame();
+      return;
+    }
     this.lastFrame = frame;
     if (this.workers.length === 2 && this.queue) {
       this.queue.enqueue({ frame, frameId: ++this.frameId });
@@ -135,6 +147,8 @@ export class ConnectorPreviewCanvas {
   }
 
   private initialize() {
+    this.canvas.dataset.droppedFrames = "0";
+    this.canvas.dataset.pendingDepth = "0";
     this.canvas.dataset.retainedBitmaps = "0";
     if (typeof Worker !== "function" || typeof OffscreenCanvas !== "function") {
       this.context = this.canvas.getContext("2d");
@@ -149,33 +163,32 @@ export class ConnectorPreviewCanvas {
           name: `connector-preview-${rangeIndex}`,
           type: "module",
         });
-        worker.onmessage = (event: MessageEvent<{
-          bitmap: ImageBitmap;
-          frameId: number;
-          rangeIndex: number;
-          type: string;
-        }>) => this.receiveWorkerBitmap(event.data);
-        worker.onerror = () => this.activateFallback();
-        worker.onmessageerror = () => this.activateFallback();
+        worker.onmessage = (event: MessageEvent<WorkerResponse>) => this.receiveWorkerMessage(event.data);
+        worker.onerror = () => this.activateFallback(false);
+        worker.onmessageerror = () => this.activateFallback(false);
         this.workers.push(worker);
       }
       this.queue = createLatestWorkerFrameQueue((message) => this.sendWorkerFrame(message));
       this.canvas.dataset.previewRenderer = "two-worker";
     } catch {
-      this.activateFallback();
+      this.activateFallback(true);
     }
   }
 
-  private activateFallback() {
+  private activateFallback(retryLastFrame: boolean) {
     if (this.disposed || this.canvas.dataset.previewRenderer === "main-thread") return;
+    const fallbackFrame = retryLastFrame ? this.lastFrame : null;
     this.queue?.cancel();
     for (const worker of this.workers) worker.terminate();
     this.workers = [];
     this.queue = null;
     this.bitmapPair.close();
+    this.activeFrame = null;
+    this.activeFrameId = 0;
     this.context = this.canvas.getContext("2d");
     this.canvas.dataset.previewRenderer = "main-thread";
-    if (this.lastFrame) this.paintFallback(this.lastFrame);
+    if (fallbackFrame) this.paintFallback(fallbackFrame);
+    else this.clearSurface();
   }
 
   private sendWorkerFrame(message: WorkerFrame) {
@@ -198,22 +211,30 @@ export class ConnectorPreviewCanvas {
     }
   }
 
-  private receiveWorkerBitmap(message: {
-    bitmap: ImageBitmap;
-    frameId: number;
-    rangeIndex: number;
-    type: string;
-  }) {
+  private receiveWorkerMessage(message: WorkerResponse) {
+    if (message.type === "dropped") {
+      if (
+        !this.disposed
+        && message.frameId === this.activeFrameId
+        && (message.rangeIndex === 0 || message.rangeIndex === 1)
+      ) this.dropActiveWorkerFrame();
+      return;
+    }
+    const bitmap = message.bitmap;
+    if (!bitmap) {
+      if (message.frameId === this.activeFrameId) this.dropActiveWorkerFrame();
+      return;
+    }
     if (
       this.disposed ||
       message.type !== "rendered" ||
       message.frameId !== this.activeFrameId ||
       (message.rangeIndex !== 0 && message.rangeIndex !== 1)
     ) {
-      message.bitmap.close();
+      bitmap.close();
       return;
     }
-    const pair = this.bitmapPair.accept(message.frameId, message.rangeIndex, message.bitmap);
+    const pair = this.bitmapPair.accept(message.frameId, message.rangeIndex, bitmap);
     this.canvas.dataset.retainedBitmaps = `${this.bitmapPair.retainedCount()}`;
     if (!pair) return;
     const context = this.context;
@@ -229,12 +250,15 @@ export class ConnectorPreviewCanvas {
       this.queue?.complete();
       return;
     }
-    const pixelWidth = Math.max(1, Math.round(frame.width * frame.devicePixelRatio));
-    const pixelHeight = Math.max(1, Math.round(frame.height * frame.devicePixelRatio));
-    if (this.canvas.width !== pixelWidth) this.canvas.width = pixelWidth;
-    if (this.canvas.height !== pixelHeight) this.canvas.height = pixelHeight;
+    const size = getConnectorPreviewFramePixelSize(frame);
+    if (!size || !this.resizeCanvas(size.width, size.height)) {
+      pair[0].close();
+      pair[1].close();
+      this.dropActiveWorkerFrame();
+      return;
+    }
     context.setTransform(1, 0, 0, 1, 0, 0);
-    context.clearRect(0, 0, pixelWidth, pixelHeight);
+    context.clearRect(0, 0, size.width, size.height);
     context.drawImage(pair[0], 0, 0);
     context.drawImage(pair[1], 0, 0);
     pair[0].close();
@@ -252,13 +276,56 @@ export class ConnectorPreviewCanvas {
   private paintFallback(frame: ConnectorPreviewFrame) {
     const context = this.context;
     if (!context) return;
-    const pixelWidth = Math.max(1, Math.round(frame.width * frame.devicePixelRatio));
-    const pixelHeight = Math.max(1, Math.round(frame.height * frame.devicePixelRatio));
-    if (this.canvas.width !== pixelWidth) this.canvas.width = pixelWidth;
-    if (this.canvas.height !== pixelHeight) this.canvas.height = pixelHeight;
-    paintConnectorPreviewFrame(context, frame);
+    const size = getConnectorPreviewFramePixelSize(frame);
+    if (!size || !this.resizeCanvas(size.width, size.height) || !paintConnectorPreviewFrame(context, frame)) {
+      this.recordDroppedFrame();
+      this.clearSurface();
+      return;
+    }
     const frameId = ++this.frameId;
     this.canvas.dataset.presentedFrame = `${frameId}`;
     this.canvas.dispatchEvent(new CustomEvent("connector-preview-presented", { detail: { frameId } }));
+  }
+
+  private resizeCanvas(width: number, height: number) {
+    try {
+      if (this.canvas.width !== width) this.canvas.width = width;
+      if (this.canvas.height !== height) this.canvas.height = height;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private clearSurface() {
+    if (this.context) clearConnectorPreviewContext(this.context);
+  }
+
+  private recordDroppedFrame() {
+    const dropped = Number.parseInt(this.canvas.dataset.droppedFrames ?? "0", 10);
+    this.canvas.dataset.droppedFrames = `${Number.isFinite(dropped) ? dropped + 1 : 1}`;
+  }
+
+  private dropRequestedFrame() {
+    this.lastFrame = null;
+    this.queue?.cancel();
+    this.bitmapPair.close();
+    this.activeFrame = null;
+    this.activeFrameId = ++this.frameId;
+    this.canvas.dataset.pendingDepth = "0";
+    this.canvas.dataset.retainedBitmaps = "0";
+    this.recordDroppedFrame();
+    this.clearSurface();
+  }
+
+  private dropActiveWorkerFrame() {
+    this.bitmapPair.close();
+    this.activeFrame = null;
+    this.activeFrameId = 0;
+    this.canvas.dataset.retainedBitmaps = "0";
+    this.recordDroppedFrame();
+    this.clearSurface();
+    this.queue?.complete();
+    this.canvas.dataset.pendingDepth = `${this.queue?.pendingDepth() ?? 0}`;
   }
 }

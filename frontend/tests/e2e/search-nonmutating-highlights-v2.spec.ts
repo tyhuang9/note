@@ -347,6 +347,91 @@ test("search exposes keyboard focus, live status, contrast, and deterministic fo
   await expect(selectTool).toBeFocused();
 });
 
+test("search input preserves native editing chords and releases a held temporary Hand", async ({ page }) => {
+  await installSearchWorkspace(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+  const textControl = page
+    .locator('[data-canvas-element-id="text-rich"]')
+    .getByRole("button", { name: /Select and move text block/ });
+  await textControl.focus();
+  await textControl.press("Enter");
+  const canvas = page.getByRole("tabpanel");
+  await canvas.focus();
+  await page.waitForTimeout(700);
+  await resetPersistenceCounts(page);
+  const baselineJson = await workspaceJson(page);
+
+  await page.keyboard.down("Space");
+  await expect(canvas).toHaveAttribute("data-temporary-hand", "true");
+  await page.getByRole("button", { name: "Find in canvas" }).click();
+  const search = page.getByRole("textbox", { name: "Find in canvas" });
+  await expect(search).toBeFocused();
+  await page.keyboard.up("Space");
+  await expect(canvas).not.toHaveAttribute("data-temporary-hand");
+
+  const phrase = "alpha beta gamma";
+  await search.fill(phrase);
+  await search.evaluate((input) => input.setSelectionRange(input.value.length, input.value.length));
+  await page.keyboard.press("Control+ArrowLeft");
+  expect(await inputSelection(search)).toEqual({ end: 11, start: 11 });
+
+  await search.fill(phrase);
+  await search.evaluate((input) => input.setSelectionRange(input.value.length, input.value.length));
+  await page.keyboard.press("Control+Backspace");
+  await expect(search).toHaveValue("alpha beta ");
+
+  await search.fill(phrase);
+  await search.evaluate((input) => input.setSelectionRange(0, 0));
+  await page.keyboard.press("Control+Delete");
+  await expect(search).toHaveValue("beta gamma");
+
+  await search.fill("editable");
+  await page.keyboard.press("Control+a");
+  expect(await inputSelection(search)).toEqual({ end: 8, start: 0 });
+  await page.keyboard.press("Control+x");
+  await expect(search).toHaveValue("");
+  await page.keyboard.press("Control+z");
+  await expect(search).toHaveValue("editable");
+  await page.keyboard.press("Control+y");
+  await expect(search).toHaveValue("");
+  await page.keyboard.press("Control+z");
+  await expect(search).toHaveValue("editable");
+
+  expect(await search.evaluate((input) => {
+    const chords = [
+      { key: "ArrowLeft", metaKey: true },
+      { key: "Backspace", metaKey: true },
+      { key: "Delete", metaKey: true },
+      { altKey: true, key: "ArrowLeft" },
+      { altKey: true, key: "Backspace" },
+      { ctrlKey: true, key: "c" },
+      { ctrlKey: true, key: "v" },
+      { altKey: true, ctrlKey: true, key: "@" },
+    ];
+    return chords.map((init) => input.dispatchEvent(new KeyboardEvent("keydown", {
+      ...init,
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+    })));
+  })).toEqual(Array(8).fill(true));
+
+  if (await page.evaluate(() => /Mac/.test(navigator.platform))) {
+    await search.fill(phrase);
+    await search.evaluate((input) => input.setSelectionRange(input.value.length, input.value.length));
+    await page.keyboard.press("Alt+ArrowLeft");
+    expect((await inputSelection(search)).start).toBeLessThan(phrase.length);
+  }
+  await search.fill("");
+  await page.keyboard.insertText("€");
+  await expect(search).toHaveValue("€");
+  expect(await workspaceJson(page)).toBe(baselineJson);
+  expect(await persistenceCounts(page)).toEqual({ apply: 0, session: 0 });
+  await search.press("Escape");
+  await expect(canvas).not.toHaveAttribute("data-temporary-hand");
+});
+
 for (const focusTarget of ["input", "previous", "next", "close"] as const) {
   test(`search ${focusTarget} focus blocks document mutation shortcuts and paste`, async ({ page }) => {
     await installSearchWorkspace(page);
@@ -432,6 +517,88 @@ for (const focusTarget of ["input", "previous", "next", "close"] as const) {
     await page.keyboard.press("Control+z");
     await expect.poll(() => elementX(page, "text-rich")).toBe(320);
     await expect.poll(async () => (await persistenceCounts(page)).apply).toBe(1);
+  });
+}
+
+for (const focusTarget of ["input", "previous", "next", "close"] as const) {
+  test(`search ${focusTarget} Escape preserves a pending two-click Arrow`, async ({ page }) => {
+    await installSearchWorkspace(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/");
+    const canvas = page.getByRole("tabpanel");
+    const canvasBounds = await canvas.boundingBox();
+    if (!canvasBounds) throw new Error("Canvas bounds were unavailable");
+    await page.getByRole("button", { name: "Arrow (A / 5)" }).click();
+    await resetPersistenceCounts(page);
+    const baselineJson = await workspaceJson(page);
+    const existingConnectorIds = new Set(
+      (await workspaceElements(page))
+        .filter((element) => element.type === "connector")
+        .map((element) => String(element.id)),
+    );
+    const firstPoint = {
+      x: canvasBounds.x + canvasBounds.width - 180,
+      y: canvasBounds.y + 110,
+    };
+    const secondPoint = {
+      x: canvasBounds.x + canvasBounds.width - 110,
+      y: canvasBounds.y + 290,
+    };
+    await page.mouse.click(firstPoint.x, firstPoint.y);
+    const preview = page.locator(".arrow-authoring-preview");
+    await expect(preview).toHaveCount(1);
+    const previewStart = {
+      x: Number(await preview.getAttribute("data-start-x")),
+      y: Number(await preview.getAttribute("data-start-y")),
+    };
+    const pendingSelection = await selectedCanvasElementIds(page);
+
+    await page.getByRole("button", { name: "Find in canvas" }).click();
+    const search = page.getByRole("textbox", { name: "Find in canvas" });
+    await search.fill("needle");
+    const focusedControl = focusTarget === "input"
+      ? search
+      : page.getByRole("button", {
+          name: focusTarget === "previous"
+            ? "Previous match"
+            : focusTarget === "next"
+              ? "Next match"
+              : "Close search",
+          exact: focusTarget === "close",
+        });
+    await focusedControl.focus();
+    await expect(focusedControl).toBeFocused();
+    await page.keyboard.press("Escape");
+
+    await expect(page.locator(".search-panel")).toHaveCount(0);
+    await expect(preview).toHaveCount(1);
+    expect({
+      x: Number(await preview.getAttribute("data-start-x")),
+      y: Number(await preview.getAttribute("data-start-y")),
+    }).toEqual(previewStart);
+    await expect(canvas).toHaveAttribute("data-active-tool", "arrow");
+    expect(await selectedCanvasElementIds(page)).toEqual(pendingSelection);
+    expect(await workspaceJson(page)).toBe(baselineJson);
+    expect(await persistenceCounts(page)).toEqual({ apply: 0, session: 0 });
+
+    await page.mouse.move(secondPoint.x, secondPoint.y);
+    const previewEnd = {
+      x: Number(await preview.getAttribute("data-end-x")),
+      y: Number(await preview.getAttribute("data-end-y")),
+    };
+    await page.mouse.click(secondPoint.x, secondPoint.y);
+    await expect(preview).toHaveCount(0);
+    await expect.poll(async () => (await persistenceCounts(page)).apply).toBe(1);
+    await expect.poll(async () => (await persistenceCounts(page)).session).toBe(1);
+    const addedConnectors = (await workspaceElements(page)).filter((element) => (
+      element.type === "connector" && !existingConnectorIds.has(String(element.id))
+    ));
+    expect(addedConnectors).toHaveLength(1);
+    expect(addedConnectors[0]).toMatchObject({
+      end: { kind: "free", ...previewEnd },
+      start: { kind: "free", ...previewStart },
+      type: "connector",
+    });
   });
 }
 
@@ -557,6 +724,13 @@ async function selectedCanvasElementIds(page: Page) {
       return canvasElement?.dataset.canvasElementId ? [canvasElement.dataset.canvasElementId] : [];
     }))).sort()
   ));
+}
+
+async function inputSelection(input: Locator) {
+  return input.evaluate((element) => ({
+    end: (element as HTMLInputElement).selectionEnd,
+    start: (element as HTMLInputElement).selectionStart,
+  }));
 }
 
 async function persistenceCounts(page: Page) {

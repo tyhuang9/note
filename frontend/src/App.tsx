@@ -474,8 +474,7 @@ const TEXT_BLOCK_CONTENT_PADDING_LEFT = 10;
 const TEXT_BLOCK_CONTENT_PADDING_TOP = 5;
 const LLAMA_HARNESS_SELECTED_AGENT_KEY = "note.llamaHarness.selectedAgentId.v1";
 const DEFAULT_PAN_OFFSET: PanOffset = { x: 0, y: 0 };
-const NATIVE_SEARCH_TEXT_SHORTCUTS = new Set(["a", "c", "v", "x", "y", "z"]);
-const SEARCH_CONTROL_KEYS = new Set(["Tab", "Escape", "Enter", " "]);
+const SEARCH_CONTROL_COMMAND_KEYS = new Set(["a", "f", "n", "o", "y", "z", "+", "=", "-", "0"]);
 type SidebarSortOrder =
   | "name-asc"
   | "name-desc"
@@ -495,22 +494,12 @@ function isCanvasSearchPanelTarget(target: EventTarget | null): target is Elemen
 
 function guardCanvasSearchPanelKeyboardEvent(event: KeyboardEvent): boolean {
   if (!isCanvasSearchPanelTarget(event.target)) return false;
-  const usesCommandModifier = event.ctrlKey || event.metaKey;
-  if (isTextEntryTarget(event.target)) {
-    const preservesNativeTextEditing = (
-      !usesCommandModifier && !event.altKey
-    ) || (
-      usesCommandModifier
-        && !event.altKey
-        && NATIVE_SEARCH_TEXT_SHORTCUTS.has(event.key.toLowerCase())
-    );
-    if (!preservesNativeTextEditing) event.preventDefault();
-  } else {
-    const preservesSearchControl = !usesCommandModifier
-      && !event.altKey
-      && SEARCH_CONTROL_KEYS.has(event.key);
-    if (!preservesSearchControl) event.preventDefault();
-  }
+  if (isTextEntryTarget(event.target)) return true;
+  const isAppCommand = (event.ctrlKey || event.metaKey)
+    && SEARCH_CONTROL_COMMAND_KEYS.has(event.key.toLowerCase());
+  const isCanvasDeletion = event.key === "Delete" || event.key === "Backspace";
+  const isToolCommand = drawingToolForShortcut(event, true) !== null;
+  if (isAppCommand || isCanvasDeletion || isToolCommand) event.preventDefault();
   return true;
 }
 
@@ -3695,11 +3684,12 @@ function App() {
     }
 
     function handleKeyUp(event: KeyboardEvent) {
-      if (isCanvasSearchPanelTarget(event.target)) return;
       if (event.code === "Space") {
         isTemporaryHandActiveRef.current = false;
         canvasRef.current?.removeAttribute("data-temporary-hand");
+        return;
       }
+      if (isCanvasSearchPanelTarget(event.target)) return;
     }
 
     function clearTemporaryHandForWindowBlur() {

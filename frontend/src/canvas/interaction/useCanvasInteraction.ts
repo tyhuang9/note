@@ -800,7 +800,12 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
   useEffect(() => {
     const handleWindowBlur = () => cancelTransientPointerInteraction();
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") cancelArrowAuthoring();
+      if (
+        event.key === "Escape"
+        && !(event.target instanceof Element && event.target.closest(".search-panel"))
+      ) {
+        cancelArrowAuthoring();
+      }
     };
     window.addEventListener("blur", handleWindowBlur);
     window.addEventListener("keydown", handleEscape, true);

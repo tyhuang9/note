@@ -1444,6 +1444,7 @@ function App() {
   const drawingPropertyPreviewRef = useRef<DrawingPropertyPreviewTransaction | null>(null);
   const authoringFocusReturnRafRef = useRef<number | null>(null);
   const directTextFocusReturnRafRef = useRef<number | null>(null);
+  const offscreenNavigationFocusRafRef = useRef<number | null>(null);
   const previousCanvasAuthoringAvailableRef = useRef(false);
   const isCanvasAuthoringAvailableRef = useRef(false);
   const isWorkbenchOverlayOpenRef = useRef(false);
@@ -2175,6 +2176,9 @@ function App() {
       }
       if (directTextFocusReturnRafRef.current !== null) {
         window.cancelAnimationFrame(directTextFocusReturnRafRef.current);
+      }
+      if (offscreenNavigationFocusRafRef.current !== null) {
+        window.cancelAnimationFrame(offscreenNavigationFocusRafRef.current);
       }
 
       cancelCanvasSelectionSession();
@@ -8587,6 +8591,10 @@ function App() {
   }
 
   function panToOffscreenGroup(direction: OffscreenGroup["direction"]) {
+    if (offscreenNavigationFocusRafRef.current !== null) {
+      window.cancelAnimationFrame(offscreenNavigationFocusRafRef.current);
+      offscreenNavigationFocusRafRef.current = null;
+    }
     if (!canvasViewport) {
       return;
     }
@@ -8626,6 +8634,23 @@ function App() {
     setPanOffset({
       x: canvasSize.width / 2 - targetCenter.x * zoomLevel,
       y: canvasSize.height / 2 - targetCenter.y * zoomLevel,
+    });
+    const targetBlockId = targetBlocks[0]?.id;
+    offscreenNavigationFocusRafRef.current = window.requestAnimationFrame(() => {
+      offscreenNavigationFocusRafRef.current = window.requestAnimationFrame(() => {
+        offscreenNavigationFocusRafRef.current = null;
+        const targetElement = targetBlockId
+          ? blockElementsRef.current.get(targetBlockId)
+          : null;
+        const focusTarget = targetElement?.querySelector<HTMLElement>(
+          ".text-block-header, [role=button], button, [tabindex]:not([tabindex='-1'])",
+        );
+        if (focusTarget?.isConnected) {
+          focusTarget.focus({ preventScroll: true });
+          return;
+        }
+        canvasRef.current?.focus({ preventScroll: true });
+      });
     });
   }
 

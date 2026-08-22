@@ -6,6 +6,7 @@ import type { Options } from "roughjs/bin/core";
 import type { CanvasColor, CanvasElement, ConnectorElement, ElementId, RichTextValue, RoughStyle, ShapeElement } from "../model/elements";
 import type { SearchMatch } from "../../appTypes";
 import { resolveConnectorPoints } from "../model/connectorBinding";
+import { getShapeTextInsets } from "../model/hitTesting";
 import { roundedDiamondPath, roundedRectanglePath } from "../model/shapeBoundary";
 export { roundedDiamondPath, roundedRectanglePath } from "../model/shapeBoundary";
 import {
@@ -300,19 +301,10 @@ export function shapeTextSurfaceColors(
 }
 
 export function shapeTextInsetStyle(element: ShapeElement, theme: CanvasTheme = "light"): ShapeTextInsetCss {
-  const horizontal = element.shape === "rectangle"
-    ? 12
-    : element.shape === "ellipse"
-      ? Math.max(8, element.width * 0.14645)
-      : Math.max(8, element.width * 0.25);
-  const vertical = element.shape === "rectangle"
-    ? 12
-    : element.shape === "ellipse"
-      ? Math.max(8, element.height * 0.14645)
-      : Math.max(8, element.height * 0.25);
+  const { horizontal, vertical } = getShapeTextInsets(element);
   const surfaceColors = shapeTextSurfaceColors(element.style.fillColor, theme);
   return {
-    inset: `${Math.min(vertical, Math.max(0, element.height / 2 - 2))}px ${Math.min(horizontal, Math.max(0, element.width / 2 - 2))}px`,
+    inset: `${vertical}px ${horizontal}px`,
     "--shape-text-surface-color": surfaceColors.color,
     "--shape-text-surface-fill": surfaceColors.fill,
     "--shape-text-surface-radius": element.shape === "ellipse" ? "999px" : element.shape === "diamond" ? "8px" : "6px",

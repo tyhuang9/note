@@ -10,6 +10,7 @@ import type {
 import {
   canvasElementContainsPoint,
   getEraserElementIds,
+  shapeTextContainsPoint,
 } from "../../src/canvas/model/hitTesting";
 import { PEN_BRUSH } from "../../src/canvas/model/ink";
 
@@ -105,6 +106,24 @@ const ink: CanvasElement = {
 };
 
 describe("canvas element hit testing", () => {
+  it("matches the rotated inset used by shape-owned text", () => {
+    const labeled = { ...rectangle, rotation: 32, text: { content: "Editable" } };
+    const center = { x: labeled.x + labeled.width / 2, y: labeled.y + labeled.height / 2 };
+    const rotateLocalPoint = (x: number, y: number) => {
+      const angle = (labeled.rotation * Math.PI) / 180;
+      const dx = x - center.x;
+      const dy = y - center.y;
+      return {
+        x: center.x + dx * Math.cos(angle) - dy * Math.sin(angle),
+        y: center.y + dx * Math.sin(angle) + dy * Math.cos(angle),
+      };
+    };
+
+    expect(shapeTextContainsPoint(labeled, center)).toBe(true);
+    expect(shapeTextContainsPoint(labeled, rotateLocalPoint(labeled.x + 4, labeled.y + 4))).toBe(false);
+    expect(shapeTextContainsPoint({ ...labeled, text: undefined }, center)).toBe(false);
+  });
+
   it("uses box interiors for text/images and painted paths for ink", () => {
     expect(canvasElementContainsPoint(text, { x: 50, y: 30 }, 0)).toBe(true);
     expect(canvasElementContainsPoint(image, { x: 200, y: 40 }, 0)).toBe(true);

@@ -17,6 +17,7 @@ type CanvasViewportProps = {
   isKeyboardShapeCreationAvailable?: boolean;
   isKeyboardTextCreationAvailable?: boolean;
   onDoubleClick: MouseEventHandler<HTMLElement>;
+  onDoubleClickCapture?: MouseEventHandler<HTMLElement>;
   onPointerCancel: PointerEventHandler<HTMLElement>;
   onPointerCancelCapture?: PointerEventHandler<HTMLElement>;
   onPointerDown: PointerEventHandler<HTMLElement>;
@@ -43,6 +44,7 @@ export const CanvasViewport = forwardRef<HTMLElement, CanvasViewportProps>(
       isKeyboardShapeCreationAvailable = false,
       isKeyboardTextCreationAvailable = false,
       onDoubleClick,
+      onDoubleClickCapture,
       onPointerCancel,
       onPointerCancelCapture,
       onPointerDown,
@@ -96,7 +98,7 @@ export const CanvasViewport = forwardRef<HTMLElement, CanvasViewportProps>(
         }}
         onDoubleClickCapture={(event) => {
           if (isSearchPanelEvent(event)) return;
-          blockCanvasInteraction(event);
+          if (!blockCanvasInteraction(event)) onDoubleClickCapture?.(event);
         }}
         onKeyDownCapture={(event) => {
           if (isSearchPanelEvent(event)) return;

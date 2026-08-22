@@ -5863,6 +5863,7 @@ function App() {
     point: CanvasPoint,
     source: DirectTextDraft["source"],
     returnFocus: HTMLElement | null = canvasRef.current,
+    previousSelection: readonly string[] = selectedBlockIdsRef.current,
   ) {
     const pageId = selectedPageIdRef.current;
     const activeTool = activeToolRef.current;
@@ -5895,7 +5896,7 @@ function App() {
         pageId,
         dataRef.current.elements.length,
       ),
-      previousSelection: [...selectedBlockIdsRef.current],
+      previousSelection: [...previousSelection],
       previousTool: activeTool,
       returnFocus,
       source,
@@ -8344,6 +8345,7 @@ function App() {
     getPrimitivePreviewAppearance: getPrimitiveAppearance,
     hasPendingImage: () => pendingImagePlacementRef.current !== null,
     interactionCancellationKey: `${activeTool}:${selectedPageId ?? ""}`,
+    isDirectTextDraftActive: () => directTextDraftRef.current !== null,
     isTemporaryHandActiveRef,
     isTextEditing: () =>
       editingBlockIdRef.current !== null || directTextDraftRef.current !== null,
@@ -8353,8 +8355,8 @@ function App() {
     minZoom: MIN_ZOOM,
     onArrowStatusChange: setConnectorBindingAnnouncement,
     onCreateArrow: completeArrowCreation,
-    onCreateDirectText: (point) =>
-      startDirectTextDraft(point, "pointer", canvasRef.current),
+    onCreateDirectText: (point, previousSelection) =>
+      startDirectTextDraft(point, "pointer", canvasRef.current, previousSelection),
     onCreatePrimitive: completePrimitiveCreation,
     onPrimitiveStatusChange: (tool) => {
       pointerShapeAnnouncementSequenceRef.current += 1;
@@ -8820,6 +8822,7 @@ function App() {
           isKeyboardShapeCreationAvailable={activeKeyboardShapeLabel !== null}
           isKeyboardTextCreationAvailable={isKeyboardTextCreationAvailable}
           onDoubleClick={canvasInteraction.handleDoubleClick}
+          onDoubleClickCapture={canvasInteraction.handleDoubleClickCapture}
           onLostPointerCapture={(event) => {
             inkInteraction.handlePointerCancelCapture(event);
             canvasInteraction.handlePointerCancel(event);

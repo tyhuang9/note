@@ -81,6 +81,34 @@ function unrotatePoint(
   };
 }
 
+export function getShapeTextInsets(element: ShapeElement) {
+  const horizontal = element.shape === "rectangle"
+    ? 12
+    : element.shape === "ellipse"
+      ? Math.max(8, element.width * 0.14645)
+      : Math.max(8, element.width * 0.25);
+  const vertical = element.shape === "rectangle"
+    ? 12
+    : element.shape === "ellipse"
+      ? Math.max(8, element.height * 0.14645)
+      : Math.max(8, element.height * 0.25);
+  return {
+    horizontal: Math.min(horizontal, Math.max(0, element.width / 2 - 2)),
+    vertical: Math.min(vertical, Math.max(0, element.height / 2 - 2)),
+  };
+}
+
+/** Model-space hit for the rendered inset that owns shape-contained text. */
+export function shapeTextContainsPoint(element: ShapeElement, point: CanvasPoint) {
+  if (!element.text) return false;
+  const local = unrotatePoint(element, point);
+  const insets = getShapeTextInsets(element);
+  return local.x >= element.x + insets.horizontal
+    && local.x <= element.x + element.width - insets.horizontal
+    && local.y >= element.y + insets.vertical
+    && local.y <= element.y + element.height - insets.vertical;
+}
+
 function shapeContainsPoint(element: ShapeElement, worldPoint: CanvasPoint, tolerance: number) {
   const point = unrotatePoint(element, worldPoint);
   const radius = Math.max(0, tolerance) + element.style.strokeWidth / 2;

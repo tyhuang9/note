@@ -1810,7 +1810,7 @@ function App() {
   const isCanvasAuthoringAvailable = Boolean(
     selectedPage && !isTemplatePage(selectedPage) && canvasViewport,
   );
-  const activeKeyboardShapeLabel = !isCanvasAuthoringAvailable
+  const activeKeyboardShapeLabel = !isCanvasAuthoringAvailable || isSearchOpen
     ? null
     : activeTool === "rectangle"
     ? "Rectangle"
@@ -8161,8 +8161,8 @@ function App() {
     const keepsToolActive = isToolLockedRef.current;
     completePrimitiveCreation(elementId, tool, geometry, getPrimitiveAppearance(tool, elementId));
     setConnectorBindingAnnouncement(keepsToolActive
-      ? `Keyboard shape ${sequence} created. ${label} is centered in the viewport. Tool lock kept ${label} active.`
-      : `Keyboard shape ${sequence} created. ${label} is centered in the viewport. Switched to Select.`);
+      ? `Keyboard shape ${sequence} created. ${label} was placed in the current viewport. Tool lock kept ${label} active.`
+      : `Keyboard shape ${sequence} created. ${label} was placed in the current viewport. Switched to Select.`);
     canvasRef.current?.focus({ preventScroll: true });
     return true;
   };
@@ -8531,7 +8531,7 @@ function App() {
 
         {activeKeyboardShapeLabel ? (
           <span className="canvas-accessibility-status" id="canvas-shape-authoring-instruction">
-            {`${activeKeyboardShapeLabel} tool selected. Drag to draw, or press Enter to add a default ${activeKeyboardShapeLabel.toLowerCase()} at the center of the viewport.`}
+            {`${activeKeyboardShapeLabel} tool selected. Drag to draw, or press Enter to add a default ${activeKeyboardShapeLabel.toLowerCase()} in the current viewport.`}
           </span>
         ) : null}
         <CanvasViewport

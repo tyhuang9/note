@@ -37,13 +37,9 @@ test("keeps seeded RoughJS preview and committed geometry identical across zoom,
     const before = await svgSnapshot(preview);
     const beforePixels = await preview.screenshot();
     await testInfo.attach(`preview-${scenario.zoom}-${scenario.dark ? "dark" : "light"}.png`, { body: beforePixels, contentType: "image/png" });
-    if (scenario.alt) await page.keyboard.up("Alt");
-    else await page.keyboard.down("Alt");
-    if (scenario.shift) await page.keyboard.up("Shift");
-    else await page.keyboard.down("Shift");
     await page.mouse.up();
-    await page.keyboard.up("Alt");
-    await page.keyboard.up("Shift");
+    if (scenario.alt) await page.keyboard.up("Alt");
+    if (scenario.shift) await page.keyboard.up("Shift");
 
     const committed = page.locator(`[data-canvas-element-id="${before.elementId}"] ${scenario.selector}`);
     await expect(committed).toBeVisible();

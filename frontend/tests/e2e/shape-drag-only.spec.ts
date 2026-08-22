@@ -110,7 +110,7 @@ test("pointerup applies the final screen-space threshold without an intervening 
 
   await page.getByRole("button", { name: TOOL_NAMES.rectangle }).click();
   await settleAndResetCounts(page);
-  await releaseCapturedWithoutMove(page, start, { x: start.x + 2, y: start.y });
+  await releaseCapturedWithoutMove(page, start, { x: start.x + 1.2, y: start.y + 1.6 });
   await expect(page.locator(".primitive-authoring-preview")).toHaveCount(0);
   await expect(page.locator('[data-canvas-element-type="shape"]')).toHaveCount(1);
   await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
@@ -122,9 +122,29 @@ test("pointerup applies the final screen-space threshold without an intervening 
 
   await page.getByRole("button", { name: TOOL_NAMES.diamond }).click();
   await settleAndResetCounts(page);
-  await releaseCapturedWithoutMove(page, { x: start.x + 40, y: start.y + 40 }, { x: start.x + 44, y: start.y + 40 });
+  const finalStart = { x: start.x + 40, y: start.y + 40 };
+  await releaseCapturedWithoutMove(page, finalStart, { x: finalStart.x + 2.4, y: finalStart.y + 3.2 });
   await expect(page.locator('[data-canvas-element-type="shape"]')).toHaveCount(3);
   await expect.poll(() => counts(page)).toEqual({ apply: 1, persistence: 2, session: 1 });
+  const greaterThanThresholdShape = await newestShape(page);
+  if (!greaterThanThresholdShape) throw new Error("Final-pointer shape was unavailable.");
+  expect(Number(greaterThanThresholdShape.x)).toBeCloseTo(finalStart.x - bounds.x, 4);
+  expect(Number(greaterThanThresholdShape.y)).toBeCloseTo(finalStart.y - bounds.y, 4);
+  expect(Number(greaterThanThresholdShape.width)).toBeCloseTo(2.4, 4);
+  expect(Number(greaterThanThresholdShape.height)).toBeCloseTo(3.2, 4);
+
+  await page.getByRole("button", { name: TOOL_NAMES.rectangle }).click();
+  await settleAndResetCounts(page);
+  const retreatStart = { x: start.x + 80, y: start.y + 60 };
+  const pointerId = await beginCapturedDrag(page, retreatStart, { x: retreatStart.x + 8, y: retreatStart.y + 6 });
+  await expect(page.locator(".primitive-authoring-preview")).toHaveCount(1);
+  await expect(page.locator(`[data-canvas-element-id="${greaterThanThresholdShape.id}"]`)).not.toHaveAttribute("aria-pressed", "true");
+  await dispatchCapturedPointerUp(page, pointerId, { x: retreatStart.x + 1.2, y: retreatStart.y + 1.6 });
+  await page.mouse.up();
+  await expect(page.locator(".primitive-authoring-preview")).toHaveCount(0);
+  await expect(page.locator('[data-canvas-element-type="shape"]')).toHaveCount(3);
+  await expect(page.locator(`[data-canvas-element-id="${greaterThanThresholdShape.id}"]`)).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
 });
 
 test("focused canvas Enter creates accessible viewport-centered shapes", async ({ page }) => {
@@ -141,7 +161,7 @@ test("focused canvas Enter creates accessible viewport-centered shapes", async (
       await page.getByRole("button", { name: TOOL_NAMES[shape] }).click();
       await expect(canvas).toHaveAttribute("aria-keyshortcuts", "Enter");
       await expect(canvas).toHaveAccessibleDescription(
-        `${shapeLabel(shape)} tool selected. Drag to draw, or press Enter to add a default ${shape} at the center of the viewport.`,
+        `${shapeLabel(shape)} tool selected. Drag to draw, or press Enter to add a default ${shape} in the current viewport.`,
       );
       await canvas.focus();
       await settleAndResetCounts(page);
@@ -161,7 +181,7 @@ test("focused canvas Enter creates accessible viewport-centered shapes", async (
       await expect(canvas).toBeFocused();
       await expect(page.getByRole("button", { name: "Select (V / 1)" })).toHaveAttribute("aria-pressed", "true");
       await expect(canvas).not.toHaveAttribute("aria-keyshortcuts");
-      await expect(status).toHaveText(`Keyboard shape ${expectedKeyboardSequence} created. ${shapeLabel(shape)} is centered in the viewport. Switched to Select.`);
+      await expect(status).toHaveText(`Keyboard shape ${expectedKeyboardSequence} created. ${shapeLabel(shape)} was placed in the current viewport. Switched to Select.`);
       const canvasBounds = await requiredBounds(canvas, "canvas");
       const createdBounds = await requiredBounds(createdLocator, "keyboard-created shape");
       expect(createdBounds.x + createdBounds.width / 2).toBeCloseTo(canvasBounds.x + canvasBounds.width / 2, 0);
@@ -180,7 +200,7 @@ test("focused canvas Enter creates accessible viewport-centered shapes", async (
   await expect.poll(() => counts(page)).toEqual({ apply: 1, persistence: 2, session: 1 });
   lastCreatedId = (await newestShape(page))?.id ?? "";
   await expect(page.getByRole("button", { name: TOOL_NAMES.diamond })).toHaveAttribute("aria-pressed", "true");
-  await expect(status).toHaveText(`Keyboard shape ${expectedKeyboardSequence} created. Diamond is centered in the viewport. Tool lock kept Diamond active.`);
+  await expect(status).toHaveText(`Keyboard shape ${expectedKeyboardSequence} created. Diamond was placed in the current viewport. Tool lock kept Diamond active.`);
 
   await settleAndResetCounts(page);
   await page.evaluate(() => {
@@ -196,7 +216,7 @@ test("focused canvas Enter creates accessible viewport-centered shapes", async (
   expectedShapeCount += 1;
   lastCreatedId = (await newestShape(page))?.id ?? "";
   await expect.poll(() => counts(page)).toEqual({ apply: 1, persistence: 2, session: 1 });
-  await expect(status).toHaveText(`Keyboard shape ${expectedKeyboardSequence} created. Diamond is centered in the viewport. Tool lock kept Diamond active.`);
+  await expect(status).toHaveText(`Keyboard shape ${expectedKeyboardSequence} created. Diamond was placed in the current viewport. Tool lock kept Diamond active.`);
   await expect.poll(() => page.evaluate(() => (
     window as unknown as { __shapeKeyboardStatusMutations: number }
   ).__shapeKeyboardStatusMutations)).toBeGreaterThan(0);
@@ -216,6 +236,21 @@ test("keyboard shape creation guards text, modal, modified, repeated, and unsafe
   await page.getByRole("button", { name: TOOL_NAMES.rectangle }).click();
   await canvas.focus();
   await settleAndResetCounts(page);
+
+  await expect(canvas).toHaveAttribute("aria-keyshortcuts", "Enter");
+  await expect(canvas).toHaveAccessibleDescription(
+    "Rectangle tool selected. Drag to draw, or press Enter to add a default rectangle in the current viewport.",
+  );
+  await page.keyboard.press("Control+f");
+  await expect(page.getByRole("button", { name: "Close search", exact: true })).toBeVisible();
+  await expect(canvas).not.toHaveAttribute("aria-keyshortcuts");
+  await expect(canvas).not.toHaveAttribute("aria-describedby");
+  await page.getByRole("button", { name: "Close search", exact: true }).click();
+  await expect(canvas).toHaveAttribute("aria-keyshortcuts", "Enter");
+  await expect(canvas).toHaveAccessibleDescription(
+    "Rectangle tool selected. Drag to draw, or press Enter to add a default rectangle in the current viewport.",
+  );
+  await canvas.focus();
 
   for (const init of [
     { isComposing: true },
@@ -264,6 +299,7 @@ test("keyboard shape creation guards text, modal, modified, repeated, and unsafe
   const edgeShape = await newestShape(page);
   expect(Number(edgeShape?.x) + Number(edgeShape?.width)).toBeLessThanOrEqual(1_000_000);
   expect(Number(edgeShape?.y) + Number(edgeShape?.height)).toBeLessThanOrEqual(1_000_000);
+  await expect(status).toHaveText("Keyboard shape 1 created. Rectangle was placed in the current viewport. Switched to Select.");
 
   await persistViewportCenter(page, await requiredBounds(reloadedCanvas, "canvas"), { x: 1_000_500, y: 0 });
   await page.reload();
@@ -496,6 +532,15 @@ async function releaseCapturedWithoutMove(
   await page.mouse.down();
   const pointerId = Number(await page.locator("body").getAttribute("data-shape-drag-pointer-id"));
   if (!Number.isFinite(pointerId)) throw new Error("Shape drag pointer id was unavailable.");
+  await dispatchCapturedPointerUp(page, pointerId, end);
+  await page.mouse.up();
+}
+
+async function dispatchCapturedPointerUp(
+  page: Page,
+  pointerId: number,
+  end: { x: number; y: number },
+) {
   await page.evaluate(({ end, pointerId }) => {
     const target = Array.from(document.querySelectorAll<HTMLElement>("*"))
       .find((element) => element.hasPointerCapture(pointerId));
@@ -509,7 +554,6 @@ async function releaseCapturedWithoutMove(
       pointerId,
     }));
   }, { end, pointerId });
-  await page.mouse.up();
 }
 
 async function dispatchCapturedTermination(

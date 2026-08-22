@@ -3467,6 +3467,7 @@ h2 {
 }
 
 .canvas-accessibility-status,
+.editor-shortcut-instructions,
 .connector-endpoint-chooser-status {
   position: absolute;
   width: 1px;

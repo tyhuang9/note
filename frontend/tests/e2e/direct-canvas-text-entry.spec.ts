@@ -23,7 +23,7 @@ test("blank double click stays transient until one non-empty rich commit", async
     const editor = page.locator(".text-block-editor-content");
     await expect(editor).toBeFocused();
     await expect(page.locator('[data-canvas-element-type="text"]')).toHaveCount(2);
-    await expect.poll(() => workspaceElements(page)).toHaveLength(2);
+    await expect.poll(() => workspaceElements(page)).toHaveLength(4);
     await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
 
     const draftBounds = await requiredBounds(page.locator(".text-block").last(), "draft");
@@ -38,6 +38,15 @@ test("blank double click stays transient until one non-empty rich commit", async
   }
 
   await setZoom(page, canvas, 100);
+  const emptyBlurPoint = await blankPoint(canvas, 100);
+  await page.mouse.dblclick(emptyBlurPoint.x, emptyBlurPoint.y);
+  await expect(page.locator(".text-block-editor-content")).toBeFocused();
+  await selectedHeader.click();
+  await expect(page.locator('[data-canvas-element-type="text"]')).toHaveCount(1);
+  await expect(selectedHeader).toHaveAttribute("aria-pressed", "true");
+  await expect(canvas).toBeFocused();
+  await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
+
   await panCanvas(page, canvas, { x: 80, y: 45 });
   const point = await blankPoint(canvas, 100);
   await page.mouse.dblclick(point.x, point.y);
@@ -50,7 +59,9 @@ test("blank double click stays transient until one non-empty rich commit", async
   await expect.poll(() => counts(page)).toEqual({ apply: 1, persistence: 2, session: 1 });
   const created = (await workspaceElements(page)).find((element) => element.id !== "text-one" && element.type === "text");
   if (!created) throw new Error("Committed direct text was unavailable");
-  await expect(page.locator(`[data-canvas-element-id="${created.id}"] .text-block-display`)).toHaveText("Direct rich text");
+  const createdBlock = page.locator(`[data-canvas-element-id="${created.id}"]`);
+  await expect(createdBlock.locator(".text-block-display")).toHaveText("Direct rich text");
+  await expect(createdBlock.locator(".text-block-header")).toBeFocused();
   expect(created?.content).toBe("Direct rich text");
   expect(JSON.stringify(created?.richContent)).toContain("Direct rich text");
 
@@ -86,8 +97,18 @@ test("double click places a caret in formatted standalone and rotated locked sha
   await page.mouse.dblclick(shapePoint.x, shapePoint.y);
   const shapeEditor = shape.locator(".shape-contained-text-editor-content");
   await expect(shapeEditor).toBeFocused();
+  await expect(shapeEditor).toHaveAccessibleDescription(/Escape cancels this shape text edit.*Control\+Enter.*Command\+Enter saves/i);
+  await expect(shapeEditor).toHaveAttribute("aria-keyshortcuts", "Escape Control+Enter Meta+Enter");
   expect(await selectionTextOffset(shapeEditor)).toBeGreaterThanOrEqual(7);
   expect(await selectionTextOffset(shapeEditor)).toBeLessThanOrEqual(9);
+  await dispatchEditorKey(shapeEditor, { isComposing: true, key: "Escape" });
+  await dispatchEditorKey(shapeEditor, { key: "Escape", repeat: true });
+  await dispatchEditorKey(shapeEditor, { ctrlKey: true, key: "Enter", repeat: true });
+  await dispatchEditorKey(shapeEditor, { altKey: true, ctrlKey: true, key: "Enter" });
+  await dispatchEditorKey(shapeEditor, { ctrlKey: true, key: "Enter", shiftKey: true });
+  await dispatchLegacyCompositionKey(shapeEditor);
+  await expect(shapeEditor).toBeFocused();
+  await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
   await page.keyboard.press("Escape");
   await expect(shape).toHaveAttribute("aria-label", /Select locked rectangle shape/);
   await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
@@ -96,6 +117,16 @@ test("double click places a caret in formatted standalone and rotated locked sha
   await shape.press("F2");
   await expect(shapeEditor).toBeFocused();
   expect(await selectionTextOffset(shapeEditor)).toBe("rotated shape text".length);
+  await page.keyboard.press("Escape");
+
+  const frontShape = page.locator('[data-canvas-element-id="shape-front"]');
+  const frontBounds = await requiredBounds(frontShape, "front overlap shape");
+  await page.mouse.dblclick(
+    frontBounds.x + frontBounds.width / 2,
+    frontBounds.y + frontBounds.height / 2,
+  );
+  await expect(frontShape.locator(".shape-contained-text-editor-content")).toBeFocused();
+  await expect(page.locator('[data-canvas-element-id="shape-back"] .shape-contained-text-editor-content')).toHaveCount(0);
   await page.keyboard.press("Escape");
 });
 
@@ -112,8 +143,25 @@ test("keyboard text authoring is discoverable, guarded, and honors tool lock", a
     await expect(canvas).toHaveAccessibleDescription(/Text tool selected.*press Enter/i);
     await canvas.focus();
     await page.keyboard.press("Enter");
-    await expect(page.locator(".text-block-editor-content")).toBeFocused();
+    const editor = page.locator(".text-block-editor-content");
+    await expect(editor).toBeFocused();
+    await expect(editor).toHaveAccessibleName("New text block");
+    await expect(editor).toHaveAccessibleDescription(/Escape cancels.*Control\+Enter.*Command\+Enter saves/i);
+    await expect(editor).toHaveAttribute("aria-keyshortcuts", "Escape Control+Enter Meta+Enter");
     await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
+    if (zoom === 50) {
+      await page.keyboard.insertText("IME-safe draft");
+      await dispatchEditorKey(editor, { isComposing: true, key: "Escape" });
+      await dispatchEditorKey(editor, { key: "Escape", repeat: true });
+      await dispatchEditorKey(editor, { ctrlKey: true, key: "Enter", repeat: true });
+      await dispatchEditorKey(editor, { altKey: true, ctrlKey: true, key: "Enter" });
+      await dispatchEditorKey(editor, { ctrlKey: true, key: "Enter", shiftKey: true });
+      await dispatchLegacyCompositionKey(editor);
+      await expect(editor).toBeFocused();
+      await expect(editor).toHaveText("IME-safe draft");
+      await expect(page.locator('[data-canvas-element-type="text"]')).toHaveCount(2);
+      await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
+    }
     await page.keyboard.press("Escape");
     await expect(textTool).toHaveAttribute("aria-pressed", "true");
     await expect(canvas).toBeFocused();
@@ -211,6 +259,31 @@ async function dispatchCanvasEnter(canvas: Locator, init: Record<string, boolean
   }, init);
 }
 
+async function dispatchEditorKey(
+  editor: Locator,
+  init: Readonly<Partial<KeyboardEventInit> & { key: string }>,
+) {
+  await editor.evaluate((element, eventInit) => {
+    element.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      ...eventInit,
+    }));
+  }, init);
+}
+
+async function dispatchLegacyCompositionKey(editor: Locator) {
+  await editor.evaluate((element) => {
+    const event = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Escape",
+    });
+    Object.defineProperty(event, "keyCode", { value: 229 });
+    element.dispatchEvent(event);
+  });
+}
+
 function pointForTextOffset(content: Locator, targetOffset: number) {
   return content.evaluate((element, offset) => {
     const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
@@ -304,6 +377,18 @@ async function installWorkspace(page: Page) {
           text: { content: "rotated shape text", richContent: { type: "doc", content: [{ type: "paragraph", content: [
             { type: "text", text: "rotated " }, { type: "text", marks: [{ type: "italic" }], text: "shape" }, { type: "text", text: " text" },
           ] }] } }, type: "shape", updatedAt: 1, width: 280, x: 600, y: 330, zIndex: 1,
+        },
+        {
+          createdAt: 1, height: 140, id: "shape-front", locked: false, opacity: 1, pageId: "page-one",
+          rotation: 0, shape: "rectangle", style: { fillColor: null, roughness: 0.5, roundness: 0.4, seed: 42,
+            strokeColor: { kind: "theme", token: "foreground" }, strokeStyle: "solid", strokeWidth: 2 },
+          text: { content: "front overlay" }, type: "shape", updatedAt: 1, width: 240, x: 600, y: 520, zIndex: 30,
+        },
+        {
+          createdAt: 1, height: 140, id: "shape-back", locked: false, opacity: 1, pageId: "page-one",
+          rotation: 0, shape: "rectangle", style: { fillColor: null, roughness: 0.5, roundness: 0.4, seed: 43,
+            strokeColor: { kind: "theme", token: "foreground" }, strokeStyle: "solid", strokeWidth: 2 },
+          text: { content: "back overlay" }, type: "shape", updatedAt: 1, width: 240, x: 600, y: 520, zIndex: 20,
         },
       ],
       folders: [], isDarkMode: false,

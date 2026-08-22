@@ -324,6 +324,7 @@ type ShapeContainedTextEditorProps = {
 function ShapeContainedTextEditor({ canvasTheme, caretPlacementRequest, element, onActiveEditorChange, onCancel, onCommit, onEditSessionChange }: ShapeContainedTextEditorProps) {
   const initialText = useMemo(() => element.text ?? { content: "" }, [element.id]);
   const initialCaretPlacementRequest = useRef(caretPlacementRequest);
+  const instructionsId = `shape-text-editor-instructions-${element.id}`;
   const baselineDocument = useRef(getCanonicalShapeRichTextDocument(initialText));
   const finalized = useRef(false);
   const extensions = useMemo(
@@ -365,19 +366,36 @@ function ShapeContainedTextEditor({ canvasTheme, caretPlacementRequest, element,
     content: baselineDocument.current,
     editorProps: {
       attributes: {
+        "aria-describedby": instructionsId,
+        "aria-keyshortcuts": "Escape Control+Enter Meta+Enter",
         "aria-label": `Edit text inside ${element.shape}`,
         "aria-multiline": "true",
         class: "shape-contained-text-editor-content text-block-rich-content",
         role: "textbox",
       },
       handleKeyDown: (_view, event) => {
-        if (event.key === "Escape") {
+        if (event.isComposing || event.keyCode === 229) {
+          return false;
+        }
+        const isCancel = event.key === "Escape";
+        const isCommit = event.key === "Enter" && (event.ctrlKey || event.metaKey);
+        if (
+          event.repeat && (isCancel || isCommit)
+          || isCommit && (event.altKey || event.shiftKey)
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          return true;
+        }
+        if (isCancel) {
           event.preventDefault();
           event.stopPropagation();
           if (editor) finish(editor, true, true);
           return true;
         }
-        if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        if (
+          isCommit
+        ) {
           event.preventDefault();
           event.stopPropagation();
           if (editor) finish(editor, false, true);
@@ -446,6 +464,9 @@ function ShapeContainedTextEditor({ canvasTheme, caretPlacementRequest, element,
   return (
     <div className="shape-contained-text shape-contained-text-editor" style={shapeTextInsetStyle(element, canvasTheme)}>
       <EditorContent className="shape-contained-text-editor-surface" editor={editor} />
+      <span className="editor-shortcut-instructions" id={instructionsId}>
+        Escape cancels this shape text edit. Control+Enter or Command+Enter saves it.
+      </span>
       <div aria-hidden="true" className="shape-contained-text-editor-hint">
         Esc cancels · Ctrl/⌘+Enter saves
       </div>

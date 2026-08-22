@@ -153,6 +153,9 @@ export const TextBlockView = memo(function TextBlockView({
   } | null>(null);
   const isTransientDraftFinalizedRef = useRef(false);
   const [isContentSelected, setIsContentSelected] = useState(false);
+  const transientDraftInstructionsId = isTransientDraft
+    ? `direct-text-draft-instructions-${block.id}`
+    : undefined;
 
   const setBlockElement = useCallback(
     (element: HTMLDivElement | null) => {
@@ -441,6 +444,11 @@ export const TextBlockView = memo(function TextBlockView({
       deleteEmpty: true,
       endEdit: true,
       includeSizeUpdates: true,
+    });
+    window.requestAnimationFrame(() => {
+      blockRef.current
+        ?.querySelector<HTMLElement>(".text-block-header")
+        ?.focus({ preventScroll: true });
     });
   }
 
@@ -901,39 +909,50 @@ export const TextBlockView = memo(function TextBlockView({
         tabIndex={0}
       />
       {isEditing ? (
-        <TiptapBlockEditor
-          block={block}
-          onBlur={handleEditorBlur}
-          onCancelDraft={isTransientDraft ? cancelTransientDraft : undefined}
-          onCanvasPanStart={onCanvasPanStart}
-          onChange={handleEditorChange}
-          onCommitDraft={isTransientDraft ? commitTransientDraft : undefined}
-          initialCaretOffset={pendingCaretOffset.current}
-          initialCaretPoint={pendingCaretPoint.current}
-          onCaretOffsetHandled={() => {
-            pendingCaretOffset.current = null;
-          }}
-          onCaretPointHandled={() => {
-            pendingCaretPoint.current = null;
-          }}
-          onEditorReady={(editor) => {
-            editorRef.current = editor;
-            onActiveEditorChange(editor);
+        <>
+          {transientDraftInstructionsId ? (
+            <span
+              className="editor-shortcut-instructions"
+              id={transientDraftInstructionsId}
+            >
+              Escape cancels this new text block. Control+Enter or Command+Enter saves it.
+            </span>
+          ) : null}
+          <TiptapBlockEditor
+            block={block}
+            draftInstructionsId={transientDraftInstructionsId}
+            onBlur={handleEditorBlur}
+            onCancelDraft={isTransientDraft ? cancelTransientDraft : undefined}
+            onCanvasPanStart={onCanvasPanStart}
+            onChange={handleEditorChange}
+            onCommitDraft={isTransientDraft ? commitTransientDraft : undefined}
+            initialCaretOffset={pendingCaretOffset.current}
+            initialCaretPoint={pendingCaretPoint.current}
+            onCaretOffsetHandled={() => {
+              pendingCaretOffset.current = null;
+            }}
+            onCaretPointHandled={() => {
+              pendingCaretPoint.current = null;
+            }}
+            onEditorReady={(editor) => {
+              editorRef.current = editor;
+              onActiveEditorChange(editor);
 
-            if (editor) {
-              scheduleAutosize();
-            }
-          }}
-          onFocusEndHandled={onFocusEndHandled}
-          onSelectContent={() => {
-            setIsContentSelected(true);
-          }}
-          onSelectAllBlocks={handleSelectAllBlocksFromEditor}
-          onSelectionReset={() => {
-            setIsContentSelected(false);
-          }}
-          shouldFocusEnd={shouldFocusEnd}
-        />
+              if (editor) {
+                scheduleAutosize();
+              }
+            }}
+            onFocusEndHandled={onFocusEndHandled}
+            onSelectContent={() => {
+              setIsContentSelected(true);
+            }}
+            onSelectAllBlocks={handleSelectAllBlocksFromEditor}
+            onSelectionReset={() => {
+              setIsContentSelected(false);
+            }}
+            shouldFocusEnd={shouldFocusEnd}
+          />
+        </>
       ) : null}
       {!isEditing ? (
         <div
@@ -1021,6 +1040,7 @@ function areSearchRangesEqual(
 
 type TiptapBlockEditorProps = {
   block: TextElement;
+  draftInstructionsId?: string;
   initialCaretOffset: number | null;
   initialCaretPoint: CaretPlacementRequest | null;
   onBlur: (editor: Editor, event: FocusEvent) => void;
@@ -1054,6 +1074,7 @@ type ClipboardEditorImage =
 
 function TiptapBlockEditor({
   block,
+  draftInstructionsId,
   initialCaretOffset,
   initialCaretPoint,
   onBlur,
@@ -1094,13 +1115,36 @@ function TiptapBlockEditor({
       shouldRerenderOnTransaction: false,
       editorProps: {
         attributes: {
+          ...(draftInstructionsId
+            ? {
+                "aria-describedby": draftInstructionsId,
+                "aria-keyshortcuts": "Escape Control+Enter Meta+Enter",
+              }
+            : {}),
           "aria-multiline": "true",
-          "aria-label": "Text block",
+          "aria-label": draftInstructionsId ? "New text block" : "Text block",
           class: "text-block-editor-content text-block-rich-content",
           role: "textbox",
         },
         handleKeyDown: (view, event) => {
-          if (event.key === "Escape" && onCancelDraftRef.current) {
+          if (event.isComposing || event.keyCode === 229) {
+            return false;
+          }
+
+          const isDraftEscape = event.key === "Escape" && Boolean(onCancelDraftRef.current);
+          const isDraftCommit = event.key === "Enter"
+            && (event.ctrlKey || event.metaKey)
+            && Boolean(onCommitDraftRef.current);
+          if (
+            event.repeat && (isDraftEscape || isDraftCommit)
+            || isDraftCommit && (event.altKey || event.shiftKey)
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            return true;
+          }
+
+          if (isDraftEscape && onCancelDraftRef.current) {
             event.preventDefault();
             event.stopPropagation();
             onCancelDraftRef.current();
@@ -1108,8 +1152,7 @@ function TiptapBlockEditor({
           }
 
           if (
-            event.key === "Enter"
-            && (event.ctrlKey || event.metaKey)
+            isDraftCommit
             && onCommitDraftRef.current
           ) {
             event.preventDefault();

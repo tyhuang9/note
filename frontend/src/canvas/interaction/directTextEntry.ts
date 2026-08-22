@@ -18,6 +18,40 @@ export type DirectTextDraftRect = Readonly<{
   y: number;
 }>;
 
+export type DirectTextEntryAvailability = Readonly<{
+  activeTool: string;
+  hasConnectorChooser: boolean;
+  hasDirectDraft: boolean;
+  hasPendingImage: boolean;
+  isCanvasAuthoringAvailable: boolean;
+  isEditingText: boolean;
+  isModalOrOverlayOpen: boolean;
+  isSearchOpen: boolean;
+  source: "keyboard" | "pointer";
+}>;
+
+/** Single state contract for advertised and authoritative direct text entry. */
+export function canStartDirectTextEntry({
+  activeTool,
+  hasConnectorChooser,
+  hasDirectDraft,
+  hasPendingImage,
+  isCanvasAuthoringAvailable,
+  isEditingText,
+  isModalOrOverlayOpen,
+  isSearchOpen,
+  source,
+}: DirectTextEntryAvailability) {
+  return isCanvasAuthoringAvailable
+    && !hasConnectorChooser
+    && !hasDirectDraft
+    && !hasPendingImage
+    && !isEditingText
+    && !isModalOrOverlayOpen
+    && !isSearchOpen
+    && (source === "pointer" ? activeTool === "select" : activeTool === "text");
+}
+
 /** Places the first editable caret exactly at a world-space canvas point. */
 export function getDirectTextDraftRect(
   caretPoint: CanvasPoint,

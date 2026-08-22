@@ -60,6 +60,7 @@ import {
   type ShapeTool,
 } from "./canvas/interaction/primitiveGeometry";
 import {
+  canStartDirectTextEntry,
   getDefaultKeyboardTextCaretPoint,
   getDirectTextDraftRect,
 } from "./canvas/interaction/directTextEntry";
@@ -1848,12 +1849,17 @@ function App() {
       : activeTool === "diamond"
         ? "Diamond"
         : null;
-  const isKeyboardTextCreationAvailable = Boolean(
-    isCanvasAuthoringAvailable &&
-    !isSearchOpen &&
-    !editingBlockId &&
-    activeTool === "text",
-  );
+  const isKeyboardTextCreationAvailable = canStartDirectTextEntry({
+    activeTool,
+    hasConnectorChooser: connectorEndpointChooser !== null,
+    hasDirectDraft: directTextDraft !== null,
+    hasPendingImage: pendingImagePlacement !== null,
+    isCanvasAuthoringAvailable,
+    isEditingText: editingBlockId !== null,
+    isModalOrOverlayOpen: Boolean(activeWorkbenchOverlay || isAIProvidersOpen),
+    isSearchOpen,
+    source: "keyboard",
+  });
   const availableDrawingPropertiesContext = isCanvasAuthoringAvailable
     ? drawingPropertiesContext
     : null;
@@ -3829,10 +3835,7 @@ function App() {
         event.key === "Enter"
         && event.target === canvasRef.current
         && document.activeElement === canvasRef.current
-        && activeToolRef.current === "text"
-        && isCanvasAuthoringAvailableRef.current
-        && connectorEndpointChooserRef.current === null
-        && !currentEditingBlockId
+        && isKeyboardTextCreationAvailable
         && !event.isComposing
         && !event.repeat
         && !event.altKey
@@ -3979,6 +3982,7 @@ function App() {
     isCanvasKeyboardActive,
     isEditingHeaderTitle,
     isAIProvidersOpen,
+    isKeyboardTextCreationAvailable,
     isStarterDismissed,
     isWorkspaceEmpty,
     selectAllVisibleBlocks,
@@ -5867,17 +5871,17 @@ function App() {
   ) {
     const pageId = selectedPageIdRef.current;
     const activeTool = activeToolRef.current;
-    if (
-      !pageId ||
-      !isCanvasAuthoringAvailableRef.current ||
-      isWorkbenchOverlayOpenRef.current ||
-      isSearchOpen ||
-      connectorEndpointChooserRef.current !== null ||
-      pendingImagePlacementRef.current !== null ||
-      editingBlockIdRef.current !== null ||
-      directTextDraftRef.current !== null ||
-      (source === "pointer" ? activeTool !== "select" : activeTool !== "text")
-    ) {
+    if (!pageId || !canStartDirectTextEntry({
+      activeTool,
+      hasConnectorChooser: connectorEndpointChooserRef.current !== null,
+      hasDirectDraft: directTextDraftRef.current !== null,
+      hasPendingImage: pendingImagePlacementRef.current !== null,
+      isCanvasAuthoringAvailable: isCanvasAuthoringAvailableRef.current,
+      isEditingText: editingBlockIdRef.current !== null,
+      isModalOrOverlayOpen: isWorkbenchOverlayOpenRef.current || isAIProvidersOpen,
+      isSearchOpen,
+      source,
+    })) {
       return false;
     }
 
@@ -8729,7 +8733,9 @@ function App() {
       <section
         className={`workspace ${isTextFormattingVisible ? "has-text-formatting" : ""} ${isShapeTextEditing ? "is-shape-text-editing" : ""} ${isPropertiesPanelOpen && availableDrawingPropertiesContext ? "has-compact-properties" : ""}`}
         inert={
-          isAssistantOverlayOpen || isExplorerOverlayOpen ? true : undefined
+          isAssistantOverlayOpen || isExplorerOverlayOpen || isAIProvidersOpen
+            ? true
+            : undefined
         }
       >
         <PageHeader

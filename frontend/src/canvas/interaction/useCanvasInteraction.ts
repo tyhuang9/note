@@ -148,7 +148,7 @@ function isCanvasChromeTarget(target: EventTarget | null) {
 
 function isCanvasDoubleClickExcludedTarget(target: EventTarget | null) {
   return target instanceof Element && target.closest(
-    ".canvas-tool-palette, .drawing-properties-panel, .offscreen-indicators, .search-panel, .selection-frame-handle, .selection-frame-endpoint-handle, .selection-frame-text-resize-e",
+    ".canvas-tool-palette, .drawing-properties-panel, .offscreen-indicators, .search-panel, .selection-frame-handle, .selection-frame-endpoint-handle, .selection-frame-text-resize-e, .shape-contained-text-editor, .global-text-toolbar, [role='dialog'], [aria-modal='true']",
   ) !== null;
 }
 
@@ -174,6 +174,43 @@ export function elementIdsBackToFront(elements: readonly CanvasElement[]): strin
     .map((element, index) => ({ element, index }))
     .sort((first, second) => first.element.zIndex - second.element.zIndex || first.index - second.index)
     .map(({ element }) => element.id);
+}
+
+type EditableTextCanvasElement = Extract<CanvasElement, { type: "shape" | "text" }>;
+
+export type DirectTextEntryHit =
+  | Readonly<{ element: EditableTextCanvasElement; kind: "editable" }>
+  | Readonly<{ kind: "blocked" }>
+  | Readonly<{ kind: "blank" }>;
+
+/** Resolves text-entry intent in exact visual z-order without DOM ownership. */
+export function resolveDirectTextEntryHit(
+  elements: readonly CanvasElement[],
+  point: CanvasPoint,
+): DirectTextEntryHit {
+  const elementsById = Object.fromEntries(
+    elements.map((element) => [element.id, element]),
+  );
+  const orderedIds = elementIdsBackToFront(elements);
+  const directTarget = getTopmostElementAtPoint(
+    elementsById,
+    orderedIds,
+    point,
+    0,
+  );
+  if (directTarget) {
+    return directTarget.type === "text" || directTarget.type === "shape"
+      ? { element: directTarget, kind: "editable" }
+      : { kind: "blocked" };
+  }
+
+  for (let index = orderedIds.length - 1; index >= 0; index -= 1) {
+    const element = elementsById[orderedIds[index]];
+    if (element?.type === "shape" && shapeTextContainsPoint(element, point)) {
+      return { element, kind: "editable" };
+    }
+  }
+  return { kind: "blank" };
 }
 
 /** Central DOM router for legacy canvas pan, marquee, insertion, and wheel behavior. */
@@ -709,49 +746,24 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
     [capturePointer, getCanvasPoint, startPan],
   );
 
-  const handleDoubleClick = useCallback(
-    (event: ReactMouseEvent<HTMLElement>) => {
+  const editDirectTextElement = useCallback(
+    (
+      event: ReactMouseEvent<HTMLElement>,
+      element: EditableTextCanvasElement,
+    ) => {
       const current = optionsRef.current;
-      if (
-        event.button !== 0
-        || performance.now() - suppressDraftOriginDoubleClickRef.current < 750
-        || current.activeToolRef.current !== "select"
-        || current.isTextEditing()
-        || isCanvasDoubleClickExcludedTarget(event.target)
-        || event.target instanceof Element && event.target.closest(".shape-contained-text-editor")
-      ) return;
-      const point = getCanvasPoint(event.clientX, event.clientY);
-      if (!point) return;
-      const elementsById = Object.fromEntries(
-        current.visibleElements.map((element) => [element.id, element]),
-      );
-      const target = getTopmostElementAtPoint(
-        elementsById,
-        elementIdsBackToFront(current.visibleElements),
-        point,
-        0,
-      );
-      if (target && target.type !== "text" && target.type !== "shape") return;
-      if (!target && !isCanvasBackgroundTarget(event.target)) return;
       event.preventDefault();
       event.stopPropagation();
       current.cleanupMarquee();
       current.setInsertionPoint(null);
       current.setIsCanvasKeyboardActive(true);
-      if (!target) {
-        const previousSelection = blankClickSelectionRef.current?.elementIds
-          ?? current.selectedElementIdsRef.current;
-        blankClickSelectionRef.current = null;
-        current.onCreateDirectText(point, previousSelection);
-        return;
-      }
       blankClickSelectionRef.current = null;
       const textSurface = event.target instanceof Element
         ? event.target.closest<HTMLElement>(
             ".shape-contained-text-content, .text-block-display",
           )
         : null;
-      current.onEditBindableText(target.id, {
+      current.onEditBindableText(element.id, {
         clientX: event.clientX,
         clientY: event.clientY,
         textOffset: textSurface
@@ -764,7 +776,39 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
           : null,
       });
     },
-    [getCanvasPoint],
+    [],
+  );
+
+  const handleDoubleClick = useCallback(
+    (event: ReactMouseEvent<HTMLElement>) => {
+      const current = optionsRef.current;
+      if (
+        event.button !== 0
+        || performance.now() - suppressDraftOriginDoubleClickRef.current < 750
+        || current.activeToolRef.current !== "select"
+        || current.isTextEditing()
+        || isCanvasDoubleClickExcludedTarget(event.target)
+      ) return;
+      const point = getCanvasPoint(event.clientX, event.clientY);
+      if (!point) return;
+      const hit = resolveDirectTextEntryHit(current.visibleElements, point);
+      if (hit.kind === "blocked") return;
+      if (hit.kind === "blank" && !isCanvasBackgroundTarget(event.target)) return;
+      if (hit.kind === "blank") {
+        event.preventDefault();
+        event.stopPropagation();
+        current.cleanupMarquee();
+        current.setInsertionPoint(null);
+        current.setIsCanvasKeyboardActive(true);
+        const previousSelection = blankClickSelectionRef.current?.elementIds
+          ?? current.selectedElementIdsRef.current;
+        blankClickSelectionRef.current = null;
+        current.onCreateDirectText(point, previousSelection);
+        return;
+      }
+      editDirectTextElement(event, hit.element);
+    },
+    [editDirectTextElement, getCanvasPoint],
   );
 
   const handleDoubleClickCapture = useCallback(
@@ -776,49 +820,14 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
         || current.activeToolRef.current !== "select"
         || current.isTextEditing()
         || isCanvasDoubleClickExcludedTarget(event.target)
-        || event.target instanceof Element && event.target.closest(
-          ".shape-contained-text-editor, .global-text-toolbar, [role='dialog']",
-        )
       ) return;
       const point = getCanvasPoint(event.clientX, event.clientY);
       if (!point) return;
-      const elementsById = Object.fromEntries(
-        current.visibleElements.map((element) => [element.id, element]),
-      );
-      const target = getTopmostElementAtPoint(
-        elementsById,
-        elementIdsBackToFront(current.visibleElements),
-        point,
-        0,
-      ) ?? [...current.visibleElements].reverse().find(
-        (element): element is ShapeElement =>
-          element.type === "shape" && shapeTextContainsPoint(element, point),
-      );
-      if (!target || target.type !== "text" && target.type !== "shape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      current.cleanupMarquee();
-      current.setInsertionPoint(null);
-      current.setIsCanvasKeyboardActive(true);
-      const textSurface = event.target instanceof Element
-        ? event.target.closest<HTMLElement>(
-            ".shape-contained-text-content, .text-block-display",
-          )
-        : null;
-      current.onEditBindableText(target.id, {
-        clientX: event.clientX,
-        clientY: event.clientY,
-        textOffset: textSurface
-          ? getTextOffsetAtClientPoint(
-              textSurface,
-              event.clientX,
-              event.clientY,
-              textSurface.textContent?.length ?? 0,
-            )
-          : null,
-      });
+      const hit = resolveDirectTextEntryHit(current.visibleElements, point);
+      if (hit.kind !== "editable") return;
+      editDirectTextElement(event, hit.element);
     },
-    [getCanvasPoint],
+    [editDirectTextElement, getCanvasPoint],
   );
 
   const handlePointerMove = useCallback(

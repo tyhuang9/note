@@ -5,7 +5,7 @@ import {
   getDirectTextDraftRect,
 } from "../../src/canvas/interaction/directTextEntry";
 import { resolveDirectTextEntryHit } from "../../src/canvas/interaction/useCanvasInteraction";
-import type { ShapeElement } from "../../src/canvas/model/elements";
+import type { ImageElement, ShapeElement } from "../../src/canvas/model/elements";
 
 describe("direct canvas text entry geometry", () => {
   it("keeps advertised keyboard entry aligned with modal and editor guards", () => {
@@ -65,6 +65,70 @@ describe("direct canvas text entry geometry", () => {
       element: { id: "visual-front" },
       kind: "editable",
     });
+  });
+
+  it("prioritizes a front hollow shape label over a lower filled shape", () => {
+    const shape = (id: string, zIndex: number, fillColor: string | null): ShapeElement => ({
+      createdAt: 1,
+      height: 100,
+      id,
+      locked: false,
+      opacity: 1,
+      pageId: "page",
+      rotation: 0,
+      shape: "rectangle",
+      style: {
+        fillColor: fillColor ? { kind: "fixed", value: fillColor } : null,
+        roughness: 1,
+        roundness: 0,
+        seed: zIndex,
+        strokeColor: { kind: "fixed", value: "#000" },
+        strokeStyle: "solid",
+        strokeWidth: 2,
+      },
+      text: { content: id },
+      type: "shape",
+      updatedAt: 1,
+      width: 200,
+      x: 0,
+      y: 0,
+      zIndex,
+    });
+
+    const hit = resolveDirectTextEntryHit(
+      [shape("lower-filled", 10, "#fff"), shape("front-hollow-label", 20, null)],
+      { x: 100, y: 50 },
+    );
+
+    expect(hit).toMatchObject({
+      element: { id: "front-hollow-label" },
+      kind: "editable",
+    });
+  });
+
+  it("blocks editing when the front ordinary geometry belongs to a non-editable element", () => {
+    const image: ImageElement = {
+      assetId: "asset",
+      createdAt: 1,
+      fileName: "cover.png",
+      fit: "contain",
+      height: 100,
+      id: "front-image",
+      locked: false,
+      naturalHeight: 100,
+      naturalWidth: 200,
+      opacity: 1,
+      pageId: "page",
+      rotation: 0,
+      type: "image",
+      updatedAt: 1,
+      width: 200,
+      x: 0,
+      y: 0,
+      zIndex: 20,
+    };
+
+    expect(resolveDirectTextEntryHit([image], { x: 100, y: 50 })).toEqual({ kind: "blocked" });
   });
 
   it("places the first caret exactly at the requested world point", () => {

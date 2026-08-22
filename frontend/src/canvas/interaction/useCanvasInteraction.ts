@@ -26,6 +26,7 @@ import {
 } from "../model/connectorBinding";
 import { screenToleranceToWorld } from "../model/geometry";
 import {
+  canvasElementContainsPoint,
   getDirectBindableTargetAtPoint,
   getElementBounds,
   getTopmostElementAtPoint,
@@ -192,22 +193,16 @@ export function resolveDirectTextEntryHit(
     elements.map((element) => [element.id, element]),
   );
   const orderedIds = elementIdsBackToFront(elements);
-  const directTarget = getTopmostElementAtPoint(
-    elementsById,
-    orderedIds,
-    point,
-    0,
-  );
-  if (directTarget) {
-    return directTarget.type === "text" || directTarget.type === "shape"
-      ? { element: directTarget, kind: "editable" }
-      : { kind: "blocked" };
-  }
-
   for (let index = orderedIds.length - 1; index >= 0; index -= 1) {
     const element = elementsById[orderedIds[index]];
-    if (element?.type === "shape" && shapeTextContainsPoint(element, point)) {
+    if (!element) continue;
+    if (element.type === "shape" && shapeTextContainsPoint(element, point)) {
       return { element, kind: "editable" };
+    }
+    if (canvasElementContainsPoint(element, point, 0, elementsById)) {
+      return element.type === "text" || element.type === "shape"
+        ? { element, kind: "editable" }
+        : { kind: "blocked" };
     }
   }
   return { kind: "blank" };

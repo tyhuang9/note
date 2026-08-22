@@ -695,6 +695,20 @@ function getOffscreenDirectionLabel(
   return labels[direction];
 }
 
+function getOffscreenGroupItemLabel(group: OffscreenGroup): string {
+  const singular = group.itemKind === "textbox" ? "textbox" : "canvas item";
+  const plural = group.itemKind === "textbox" ? "textboxes" : "canvas items";
+  return `${group.count} ${group.count === 1 ? singular : plural}`;
+}
+
+function getOffscreenGroupStatusLabel(group: OffscreenGroup): string {
+  return `Navigated to ${getOffscreenGroupItemLabel(group)} offscreen ${getOffscreenDirectionLabel(group.direction)}.`;
+}
+
+function getOffscreenGroupsContainerLabel(groups: readonly OffscreenGroup[]): string {
+  return `Offscreen ${groups.every((group) => group.itemKind === "textbox") ? "textboxes" : "canvas items"}`;
+}
+
 function HeroIcon({ name }: Readonly<WorkbenchIconProps>) {
   return (
     <svg
@@ -898,6 +912,19 @@ function hasShapeContainedText(
   element: CanvasElement,
 ): element is ShapeElement & Required<Pick<ShapeElement, "text">> {
   return element.type === "shape" && element.text !== undefined;
+}
+
+function createOffscreenGroup(
+  direction: OffscreenGroup["direction"],
+  elements: readonly CanvasElement[],
+): OffscreenGroup {
+  return {
+    count: elements.length,
+    direction,
+    itemKind: elements.every((element) => isTextElement(element) || hasShapeContainedText(element))
+      ? "textbox"
+      : "canvas-item",
+  };
 }
 
 function hasShapeContainedTextDifference(first: CanvasElement[], second: CanvasElement[]) {
@@ -1972,7 +1999,7 @@ function App() {
       return [];
     }
 
-    const counts = new Map<OffscreenGroup["direction"], number>();
+    const elementsByDirection = new Map<OffscreenGroup["direction"], CanvasElement[]>();
 
     for (const block of visibleBlocks) {
       const direction = getOffscreenDirection(block, canvasViewport);
@@ -1981,13 +2008,14 @@ function App() {
         continue;
       }
 
-      counts.set(direction, (counts.get(direction) ?? 0) + 1);
+      const elements = elementsByDirection.get(direction);
+      if (elements) elements.push(block);
+      else elementsByDirection.set(direction, [block]);
     }
 
-    return Array.from(counts.entries()).map(([direction, count]) => ({
-      direction,
-      count,
-    }));
+    return Array.from(elementsByDirection.entries()).map(([direction, elements]) =>
+      createOffscreenGroup(direction, elements),
+    );
   }, [canvasViewport, visibleBlocks]);
   useEffect(() => {
     const currentStates = new Map(
@@ -8607,6 +8635,8 @@ function App() {
     if (targetBlocks.length === 0) {
       return;
     }
+    const group = offscreenGroups.find((candidate) => candidate.direction === direction)
+      ?? createOffscreenGroup(direction, targetBlocks);
 
     const bounds = targetBlocks.reduce(
       (currentBounds, block) => ({
@@ -8636,6 +8666,7 @@ function App() {
     setEditingBlockId(null);
     setInsertionPoint(null);
     setActiveMode("selected");
+    setConnectorBindingAnnouncement(getOffscreenGroupStatusLabel(group));
     setPanOffset({
       x: canvasSize.width / 2 - targetCenter.x * zoomLevel,
       y: canvasSize.height / 2 - targetCenter.y * zoomLevel,
@@ -8944,14 +8975,12 @@ function App() {
               className={`offscreen-indicators ${
                 isSearchOpen ? "has-search-panel" : ""
               }`}
-              aria-label="Offscreen textboxes"
+              aria-label={getOffscreenGroupsContainerLabel(offscreenGroups)}
               inert={isSearchOpen ? true : undefined}
             >
               {offscreenGroups.map((group) => (
                 <button
-                  aria-label={`${group.count} ${
-                    group.count === 1 ? "textbox" : "textboxes"
-                  } offscreen ${getOffscreenDirectionLabel(group.direction)}`}
+                  aria-label={`${getOffscreenGroupItemLabel(group)} offscreen ${getOffscreenDirectionLabel(group.direction)}`}
                   className={`offscreen-arrow offscreen-${group.direction}`}
                   key={group.direction}
                   onClick={(event) => {

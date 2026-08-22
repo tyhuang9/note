@@ -61,6 +61,7 @@ export type CanvasSize = {
 export type OffscreenGroup = {
   direction: "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw";
   count: number;
+  itemKind: "canvas-item" | "textbox";
 };
 
 export type SearchMatch = {

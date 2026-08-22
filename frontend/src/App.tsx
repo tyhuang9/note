@@ -2179,6 +2179,7 @@ function App() {
       }
       if (offscreenNavigationFocusRafRef.current !== null) {
         window.cancelAnimationFrame(offscreenNavigationFocusRafRef.current);
+        offscreenNavigationFocusRafRef.current = null;
       }
 
       cancelCanvasSelectionSession();
@@ -8625,6 +8626,10 @@ function App() {
       x: (bounds.minX + bounds.maxX) / 2,
       y: (bounds.minY + bounds.maxY) / 2,
     };
+    const navigationPageId = selectedPageIdRef.current;
+    const navigationFocusOrigin = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
 
     blurActiveTextEntry();
     setSelectedBlockIds(targetBlocks.map((block) => block.id));
@@ -8639,12 +8644,24 @@ function App() {
     offscreenNavigationFocusRafRef.current = window.requestAnimationFrame(() => {
       offscreenNavigationFocusRafRef.current = window.requestAnimationFrame(() => {
         offscreenNavigationFocusRafRef.current = null;
+        const activeElement = document.activeElement;
+        const hasDifferentMeaningfulFocus = activeElement instanceof HTMLElement
+          && activeElement !== document.body
+          && activeElement !== document.documentElement
+          && activeElement !== navigationFocusOrigin
+          && activeElement.isConnected;
+        if (selectedPageIdRef.current !== navigationPageId || hasDifferentMeaningfulFocus) {
+          return;
+        }
         const targetElement = targetBlockId
-          ? blockElementsRef.current.get(targetBlockId)
+          ? document.querySelector<HTMLElement>(
+            `[data-canvas-element-id="${CSS.escape(targetBlockId)}"]`,
+          )
           : null;
-        const focusTarget = targetElement?.querySelector<HTMLElement>(
-          ".text-block-header, [role=button], button, [tabindex]:not([tabindex='-1'])",
-        );
+        const focusableSelector = ".text-block-header, [role=button], button, [tabindex]:not([tabindex='-1'])";
+        const focusTarget = targetElement?.matches(focusableSelector)
+          ? targetElement
+          : targetElement?.querySelector<HTMLElement>(focusableSelector);
         if (focusTarget?.isConnected) {
           focusTarget.focus({ preventScroll: true });
           return;

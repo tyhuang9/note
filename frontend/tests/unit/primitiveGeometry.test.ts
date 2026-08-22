@@ -4,6 +4,7 @@ import {
   deterministicSeed,
   getDefaultKeyboardShapeGeometry,
   isMeaningfulShapeDrag,
+  isPersistableShapeRect,
   primitiveGeometryFromSession,
   SHAPE_DRAG_THRESHOLD_PX,
   shapeRectFromDrag,
@@ -35,6 +36,20 @@ describe("primitive drag geometry", () => {
         { alt: false, shift: false },
         false,
       )).toBeNull();
+      expect(primitiveGeometryFromSession(
+        shape,
+        { x: 20, y: 30 },
+        { x: 23, y: 30 },
+        { alt: false, shift: false },
+        true,
+      )).toBeNull();
+      expect(primitiveGeometryFromSession(
+        shape,
+        { x: 20, y: 30 },
+        { x: 20, y: 27 },
+        { alt: false, shift: false },
+        true,
+      )).toBeNull();
     }
     expect(primitiveGeometryFromSession(
       "line",
@@ -43,6 +58,30 @@ describe("primitive drag geometry", () => {
       { alt: false, shift: false },
       false,
     )).toEqual({ kind: "connector", start: { x: 20, y: 30 }, end: { x: 180, y: 30 } });
+  });
+
+  it("rejects non-positive and out-of-envelope shape rectangles", () => {
+    expect(isPersistableShapeRect({ x: 0, y: 0, width: 1, height: 1 })).toBe(true);
+    expect(isPersistableShapeRect({ x: 0, y: 0, width: 0, height: 1 })).toBe(false);
+    expect(isPersistableShapeRect({ x: 0, y: 0, width: 1, height: 0 })).toBe(false);
+    expect(isPersistableShapeRect({ x: 999_990, y: 999_990, width: 10, height: 10 })).toBe(true);
+    expect(isPersistableShapeRect({ x: 999_991, y: 999_990, width: 10, height: 10 })).toBe(false);
+    expect(isPersistableShapeRect({ x: -1_000_001, y: 0, width: 10, height: 10 })).toBe(false);
+    expect(isPersistableShapeRect({ x: Number.NaN, y: 0, width: 10, height: 10 })).toBe(false);
+    expect(primitiveGeometryFromSession(
+      "rectangle",
+      { x: 999_995, y: 0 },
+      { x: 1_000_005, y: 10 },
+      { alt: false, shift: false },
+      true,
+    )).toBeNull();
+    expect(primitiveGeometryFromSession(
+      "diamond",
+      { x: -999_995, y: 0 },
+      { x: -1_000_005, y: -10 },
+      { alt: true, shift: true },
+      true,
+    )).toBeNull();
   });
 
   it("centers default keyboard shapes and keeps them inside the persistence envelope", () => {

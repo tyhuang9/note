@@ -1,5 +1,9 @@
 import type { CanvasPoint, CanvasRect } from "../model/geometry";
-import { MAX_CANVAS_VALUE, isSafeCanvasCoordinate } from "../model/connectorBinding";
+import {
+  MAX_CANVAS_VALUE,
+  isSafeCanvasCoordinate,
+  isSafeCanvasDimension,
+} from "../model/connectorBinding";
 
 export type PrimitiveModifiers = Readonly<{ alt: boolean; shift: boolean }>;
 export type ShapeTool = "rectangle" | "ellipse" | "diamond";
@@ -28,6 +32,18 @@ export function isMeaningfulShapeDrag(
   ) >= SHAPE_DRAG_THRESHOLD_PX;
 }
 
+/** Matches the finite, positive shape envelope accepted by persistence and binding. */
+export function isPersistableShapeRect(rect: CanvasRect): boolean {
+  return isSafeCanvasCoordinate(rect.x)
+    && isSafeCanvasCoordinate(rect.y)
+    && isSafeCanvasDimension(rect.width)
+    && rect.width > 0
+    && isSafeCanvasDimension(rect.height)
+    && rect.height > 0
+    && isSafeCanvasCoordinate(rect.x + rect.width)
+    && isSafeCanvasCoordinate(rect.y + rect.height);
+}
+
 /** Returns a persistence-safe default shape centered in the visible viewport when possible. */
 export function getDefaultKeyboardShapeGeometry(
   tool: ShapeTool,
@@ -50,7 +66,7 @@ export function getDefaultKeyboardShapeGeometry(
   const width = Math.min(defaults.width, viewport.width);
   const height = Math.min(defaults.height, viewport.height);
   if (width <= 0 || height <= 0) return null;
-  return {
+  const geometry: Extract<PrimitiveGeometry, { kind: "shape" }> = {
     kind: "shape",
     rect: {
       x: Math.max(-MAX_CANVAS_VALUE, Math.min(MAX_CANVAS_VALUE - width, center.x - width / 2)),
@@ -59,6 +75,7 @@ export function getDefaultKeyboardShapeGeometry(
       height,
     },
   };
+  return isPersistableShapeRect(geometry.rect) ? geometry : null;
 }
 
 /** Normalizes a drag into a positive box; Shift locks aspect ratio, Alt expands from center. */
@@ -114,7 +131,8 @@ export function primitiveGeometryFromSession(
   if (!didMove) {
     return null;
   }
-  return { kind: "shape", rect: shapeRectFromDrag(start, current, modifiers) };
+  const rect = shapeRectFromDrag(start, current, modifiers);
+  return isPersistableShapeRect(rect) ? { kind: "shape", rect } : null;
 }
 
 export function deterministicSeed(id: string): number {

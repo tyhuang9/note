@@ -50,9 +50,21 @@ test("click and subthreshold shape gestures are inert at 50%, 100%, and 200%", a
         await expect(page.locator(".primitive-authoring-preview")).toHaveCount(0);
         await page.mouse.up();
       }
-      const pointerId = await beginCapturedDrag(page, start, { x: start.x + 3, y: start.y });
+      for (const delta of [
+        { x: 12, y: 0 },
+        { x: -12, y: 0 },
+        { x: 0, y: 12 },
+        { x: 0, y: -12 },
+      ]) {
+        await page.mouse.move(start.x, start.y);
+        await page.mouse.down();
+        await page.mouse.move(start.x + delta.x, start.y + delta.y);
+        await expect(page.locator(".primitive-authoring-preview")).toHaveCount(0);
+        await page.mouse.up();
+      }
+      const pointerId = await beginCapturedDrag(page, start, { x: start.x + 2.2, y: start.y + 2.2 });
       await expect(page.locator(".primitive-authoring-preview")).toHaveCount(1);
-      await dispatchCapturedTermination(page, pointerId, "pointercancel", { x: start.x + 3, y: start.y });
+      await dispatchCapturedTermination(page, pointerId, "pointercancel", { x: start.x + 2.2, y: start.y + 2.2 });
       await page.mouse.up();
 
       await expect(page.locator('[data-canvas-element-type="shape"]')).toHaveCount(1);
@@ -117,14 +129,14 @@ test("pointerup applies the final screen-space threshold without an intervening 
 
   await releaseCapturedWithoutMove(page, start, { x: start.x + 3, y: start.y });
   await expect(page.locator(".primitive-authoring-preview")).toHaveCount(0);
-  await expect(page.locator('[data-canvas-element-type="shape"]')).toHaveCount(2);
-  await expect.poll(() => counts(page)).toEqual({ apply: 1, persistence: 2, session: 1 });
+  await expect(page.locator('[data-canvas-element-type="shape"]')).toHaveCount(1);
+  await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
 
   await page.getByRole("button", { name: TOOL_NAMES.diamond }).click();
   await settleAndResetCounts(page);
   const finalStart = { x: start.x + 40, y: start.y + 40 };
   await releaseCapturedWithoutMove(page, finalStart, { x: finalStart.x + 2.4, y: finalStart.y + 3.2 });
-  await expect(page.locator('[data-canvas-element-type="shape"]')).toHaveCount(3);
+  await expect(page.locator('[data-canvas-element-type="shape"]')).toHaveCount(2);
   await expect.poll(() => counts(page)).toEqual({ apply: 1, persistence: 2, session: 1 });
   const greaterThanThresholdShape = await newestShape(page);
   if (!greaterThanThresholdShape) throw new Error("Final-pointer shape was unavailable.");
@@ -142,7 +154,7 @@ test("pointerup applies the final screen-space threshold without an intervening 
   await dispatchCapturedPointerUp(page, pointerId, { x: retreatStart.x + 1.2, y: retreatStart.y + 1.6 });
   await page.mouse.up();
   await expect(page.locator(".primitive-authoring-preview")).toHaveCount(0);
-  await expect(page.locator('[data-canvas-element-type="shape"]')).toHaveCount(3);
+  await expect(page.locator('[data-canvas-element-type="shape"]')).toHaveCount(2);
   await expect(page.locator(`[data-canvas-element-id="${greaterThanThresholdShape.id}"]`)).toHaveAttribute("aria-pressed", "true");
   await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
 });
@@ -310,6 +322,40 @@ test("keyboard shape creation guards text, modal, modified, repeated, and unsafe
   await page.keyboard.press("Enter");
   await expect(status).toHaveText("Keyboard shape 1 was not created. Ellipse is unavailable at the current canvas position.");
   await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
+
+  const unsafeBounds = await requiredBounds(unsafeCanvas, "unsafe canvas");
+  await page.getByRole("button", { name: TOOL_NAMES.ellipse }).click();
+  await settleAndResetCounts(page);
+  await drag(
+    page,
+    { x: unsafeBounds.x + unsafeBounds.width / 2 - 20, y: unsafeBounds.y + unsafeBounds.height / 2 - 20 },
+    { x: unsafeBounds.x + unsafeBounds.width / 2, y: unsafeBounds.y + unsafeBounds.height / 2 },
+  );
+  await expect(page.locator('[data-canvas-element-type="shape"]')).toHaveCount(2);
+  await expect(status).toHaveText(
+    "Shape gesture 1 was not created. Ellipse needs horizontal and vertical size within the available canvas area.",
+  );
+  await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
+  await page.keyboard.press("Control+z");
+  await expect(page.locator('[data-canvas-element-type="shape"]')).toHaveCount(2);
+
+  await persistViewportCenter(page, await requiredBounds(unsafeCanvas, "unsafe canvas"), { x: 0, y: 0 });
+  await page.reload();
+  const recoveredCanvas = page.getByRole("tabpanel");
+  const recoveredBounds = await requiredBounds(recoveredCanvas, "recovered canvas");
+  await page.getByRole("button", { name: TOOL_NAMES.rectangle }).click();
+  await settleAndResetCounts(page);
+  await drag(
+    page,
+    { x: recoveredBounds.x + 400, y: recoveredBounds.y + 240 },
+    { x: recoveredBounds.x + 440, y: recoveredBounds.y + 270 },
+  );
+  await expect(page.locator('[data-canvas-element-type="shape"]')).toHaveCount(3);
+  await expect.poll(() => counts(page)).toEqual({ apply: 1, persistence: 2, session: 1 });
+  const recoveredShapeId = (await newestShape(page))?.id;
+  if (!recoveredShapeId) throw new Error("Recovered pointer shape was unavailable.");
+  await page.reload();
+  await expect(page.locator(`[data-canvas-element-id="${recoveredShapeId}"]`)).toBeVisible();
 });
 
 test("reverse, Shift, and Alt drags preserve geometry while tool lock remains explicit", async ({ page }) => {
@@ -712,6 +758,27 @@ async function installWorkspace(page: Page) {
           pageId: string;
           upserts: ElementRecord[];
         };
+        for (const element of batch.upserts) {
+          if (element.type !== "shape") continue;
+          const x = Number(element.x);
+          const y = Number(element.y);
+          const width = Number(element.width);
+          const height = Number(element.height);
+          if (
+            !Number.isFinite(x)
+            || !Number.isFinite(y)
+            || !Number.isFinite(width)
+            || !Number.isFinite(height)
+            || Math.abs(x) > 1_000_000
+            || Math.abs(y) > 1_000_000
+            || width <= 0
+            || width > 1_000_000
+            || height <= 0
+            || height > 1_000_000
+            || Math.abs(x + width) > 1_000_000
+            || Math.abs(y + height) > 1_000_000
+          ) throw new Error("shape geometry exceeds the persistence envelope");
+        }
         const deleted = new Set(batch.deletedElementIds);
         const upserts = new Map(batch.upserts.map((element) => [element.id, element]));
         workspace.elements = workspace.elements

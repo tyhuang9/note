@@ -54,6 +54,7 @@ import { resolveCanvasColor } from "./canvas/rendering/canvasColor";
 import {
   deterministicSeed,
   getDefaultKeyboardShapeGeometry,
+  isPersistableShapeRect,
   type PrimitiveGeometry,
   type PrimitiveTool,
   type ShapeTool,
@@ -1432,6 +1433,7 @@ function App() {
   const keyboardArrowCreationRef = useRef<() => boolean>(() => false);
   const keyboardShapeCreationRef = useRef<(tool: ShapeTool) => boolean>(() => false);
   const keyboardShapeAnnouncementSequenceRef = useRef(0);
+  const pointerShapeAnnouncementSequenceRef = useRef(0);
   const keyboardArrowEndpointFocusRafRef = useRef<number | null>(null);
 
   const setSelectedPageId = useCallback((nextPageId: string) => {
@@ -7955,7 +7957,8 @@ function App() {
   const completePrimitiveCreation = useCallback(
     (elementId: string, tool: PrimitiveTool, geometry: PrimitiveGeometry, appearance: Readonly<{ opacity: number; style: RoughStyle }>) => {
       const pageId = selectedPageIdRef.current;
-      if (!pageId) return;
+      if (!pageId) return false;
+      if (geometry.kind === "shape" && !isPersistableShapeRect(geometry.rect)) return false;
       const timestamp = Date.now();
       const { opacity, style } = appearance;
 
@@ -8010,6 +8013,7 @@ function App() {
         activeToolRef.current = nextTool;
         setActiveTool(nextTool);
       }
+      return true;
     },
     [],
   );
@@ -8113,6 +8117,13 @@ function App() {
     onArrowStatusChange: setConnectorBindingAnnouncement,
     onCreateArrow: completeArrowCreation,
     onCreatePrimitive: completePrimitiveCreation,
+    onPrimitiveStatusChange: (tool) => {
+      pointerShapeAnnouncementSequenceRef.current += 1;
+      const label = tool === "rectangle" ? "Rectangle" : tool === "ellipse" ? "Ellipse" : "Diamond";
+      setConnectorBindingAnnouncement(
+        `Shape gesture ${pointerShapeAnnouncementSequenceRef.current} was not created. ${label} needs horizontal and vertical size within the available canvas area.`,
+      );
+    },
     onCreateText: (point) =>
       createTextBlock(point.x, point.y, "", {
         fromTool: true,
@@ -8159,7 +8170,10 @@ function App() {
     }
     const elementId = createId("shape");
     const keepsToolActive = isToolLockedRef.current;
-    completePrimitiveCreation(elementId, tool, geometry, getPrimitiveAppearance(tool, elementId));
+    if (!completePrimitiveCreation(elementId, tool, geometry, getPrimitiveAppearance(tool, elementId))) {
+      setConnectorBindingAnnouncement(`Keyboard shape ${sequence} was not created. ${label} is unavailable at the current canvas position.`);
+      return false;
+    }
     setConnectorBindingAnnouncement(keepsToolActive
       ? `Keyboard shape ${sequence} created. ${label} was placed in the current viewport. Tool lock kept ${label} active.`
       : `Keyboard shape ${sequence} created. ${label} was placed in the current viewport. Switched to Select.`);

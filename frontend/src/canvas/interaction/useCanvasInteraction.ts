@@ -90,7 +90,8 @@ type CanvasInteractionOptions = {
   getArrowCreatedStatus: () => string;
   getArrowTargetLabel: (target: BindableElement) => string;
   onCreateArrow: (elementId: string, start: ConnectorEndpoint, end: ConnectorEndpoint) => boolean;
-  onCreatePrimitive: (elementId: string, tool: PrimitiveTool, geometry: PrimitiveGeometry, appearance: Readonly<{ opacity: number; style: RoughStyle }>) => void;
+  onCreatePrimitive: (elementId: string, tool: PrimitiveTool, geometry: PrimitiveGeometry, appearance: Readonly<{ opacity: number; style: RoughStyle }>) => boolean;
+  onPrimitiveStatusChange: (tool: ShapeElement["shape"]) => void;
   onArrowStatusChange: (message: string) => void;
   onCreateText: (point: CanvasPoint) => void;
   onEditBindableText: (elementId: string) => void;
@@ -795,14 +796,19 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
           currentPrimitive.modifiers,
           currentPrimitive.didMove,
         );
-        if (geometry) {
-          optionsRef.current.onCreatePrimitive(
+        const didCreate = geometry
+          ? optionsRef.current.onCreatePrimitive(
             currentPrimitive.elementId,
             currentPrimitive.tool,
             geometry,
             { opacity: currentPrimitive.opacity, style: currentPrimitive.style },
-          );
-        } else {
+          )
+          : false;
+        if (!didCreate) {
+          if (
+            currentPrimitive.didMove
+            && isShapePrimitiveTool(currentPrimitive.tool)
+          ) optionsRef.current.onPrimitiveStatusChange(currentPrimitive.tool);
           const restorableSelection = currentPrimitive.previousSelection.filter((id) =>
             optionsRef.current.visibleElements.some((element) => element.id === id)
           );

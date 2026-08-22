@@ -26,6 +26,10 @@ import {
 } from "../model/connectorBinding";
 import { screenToleranceToWorld } from "../model/geometry";
 import { getDirectBindableTargetAtPoint, getElementBounds, getTopmostElementAtPoint } from "../model/hitTesting";
+import {
+  getTextOffsetAtClientPoint,
+  type CaretPlacementRequest,
+} from "../../editor/caretPlacement";
 import { renderConnectorRoughSvg, renderShapeRoughSvg, shapeRenderPadding } from "../components/PrimitiveElementView";
 import {
   isMeaningfulShapeDrag,
@@ -81,6 +85,7 @@ type CanvasInteractionOptions = {
   hasPendingImage: () => boolean;
   isTemporaryHandActiveRef: RefObject<boolean>;
   interactionCancellationKey: string;
+  isTextEditing: () => boolean;
   leaveTextEditing: () => void;
   liveDraftLayerRef: RefObject<SVGSVGElement | null>;
   maxZoom: number;
@@ -90,11 +95,12 @@ type CanvasInteractionOptions = {
   getArrowCreatedStatus: () => string;
   getArrowTargetLabel: (target: BindableElement) => string;
   onCreateArrow: (elementId: string, start: ConnectorEndpoint, end: ConnectorEndpoint) => boolean;
+  onCreateDirectText: (point: CanvasPoint) => boolean;
   onCreatePrimitive: (elementId: string, tool: PrimitiveTool, geometry: PrimitiveGeometry, appearance: Readonly<{ opacity: number; style: RoughStyle }>) => boolean;
   onPrimitiveStatusChange: (tool: ShapeElement["shape"]) => void;
   onArrowStatusChange: (message: string) => void;
   onCreateText: (point: CanvasPoint) => void;
-  onEditBindableText: (elementId: string) => void;
+  onEditBindableText: (elementId: string, caretPlacement?: CaretPlacementRequest) => void;
   onImagePreviewPointChange: (point: CanvasPoint | null) => void;
   onPlaceImage: (point: CanvasPoint) => void;
   onRequestImagePicker: () => void;
@@ -682,19 +688,49 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       if (
         event.button !== 0
         || current.activeToolRef.current !== "select"
+        || current.isTextEditing()
         || isCanvasDoubleClickExcludedTarget(event.target)
         || event.target instanceof Element && event.target.closest(".shape-contained-text-editor")
       ) return;
       const point = getCanvasPoint(event.clientX, event.clientY);
       if (!point) return;
-      const target = getDirectBindableTargetAtPoint(current.visibleElements, point);
-      if (!target) return;
+      const elementsById = Object.fromEntries(
+        current.visibleElements.map((element) => [element.id, element]),
+      );
+      const target = getTopmostElementAtPoint(
+        elementsById,
+        elementIdsBackToFront(current.visibleElements),
+        point,
+        0,
+      );
+      if (target && target.type !== "text" && target.type !== "shape") return;
+      if (!target && !isCanvasBackgroundTarget(event.target)) return;
       event.preventDefault();
       event.stopPropagation();
       current.cleanupMarquee();
       current.setInsertionPoint(null);
       current.setIsCanvasKeyboardActive(true);
-      current.onEditBindableText(target.id);
+      if (!target) {
+        current.onCreateDirectText(point);
+        return;
+      }
+      const textSurface = event.target instanceof Element
+        ? event.target.closest<HTMLElement>(
+            ".shape-contained-text-content, .text-block-display",
+          )
+        : null;
+      current.onEditBindableText(target.id, {
+        clientX: event.clientX,
+        clientY: event.clientY,
+        textOffset: textSurface
+          ? getTextOffsetAtClientPoint(
+              textSurface,
+              event.clientX,
+              event.clientY,
+              textSurface.textContent?.length ?? 0,
+            )
+          : null,
+      });
     },
     [getCanvasPoint],
   );

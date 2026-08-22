@@ -20,6 +20,11 @@ import type {
 import { blurActiveTextEntry } from "../editorUtils";
 import { createSlashCommandExtension } from "../editor/SlashCommandExtension";
 import {
+  getTextOffsetAtClientPoint,
+  placeEditorCaret,
+  type CaretPlacementRequest,
+} from "../editor/caretPlacement";
+import {
   getCanonicalRichTextDocument as getTipTapContent,
   hasTipTapRenderableContent,
   renderRichTextContent as renderRichBlockContent,
@@ -53,6 +58,7 @@ type TextBlockViewProps = {
   interactionCancellationKey: string;
   isMultiSelected: boolean;
   isSelected: boolean;
+  isTransientDraft?: boolean;
   shouldFocusEnd: boolean;
   onEditEnd: (blockId: string) => void;
   onDelete: (blockId: string) => void;
@@ -61,6 +67,7 @@ type TextBlockViewProps = {
   onCanvasPanEnd: (event: ReactPointerEvent<HTMLElement>) => void;
   onCanvasPanMove: (event: ReactPointerEvent<HTMLElement>) => void;
   onCanvasPanStart: (event: ReactPointerEvent<HTMLElement>) => void;
+  onCancelDraft?: (blockId: string) => void;
   onFocusEndHandled: () => void;
   onBlockElementChange: (
     blockId: string,
@@ -82,11 +89,6 @@ type TextBlockViewProps = {
   zoomLevel: number;
 };
 
-type CaretPoint = {
-  clientX: number;
-  clientY: number;
-};
-
 export const TextBlockView = memo(function TextBlockView({
   block,
   activeSearchRange,
@@ -97,6 +99,7 @@ export const TextBlockView = memo(function TextBlockView({
   interactionCancellationKey,
   isMultiSelected,
   isSelected,
+  isTransientDraft = false,
   shouldFocusEnd,
   onEditEnd,
   onDelete,
@@ -105,6 +108,7 @@ export const TextBlockView = memo(function TextBlockView({
   onCanvasPanEnd,
   onCanvasPanMove,
   onCanvasPanStart,
+  onCancelDraft,
   onFocusEndHandled,
   onBlockElementChange,
   onKeyboardMove,
@@ -127,7 +131,7 @@ export const TextBlockView = memo(function TextBlockView({
   const activePointerId = useRef<number | null>(null);
   const hasManualWidth = useRef(Boolean(block.isWidthManuallyResized));
   const pendingCaretOffset = useRef<number | null>(null);
-  const pendingCaretPoint = useRef<CaretPoint | null>(null);
+  const pendingCaretPoint = useRef<CaretPlacementRequest | null>(null);
   const suppressModifierClickRef = useRef(false);
   const draftContentRef = useRef(block.content);
   const draftRichContentRef = useRef<JSONContent>(
@@ -147,6 +151,7 @@ export const TextBlockView = memo(function TextBlockView({
     key: string;
     source: HTMLElement | null;
   } | null>(null);
+  const isTransientDraftFinalizedRef = useRef(false);
   const [isContentSelected, setIsContentSelected] = useState(false);
 
   const setBlockElement = useCallback(
@@ -173,6 +178,10 @@ export const TextBlockView = memo(function TextBlockView({
       latestAutosizeContent.current = null;
     }
   }, [block.content, block.id, block.richContent, isEditing]);
+
+  useEffect(() => {
+    isTransientDraftFinalizedRef.current = false;
+  }, [block.id, isTransientDraft]);
 
   useEffect(() => {
     hasManualWidth.current = Boolean(block.isWidthManuallyResized);
@@ -365,36 +374,6 @@ export const TextBlockView = memo(function TextBlockView({
     }, TEXT_COMMIT_DELAY_MS);
   }
 
-  function getTextOffsetFromNode(
-    container: HTMLElement,
-    caretNode: Node,
-    caretOffset: number,
-  ) {
-    const textWalker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
-    let textOffset = 0;
-    let currentNode = textWalker.nextNode();
-
-    while (currentNode) {
-      if (currentNode === caretNode) {
-        return textOffset + caretOffset;
-      }
-
-      if (
-        caretNode.nodeType === Node.ELEMENT_NODE &&
-        caretNode.childNodes[caretOffset] &&
-        currentNode.compareDocumentPosition(caretNode.childNodes[caretOffset]) &
-          Node.DOCUMENT_POSITION_FOLLOWING
-      ) {
-        return textOffset;
-      }
-
-      textOffset += currentNode.textContent?.length ?? 0;
-      currentNode = textWalker.nextNode();
-    }
-
-    return textOffset;
-  }
-
   function getCaretOffsetFromPoint(clientX: number, clientY: number) {
     const displayElement = displayRef.current;
 
@@ -402,51 +381,16 @@ export const TextBlockView = memo(function TextBlockView({
       return draftContentRef.current.length;
     }
 
-    const caretPositionFromPoint = (
-      document as Document & {
-        caretPositionFromPoint?: (
-          x: number,
-          y: number,
-        ) => { offsetNode: Node; offset: number } | null;
-      }
-    ).caretPositionFromPoint;
-
-    if (caretPositionFromPoint) {
-      const caretPosition = caretPositionFromPoint.call(document, clientX, clientY);
-
-      if (
-        caretPosition &&
-        displayElement.contains(caretPosition.offsetNode)
-      ) {
-        return getTextOffsetFromNode(
-          displayElement,
-          caretPosition.offsetNode,
-          caretPosition.offset,
-        );
-      }
-    }
-
-    const caretRangeFromPoint = (
-      document as Document & {
-        caretRangeFromPoint?: (x: number, y: number) => Range | null;
-      }
-    ).caretRangeFromPoint;
-    const caretRange = caretRangeFromPoint?.call(document, clientX, clientY);
-
-    if (caretRange && displayElement.contains(caretRange.startContainer)) {
-      return getTextOffsetFromNode(
-        displayElement,
-        caretRange.startContainer,
-        caretRange.startOffset,
-      );
-    }
-
-    return draftContentRef.current.length;
+    return getTextOffsetAtClientPoint(displayElement, {
+      clientX,
+      clientY,
+    }) ?? draftContentRef.current.length;
   }
 
   function cacheCaretFromPoint(clientX: number, clientY: number) {
-    pendingCaretOffset.current = getCaretOffsetFromPoint(clientX, clientY);
-    pendingCaretPoint.current = { clientX, clientY };
+    const textOffset = getCaretOffsetFromPoint(clientX, clientY);
+    pendingCaretOffset.current = textOffset;
+    pendingCaretPoint.current = { clientX, clientY, textOffset };
   }
 
   function selectTextBlock(additive = false) {
@@ -467,7 +411,37 @@ export const TextBlockView = memo(function TextBlockView({
     draftContentRef.current = editor.getText({ blockSeparator: "\n" });
     draftRichContentRef.current = editor.getJSON();
     applyAutosize();
-    scheduleContentCommit();
+    if (!isTransientDraft) {
+      scheduleContentCommit();
+    }
+  }
+
+  function cancelTransientDraft() {
+    if (!isTransientDraft || isTransientDraftFinalizedRef.current) {
+      return;
+    }
+
+    isTransientDraftFinalizedRef.current = true;
+    if (commitTimerRef.current !== null) {
+      window.clearTimeout(commitTimerRef.current);
+      commitTimerRef.current = null;
+    }
+    onActiveEditorChange(null);
+    onCancelDraft?.(block.id);
+  }
+
+  function commitTransientDraft(editor: Editor) {
+    if (!isTransientDraft || isTransientDraftFinalizedRef.current) {
+      return;
+    }
+
+    isTransientDraftFinalizedRef.current = true;
+    onActiveEditorChange(null);
+    commitEditorDraft(editor, {
+      deleteEmpty: true,
+      endEdit: true,
+      includeSizeUpdates: true,
+    });
   }
 
   function commitEditorDraft(
@@ -529,16 +503,22 @@ export const TextBlockView = memo(function TextBlockView({
   }
 
   function handleEditorBlur(editor: Editor, event: FocusEvent) {
+    if (isTransientDraftFinalizedRef.current) {
+      return;
+    }
+
     if (
       document.body.dataset.noteToolbarInteraction === "true" ||
       isToolbarBlurTarget(event.relatedTarget) ||
       isToolbarBlurTarget(document.activeElement)
     ) {
-      commitEditorDraft(editor, {
-        deleteEmpty: false,
-        endEdit: false,
-        includeSizeUpdates: false,
-      });
+      if (!isTransientDraft) {
+        commitEditorDraft(editor, {
+          deleteEmpty: false,
+          endEdit: false,
+          includeSizeUpdates: false,
+        });
+      }
       onActiveEditorChange(editor);
       return;
     }
@@ -546,6 +526,9 @@ export const TextBlockView = memo(function TextBlockView({
     setIsContentSelected(false);
     onActiveEditorChange(null);
     window.getSelection()?.removeAllRanges();
+    if (isTransientDraft) {
+      isTransientDraftFinalizedRef.current = true;
+    }
     commitEditorDraft(editor, {
       deleteEmpty: true,
       endEdit: true,
@@ -921,8 +904,10 @@ export const TextBlockView = memo(function TextBlockView({
         <TiptapBlockEditor
           block={block}
           onBlur={handleEditorBlur}
+          onCancelDraft={isTransientDraft ? cancelTransientDraft : undefined}
           onCanvasPanStart={onCanvasPanStart}
           onChange={handleEditorChange}
+          onCommitDraft={isTransientDraft ? commitTransientDraft : undefined}
           initialCaretOffset={pendingCaretOffset.current}
           initialCaretPoint={pendingCaretPoint.current}
           onCaretOffsetHandled={() => {
@@ -1037,12 +1022,14 @@ function areSearchRangesEqual(
 type TiptapBlockEditorProps = {
   block: TextElement;
   initialCaretOffset: number | null;
-  initialCaretPoint: CaretPoint | null;
+  initialCaretPoint: CaretPlacementRequest | null;
   onBlur: (editor: Editor, event: FocusEvent) => void;
+  onCancelDraft?: () => void;
   onCaretOffsetHandled: () => void;
   onCaretPointHandled: () => void;
   onCanvasPanStart: (event: ReactPointerEvent<HTMLElement>) => void;
   onChange: (editor: Editor) => void;
+  onCommitDraft?: (editor: Editor) => void;
   onEditorReady: (editor: Editor | null) => void;
   onFocusEndHandled: () => void;
   onSelectContent: () => void;
@@ -1070,10 +1057,12 @@ function TiptapBlockEditor({
   initialCaretOffset,
   initialCaretPoint,
   onBlur,
+  onCancelDraft,
   onCaretOffsetHandled,
   onCaretPointHandled,
   onCanvasPanStart,
   onChange,
+  onCommitDraft,
   onEditorReady,
   onFocusEndHandled,
   onSelectContent,
@@ -1085,6 +1074,8 @@ function TiptapBlockEditor({
   const onSelectContentRef = useRef(onSelectContent);
   const onSelectAllBlocksRef = useRef(onSelectAllBlocks);
   const onSelectionResetRef = useRef(onSelectionReset);
+  const onCancelDraftRef = useRef(onCancelDraft);
+  const onCommitDraftRef = useRef(onCommitDraft);
   const editorExtensions = useMemo(
     () => [...richTextExtensions, createSlashCommandExtension(block.id)],
     [block.id],
@@ -1093,6 +1084,8 @@ function TiptapBlockEditor({
   onSelectContentRef.current = onSelectContent;
   onSelectAllBlocksRef.current = onSelectAllBlocks;
   onSelectionResetRef.current = onSelectionReset;
+  onCancelDraftRef.current = onCancelDraft;
+  onCommitDraftRef.current = onCommitDraft;
 
   const editor = useEditor(
     {
@@ -1107,6 +1100,26 @@ function TiptapBlockEditor({
           role: "textbox",
         },
         handleKeyDown: (view, event) => {
+          if (event.key === "Escape" && onCancelDraftRef.current) {
+            event.preventDefault();
+            event.stopPropagation();
+            onCancelDraftRef.current();
+            return true;
+          }
+
+          if (
+            event.key === "Enter"
+            && (event.ctrlKey || event.metaKey)
+            && onCommitDraftRef.current
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (editor) {
+              onCommitDraftRef.current(editor);
+            }
+            return true;
+          }
+
           const isCtrlA =
             (event.metaKey || event.ctrlKey) &&
             event.key.toLowerCase() === "a";
@@ -1217,15 +1230,8 @@ function TiptapBlockEditor({
 
     focusRafId = window.requestAnimationFrame(() => {
       placementRafId = window.requestAnimationFrame(() => {
-        const initialCaretPosition = getInitialCaretPosition(
-          editor,
-          initialCaretPoint,
-          initialCaretOffset,
-        );
-
-        if (initialCaretPosition !== null) {
-          editor.commands.focus();
-          editor.commands.setTextSelection(initialCaretPosition);
+        if (initialCaretPoint || initialCaretOffset !== null) {
+          placeEditorCaret(editor, initialCaretPoint, initialCaretOffset);
           onCaretPointHandled();
           onCaretOffsetHandled();
           return;
@@ -1632,64 +1638,6 @@ function collectTipTapImageMetrics(
   content.content?.forEach((child) => collectTipTapImageMetrics(child, images));
 }
 
-function getInitialCaretPosition(
-  editor: Editor,
-  caretPoint: CaretPoint | null,
-  textOffset: number | null,
-) {
-  const offsetPosition =
-    textOffset !== null
-      ? getDocumentPositionFromTextOffset(editor, textOffset)
-      : null;
-  const pointPosition = caretPoint
-    ? editor.view.posAtCoords({
-        left: caretPoint.clientX,
-        top: caretPoint.clientY,
-      })?.pos ?? null
-    : null;
-
-  if (pointPosition !== null) {
-    if (
-      pointPosition <= 1 &&
-      offsetPosition !== null &&
-      offsetPosition > 1
-    ) {
-      return offsetPosition;
-    }
-
-    return pointPosition;
-  }
-
-  return offsetPosition;
-}
-
-function getDocumentPositionFromTextOffset(editor: Editor, textOffset: number) {
-  let remainingOffset = Math.max(0, textOffset);
-  let documentPosition = 1;
-
-  editor.state.doc.descendants((node, position) => {
-    if (!node.isText) {
-      return true;
-    }
-
-    const textLength = node.text?.length ?? 0;
-
-    if (remainingOffset <= textLength) {
-      documentPosition = position + remainingOffset;
-      return false;
-    }
-
-    remainingOffset -= textLength;
-    return true;
-  });
-
-  if (remainingOffset > 0) {
-    return editor.state.doc.content.size;
-  }
-
-  return documentPosition;
-}
-
 function areTextBlockViewPropsEqual(
   previousProps: TextBlockViewProps,
   nextProps: TextBlockViewProps,
@@ -1698,6 +1646,7 @@ function areTextBlockViewPropsEqual(
     previousProps.block === nextProps.block &&
     previousProps.isDragSourceHidden === nextProps.isDragSourceHidden &&
     previousProps.isEditing === nextProps.isEditing &&
+    previousProps.isTransientDraft === nextProps.isTransientDraft &&
     previousProps.interactionCancellationKey === nextProps.interactionCancellationKey &&
     previousProps.isMultiSelected === nextProps.isMultiSelected &&
     previousProps.isSelected === nextProps.isSelected &&

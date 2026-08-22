@@ -60,6 +60,10 @@ import {
   type ShapeTool,
 } from "./canvas/interaction/primitiveGeometry";
 import {
+  getDefaultKeyboardTextCaretPoint,
+  getDirectTextDraftRect,
+} from "./canvas/interaction/directTextEntry";
+import {
   drawingToolAfterCreation,
   drawingToolForShortcut,
   useInkInteraction,
@@ -122,7 +126,12 @@ import {
   hasCanvasToolShortcutContext,
   isTextEntryTarget,
 } from "./editorUtils";
-import { cloneRichTextValue } from "./editor/richText";
+import type { CaretPlacementRequest } from "./editor/caretPlacement";
+import {
+  cloneRichTextValue,
+  hasTipTapRenderableContent,
+  validateRichTextDocument,
+} from "./editor/richText";
 import {
   createCanvasSearchTextIndex,
   findCanvasTextSearchResult,
@@ -241,6 +250,14 @@ import {
 import type { AppData, AppSessionState } from "./types";
 
 type BlockUpdates = TextElementUpdates;
+
+type DirectTextDraft = Readonly<{
+  block: TextElement;
+  previousSelection: readonly string[];
+  previousTool: DrawingTool;
+  returnFocus: HTMLElement | null;
+  source: "keyboard" | "pointer";
+}>;
 
 type SidebarProps = {
   bookmarkedPages: AppData["pages"];
@@ -1293,6 +1310,11 @@ function App() {
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
   const [openPageTabIds, setOpenPageTabIds] = useState<string[]>([]);
   const [focusEndBlockId, setFocusEndBlockId] = useState<string | null>(null);
+  const [directTextDraft, setDirectTextDraft] = useState<DirectTextDraft | null>(null);
+  const [shapeCaretPlacement, setShapeCaretPlacement] = useState<Readonly<{
+    elementId: string;
+    request: CaretPlacementRequest;
+  }> | null>(null);
   const [isCanvasKeyboardActive, setIsCanvasKeyboardActive] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [isAssistantOpen, setIsAssistantOpen] = useState(false);
@@ -1400,6 +1422,7 @@ function App() {
   const pageViewportsRef = useRef<Map<string, PageViewport>>(new Map());
   const isSnapToGridEnabledRef = useRef(isSnapToGridEnabled);
   const editingBlockIdRef = useRef<string | null>(editingBlockId);
+  const directTextDraftRef = useRef<DirectTextDraft | null>(directTextDraft);
   const shapeTextEditSessionRef = useRef<{ elementId: string; session: ShapeTextEditSession } | null>(null);
   const selectedBlockIdsRef = useRef<string[]>(selectedBlockIds);
   const selectedFolderIdRef = useRef(selectedFolderId);
@@ -1419,6 +1442,7 @@ function App() {
   const imagePickerRequestRef = useRef(0);
   const drawingPropertyPreviewRef = useRef<DrawingPropertyPreviewTransaction | null>(null);
   const authoringFocusReturnRafRef = useRef<number | null>(null);
+  const directTextFocusReturnRafRef = useRef<number | null>(null);
   const previousCanvasAuthoringAvailableRef = useRef(false);
   const isCanvasAuthoringAvailableRef = useRef(false);
   const isWorkbenchOverlayOpenRef = useRef(false);
@@ -1432,8 +1456,10 @@ function App() {
   }> | null>(null);
   const keyboardArrowCreationRef = useRef<() => boolean>(() => false);
   const keyboardShapeCreationRef = useRef<(tool: ShapeTool) => boolean>(() => false);
+  const keyboardTextCreationRef = useRef<() => boolean>(() => false);
   const keyboardShapeAnnouncementSequenceRef = useRef(0);
   const pointerShapeAnnouncementSequenceRef = useRef(0);
+  const directTextAnnouncementSequenceRef = useRef(0);
   const keyboardArrowEndpointFocusRafRef = useRef<number | null>(null);
 
   const setSelectedPageId = useCallback((nextPageId: string) => {
@@ -1453,6 +1479,7 @@ function App() {
   drawingPreferencesRef.current = drawingPreferences;
   textPreferencesRef.current = textPreferences;
   pendingImagePlacementRef.current = pendingImagePlacement;
+  directTextDraftRef.current = directTextDraft;
   isSnapToGridEnabledRef.current = isGridVisible && isSnapToGridEnabled;
   editingBlockIdRef.current = editingBlockId;
   openPageTabIdsRef.current = openPageTabIds;
@@ -1821,6 +1848,12 @@ function App() {
       : activeTool === "diamond"
         ? "Diamond"
         : null;
+  const isKeyboardTextCreationAvailable = Boolean(
+    isCanvasAuthoringAvailable &&
+    !isSearchOpen &&
+    !editingBlockId &&
+    activeTool === "text",
+  );
   const availableDrawingPropertiesContext = isCanvasAuthoringAvailable
     ? drawingPropertiesContext
     : null;
@@ -1884,6 +1917,12 @@ function App() {
   const renderedCanvasElementsById = useMemo(
     () => Object.fromEntries(renderedCanvasElements.map((element) => [element.id, element])),
     [renderedCanvasElements],
+  );
+  const displayedCanvasElements = useMemo(
+    () => directTextDraft?.block.pageId === selectedPageId
+      ? [...renderedCanvasElements, directTextDraft.block]
+      : renderedCanvasElements,
+    [directTextDraft, renderedCanvasElements, selectedPageId],
   );
   const suppressedConnectorCandidates = useMemo(() => {
     let arrowOrdinal = 0;
@@ -2127,6 +2166,9 @@ function App() {
       }
       if (keyboardArrowEndpointFocusRafRef.current !== null) {
         window.cancelAnimationFrame(keyboardArrowEndpointFocusRafRef.current);
+      }
+      if (directTextFocusReturnRafRef.current !== null) {
+        window.cancelAnimationFrame(directTextFocusReturnRafRef.current);
       }
 
       cancelCanvasSelectionSession();
@@ -3780,6 +3822,26 @@ function App() {
       ) {
         event.preventDefault();
         keyboardShapeCreationRef.current(activeToolRef.current);
+        return;
+      }
+
+      if (
+        event.key === "Enter"
+        && event.target === canvasRef.current
+        && document.activeElement === canvasRef.current
+        && activeToolRef.current === "text"
+        && isCanvasAuthoringAvailableRef.current
+        && connectorEndpointChooserRef.current === null
+        && !currentEditingBlockId
+        && !event.isComposing
+        && !event.repeat
+        && !event.altKey
+        && !event.ctrlKey
+        && !event.metaKey
+        && !event.shiftKey
+      ) {
+        event.preventDefault();
+        keyboardTextCreationRef.current();
         return;
       }
 
@@ -5715,6 +5777,40 @@ function App() {
     return snapPoint(point);
   }
 
+  function buildTextElement(
+    blockId: string,
+    blockPosition: CanvasPoint,
+    content: string,
+    pageId: string,
+    zIndex: number,
+    timestamp = Date.now(),
+  ): TextElement {
+    const formattedRichContent = createFormattedRichContent(
+      content,
+      textFormatStateRef.current,
+    );
+
+    return {
+      backgroundMode: textPreferencesRef.current.backgroundMode,
+      createdAt: timestamp,
+      id: blockId,
+      locked: false,
+      opacity: 1,
+      pageId,
+      rotation: 0,
+      type: "text",
+      updatedAt: timestamp,
+      x: blockPosition.x,
+      y: blockPosition.y,
+      width: DEFAULT_BLOCK_WIDTH,
+      height: DEFAULT_BLOCK_HEIGHT,
+      content,
+      ...(formattedRichContent ? { richContent: formattedRichContent } : {}),
+      isWidthManuallyResized: false,
+      zIndex,
+    };
+  }
+
   function createTextBlock(
     x: number,
     y: number,
@@ -5727,33 +5823,18 @@ function App() {
 
     const blockId = createId("block");
     const blockPosition = getTextBlockPositionForCreation({ x, y }, options);
-    const formattedRichContent = createFormattedRichContent(
-      content,
-      textFormatStateRef.current,
-    );
     const timestamp = Date.now();
 
     setBlocksWithHistory((currentBlocks) => [
       ...currentBlocks,
-      {
-        backgroundMode: textPreferencesRef.current.backgroundMode,
-        createdAt: timestamp,
-        id: blockId,
-        locked: false,
-        opacity: 1,
-        pageId: selectedPageId,
-        rotation: 0,
-        type: "text",
-        updatedAt: timestamp,
-        x: blockPosition.x,
-        y: blockPosition.y,
-        width: DEFAULT_BLOCK_WIDTH,
-        height: DEFAULT_BLOCK_HEIGHT,
+      buildTextElement(
+        blockId,
+        blockPosition,
         content,
-        ...(formattedRichContent ? { richContent: formattedRichContent } : {}),
-        isWidthManuallyResized: false,
-        zIndex: currentBlocks.length,
-      },
+        selectedPageId,
+        currentBlocks.length,
+        timestamp,
+      ),
     ]);
     editingBlockIdRef.current = blockId;
     setSelectedBlockIds([blockId]);
@@ -5769,6 +5850,145 @@ function App() {
         setActiveTool(nextTool);
       }
     }
+  }
+
+  function announceDirectText(message: string) {
+    directTextAnnouncementSequenceRef.current += 1;
+    setConnectorBindingAnnouncement(
+      `Text entry ${directTextAnnouncementSequenceRef.current}. ${message}`,
+    );
+  }
+
+  function startDirectTextDraft(
+    point: CanvasPoint,
+    source: DirectTextDraft["source"],
+    returnFocus: HTMLElement | null = canvasRef.current,
+  ) {
+    const pageId = selectedPageIdRef.current;
+    const activeTool = activeToolRef.current;
+    if (
+      !pageId ||
+      !isCanvasAuthoringAvailableRef.current ||
+      isWorkbenchOverlayOpenRef.current ||
+      isSearchOpen ||
+      connectorEndpointChooserRef.current !== null ||
+      pendingImagePlacementRef.current !== null ||
+      editingBlockIdRef.current !== null ||
+      directTextDraftRef.current !== null ||
+      (source === "pointer" ? activeTool !== "select" : activeTool !== "text")
+    ) {
+      return false;
+    }
+
+    const rect = getDirectTextDraftRect(point);
+    if (!rect) {
+      announceDirectText("Text was not created because the requested position exceeds the safe canvas boundary.");
+      return false;
+    }
+
+    const blockId = createId("block");
+    const draft: DirectTextDraft = {
+      block: buildTextElement(
+        blockId,
+        { x: rect.x, y: rect.y },
+        "",
+        pageId,
+        dataRef.current.elements.length,
+      ),
+      previousSelection: [...selectedBlockIdsRef.current],
+      previousTool: activeTool,
+      returnFocus,
+      source,
+    };
+
+    directTextDraftRef.current = draft;
+    setDirectTextDraft(draft);
+    selectedBlockIdsRef.current = [blockId];
+    setSelectedBlockIds([blockId]);
+    editingBlockIdRef.current = blockId;
+    setEditingBlockId(blockId);
+    setFocusEndBlockId(blockId);
+    setInsertionPoint(null);
+    setIsCanvasKeyboardActive(true);
+    setActiveMode("editing");
+    announceDirectText("Editing a new text block. Escape cancels; Control+Enter saves.");
+    return true;
+  }
+
+  function restoreDirectTextDraftContext(draft: DirectTextDraft) {
+    const retainedSelection = draft.previousSelection.filter((id) =>
+      dataRef.current.elements.some((element) => element.id === id),
+    );
+    selectedBlockIdsRef.current = retainedSelection;
+    setSelectedBlockIds(retainedSelection);
+    activeToolRef.current = draft.previousTool;
+    setActiveTool(draft.previousTool);
+    setIsCanvasKeyboardActive(true);
+    setActiveMode(retainedSelection.length > 0 ? "selected" : "canvas");
+
+    if (directTextFocusReturnRafRef.current !== null) {
+      window.cancelAnimationFrame(directTextFocusReturnRafRef.current);
+    }
+    directTextFocusReturnRafRef.current = window.requestAnimationFrame(() => {
+      directTextFocusReturnRafRef.current = null;
+      const activeElement = document.activeElement;
+      if (activeElement && activeElement !== document.body) return;
+      (draft.returnFocus?.isConnected ? draft.returnFocus : canvasRef.current)
+        ?.focus({ preventScroll: true });
+    });
+  }
+
+  function cancelDirectTextDraft(blockId: string) {
+    const draft = directTextDraftRef.current;
+    if (!draft || draft.block.id !== blockId) return false;
+
+    directTextDraftRef.current = null;
+    setDirectTextDraft(null);
+    editingBlockIdRef.current = null;
+    setEditingBlockId(null);
+    setActiveTextEditor(null);
+    setFocusEndBlockId(null);
+    restoreDirectTextDraftContext(draft);
+    announceDirectText("Empty text creation canceled. Nothing was saved.");
+    return true;
+  }
+
+  function commitDirectTextDraft(blockId: string, updates: BlockUpdates) {
+    const draft = directTextDraftRef.current;
+    if (!draft || draft.block.id !== blockId) return false;
+    const nextUpdates = snapManualResizeUpdates(updates);
+    const candidate: TextElement = {
+      ...draft.block,
+      ...nextUpdates,
+      updatedAt: Date.now(),
+    };
+    const hasContent = candidate.content.trim().length > 0 || Boolean(
+      candidate.richContent && hasTipTapRenderableContent(candidate.richContent),
+    );
+    if (!hasContent) return cancelDirectTextDraft(blockId);
+    if (
+      !isPersistableShapeRect(candidate) ||
+      candidate.richContent && validateRichTextDocument(candidate.richContent) !== null
+    ) {
+      cancelDirectTextDraft(blockId);
+      announceDirectText("Text was not created because its content or geometry is not persistence-safe.");
+      return false;
+    }
+
+    directTextDraftRef.current = null;
+    setDirectTextDraft(null);
+    setBlocksWithHistory((currentBlocks) =>
+      currentBlocks.some((element) => element.id === blockId)
+        ? currentBlocks
+        : [...currentBlocks, { ...candidate, zIndex: currentBlocks.length }],
+    );
+    if (draft.previousTool === "text") {
+      const nextTool = drawingToolAfterCreation("text", isToolLockedRef.current);
+      activeToolRef.current = nextTool;
+      setActiveTool(nextTool);
+    }
+    announceDirectText("Text block created.");
+    return true;
   }
 
   function readBlobAsDataUrl(blob: Blob): Promise<string> {
@@ -7737,9 +7957,14 @@ function App() {
     setActiveMode(isDeselectingOnlyBlock ? "canvas" : "selected");
   }, []);
 
-  const editBlock = useCallback((blockId: string) => {
+  const editBlock = useCallback((blockId: string, caretPlacement?: CaretPlacementRequest) => {
     const shape = dataRef.current.elements.find(
       (element): element is ShapeElement => element.id === blockId && element.type === "shape",
+    );
+    setShapeCaretPlacement(
+      shape && caretPlacement
+        ? { elementId: blockId, request: caretPlacement }
+        : null,
     );
     editingBlockIdRef.current = blockId;
     setSelectedBlockIds((currentBlockIds) =>
@@ -7763,6 +7988,7 @@ function App() {
 
     editingBlockIdRef.current = null;
     setEditingBlockId(null);
+    setShapeCaretPlacement(null);
     setActiveMode((currentMode) =>
       currentMode === "editing" ? "selected" : currentMode,
     );
@@ -7826,6 +8052,15 @@ function App() {
   }
 
   function leaveTextEditing() {
+    const directDraft = directTextDraftRef.current;
+    if (directDraft) {
+      blurActiveTextEntry();
+      window.getSelection()?.removeAllRanges();
+      if (directTextDraftRef.current === directDraft) {
+        cancelDirectTextDraft(directDraft.block.id);
+      }
+      return;
+    }
     const finishedShapeSession = finishActiveShapeTextEdit();
     blurActiveTextEntry();
     window.getSelection()?.removeAllRanges();
@@ -8110,12 +8345,16 @@ function App() {
     hasPendingImage: () => pendingImagePlacementRef.current !== null,
     interactionCancellationKey: `${activeTool}:${selectedPageId ?? ""}`,
     isTemporaryHandActiveRef,
+    isTextEditing: () =>
+      editingBlockIdRef.current !== null || directTextDraftRef.current !== null,
     leaveTextEditing,
     liveDraftLayerRef,
     maxZoom: MAX_ZOOM,
     minZoom: MIN_ZOOM,
     onArrowStatusChange: setConnectorBindingAnnouncement,
     onCreateArrow: completeArrowCreation,
+    onCreateDirectText: (point) =>
+      startDirectTextDraft(point, "pointer", canvasRef.current),
     onCreatePrimitive: completePrimitiveCreation,
     onPrimitiveStatusChange: (tool) => {
       pointerShapeAnnouncementSequenceRef.current += 1;
@@ -8155,6 +8394,18 @@ function App() {
     zoomStep: ZOOM_STEP,
   });
   cancelCanvasSelectionRef.current = canvasInteraction.cancelCapturedPointerInteraction;
+  keyboardTextCreationRef.current = () => {
+    canvasInteraction.cancelArrowAuthoring();
+    canvasInteraction.cancelCapturedPointerInteraction();
+    const point = canvasViewportRef.current
+      ? getDefaultKeyboardTextCaretPoint(canvasViewportRef.current)
+      : null;
+    if (!point) {
+      announceDirectText("Text was not created because the current viewport has no safe insertion point.");
+      return false;
+    }
+    return startDirectTextDraft(point, "keyboard", canvasRef.current);
+  };
   keyboardShapeCreationRef.current = (tool) => {
     canvasInteraction.cancelArrowAuthoring();
     canvasInteraction.cancelCapturedPointerInteraction();
@@ -8548,8 +8799,17 @@ function App() {
             {`${activeKeyboardShapeLabel} tool selected. Drag to draw, or press Enter to add a default ${activeKeyboardShapeLabel.toLowerCase()} in the current viewport.`}
           </span>
         ) : null}
+        {isKeyboardTextCreationAvailable ? (
+          <span className="canvas-accessibility-status" id="canvas-text-authoring-instruction">
+            Text tool selected. Click to add text, or press Enter to start an editable text block in the current viewport.
+          </span>
+        ) : null}
         <CanvasViewport
-          describedBy={activeKeyboardShapeLabel ? "canvas-shape-authoring-instruction" : undefined}
+          describedBy={activeKeyboardShapeLabel
+            ? "canvas-shape-authoring-instruction"
+            : isKeyboardTextCreationAvailable
+              ? "canvas-text-authoring-instruction"
+              : undefined}
           labelledBy={
             selectedPageId ? getWorkspaceTabId(selectedPageId) : undefined
           }
@@ -8558,6 +8818,7 @@ function App() {
           id={WORKSPACE_PAGE_PANEL_ID}
           isInteractionDisabled={isSearchOpen}
           isKeyboardShapeCreationAvailable={activeKeyboardShapeLabel !== null}
+          isKeyboardTextCreationAvailable={isKeyboardTextCreationAvailable}
           onDoubleClick={canvasInteraction.handleDoubleClick}
           onLostPointerCapture={(event) => {
             inkInteraction.handlePointerCancelCapture(event);
@@ -8778,7 +9039,7 @@ function App() {
             ref={canvasContentRef}
             zoomLevel={zoomLevel}
           >
-            {renderedCanvasElements.map((element) => (
+            {displayedCanvasElements.map((element) => (
               <CanvasElementRenderer
                 element={element}
                 key={element.id}
@@ -8817,6 +9078,11 @@ function App() {
                       activeSearchMatch?.elementId === shape.id ? activeSearchMatch : null
                     }
                     canvasTheme={isDarkMode ? "dark" : "light"}
+                    caretPlacementRequest={
+                      shapeCaretPlacement?.elementId === shape.id
+                        ? shapeCaretPlacement.request
+                        : null
+                    }
                     element={shape}
                     isEditing={shape.id === editingBlockId}
                     isSelected={selectedBlockIds.includes(shape.id)}
@@ -8832,42 +9098,57 @@ function App() {
                     searchableText={canvasSearchTextIndex.get(shape.id) ?? ""}
                   />
                 )}
-                renderText={(block) => (
-                  <TextBlockView
-                block={block}
-                activeSearchRange={
-                  activeSearchMatch?.elementId === block.id ? activeSearchMatch : null
-                }
-                isEditing={block.id === editingBlockId}
-                isDragSourceHidden={false}
-                interactionCancellationKey={`${activeTool}:${selectedPageId ?? ""}`}
-                isMultiSelected={selectedBlockIds.length > 1}
-                isSelected={selectedBlockIds.includes(block.id)}
-                key={block.id}
-                onDelete={deleteBlock}
-                onEdit={editBlock}
-                onEditEnd={endBlockEdit}
-                onSelectAllBlocks={selectAllVisibleBlocks}
-                onCanvasPanEnd={canvasInteraction.handlePointerEnd}
-                onCanvasPanMove={canvasInteraction.handlePointerMove}
-                onCanvasPanStart={canvasInteraction.startPan}
-                onFocusEndHandled={handleFocusEndHandled}
-                onActiveEditorChange={setActiveTextEditor}
-                onBlockElementChange={registerBlockElement}
-                onKeyboardMove={moveCanvasElementByKeyboard}
-                onKeyboardResize={resizeTextWidthByKeyboard}
-                onSelect={selectBlock}
-                onUpdate={updateBlock}
-                onVisualDragCancel={cancelVisualDrag}
-                onVisualDragEnd={endVisualDrag}
-                onVisualDragMove={moveVisualDrag}
-                onVisualDragStart={startVisualDrag}
-                searchRanges={getCanvasSearchRangesForElement(searchMatchesByElementId, block.id)}
-                searchableText={canvasSearchTextIndex.get(block.id) ?? ""}
-                shouldFocusEnd={focusEndBlockId === block.id}
-                zoomLevel={zoomLevel}
-                  />
-                )}
+                renderText={(block) => {
+                  const isDirectTextDraft = directTextDraft?.block.id === block.id;
+                  return (
+                    <TextBlockView
+                      block={block}
+                      activeSearchRange={
+                        activeSearchMatch?.elementId === block.id ? activeSearchMatch : null
+                      }
+                      isEditing={block.id === editingBlockId}
+                      isDragSourceHidden={false}
+                      interactionCancellationKey={`${activeTool}:${selectedPageId ?? ""}`}
+                      isMultiSelected={selectedBlockIds.length > 1}
+                      isSelected={selectedBlockIds.includes(block.id)}
+                      isTransientDraft={isDirectTextDraft}
+                      key={block.id}
+                      onCancelDraft={cancelDirectTextDraft}
+                      onDelete={(blockId) => {
+                        if (!cancelDirectTextDraft(blockId)) deleteBlock(blockId);
+                      }}
+                      onEdit={editBlock}
+                      onEditEnd={(blockId) => {
+                        if (!cancelDirectTextDraft(blockId)) endBlockEdit(blockId);
+                      }}
+                      onSelectAllBlocks={selectAllVisibleBlocks}
+                      onCanvasPanEnd={canvasInteraction.handlePointerEnd}
+                      onCanvasPanMove={canvasInteraction.handlePointerMove}
+                      onCanvasPanStart={canvasInteraction.startPan}
+                      onFocusEndHandled={handleFocusEndHandled}
+                      onActiveEditorChange={setActiveTextEditor}
+                      onBlockElementChange={registerBlockElement}
+                      onKeyboardMove={moveCanvasElementByKeyboard}
+                      onKeyboardResize={resizeTextWidthByKeyboard}
+                      onSelect={selectBlock}
+                      onUpdate={(blockId, updates) => {
+                        if (directTextDraftRef.current?.block.id === blockId) {
+                          commitDirectTextDraft(blockId, updates);
+                          return;
+                        }
+                        updateBlock(blockId, updates);
+                      }}
+                      onVisualDragCancel={cancelVisualDrag}
+                      onVisualDragEnd={endVisualDrag}
+                      onVisualDragMove={moveVisualDrag}
+                      onVisualDragStart={startVisualDrag}
+                      searchRanges={getCanvasSearchRangesForElement(searchMatchesByElementId, block.id)}
+                      searchableText={canvasSearchTextIndex.get(block.id) ?? ""}
+                      shouldFocusEnd={focusEndBlockId === block.id}
+                      zoomLevel={zoomLevel}
+                    />
+                  );
+                }}
                 renderImage={(block) => (
                   <ImageElementView
                   element={block}

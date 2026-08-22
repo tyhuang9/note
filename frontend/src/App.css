@@ -2505,7 +2505,8 @@ h2 {
 }
 
 .shape-contained-text-display {
-  pointer-events: none;
+  cursor: text;
+  pointer-events: auto;
   user-select: none;
 }
 
@@ -3586,7 +3587,7 @@ h2 {
   padding: 0;
   color: #202936;
   background: #ffffff;
-  cursor: text;
+  cursor: default;
   overflow: visible;
   pointer-events: auto;
 }

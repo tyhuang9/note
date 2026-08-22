@@ -18,6 +18,11 @@ import {
 } from "../rendering/canvasColor";
 import { createSlashCommandExtension } from "../../editor/SlashCommandExtension";
 import {
+  placeEditorCaret,
+  type CaretPlacementRequest,
+} from "../../editor/caretPlacement";
+export type { CaretPlacementRequest } from "../../editor/caretPlacement";
+import {
   getCanonicalShapeRichTextDocument,
   getShapeTextAccessibleExcerpt,
   hasTipTapRenderableContent,
@@ -38,6 +43,7 @@ type PrimitiveElementViewProps<T extends ShapeElement | ConnectorElement> = {
 type ShapeElementViewProps = PrimitiveElementViewProps<ShapeElement> & {
   activeSearchRange: SearchMatch | null;
   canvasTheme: CanvasTheme;
+  caretPlacementRequest?: CaretPlacementRequest | null;
   isEditing: boolean;
   onActiveEditorChange: (editor: Editor | null) => void;
   onEdit: (elementId: string) => void;
@@ -168,7 +174,7 @@ function primitiveKeyDown(
   onKeyboardMove(element.id, delta);
 }
 
-export function ShapeElementView({ activeSearchRange, canvasTheme, element, isDragSourceHidden = false, isEditing, isSelected, onActiveEditorChange, onEdit, onEditEnd, onEditSessionChange, onElementChange, onKeyboardMove, onSelect, onTextCommit, searchRanges, searchableText }: ShapeElementViewProps) {
+export function ShapeElementView({ activeSearchRange, canvasTheme, caretPlacementRequest = null, element, isDragSourceHidden = false, isEditing, isSelected, onActiveEditorChange, onEdit, onEditEnd, onEditSessionChange, onElementChange, onKeyboardMove, onSelect, onTextCommit, searchRanges, searchableText }: ShapeElementViewProps) {
   const ref = useRef<SVGSVGElement | null>(null);
   const rootRef = createPrimitiveRootRef(element.id, onElementChange);
   const renderPadding = shapeRenderPadding(element.style);
@@ -217,6 +223,7 @@ export function ShapeElementView({ activeSearchRange, canvasTheme, element, isDr
         <ShapeContainedTextEditor
           element={element}
           canvasTheme={canvasTheme}
+          caretPlacementRequest={caretPlacementRequest}
           onActiveEditorChange={onActiveEditorChange}
           onCancel={(restoreFocus) => onEditEnd(element.id, "canceled", restoreFocus)}
           onCommit={(text, outcome, restoreFocus) => {
@@ -314,6 +321,7 @@ export function shapeTextInsetStyle(element: ShapeElement, theme: CanvasTheme = 
 
 type ShapeContainedTextEditorProps = {
   canvasTheme: CanvasTheme;
+  caretPlacementRequest: CaretPlacementRequest | null;
   element: ShapeElement;
   onActiveEditorChange: (editor: Editor | null) => void;
   onCancel: (restoreFocus: boolean) => void;
@@ -321,8 +329,9 @@ type ShapeContainedTextEditorProps = {
   onEditSessionChange: ShapeElementViewProps["onEditSessionChange"];
 };
 
-function ShapeContainedTextEditor({ canvasTheme, element, onActiveEditorChange, onCancel, onCommit, onEditSessionChange }: ShapeContainedTextEditorProps) {
+function ShapeContainedTextEditor({ canvasTheme, caretPlacementRequest, element, onActiveEditorChange, onCancel, onCommit, onEditSessionChange }: ShapeContainedTextEditorProps) {
   const initialText = useMemo(() => element.text ?? { content: "" }, [element.id]);
+  const initialCaretPlacementRequest = useRef(caretPlacementRequest);
   const baselineDocument = useRef(getCanonicalShapeRichTextDocument(initialText));
   const finalized = useRef(false);
   const extensions = useMemo(
@@ -407,13 +416,17 @@ function ShapeContainedTextEditor({ canvasTheme, element, onActiveEditorChange, 
       }
       finish(blurredEditor, false, false);
     },
-    onCreate: ({ editor: createdEditor }) => {
-      queueMicrotask(() => createdEditor.commands.focus("end"));
-    },
   });
 
   useEffect(() => {
     if (!editor) return;
+    editor.commands.focus("end");
+    let focusRafId: number | null = window.requestAnimationFrame(() => {
+      focusRafId = window.requestAnimationFrame(() => {
+        placeEditorCaret(editor, initialCaretPlacementRequest.current);
+        focusRafId = null;
+      });
+    });
     const finishCurrentDraft = () => finish(editor, false, false);
     const cancelAndRestoreFocus = () => finish(editor, true, true);
     const commitAndRestoreFocus = () => finish(editor, false, true);
@@ -429,6 +442,9 @@ function ShapeContainedTextEditor({ canvasTheme, element, onActiveEditorChange, 
     onEditSessionChange(element.id, { cancel: cancelAndRestoreFocus, commit: commitAndRestoreFocus });
     document.addEventListener("focusin", finishWhenFocusLeavesSession);
     return () => {
+      if (focusRafId !== null) {
+        window.cancelAnimationFrame(focusRafId);
+      }
       document.removeEventListener("focusin", finishWhenFocusLeavesSession);
       onActiveEditorChange(null);
       onEditSessionChange(element.id, null);

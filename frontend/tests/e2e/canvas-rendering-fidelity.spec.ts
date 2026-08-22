@@ -240,6 +240,71 @@ test("uses genuine offscreen navigation without replacing Canvas keyboard focus"
   expect(focusedCanvas).toEqual(await canvasPresentation(canvas));
 });
 
+test("focuses the revealed offscreen shape root", async ({ page }) => {
+  await installOffscreenNavigationWorkspace(page, { targetKind: "shape" });
+  await page.goto("/");
+
+  const canvas = page.getByRole("tabpanel");
+  const offscreenButton = page.getByRole("button", { name: "1 textbox offscreen east" });
+  const shape = page.locator('[data-canvas-element-id="offscreen-shape"]');
+
+  await expect(offscreenButton).toBeVisible();
+  await offscreenButton.focus();
+  await page.keyboard.press("Enter");
+  await expect(offscreenButton).toHaveCount(0);
+  await expect(shape).toBeVisible();
+  await expect(shape).toHaveAttribute("role", "button");
+  expect(await isOnscreen(shape, canvas)).toBe(true);
+  await expect(shape).toBeFocused();
+});
+
+test("does not steal a deliberate focus transfer after offscreen navigation", async ({ page }) => {
+  await installOffscreenNavigationWorkspace(page, { includeSecondaryPage: true });
+  await page.goto("/");
+
+  const offscreenButton = page.getByRole("button", { name: "1 textbox offscreen east" });
+  const otherPageTab = page.locator("#workspace-page-tab-other-page");
+  const textboxHeader = page.locator('[data-canvas-element-id="offscreen-text"] .text-block-header');
+  await expect(offscreenButton).toBeVisible();
+  await expect(otherPageTab).toBeVisible();
+
+  await page.evaluate(() => {
+    const control = document.querySelector<HTMLButtonElement>(".offscreen-arrow");
+    const nextFocus = document.getElementById("workspace-page-tab-other-page") as HTMLElement | null;
+    if (!control || !nextFocus) throw new Error("Offscreen focus-transfer controls were unavailable.");
+    control.focus();
+    control.click();
+    nextFocus.focus();
+  });
+  await waitForAnimationFrames(page);
+  await expect(otherPageTab).toBeFocused();
+  await expect(textboxHeader).not.toBeFocused();
+});
+
+test("abandons offscreen focus handoff after a page change", async ({ page }) => {
+  await installOffscreenNavigationWorkspace(page, { includeSecondaryPage: true });
+  await page.goto("/");
+
+  const canvas = page.getByRole("tabpanel");
+  const offscreenButton = page.getByRole("button", { name: "1 textbox offscreen east" });
+  const otherPageTab = page.locator("#workspace-page-tab-other-page");
+  await expect(offscreenButton).toBeVisible();
+  await expect(otherPageTab).toBeVisible();
+
+  await page.evaluate(() => {
+    const control = document.querySelector<HTMLButtonElement>(".offscreen-arrow");
+    const nextPage = document.getElementById("workspace-page-tab-other-page") as HTMLElement | null;
+    if (!control || !nextPage) throw new Error("Offscreen page-change controls were unavailable.");
+    control.focus();
+    control.click();
+    nextPage.focus();
+    nextPage.click();
+  });
+  await waitForAnimationFrames(page);
+  await expect(canvas).toHaveAttribute("aria-labelledby", "workspace-page-tab-other-page");
+  await expect(otherPageTab).toBeFocused();
+});
+
 async function svgSnapshot(locator: Locator) {
   return locator.evaluate((svg) => {
     const rect = (svg.querySelector("g") ?? svg).getBoundingClientRect();
@@ -298,10 +363,47 @@ async function isOnscreen(locator: Locator, canvas: Locator) {
   }, await canvas.elementHandle());
 }
 
-async function installOffscreenNavigationWorkspace(page: Page) {
-  await page.addInitScript(() => {
-    const workspace = {
-      elements: [{
+async function waitForAnimationFrames(page: Page) {
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
+  }));
+}
+
+async function installOffscreenNavigationWorkspace(
+  page: Page,
+  {
+    includeSecondaryPage = false,
+    targetKind = "text",
+  }: { includeSecondaryPage?: boolean; targetKind?: "shape" | "text" } = {},
+) {
+  await page.addInitScript(({ includeSecondaryPage, targetKind }) => {
+    const target = targetKind === "shape"
+      ? {
+        createdAt: 1,
+        height: 120,
+        id: "offscreen-shape",
+        locked: false,
+        opacity: 1,
+        pageId: "offscreen-page",
+        rotation: 0,
+        shape: "rectangle",
+        style: {
+          fillColor: null,
+          roughness: 1,
+          roundness: 0,
+          seed: 17,
+          strokeColor: { kind: "fixed", value: "#4c6ef5" },
+          strokeStyle: "solid",
+          strokeWidth: 2,
+        },
+        type: "shape",
+        updatedAt: 1,
+        width: 220,
+        x: 10_000,
+        y: 160,
+        zIndex: 1,
+      }
+      : {
         backgroundMode: "surface",
         content: "Offscreen destination",
         createdAt: 1,
@@ -317,13 +419,21 @@ async function installOffscreenNavigationWorkspace(page: Page) {
         x: 10_000,
         y: 160,
         zIndex: 1,
-      }],
+      };
+    const pages = [
+      { folderId: "", id: "offscreen-page", isBookmarked: false, revision: 0, title: "Offscreen navigation" },
+      ...(includeSecondaryPage
+        ? [{ folderId: "", id: "other-page", isBookmarked: false, revision: 0, title: "Other page" }]
+        : []),
+    ];
+    const workspace = {
+      elements: [target],
       folders: [],
       isDarkMode: false,
-      pages: [{ folderId: "", id: "offscreen-page", isBookmarked: false, revision: 0, title: "Offscreen navigation" }],
+      pages,
       sessionState: {
         isToolLocked: true,
-        openPageTabIds: ["offscreen-page"],
+        openPageTabIds: pages.map((page) => page.id),
         selectedFolderId: "",
         selectedPageId: "offscreen-page",
       },
@@ -349,7 +459,7 @@ async function installOffscreenNavigationWorkspace(page: Page) {
         throw new Error(`Unexpected command ${command}`);
       },
     };
-  });
+  }, { includeSecondaryPage, targetKind });
 }
 
 async function requiredBounds(locator: Locator, label: string) {

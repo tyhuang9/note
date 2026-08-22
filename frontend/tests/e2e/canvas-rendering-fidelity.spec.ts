@@ -103,6 +103,8 @@ test("uses tool-specific native cursors and localized canvas keyboard focus", as
 
   await page.keyboard.press("Tab");
   await expect(activeTool).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(canvas).toBeFocused();
 
   await page.keyboard.down("Space");
   expect(await canvas.evaluate((node) => getComputedStyle(node).cursor)).toBe("grab");
@@ -164,9 +166,15 @@ test("keeps Canvas focus visually neutral while preserving keyboard navigation",
   const canvas = page.getByRole("tabpanel");
   const activeTool = page.locator('.canvas-tool-palette [data-tool="select"]');
   await expect(canvas).toHaveAttribute("role", "tabpanel");
-  await expect(canvas).toHaveAttribute("aria-labelledby", /\S+/);
+  const canvasId = await canvas.getAttribute("id");
+  const labelledBy = await canvas.getAttribute("aria-labelledby");
+  if (!canvasId || !labelledBy) throw new Error("Canvas tab ownership attributes were unavailable.");
+  const tab = page.locator(`[id="${labelledBy}"]`);
+  await expect(canvas).toHaveAttribute("aria-labelledby", labelledBy);
   await expect(canvas).toHaveAccessibleName(/\S+/);
   await expect(canvas).toHaveAttribute("tabindex", "0");
+  await expect(tab).toHaveAttribute("role", "tab");
+  await expect(tab).toHaveAttribute("aria-controls", canvasId);
 
   for (const dark of [false, true]) {
     await setDarkMode(page, dark);
@@ -190,6 +198,46 @@ test("keeps Canvas focus visually neutral while preserving keyboard navigation",
       expect(Number.parseFloat(selectFocus.outlineWidth)).toBeGreaterThan(0);
     }
   }
+});
+
+test("uses genuine offscreen navigation without replacing Canvas keyboard focus", async ({ page }) => {
+  await installOffscreenNavigationWorkspace(page);
+  await page.goto("/");
+
+  const canvas = page.getByRole("tabpanel");
+  const activeTool = page.locator('.canvas-tool-palette [data-tool="select"]');
+  const offscreenButton = page.getByRole("button", { name: "1 textbox offscreen east" });
+  const textbox = page.locator('[data-canvas-element-id="offscreen-text"]');
+  const textboxHeader = textbox.locator(".text-block-header");
+
+  await expect(canvas).toBeVisible();
+  await expect(offscreenButton).toBeVisible();
+  await expect(offscreenButton).toHaveJSProperty("tabIndex", 0);
+  await activeTool.focus();
+  await page.keyboard.press("Shift+Tab");
+  await expect(canvas).toBeFocused();
+
+  await offscreenButton.focus();
+  await expect(offscreenButton).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(textbox).toBeVisible();
+  await expect(offscreenButton).toHaveCount(0);
+  expect(await isOnscreen(textbox, canvas)).toBe(true);
+  await expect(textboxHeader).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(page.getByRole("button", { name: "Send to back" })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(textboxHeader).toBeFocused();
+  await expect(page.locator("[data-canvas-focus-indicator]")).toHaveCount(0);
+  await expect(page.getByText("Canvas focused", { exact: true })).toHaveCount(0);
+
+  await activeTool.focus();
+  await page.keyboard.press("Shift+Tab");
+  await expect(canvas).toBeFocused();
+  await canvas.focus();
+  const focusedCanvas = await canvasPresentation(canvas);
+  await activeTool.focus();
+  expect(focusedCanvas).toEqual(await canvasPresentation(canvas));
 });
 
 async function svgSnapshot(locator: Locator) {
@@ -235,6 +283,71 @@ async function canvasPresentation(canvas: Locator) {
       width: rect.width,
       x: rect.x,
       y: rect.y,
+    };
+  });
+}
+
+async function isOnscreen(locator: Locator, canvas: Locator) {
+  return locator.evaluate((node, canvasElement) => {
+    const rect = node.getBoundingClientRect();
+    const canvasRect = canvasElement.getBoundingClientRect();
+    return rect.left < canvasRect.right
+      && rect.right > canvasRect.left
+      && rect.top < canvasRect.bottom
+      && rect.bottom > canvasRect.top;
+  }, await canvas.elementHandle());
+}
+
+async function installOffscreenNavigationWorkspace(page: Page) {
+  await page.addInitScript(() => {
+    const workspace = {
+      elements: [{
+        backgroundMode: "surface",
+        content: "Offscreen destination",
+        createdAt: 1,
+        height: 96,
+        id: "offscreen-text",
+        locked: false,
+        opacity: 1,
+        pageId: "offscreen-page",
+        rotation: 0,
+        type: "text",
+        updatedAt: 1,
+        width: 220,
+        x: 10_000,
+        y: 160,
+        zIndex: 1,
+      }],
+      folders: [],
+      isDarkMode: false,
+      pages: [{ folderId: "", id: "offscreen-page", isBookmarked: false, revision: 0, title: "Offscreen navigation" }],
+      sessionState: {
+        isToolLocked: true,
+        openPageTabIds: ["offscreen-page"],
+        selectedFolderId: "",
+        selectedPageId: "offscreen-page",
+      },
+      warnings: [],
+    };
+    const runtime = window as unknown as {
+      __TAURI_INTERNALS__: { invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> };
+      isTauri: boolean;
+    };
+    runtime.isTauri = true;
+    runtime.__TAURI_INTERNALS__ = {
+      invoke: async (command, args = {}) => {
+        if (command === "initialize_storage") {
+          return { databasePath: "canvas-focus-offscreen.db", importedLegacyData: false, schemaVersion: 1, warnings: [] };
+        }
+        if (command === "load_workspace_data") return workspace;
+        if (command === "reconcile_workspace_structure") return { pages: workspace.pages };
+        if (command === "save_session_state") {
+          workspace.sessionState = args.state as typeof workspace.sessionState;
+          return;
+        }
+        if (command === "apply_scene_changes") return { newRevision: 1, pageId: "offscreen-page" };
+        throw new Error(`Unexpected command ${command}`);
+      },
     };
   });
 }

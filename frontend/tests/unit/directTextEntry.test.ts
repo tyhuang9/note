@@ -4,8 +4,11 @@ import {
   getDefaultKeyboardTextCaretPoint,
   getDirectTextDraftRect,
 } from "../../src/canvas/interaction/directTextEntry";
-import { resolveDirectTextEntryHit } from "../../src/canvas/interaction/useCanvasInteraction";
-import type { ImageElement, ShapeElement } from "../../src/canvas/model/elements";
+import {
+  resolveDirectTextEntryHit,
+  resolveDirectTextEntryHitForNativeEvent,
+} from "../../src/canvas/interaction/useCanvasInteraction";
+import type { CanvasElement, ImageElement, ShapeElement } from "../../src/canvas/model/elements";
 
 describe("direct canvas text entry geometry", () => {
   it("keeps advertised keyboard entry aligned with modal and editor guards", () => {
@@ -129,6 +132,62 @@ describe("direct canvas text entry geometry", () => {
     };
 
     expect(resolveDirectTextEntryHit([image], { x: 100, y: 50 })).toEqual({ kind: "blocked" });
+  });
+
+  it("resolves a 5,000-element blank double click once across capture and bubble", () => {
+    const elements: ShapeElement[] = Array.from({ length: 5_000 }, (_, index) => ({
+      createdAt: 1,
+      height: 20,
+      id: `shape-${index}`,
+      locked: false,
+      opacity: 1,
+      pageId: "page",
+      rotation: 0,
+      shape: "rectangle",
+      style: {
+        fillColor: null,
+        roughness: 1,
+        roundness: 0,
+        seed: index,
+        strokeColor: { kind: "fixed", value: "#000" },
+        strokeStyle: "solid",
+        strokeWidth: 2,
+      },
+      type: "shape",
+      updatedAt: 1,
+      width: 20,
+      x: index * 25,
+      y: 0,
+      zIndex: index,
+    }));
+    const nativeDoubleClick = {};
+    const point = { x: -100, y: -100 };
+    let resolverTraversals = 0;
+    const resolveHit = (scene: readonly CanvasElement[], hitPoint: typeof point) => {
+      resolverTraversals += 1;
+      return resolveDirectTextEntryHit(scene, hitPoint);
+    };
+
+    const startedAt = performance.now();
+    const captureHit = resolveDirectTextEntryHitForNativeEvent(
+      nativeDoubleClick,
+      elements,
+      point,
+      resolveHit,
+    );
+    const bubbleHit = resolveDirectTextEntryHitForNativeEvent(
+      nativeDoubleClick,
+      elements,
+      point,
+      resolveHit,
+    );
+    const durationMs = performance.now() - startedAt;
+
+    console.info(`5,000-element direct text event resolution: ${durationMs.toFixed(2)} ms`);
+    expect(captureHit).toEqual({ kind: "blank" });
+    expect(bubbleHit).toEqual({ kind: "blank" });
+    expect(resolverTraversals).toBe(1);
+    expect(Number.isFinite(durationMs)).toBe(true);
   });
 
   it("places the first caret exactly at the requested world point", () => {

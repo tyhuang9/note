@@ -184,6 +184,19 @@ export type DirectTextEntryHit =
   | Readonly<{ kind: "blocked" }>
   | Readonly<{ kind: "blank" }>;
 
+type DirectTextEntryHitResolver = (
+  elements: readonly CanvasElement[],
+  point: CanvasPoint,
+) => DirectTextEntryHit;
+
+type CachedDirectTextEntryHit = Readonly<{
+  elements: readonly CanvasElement[];
+  hit: DirectTextEntryHit;
+  point: CanvasPoint;
+}>;
+
+const directTextEntryHitByNativeEvent = new WeakMap<object, CachedDirectTextEntryHit>();
+
 /** Resolves text-entry intent in exact visual z-order without DOM ownership. */
 export function resolveDirectTextEntryHit(
   elements: readonly CanvasElement[],
@@ -206,6 +219,28 @@ export function resolveDirectTextEntryHit(
     }
   }
   return { kind: "blank" };
+}
+
+/** Shares a scene hit between React's capture and bubble handlers for one native event. */
+export function resolveDirectTextEntryHitForNativeEvent(
+  nativeEvent: object,
+  elements: readonly CanvasElement[],
+  point: CanvasPoint,
+  resolveHit: DirectTextEntryHitResolver = resolveDirectTextEntryHit,
+): DirectTextEntryHit {
+  const cached = directTextEntryHitByNativeEvent.get(nativeEvent);
+  if (
+    cached &&
+    cached.elements === elements &&
+    cached.point.x === point.x &&
+    cached.point.y === point.y
+  ) {
+    return cached.hit;
+  }
+
+  const hit = resolveHit(elements, point);
+  directTextEntryHitByNativeEvent.set(nativeEvent, { elements, hit, point });
+  return hit;
 }
 
 /** Central DOM router for legacy canvas pan, marquee, insertion, and wheel behavior. */
@@ -786,7 +821,11 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       ) return;
       const point = getCanvasPoint(event.clientX, event.clientY);
       if (!point) return;
-      const hit = resolveDirectTextEntryHit(current.visibleElements, point);
+      const hit = resolveDirectTextEntryHitForNativeEvent(
+        event.nativeEvent,
+        current.visibleElements,
+        point,
+      );
       if (hit.kind === "blocked") return;
       if (hit.kind === "blank" && !isCanvasBackgroundTarget(event.target)) return;
       if (hit.kind === "blank") {
@@ -818,7 +857,11 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       ) return;
       const point = getCanvasPoint(event.clientX, event.clientY);
       if (!point) return;
-      const hit = resolveDirectTextEntryHit(current.visibleElements, point);
+      const hit = resolveDirectTextEntryHitForNativeEvent(
+        event.nativeEvent,
+        current.visibleElements,
+        point,
+      );
       if (hit.kind !== "editable") return;
       editDirectTextElement(event, hit.element);
     },

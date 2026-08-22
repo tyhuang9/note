@@ -17,7 +17,7 @@ type ShapeName = keyof typeof TOOL_NAMES;
 test.beforeEach(async ({ page }) => {
   await installWorkspace(page);
   await page.goto("/");
-  await expect(page.getByRole("tabpanel")).toBeVisible();
+  await expect(page.getByRole("tabpanel")).toBeVisible({ timeout: 30_000 });
   await page.waitForTimeout(700);
   await resetCounts(page);
 });

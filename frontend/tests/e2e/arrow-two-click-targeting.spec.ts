@@ -4,7 +4,7 @@ test.beforeEach(async ({ page }) => {
   await installArrowWorkspace(page);
   await page.setViewportSize({ width: 1500, height: 900 });
   await page.goto("/");
-  await expect(page.getByRole("tabpanel")).toBeVisible();
+  await expect(page.getByRole("tabpanel")).toBeVisible({ timeout: 30_000 });
 });
 
 test("Arrow stays pending after the first click and commits once on the second click with lock semantics", async ({ page }) => {

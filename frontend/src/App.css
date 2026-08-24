@@ -3034,6 +3034,12 @@ h2 {
   border: 1px solid var(--canvas-selection, var(--accent-purple));
   box-shadow: 0 0 0 2px var(--canvas-selection-soft, rgba(139, 92, 246, 0.16));
   pointer-events: none;
+  transform-origin: center;
+}
+
+.selection-frame.is-native-text-frame {
+  border-color: transparent;
+  box-shadow: none;
 }
 
 .selection-frame-move-surface {
@@ -3069,35 +3075,41 @@ h2 {
 
 .selection-frame-handle {
   position: absolute;
-  z-index: 1;
-  width: 44px;
-  height: 44px;
   border: 0;
   padding: 0;
   background: transparent;
   pointer-events: auto;
+  touch-action: none;
 }
 
-.selection-frame-handle::after {
-  position: absolute;
-  top: 17px;
-  left: 17px;
-  width: 8px;
-  height: 8px;
-  border: 1px solid var(--canvas-selection, var(--accent-purple));
-  border-radius: 999px;
-  background: var(--canvas-tool-bg, #fff);
-  content: "";
+.selection-frame-corner {
+  z-index: 2;
+  width: 44px;
+  height: 44px;
 }
 
-.selection-frame-handle-nw { top: -22px; left: -22px; cursor: nwse-resize; }
-.selection-frame-handle-ne { top: -22px; right: -22px; cursor: nesw-resize; }
-.selection-frame-handle-se { right: -22px; bottom: -22px; cursor: nwse-resize; }
-.selection-frame-handle-sw { bottom: -22px; left: -22px; cursor: nesw-resize; }
-.selection-frame-handle-n { top: -22px; left: calc(50% - 22px); cursor: ns-resize; }
-.selection-frame-handle-e { top: calc(50% - 22px); right: -22px; cursor: ew-resize; }
-.selection-frame-handle-s { bottom: -22px; left: calc(50% - 22px); cursor: ns-resize; }
-.selection-frame-handle-w { top: calc(50% - 22px); left: -22px; cursor: ew-resize; }
+.selection-frame-edge {
+  z-index: 1;
+}
+
+.selection-frame-handle-nw { top: -22px; left: -22px; }
+.selection-frame-handle-ne { top: -22px; right: -22px; }
+.selection-frame-handle-se { right: -22px; bottom: -22px; }
+.selection-frame-handle-sw { bottom: -22px; left: -22px; }
+.selection-frame-handle-n { top: -10px; right: 0; left: 0; height: 12px; }
+.selection-frame-handle-e { top: 0; right: -10px; bottom: 0; width: 12px; }
+.selection-frame-handle-s { right: 0; bottom: -10px; left: 0; height: 12px; }
+.selection-frame-handle-w { top: 0; bottom: 0; left: -10px; width: 12px; }
+
+.selection-frame.is-native-text-frame .selection-frame-corner {
+  width: 28px;
+  height: 28px;
+}
+
+.selection-frame.is-native-text-frame .selection-frame-handle-nw { top: -14px; left: -14px; }
+.selection-frame.is-native-text-frame .selection-frame-handle-ne { top: -14px; right: -14px; }
+.selection-frame.is-native-text-frame .selection-frame-handle-se { right: -14px; bottom: -14px; }
+.selection-frame.is-native-text-frame .selection-frame-handle-sw { bottom: -14px; left: -14px; }
 
 /* The hit region is deliberately larger than the visible marker. Keep it
    transparent so a text card's right edge remains continuous on hover. */
@@ -3108,44 +3120,6 @@ h2 {
 
 .selection-frame-handle:focus-visible {
   outline: 2px solid var(--canvas-focus, var(--accent-purple));
-  outline-offset: 2px;
-}
-
-.selection-frame-text-resize-e {
-  position: absolute;
-  z-index: 2;
-  box-sizing: border-box;
-  width: 44px;
-  height: 44px;
-  min-width: 44px;
-  min-height: 44px;
-  border: 0;
-  padding: 0;
-  background: transparent;
-  pointer-events: auto;
-  transform-origin: center;
-  touch-action: none;
-}
-
-.selection-frame-text-resize-e.is-ew-resize { cursor: ew-resize; }
-.selection-frame-text-resize-e.is-nwse-resize { cursor: nwse-resize; }
-.selection-frame-text-resize-e.is-ns-resize { cursor: ns-resize; }
-.selection-frame-text-resize-e.is-nesw-resize { cursor: nesw-resize; }
-
-.selection-frame-text-resize-e::after {
-  position: absolute;
-  top: 9px;
-  left: 20px;
-  width: 4px;
-  height: 26px;
-  border-radius: 999px;
-  background: var(--accent-purple);
-  box-shadow: 0 0 0 2px var(--canvas-tool-bg, #fff);
-  content: "";
-}
-
-.selection-frame-text-resize-e:focus-visible {
-  outline: 3px solid var(--canvas-focus, var(--accent-purple));
   outline-offset: 2px;
 }
 

@@ -5,19 +5,6 @@ type CanvasInteractionOverlayProps = {
   children?: ReactNode;
   isInert?: boolean;
   marqueeRef: Ref<HTMLDivElement>;
-  textResizeHandle?: {
-    cursorClass: string;
-    onKeyDown: KeyboardEventHandler<HTMLButtonElement>;
-    onLostPointerCapture: PointerEventHandler<HTMLButtonElement>;
-    onPointerCancel: PointerEventHandler<HTMLButtonElement>;
-    onPointerDown: PointerEventHandler<HTMLButtonElement>;
-    onPointerMove: PointerEventHandler<HTMLButtonElement>;
-    onPointerUp: PointerEventHandler<HTMLButtonElement>;
-    ref: Ref<HTMLButtonElement>;
-    rotation: number;
-    x: number;
-    y: number;
-  };
   selectionFrameRef?: Ref<HTMLDivElement>;
   selectionFrame?: {
     connectorEndpointHandles?: readonly {
@@ -29,6 +16,7 @@ type CanvasInteractionOverlayProps = {
       y: number;
     }[];
     height: number;
+    isNativeTextFrame: boolean;
     moveLabel: string;
     onClick?: MouseEventHandler<HTMLButtonElement>;
     onDoubleClick?: MouseEventHandler<HTMLButtonElement>;
@@ -43,6 +31,7 @@ type CanvasInteractionOverlayProps = {
     preserveNativeSoutheastHandle?: boolean;
     resizeLabel: (handle: SelectionResizeHandle) => string;
     resizeHandles: readonly SelectionResizeHandle[];
+    rotation: number;
     showMoveSurface: boolean;
     width: number;
     x: number;
@@ -57,16 +46,21 @@ export function CanvasInteractionOverlay({
   marqueeRef,
   selectionFrame,
   selectionFrameRef,
-  textResizeHandle,
 }: CanvasInteractionOverlayProps) {
   return (
     <div className="canvas-interaction-overlay" inert={isInert ? true : undefined}>
       <div className="selection-rectangle" ref={marqueeRef} />
       {selectionFrame ? (
         <div
-          className="selection-frame"
+          className={`selection-frame ${selectionFrame.isNativeTextFrame ? "is-native-text-frame" : ""}`}
           ref={selectionFrameRef}
-          style={{ height: selectionFrame.height, left: selectionFrame.x, top: selectionFrame.y, width: selectionFrame.width }}
+          style={{
+            height: selectionFrame.height,
+            left: selectionFrame.x,
+            top: selectionFrame.y,
+            transform: `rotate(${selectionFrame.rotation}deg)`,
+            width: selectionFrame.width,
+          }}
         >
           {selectionFrame.showMoveSurface ? (
             <button
@@ -86,7 +80,8 @@ export function CanvasInteractionOverlay({
           {selectionFrame.resizeHandles.map((handle) => (
             <button
               aria-label={selectionFrame.resizeLabel(handle)}
-              className={`selection-frame-handle selection-frame-handle-${handle}`}
+              className={`selection-frame-handle selection-frame-handle-${handle} ${handle.length === 1 ? "selection-frame-edge" : "selection-frame-corner"}`}
+              data-selection-resize-handle={handle}
               key={handle}
               onKeyDown={selectionFrame.onResizeKeyDown(handle)}
               onPointerCancel={selectionFrame.onPointerCancel}
@@ -97,6 +92,7 @@ export function CanvasInteractionOverlay({
               onLostPointerCapture={selectionFrame.onLostPointerCapture}
               onPointerMove={selectionFrame.onPointerMove}
               onPointerUp={selectionFrame.onPointerUp}
+              style={{ cursor: rotatedResizeCursor(handle, selectionFrame.rotation) }}
               type="button"
             />
           ))}
@@ -126,27 +122,20 @@ export function CanvasInteractionOverlay({
           ))}
         </div>
       ) : null}
-      {textResizeHandle ? (
-        <button
-          aria-label="Resize text width"
-          aria-keyshortcuts="ArrowLeft ArrowRight"
-          className={`selection-frame-text-resize-e ${textResizeHandle.cursorClass}`}
-          onKeyDown={textResizeHandle.onKeyDown}
-          onLostPointerCapture={textResizeHandle.onLostPointerCapture}
-          onPointerCancel={textResizeHandle.onPointerCancel}
-          onPointerDown={textResizeHandle.onPointerDown}
-          onPointerMove={textResizeHandle.onPointerMove}
-          onPointerUp={textResizeHandle.onPointerUp}
-          ref={textResizeHandle.ref}
-          style={{
-            left: textResizeHandle.x - 22,
-            top: textResizeHandle.y - 22,
-            transform: `rotate(${textResizeHandle.rotation}deg)`,
-          }}
-          type="button"
-        />
-      ) : null}
       {children}
     </div>
   );
+}
+
+function rotatedResizeCursor(handle: SelectionResizeHandle, rotation: number) {
+  const localAxis = handle === "e" || handle === "w"
+    ? 0
+    : handle === "n" || handle === "s"
+      ? 90
+      : handle === "nw" || handle === "se"
+        ? 45
+        : 135;
+  const normalized = ((localAxis + rotation) % 180 + 180) % 180;
+  const cursorIndex = Math.round(normalized / 45) % 4;
+  return (["ew-resize", "nwse-resize", "ns-resize", "nesw-resize"] as const)[cursorIndex];
 }

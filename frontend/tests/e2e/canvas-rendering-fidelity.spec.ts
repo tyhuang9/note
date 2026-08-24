@@ -200,17 +200,20 @@ test("keeps Canvas focus visually neutral while preserving keyboard navigation",
   }
 });
 
-test("uses genuine offscreen navigation without replacing Canvas keyboard focus", async ({ page }) => {
+test("labels offscreen text while preserving genuine keyboard navigation", async ({ page }) => {
   await installOffscreenNavigationWorkspace(page);
   await page.goto("/");
 
   const canvas = page.getByRole("tabpanel");
   const activeTool = page.locator('.canvas-tool-palette [data-tool="select"]');
+  const offscreenGroup = page.locator(".offscreen-indicators");
   const offscreenButton = page.getByRole("button", { name: "1 textbox offscreen east" });
+  const status = page.locator('[role="status"].canvas-accessibility-status');
   const textbox = page.locator('[data-canvas-element-id="offscreen-text"]');
   const textboxHeader = textbox.locator(".text-block-header");
 
   await expect(canvas).toBeVisible();
+  await expect(offscreenGroup).toHaveAttribute("aria-label", "Offscreen textboxes");
   await expect(offscreenButton).toBeVisible();
   await expect(offscreenButton).toHaveJSProperty("tabIndex", 0);
   await activeTool.focus();
@@ -220,6 +223,7 @@ test("uses genuine offscreen navigation without replacing Canvas keyboard focus"
   await offscreenButton.focus();
   await expect(offscreenButton).toBeFocused();
   await page.keyboard.press("Enter");
+  await expect(status).toHaveText("Navigated to 1 textbox offscreen east.");
   await expect(textbox).toBeVisible();
   await expect(offscreenButton).toHaveCount(0);
   expect(await isOnscreen(textbox, canvas)).toBe(true);
@@ -240,22 +244,65 @@ test("uses genuine offscreen navigation without replacing Canvas keyboard focus"
   expect(focusedCanvas).toEqual(await canvasPresentation(canvas));
 });
 
-test("focuses the revealed offscreen shape root", async ({ page }) => {
-  await installOffscreenNavigationWorkspace(page, { targetKind: "shape" });
+test("labels an offscreen rectangle as a canvas item and focuses its root", async ({ page }) => {
+  await installOffscreenNavigationWorkspace(page, { targetKind: "rectangle" });
   await page.goto("/");
 
   const canvas = page.getByRole("tabpanel");
-  const offscreenButton = page.getByRole("button", { name: "1 textbox offscreen east" });
+  const offscreenGroup = page.locator(".offscreen-indicators");
+  const offscreenButton = page.getByRole("button", { name: "1 canvas item offscreen east" });
   const shape = page.locator('[data-canvas-element-id="offscreen-shape"]');
+  const status = page.locator('[role="status"].canvas-accessibility-status');
 
+  await expect(offscreenGroup).toHaveAttribute("aria-label", "Offscreen canvas items");
   await expect(offscreenButton).toBeVisible();
   await offscreenButton.focus();
   await page.keyboard.press("Enter");
+  await expect(status).toHaveText("Navigated to 1 canvas item offscreen east.");
   await expect(offscreenButton).toHaveCount(0);
   await expect(shape).toBeVisible();
   await expect(shape).toHaveAttribute("role", "button");
   expect(await isOnscreen(shape, canvas)).toBe(true);
   await expect(shape).toBeFocused();
+});
+
+test("labels an offscreen image as a canvas item", async ({ page }) => {
+  await installOffscreenNavigationWorkspace(page, { targetKind: "image" });
+  await page.goto("/");
+
+  const offscreenGroup = page.locator(".offscreen-indicators");
+  const offscreenButton = page.getByRole("button", { name: "1 canvas item offscreen east" });
+  const status = page.locator('[role="status"].canvas-accessibility-status');
+  await expect(offscreenGroup).toHaveAttribute("aria-label", "Offscreen canvas items");
+  await expect(offscreenButton).toBeVisible();
+  await offscreenButton.press("Enter");
+  await expect(status).toHaveText("Navigated to 1 canvas item offscreen east.");
+});
+
+test("labels mixed offscreen elements as canvas items", async ({ page }) => {
+  await installOffscreenNavigationWorkspace(page, { targetKind: "mixed" });
+  await page.goto("/");
+
+  const offscreenGroup = page.locator(".offscreen-indicators");
+  const offscreenButton = page.getByRole("button", { name: "2 canvas items offscreen east" });
+  const status = page.locator('[role="status"].canvas-accessibility-status');
+  await expect(offscreenGroup).toHaveAttribute("aria-label", "Offscreen canvas items");
+  await expect(offscreenButton).toBeVisible();
+  await offscreenButton.press("Enter");
+  await expect(status).toHaveText("Navigated to 2 canvas items offscreen east.");
+});
+
+test("keeps a rectangle with contained text in the canvas-item offscreen group", async ({ page }) => {
+  await installOffscreenNavigationWorkspace(page, { targetKind: "shape-text" });
+  await page.goto("/");
+
+  const offscreenGroup = page.locator(".offscreen-indicators");
+  const offscreenButton = page.getByRole("button", { name: "1 canvas item offscreen east" });
+  const status = page.locator('[role="status"].canvas-accessibility-status');
+  await expect(offscreenGroup).toHaveAttribute("aria-label", "Offscreen canvas items");
+  await expect(offscreenButton).toBeVisible();
+  await offscreenButton.press("Enter");
+  await expect(status).toHaveText("Navigated to 1 canvas item offscreen east.");
 });
 
 test("does not steal a deliberate focus transfer after offscreen navigation", async ({ page }) => {
@@ -374,52 +421,88 @@ async function installOffscreenNavigationWorkspace(
   {
     includeSecondaryPage = false,
     targetKind = "text",
-  }: { includeSecondaryPage?: boolean; targetKind?: "shape" | "text" } = {},
+  }: {
+    includeSecondaryPage?: boolean;
+    targetKind?: "image" | "mixed" | "rectangle" | "shape-text" | "text";
+  } = {},
 ) {
   await page.addInitScript(({ includeSecondaryPage, targetKind }) => {
-    const target = targetKind === "shape"
-      ? {
-        createdAt: 1,
-        height: 120,
-        id: "offscreen-shape",
-        locked: false,
-        opacity: 1,
-        pageId: "offscreen-page",
-        rotation: 0,
-        shape: "rectangle",
-        style: {
-          fillColor: null,
-          roughness: 1,
-          roundness: 0,
-          seed: 17,
-          strokeColor: { kind: "fixed", value: "#4c6ef5" },
-          strokeStyle: "solid",
-          strokeWidth: 2,
-        },
-        type: "shape",
-        updatedAt: 1,
-        width: 220,
-        x: 10_000,
-        y: 160,
-        zIndex: 1,
-      }
-      : {
-        backgroundMode: "surface",
-        content: "Offscreen destination",
-        createdAt: 1,
-        height: 96,
-        id: "offscreen-text",
-        locked: false,
-        opacity: 1,
-        pageId: "offscreen-page",
-        rotation: 0,
-        type: "text",
-        updatedAt: 1,
-        width: 220,
-        x: 10_000,
-        y: 160,
-        zIndex: 1,
-      };
+    const shape = {
+      createdAt: 1,
+      height: 120,
+      id: "offscreen-shape",
+      locked: false,
+      opacity: 1,
+      pageId: "offscreen-page",
+      rotation: 0,
+      shape: "rectangle",
+      style: {
+        fillColor: null,
+        roughness: 1,
+        roundness: 0,
+        seed: 17,
+        strokeColor: { kind: "fixed", value: "#4c6ef5" },
+        strokeStyle: "solid",
+        strokeWidth: 2,
+      },
+      type: "shape",
+      updatedAt: 1,
+      width: 220,
+      x: 10_000,
+      y: 160,
+      zIndex: 1,
+    };
+    const text = {
+      backgroundMode: "surface",
+      content: "Offscreen destination",
+      createdAt: 1,
+      height: 96,
+      id: "offscreen-text",
+      locked: false,
+      opacity: 1,
+      pageId: "offscreen-page",
+      rotation: 0,
+      type: "text",
+      updatedAt: 1,
+      width: 220,
+      x: 10_000,
+      y: 160,
+      zIndex: 1,
+    };
+    const shapeText = {
+      ...shape,
+      id: "offscreen-shape-text",
+      text: { content: "Contained offscreen text" },
+    };
+    const image = {
+      assetId: "offscreen-image-asset",
+      createdAt: 1,
+      fileName: "Offscreen image",
+      fit: "contain",
+      height: 120,
+      id: "offscreen-image",
+      locked: false,
+      naturalHeight: 120,
+      naturalWidth: 220,
+      opacity: 1,
+      pageId: "offscreen-page",
+      rotation: 0,
+      type: "image",
+      updatedAt: 1,
+      width: 220,
+      x: 10_000,
+      y: 160,
+      zIndex: 1,
+    };
+    const elements = targetKind === "mixed"
+      ? [text, shape]
+      : targetKind === "image"
+        ? [image]
+        : targetKind === "shape-text"
+          ? [shapeText]
+          : targetKind === "rectangle"
+            ? [shape]
+            : [text];
     const pages = [
       { folderId: "", id: "offscreen-page", isBookmarked: false, revision: 0, title: "Offscreen navigation" },
       ...(includeSecondaryPage
@@ -427,7 +510,7 @@ async function installOffscreenNavigationWorkspace(
         : []),
     ];
     const workspace = {
-      elements: [target],
+      elements,
       folders: [],
       isDarkMode: false,
       pages,
@@ -451,6 +534,15 @@ async function installOffscreenNavigationWorkspace(
         }
         if (command === "load_workspace_data") return workspace;
         if (command === "reconcile_workspace_structure") return { pages: workspace.pages };
+        if (command === "load_asset") {
+          return {
+            byteSize: 68,
+            dataBase64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9v9O8AAAAASUVORK5CYII=",
+            fileName: "Offscreen image",
+            id: args.assetId,
+            mediaType: "image/png",
+          };
+        }
         if (command === "save_session_state") {
           workspace.sessionState = args.state as typeof workspace.sessionState;
           return;

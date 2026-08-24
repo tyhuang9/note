@@ -26,7 +26,6 @@ export type DirectTextEntryAvailability = Readonly<{
   isCanvasAuthoringAvailable: boolean;
   isEditingText: boolean;
   isModalOrOverlayOpen: boolean;
-  isSearchOpen: boolean;
   source: "keyboard" | "pointer";
 }>;
 
@@ -39,7 +38,6 @@ export function canStartDirectTextEntry({
   isCanvasAuthoringAvailable,
   isEditingText,
   isModalOrOverlayOpen,
-  isSearchOpen,
   source,
 }: DirectTextEntryAvailability) {
   return isCanvasAuthoringAvailable
@@ -48,7 +46,6 @@ export function canStartDirectTextEntry({
     && !hasPendingImage
     && !isEditingText
     && !isModalOrOverlayOpen
-    && !isSearchOpen
     && (source === "pointer" ? activeTool === "select" : activeTool === "text");
 }
 

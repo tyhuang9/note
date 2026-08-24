@@ -2781,9 +2781,7 @@ h2 {
 }
 
 .search-panel input:focus-visible {
-  background: rgba(37, 99, 235, 0.08);
-  outline: 3px solid #2563eb;
-  outline-offset: -3px;
+  outline: none;
 }
 
 .search-panel-count {
@@ -2826,14 +2824,6 @@ h2 {
   display: flex;
   flex: 0 0 auto;
   gap: 4px;
-}
-
-.search-panel-paused-cue {
-  flex: 1 0 100%;
-  color: #4b586b;
-  font-size: 12px;
-  line-height: 1.35;
-  text-align: center;
 }
 
 .search-panel button {

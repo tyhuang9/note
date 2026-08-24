@@ -20,13 +20,11 @@ describe("direct canvas text entry geometry", () => {
       isCanvasAuthoringAvailable: true,
       isEditingText: false,
       isModalOrOverlayOpen: false,
-      isSearchOpen: false,
       source: "keyboard" as const,
     };
 
     expect(canStartDirectTextEntry(available)).toBe(true);
     expect(canStartDirectTextEntry({ ...available, isModalOrOverlayOpen: true })).toBe(false);
-    expect(canStartDirectTextEntry({ ...available, isSearchOpen: true })).toBe(false);
     expect(canStartDirectTextEntry({ ...available, hasPendingImage: true })).toBe(false);
     expect(canStartDirectTextEntry({ ...available, source: "pointer" })).toBe(false);
     expect(canStartDirectTextEntry({ ...available, activeTool: "select", source: "pointer" })).toBe(true);

@@ -13,7 +13,6 @@ type CanvasViewportProps = {
   labelledBy?: string;
   children: ReactNode;
   id: string;
-  isInteractionDisabled?: boolean;
   isKeyboardShapeCreationAvailable?: boolean;
   isKeyboardTextCreationAvailable?: boolean;
   onDoubleClick: MouseEventHandler<HTMLElement>;
@@ -40,7 +39,6 @@ export const CanvasViewport = forwardRef<HTMLElement, CanvasViewportProps>(
       labelledBy,
       children,
       id,
-      isInteractionDisabled = false,
       isKeyboardShapeCreationAvailable = false,
       isKeyboardTextCreationAvailable = false,
       onDoubleClick,
@@ -61,16 +59,6 @@ export const CanvasViewport = forwardRef<HTMLElement, CanvasViewportProps>(
     const isSearchPanelEvent = (event: { target: EventTarget | null }) => (
       event.target instanceof Element && event.target.closest(".search-panel") !== null
     );
-    const blockCanvasInteraction = (event: {
-      target: EventTarget | null;
-      preventDefault: () => void;
-      stopPropagation: () => void;
-    }) => {
-      if (!isInteractionDisabled) return false;
-      event.preventDefault();
-      event.stopPropagation();
-      return true;
-    };
     return (
       <section
         aria-label={labelledBy ? undefined : "Canvas workspace"}
@@ -83,38 +71,34 @@ export const CanvasViewport = forwardRef<HTMLElement, CanvasViewportProps>(
         aria-labelledby={labelledBy}
         className={`canvas ${activeMode === "canvas" ? "is-canvas-selected" : ""} ${activeMode === "panning" ? "is-panning" : ""} ${activeMode === "selecting" ? "is-selecting" : ""}`}
         data-active-tool={activeTool}
-        data-search-navigation-active={isInteractionDisabled ? "true" : undefined}
         id={id}
         onClickCapture={(event) => {
           if (isSearchPanelEvent(event)) return;
-          blockCanvasInteraction(event);
         }}
         onContextMenu={(event) => {
           if (!isSearchPanelEvent(event)) event.preventDefault();
         }}
         onDoubleClick={(event) => {
           if (isSearchPanelEvent(event)) return;
-          if (!blockCanvasInteraction(event)) onDoubleClick(event);
+          onDoubleClick(event);
         }}
         onDoubleClickCapture={(event) => {
           if (isSearchPanelEvent(event)) return;
-          if (!blockCanvasInteraction(event)) onDoubleClickCapture?.(event);
+          onDoubleClickCapture?.(event);
         }}
         onKeyDownCapture={(event) => {
           if (isSearchPanelEvent(event)) return;
-          blockCanvasInteraction(event);
         }}
         onPointerCancel={(event) => {
           if (isSearchPanelEvent(event)) return;
-          if (!blockCanvasInteraction(event)) onPointerCancel(event);
+          onPointerCancel(event);
         }}
         onPointerCancelCapture={(event) => {
           if (isSearchPanelEvent(event)) return;
-          if (!blockCanvasInteraction(event)) onPointerCancelCapture?.(event);
+          onPointerCancelCapture?.(event);
         }}
         onPointerDown={(event) => {
           if (isSearchPanelEvent(event)) return;
-          if (blockCanvasInteraction(event)) return;
           if (event.target === event.currentTarget) {
             event.currentTarget.focus({ preventScroll: true });
           }
@@ -122,35 +106,35 @@ export const CanvasViewport = forwardRef<HTMLElement, CanvasViewportProps>(
         }}
         onPointerDownCapture={(event) => {
           if (isSearchPanelEvent(event)) return;
-          if (!blockCanvasInteraction(event)) onPointerDownCapture?.(event);
+          onPointerDownCapture?.(event);
         }}
         onLostPointerCapture={(event) => {
           if (isSearchPanelEvent(event)) return;
-          if (!blockCanvasInteraction(event)) onLostPointerCapture?.(event);
+          onLostPointerCapture?.(event);
         }}
         onPointerMove={(event) => {
           if (isSearchPanelEvent(event)) return;
-          if (!blockCanvasInteraction(event)) onPointerMove(event);
+          onPointerMove(event);
         }}
         onPointerMoveCapture={(event) => {
           if (isSearchPanelEvent(event)) return;
-          if (!blockCanvasInteraction(event)) onPointerMoveCapture?.(event);
+          onPointerMoveCapture?.(event);
         }}
         onPointerUp={(event) => {
           if (isSearchPanelEvent(event)) return;
-          if (!blockCanvasInteraction(event)) onPointerUp(event);
+          onPointerUp(event);
         }}
         onPointerUpCapture={(event) => {
           if (isSearchPanelEvent(event)) return;
-          if (!blockCanvasInteraction(event)) onPointerUpCapture?.(event);
+          onPointerUpCapture?.(event);
         }}
         onWheel={(event) => {
           if (isSearchPanelEvent(event)) return;
-          if (!blockCanvasInteraction(event)) onWheel(event);
+          onWheel(event);
         }}
         ref={ref}
         role="tabpanel"
-        tabIndex={isInteractionDisabled ? -1 : 0}
+        tabIndex={0}
       >
         {children}
       </section>

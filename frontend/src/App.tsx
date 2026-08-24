@@ -1326,7 +1326,6 @@ function App() {
   const [imageImportError, setImageImportError] = useState<string | null>(null);
   const [panOffset, setPanOffset] = useState<PanOffset>({ x: 0, y: 0 });
   const [livePanOffset, setLivePanOffset] = useState<PanOffset>(panOffset);
-  const [searchPanOffset, setSearchPanOffset] = useState<PanOffset | null>(null);
   const [insertionPoint, setInsertionPoint] = useState<InsertionPoint | null>(null);
   const [canvasSize, setCanvasSize] = useState<CanvasSize>({ width: 0, height: 0 });
   const [zoomLevel, setZoomLevel] = useState(DEFAULT_ZOOM);
@@ -1868,7 +1867,7 @@ function App() {
   const isCanvasAuthoringAvailable = Boolean(
     selectedPage && !isTemplatePage(selectedPage) && canvasViewport,
   );
-  const activeKeyboardShapeLabel = !isCanvasAuthoringAvailable || isSearchOpen
+  const activeKeyboardShapeLabel = !isCanvasAuthoringAvailable
     ? null
     : activeTool === "rectangle"
     ? "Rectangle"
@@ -1885,7 +1884,6 @@ function App() {
     isCanvasAuthoringAvailable,
     isEditingText: editingBlockId !== null,
     isModalOrOverlayOpen: Boolean(activeWorkbenchOverlay || isAIProvidersOpen),
-    isSearchOpen,
     source: "keyboard",
   });
   const availableDrawingPropertiesContext = isCanvasAuthoringAvailable
@@ -2557,12 +2555,7 @@ function App() {
 
   useEffect(() => {
     setActiveSearchIndex(0);
-    setSearchPanOffset(null);
   }, [searchQuery, selectedPageId]);
-
-  useEffect(() => {
-    setSearchPanOffset(null);
-  }, [panOffset.x, panOffset.y, zoomLevel]);
 
   useEffect(() => {
     if (activeSearchIndex >= searchMatches.length) {
@@ -4450,11 +4443,12 @@ function App() {
 
   function focusCanvasSearch(trigger?: HTMLElement | null) {
     if (isCanvasSearchInteractionBlocked()) return;
-    cancelCapturedCanvasInteractionsRef.current();
-    searchReturnFocusRef.current = trigger?.isConnected && trigger !== document.body
-      ? trigger
-      : canvasRef.current;
-    setIsSearchOpen(true);
+    if (!isSearchOpen) {
+      searchReturnFocusRef.current = trigger?.isConnected && trigger !== document.body
+        ? trigger
+        : canvasRef.current;
+      setIsSearchOpen(true);
+    }
     window.requestAnimationFrame(() => {
       searchInputRef.current?.focus();
       searchInputRef.current?.select();
@@ -4466,7 +4460,6 @@ function App() {
     searchReturnFocusRef.current = null;
     setIsSearchOpen(false);
     setSearchQuery("");
-    setSearchPanOffset(null);
     if (!restoreFocus) return;
     window.requestAnimationFrame(() => {
       const fallbackTarget = canvasSearchButtonRef.current?.isConnected
@@ -5912,7 +5905,6 @@ function App() {
       isCanvasAuthoringAvailable: isCanvasAuthoringAvailableRef.current,
       isEditingText: editingBlockIdRef.current !== null,
       isModalOrOverlayOpen: isWorkbenchOverlayOpenRef.current || isAIProvidersOpen,
-      isSearchOpen,
       source,
     })) {
       return false;
@@ -8589,7 +8581,7 @@ function App() {
   };
 
   function focusSearchMatch(matchIndex: number) {
-    if (searchMatches.length === 0 || isCanvasSearchInteractionBlocked()) {
+    if (searchMatches.length === 0) {
       return;
     }
 
@@ -8601,8 +8593,6 @@ function App() {
     setActiveSearchIndex(normalizedIndex);
 
     if (match.kind === "title") {
-      setSearchPanOffset(null);
-      window.requestAnimationFrame(() => searchInputRef.current?.focus());
       return;
     }
 
@@ -8612,11 +8602,10 @@ function App() {
       return;
     }
 
-    setSearchPanOffset({
+    setPanOffset({
       x: canvasSize.width / 2 - (block.x + block.width / 2) * zoomLevel,
       y: canvasSize.height / 2 - (block.y + block.height / 2) * zoomLevel,
     });
-    window.requestAnimationFrame(() => searchInputRef.current?.focus());
   }
 
   function panToOffscreenGroup(direction: OffscreenGroup["direction"]) {
@@ -8732,10 +8721,6 @@ function App() {
     || activeNarrowOverlay
     || isAIProvidersOpen
   );
-
-  useEffect(() => {
-    if (isSearchOpen && isCanvasSearchUnavailable) closeCanvasSearch({ restoreFocus: false });
-  }, [isCanvasSearchUnavailable, isSearchOpen]);
 
   return (
     <WorkbenchShell
@@ -8897,7 +8882,6 @@ function App() {
           activeMode={activeMode}
           activeTool={activeTool}
           id={WORKSPACE_PAGE_PANEL_ID}
-          isInteractionDisabled={isSearchOpen}
           isKeyboardShapeCreationAvailable={activeKeyboardShapeLabel !== null}
           isKeyboardTextCreationAvailable={isKeyboardTextCreationAvailable}
           onDoubleClick={canvasInteraction.handleDoubleClick}
@@ -8926,7 +8910,6 @@ function App() {
           {isCanvasAuthoringAvailable ? <>
             <div
               className="canvas-authoring-controls"
-              inert={isSearchOpen ? true : undefined}
               onPointerDown={(event) => event.stopPropagation()}
             >
               <CanvasToolPalette
@@ -8958,7 +8941,6 @@ function App() {
                 contextLabel={availableDrawingPropertiesContext.contextLabel}
                 isBackgroundModeDisabled={availableDrawingPropertiesContext.isBackgroundModeDisabled}
                 isCompactOpen={isPropertiesPanelOpen}
-                isInert={isSearchOpen}
                 isSelection={availableDrawingPropertiesContext.isSelection}
                 onCancelPreview={cancelDrawingPropertyPreview}
                 onLayerAction={updateSelectedLayer}
@@ -8972,11 +8954,8 @@ function App() {
           </> : null}
           {offscreenGroups.length > 0 ? (
             <div
-              className={`offscreen-indicators ${
-                isSearchOpen ? "has-search-panel" : ""
-              }`}
+              className="offscreen-indicators"
               aria-label={getOffscreenGroupsContainerLabel(offscreenGroups)}
-              inert={isSearchOpen ? true : undefined}
               role="group"
             >
               {offscreenGroups.map((group) => (
@@ -9000,36 +8979,11 @@ function App() {
           {isSearchOpen ? (
             <div
               className="search-panel"
-              inert={isCanvasSearchUnavailable ? true : undefined}
-              onPointerDownCapture={(event) => {
-                if (isCanvasSearchInteractionBlocked()) {
-                  event.preventDefault();
-                  event.stopPropagation();
-                }
-              }}
               onKeyDown={(event) => {
-                if (isCanvasSearchInteractionBlocked()) return;
                 if (event.key === "Escape") {
                   event.preventDefault();
                   event.stopPropagation();
                   closeCanvasSearch();
-                  return;
-                }
-                if (event.key !== "Tab") return;
-                const focusableControls = Array.from(
-                  event.currentTarget.querySelectorAll<HTMLElement>(
-                    'input:not([disabled]), button:not([disabled])',
-                  ),
-                );
-                const firstControl = focusableControls[0];
-                const lastControl = focusableControls[focusableControls.length - 1];
-                if (!firstControl || !lastControl) return;
-                if (event.shiftKey && document.activeElement === firstControl) {
-                  event.preventDefault();
-                  lastControl.focus();
-                } else if (!event.shiftKey && document.activeElement === lastControl) {
-                  event.preventDefault();
-                  firstControl.focus();
                 }
               }}
               onPointerDown={(event) => event.stopPropagation()}
@@ -9037,17 +8991,14 @@ function App() {
               <div className="search-panel-query">
                 <HeroIcon name="magnifying-glass" />
                 <input
-                  aria-describedby="canvas-search-paused-description canvas-search-status"
+                  aria-describedby="canvas-search-status"
                   aria-label="Find in canvas"
-                  disabled={isCanvasSearchUnavailable}
                   onChange={(event) => {
-                    if (!isCanvasSearchInteractionBlocked()) setSearchQuery(event.currentTarget.value);
+                    if (document.activeElement === event.currentTarget) {
+                      setSearchQuery(event.currentTarget.value);
+                    }
                   }}
                   onKeyDown={(event) => {
-                    if (isCanvasSearchInteractionBlocked()) {
-                      event.preventDefault();
-                      return;
-                    }
                     if (event.key === "Enter") {
                       event.preventDefault();
                       focusSearchMatch(
@@ -9079,7 +9030,7 @@ function App() {
               <div className="search-panel-actions">
                 <button
                   aria-label="Previous match"
-                  disabled={searchMatches.length === 0 || isCanvasSearchUnavailable}
+                  disabled={searchMatches.length === 0}
                   onClick={() => focusSearchMatch(activeSearchIndex - 1)}
                   title="Previous match"
                   type="button"
@@ -9088,7 +9039,7 @@ function App() {
                 </button>
                 <button
                   aria-label="Next match"
-                  disabled={searchMatches.length === 0 || isCanvasSearchUnavailable}
+                  disabled={searchMatches.length === 0}
                   onClick={() => focusSearchMatch(activeSearchIndex + 1)}
                   title="Next match"
                   type="button"
@@ -9097,7 +9048,6 @@ function App() {
                 </button>
                 <button
                   aria-label="Close search"
-                  disabled={isCanvasSearchUnavailable}
                   onClick={() => {
                     closeCanvasSearch();
                   }}
@@ -9107,16 +9057,12 @@ function App() {
                   <HeroIcon name="x-mark" />
                 </button>
               </div>
-              <span className="search-panel-paused-cue" id="canvas-search-paused-description">
-                Canvas interactions paused while Find is open.
-              </span>
             </div>
           ) : null}
           <CanvasWorldLayer
             isGridVisible={isGridVisible}
-            isInert={isSearchOpen}
             liveDraftLayerRef={liveDraftLayerRef}
-            panOffset={searchPanOffset ?? panOffset}
+            panOffset={panOffset}
             ref={canvasContentRef}
             zoomLevel={zoomLevel}
           >
@@ -9286,7 +9232,6 @@ function App() {
             ) : null}
           </CanvasWorldLayer>
           <CanvasInteractionOverlay
-            isInert={isSearchOpen}
             marqueeRef={selectionRectRef}
             selectionFrameRef={selectionFrameRef}
             textResizeHandle={(() => {
@@ -9453,7 +9398,6 @@ function App() {
             <div
               className="canvas-starter"
               aria-label="Empty workspace shortcuts"
-              inert={isSearchOpen ? true : undefined}
               onPointerDown={(event) => {
                 event.preventDefault();
                 event.stopPropagation();

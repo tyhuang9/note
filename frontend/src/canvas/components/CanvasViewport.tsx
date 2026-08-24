@@ -107,8 +107,8 @@ export const CanvasViewport = forwardRef<HTMLElement, CanvasViewportProps>(
           onPointerDown(event);
         }}
         onPointerDownCapture={(event) => {
-          if (isSearchPanelEvent(event)) return;
           onPointerDownCapture?.(event);
+          if (isSearchPanelEvent(event)) return;
         }}
         onLostPointerCapture={(event) => {
           if (isSearchPanelEvent(event)) return;
@@ -120,8 +120,8 @@ export const CanvasViewport = forwardRef<HTMLElement, CanvasViewportProps>(
           onPointerMove(event);
         }}
         onPointerMoveCapture={(event) => {
-          if (isSearchPanelEvent(event)) return;
           onPointerMoveCapture?.(event);
+          if (isSearchPanelEvent(event)) return;
         }}
         onPointerUp={(event) => {
           if (isSearchPanelEvent(event)) return;

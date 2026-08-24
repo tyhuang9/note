@@ -585,6 +585,20 @@ function isCanvasSearchPanelTarget(target: EventTarget | null): target is Elemen
   return target instanceof Element && target.closest(".search-panel") !== null;
 }
 
+function isCanvasPastePointerChromeTarget(target: EventTarget | null) {
+  return target instanceof Element && target.closest([
+    ".canvas-tool-palette",
+    ".drawing-properties-panel",
+    ".offscreen-indicators",
+    ".search-panel",
+    ".selection-frame",
+    ".connector-endpoint-chooser",
+    ".global-text-toolbar",
+    '[role="dialog"]',
+    '[aria-modal="true"]',
+  ].join(", ")) !== null;
+}
+
 function guardCanvasSearchPanelKeyboardEvent(event: KeyboardEvent): boolean {
   if (!isCanvasSearchPanelTarget(event.target)) return false;
   if (isTextEntryTarget(event.target)) return true;
@@ -3277,6 +3291,17 @@ function App() {
     return {
       x: (pointer.x - bounds.left - panOffsetRef.current.x) / zoomLevelRef.current,
       y: (pointer.y - bounds.top - panOffsetRef.current.y) / zoomLevelRef.current,
+    };
+  }
+
+  function rememberCanvasPastePointer(event: ReactPointerEvent<HTMLElement>) {
+    if (isCanvasPastePointerChromeTarget(event.target)) {
+      lastCanvasPointerClientRef.current = null;
+      return;
+    }
+    lastCanvasPointerClientRef.current = {
+      x: event.clientX,
+      y: event.clientY,
     };
   }
 
@@ -9021,6 +9046,8 @@ function App() {
           onPointerCancelCapture={inkInteraction.handlePointerCancelCapture}
           onPointerDown={canvasInteraction.handlePointerDown}
           onPointerDownCapture={(event) => {
+            rememberCanvasPastePointer(event);
+            if (isCanvasPastePointerChromeTarget(event.target)) return;
             canvasInteraction.handlePointerDownCapture(event);
             if (!event.defaultPrevented) inkInteraction.handlePointerDownCapture(event);
           }}
@@ -9029,10 +9056,8 @@ function App() {
           }}
           onPointerMove={canvasInteraction.handlePointerMove}
           onPointerMoveCapture={(event) => {
-            lastCanvasPointerClientRef.current = {
-              x: event.clientX,
-              y: event.clientY,
-            };
+            rememberCanvasPastePointer(event);
+            if (isCanvasPastePointerChromeTarget(event.target)) return;
             canvasInteraction.handlePointerMoveCapture(event);
             inkInteraction.handlePointerMoveCapture(event);
           }}

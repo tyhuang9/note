@@ -3075,6 +3075,8 @@ h2 {
 
 .selection-frame-handle {
   position: absolute;
+  min-width: 0;
+  min-height: 0;
   border: 0;
   padding: 0;
   background: transparent;
@@ -3104,12 +3106,17 @@ h2 {
 .selection-frame.is-native-text-frame .selection-frame-corner {
   width: 28px;
   height: 28px;
+  clip-path: circle(8px at center);
 }
 
 .selection-frame.is-native-text-frame .selection-frame-handle-nw { top: -14px; left: -14px; }
 .selection-frame.is-native-text-frame .selection-frame-handle-ne { top: -14px; right: -14px; }
 .selection-frame.is-native-text-frame .selection-frame-handle-se { right: -14px; bottom: -14px; }
 .selection-frame.is-native-text-frame .selection-frame-handle-sw { bottom: -14px; left: -14px; }
+
+.selection-frame.is-native-text-frame .selection-frame-corner:focus-visible {
+  clip-path: none;
+}
 
 /* The hit region is deliberately larger than the visible marker. Keep it
    transparent so a text card's right edge remains continuous on hover. */

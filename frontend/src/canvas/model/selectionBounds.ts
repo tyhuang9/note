@@ -6,10 +6,9 @@ import type {
   InkElement,
   TextElement,
 } from "./elements";
-import { isBoxCanvasElement } from "./elements";
+import { isArrowConnector, isBoxCanvasElement } from "./elements";
 import { resolveConnectorPoints } from "./connectorBinding";
 import { getConnectorArrowheadPaintPadding } from "./connectorArrowheads";
-import { isArrowConnector } from "./elements";
 import type { CanvasPoint } from "./geometry";
 import type { Bounds } from "./hitTesting";
 import { normalizeBounds } from "./hitTesting";

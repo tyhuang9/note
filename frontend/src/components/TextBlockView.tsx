@@ -209,6 +209,7 @@ export const TextBlockView = memo(function TextBlockView({
     block.height,
     block.id,
     block.isWidthManuallyResized,
+    block.manualHeight,
     block.width,
   ]);
 
@@ -279,7 +280,7 @@ export const TextBlockView = memo(function TextBlockView({
     if (!widthMeasureElement || !heightMeasureElement) {
       return {
         width: Math.max(MIN_BLOCK_WIDTH, block.width),
-        height: Math.max(MIN_BLOCK_HEIGHT, block.height),
+        height: Math.max(MIN_BLOCK_HEIGHT, block.height, block.manualHeight ?? 0),
       };
     }
 
@@ -301,6 +302,7 @@ export const TextBlockView = memo(function TextBlockView({
       width: measuredWidth,
       height: Math.max(
         MIN_BLOCK_HEIGHT,
+        block.manualHeight ?? 0,
         measuredHeight + TEXT_BLOCK_HEADER_HEIGHT + TEXT_BLOCK_HEIGHT_BUFFER,
       ),
     };

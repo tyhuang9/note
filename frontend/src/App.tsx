@@ -209,15 +209,12 @@ import {
 import { connectorLabelFontPixels, getConnectorLabel, getConnectorLabelGapHalfLength, readableConnectorLabelAngle, resolveConnectorLabelStyle } from "./canvas/model/connectorLabel";
 import { reorderLayers, type LayerAction } from "./canvas/model/layerOrdering";
 import {
-  getProportionalScale,
   getSelectionElementBounds,
   getSelectionBounds,
   getSelectionResizePreviewConnectorIds,
   getSelectionResizeTransform,
   resizeSelection,
-  scaleSelection,
   translateSelection,
-  type SelectionCorner,
   type SelectionResizeHandle,
   type SelectionResizeTransform,
   type TextSelectionSize,
@@ -487,7 +484,6 @@ type SelectionTransformSession = {
   startBounds: SelectionRect;
   startClientX: number;
   startClientY: number;
-  selectionScale: number | null;
   selectionResizeTransform: SelectionResizeTransform | null;
   textResize: boolean;
   textSizes: ReadonlyMap<string, TextSelectionSize> | null;
@@ -6889,11 +6885,11 @@ function App() {
   function getTextSelectionSizes(
     elements: readonly CanvasElement[],
     selectedIds: ReadonlySet<string>,
-    scale: number,
+    scaleX: number,
     sourceElementsById: ReadonlyMap<string, HTMLElement> = new Map(),
   ) {
     const sizes = new Map<string, TextSelectionSize>();
-    const factor = Number.isFinite(scale) ? Math.max(0.01, scale) : 0.01;
+    const factor = Number.isFinite(scaleX) ? Math.max(0.01, scaleX) : 0.01;
     for (const element of elements) {
       if (!selectedIds.has(element.id) || element.locked || element.type !== "text") continue;
       const previewClone = sourceElementsById.get(element.id);
@@ -7268,15 +7264,13 @@ function App() {
     clientY: number,
     session: SelectionTransformSession,
   ) {
-    const isCorner = corner.length === 2;
-    const scale = isCorner ? getSelectionResizeScale(bounds, corner as SelectionCorner, clientX, clientY, session) : null;
     const draggedHandle = {
       x: (corner.includes("e") ? bounds.x + bounds.width : corner.includes("w") ? bounds.x : bounds.x + bounds.width / 2)
         + (clientX - session.startClientX) / zoomLevelRef.current,
       y: (corner.includes("s") ? bounds.y + bounds.height : corner.includes("n") ? bounds.y : bounds.y + bounds.height / 2)
         + (clientY - session.startClientY) / zoomLevelRef.current,
     };
-    const transform = isCorner ? null : getSelectionResizeTransform(
+    const transform = getSelectionResizeTransform(
       { ...bounds, rotation: getSelectionFrameRotation() },
       corner,
       draggedHandle,
@@ -7291,31 +7285,21 @@ function App() {
     const textSizes = getTextSelectionSizes(
       resizeSession.selectedElements,
       resizeSession.selectedIds,
-      scale ?? 1,
+      transform.scaleX,
       textSources,
     );
-    const previewElements = isCorner
-      ? scaleSelection(
-        resizeSession.selectedElements,
-        resizeSession.selectedIds,
-        bounds,
-        corner as SelectionCorner,
-        scale ?? 1,
-        textSizes,
-      )
-      : resizeSelection(
-        resizeSession.selectedElements,
-        resizeSession.selectedIds,
-        { ...bounds, rotation: getSelectionFrameRotation() },
-        transform!,
-        textSizes,
-      );
+    const previewElements = resizeSelection(
+      resizeSession.selectedElements,
+      resizeSession.selectedIds,
+      { ...bounds, rotation: getSelectionFrameRotation() },
+      transform,
+      textSizes,
+    );
     const previewElementsById = overlayTransformedElements(
       resizeSession.baseElementsById,
       previewElements,
     );
     return {
-      scale,
       transform,
       textSizes,
       elements: previewElements,
@@ -7362,7 +7346,6 @@ function App() {
       startBounds: bounds,
       startClientX: event.clientX,
       startClientY: event.clientY,
-      selectionScale: null,
       selectionResizeTransform: null,
       textResize: false,
       textSizes: null,
@@ -7409,7 +7392,6 @@ function App() {
       },
       startClientX: event.clientX,
       startClientY: event.clientY,
-      selectionScale: null,
       selectionResizeTransform: null,
       textResize: true,
       textSizes: null,
@@ -7548,12 +7530,11 @@ function App() {
       if (!startSelectionResizePreview()) return;
       const preview = selectionResizePreview(session.startBounds, session.corner, clientX, clientY, session);
       if (!preview) return;
-      session.selectionScale = preview.scale;
       session.selectionResizeTransform = preview.transform;
       session.textSizes = preview.textSizes;
       updateSelectionResizePreview(
-        preview.transform?.scaleX ?? preview.scale ?? 1,
-        preview.transform?.scaleY ?? preview.scale ?? 1,
+        preview.transform.scaleX,
+        preview.transform.scaleY,
         preview.elements,
         preview.elementsById,
       );
@@ -7671,42 +7652,23 @@ function App() {
       }
     } else if (session.corner && session.didMove) {
       const selectedIds = new Set(selectedBlockIdsRef.current);
-      const isCorner = session.corner.length === 2;
-      const scale = isCorner ? session.selectionScale ?? getSelectionResizeScale(
-        session.startBounds,
-        session.corner as SelectionCorner,
-        event.clientX,
-        event.clientY,
-        session,
-      ) : null;
-      const transform = !isCorner ? session.selectionResizeTransform ?? getSelectionResizeTransform(
+      const transform = session.selectionResizeTransform ?? getSelectionResizeTransform(
         { ...session.startBounds, rotation: getSelectionFrameRotation() },
         session.corner,
         {
           x: (session.corner.includes("e") ? session.startBounds.x + session.startBounds.width : session.corner.includes("w") ? session.startBounds.x : session.startBounds.x + session.startBounds.width / 2) + (event.clientX - session.startClientX) / zoomLevelRef.current,
           y: (session.corner.includes("s") ? session.startBounds.y + session.startBounds.height : session.corner.includes("n") ? session.startBounds.y : session.startBounds.y + session.startBounds.height / 2) + (event.clientY - session.startClientY) / zoomLevelRef.current,
         },
-      ) : null;
+      );
       finishSelectionResizePreview();
       clearSelectionFrameVisualBounds();
-      setBlocksWithHistory((currentBlocks) =>
-        isCorner
-          ? scaleSelection(
-            currentBlocks,
-            selectedIds,
-            session.startBounds,
-            session.corner as SelectionCorner,
-            scale ?? 1,
-            session.textSizes ?? new Map(),
-          )
-          : resizeSelection(
-            currentBlocks,
-            selectedIds,
-            { ...session.startBounds, rotation: getSelectionFrameRotation() },
-            transform!,
-            session.textSizes ?? new Map(),
-          ),
-      );
+      setBlocksWithHistory((currentBlocks) => resizeSelection(
+        currentBlocks,
+        selectedIds,
+        { ...session.startBounds, rotation: getSelectionFrameRotation() },
+        transform,
+        session.textSizes ?? new Map(),
+      ));
     } else if (!session.corner && session.didMove) {
       endVisualDrag(event.clientX, event.clientY);
     }
@@ -7766,8 +7728,8 @@ function App() {
       if (!bounds || !event.key.startsWith("Arrow")) return;
       const step = (event.shiftKey ? 10 : 1) / zoomLevelRef.current;
       const draggedCorner = {
-        x: corner.includes("e") ? bounds.x + bounds.width : bounds.x,
-        y: corner.includes("s") ? bounds.y + bounds.height : bounds.y,
+        x: corner.includes("e") ? bounds.x + bounds.width : corner.includes("w") ? bounds.x : bounds.x + bounds.width / 2,
+        y: corner.includes("s") ? bounds.y + bounds.height : corner.includes("n") ? bounds.y : bounds.y + bounds.height / 2,
       };
       if (event.key === "ArrowLeft") draggedCorner.x -= step;
       if (event.key === "ArrowRight") draggedCorner.x += step;
@@ -7776,36 +7738,18 @@ function App() {
       event.preventDefault();
       event.stopPropagation();
       const selectedIds = new Set(selectedBlockIdsRef.current);
-      const isCorner = corner.length === 2;
-      const scale = isCorner ? getProportionalScale(bounds, corner as SelectionCorner, draggedCorner) : 1;
-      const textSizes = getTextSelectionSizes(dataRef.current.elements, selectedIds, scale);
-      setBlocksWithHistory((currentBlocks) =>
-        isCorner
-          ? scaleSelection(currentBlocks, selectedIds, bounds, corner as SelectionCorner, scale, textSizes)
-          : resizeSelection(
-            currentBlocks,
-            selectedIds,
-            { ...bounds, rotation: getSelectionFrameRotation() },
-            getSelectionResizeTransform({ ...bounds, rotation: getSelectionFrameRotation() }, corner, draggedCorner),
-            textSizes,
-          ),
-      );
+      const frame = { ...bounds, rotation: getSelectionFrameRotation() };
+      const transform = getSelectionResizeTransform(frame, corner, draggedCorner);
+      const textSizes = getTextSelectionSizes(dataRef.current.elements, selectedIds, transform.scaleX);
+      setBlocksWithHistory((currentBlocks) => resizeSelection(
+        currentBlocks,
+        selectedIds,
+        frame,
+        transform,
+        textSizes,
+      ));
       setActiveMode("selected");
     };
-  }
-
-  function getSelectionResizeScale(
-    bounds: SelectionRect,
-    corner: SelectionCorner,
-    clientX: number,
-    clientY: number,
-    session: SelectionTransformSession,
-  ) {
-    const draggedCorner = {
-      x: (corner.includes("e") ? bounds.x + bounds.width : bounds.x) + (clientX - session.startClientX) / zoomLevelRef.current,
-      y: (corner.includes("s") ? bounds.y + bounds.height : bounds.y) + (clientY - session.startClientY) / zoomLevelRef.current,
-    };
-    return getProportionalScale(bounds, corner, draggedCorner);
   }
 
   function resizeTextWidthByKeyboard(

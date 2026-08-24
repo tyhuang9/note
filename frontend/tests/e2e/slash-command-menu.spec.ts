@@ -341,6 +341,58 @@ test("keyboard navigation selects commands and supports Enter, Escape, and Tab",
   ).toBe(false);
 });
 
+test("keyboard navigation scrolls only the menu and ignores a stationary pointer", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 640, height: 480 });
+  await openInitialNote(page);
+  await page.addStyleTag({
+    content: `
+      html, body, #root { min-height: 1800px; }
+      .slash-command-popup { max-height: 160px !important; }
+    `,
+  });
+  const editor = await openSlashMenu(page, 280, 160);
+  const menu = slashMenu(page);
+  const options = menu.getByRole("option");
+
+  await options.first().hover();
+  await expectSelectedOption(options, 0);
+  await page.evaluate(() => window.scrollTo(0, 240));
+  const outerScrollTop = await page.evaluate(() => window.scrollY);
+  expect(outerScrollTop).toBeGreaterThan(0);
+
+  await page.keyboard.press("ArrowUp");
+  await expectSelectedOption(options, 8);
+  await expect
+    .poll(() => menu.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(0);
+  expect(await page.evaluate(() => window.scrollY)).toBe(outerScrollTop);
+  await expect(editor).toBeFocused();
+  await expect(editor).toHaveAttribute(
+    "aria-activedescendant",
+    (await options.nth(8).getAttribute("id")) ?? "",
+  );
+
+  await menu.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await expect(menu).not.toHaveAttribute("data-has-more-below", "true");
+  await page.keyboard.press("ArrowDown");
+  await expectSelectedOption(options, 0);
+  await expect(menu).toHaveAttribute("data-has-more-below", "true");
+  expect(await page.evaluate(() => window.scrollY)).toBe(outerScrollTop);
+  await page.keyboard.press("ArrowDown");
+  await expectSelectedOption(options, 1);
+  await page.keyboard.press("ArrowUp");
+  await expectSelectedOption(options, 0);
+
+  await options.nth(2).hover();
+  await expectSelectedOption(options, 2);
+  await expect(editor).toBeFocused();
+});
+
 test("composition, pointer hover, backspace, and outside clicks dismiss safely", async ({
   page,
 }) => {
@@ -891,11 +943,17 @@ async function openSlashMenu(
   y: number,
   query = "",
 ) {
-  await clickCanvas(page, x, y);
-  await page.keyboard.type("/");
+  const canvas = page.getByRole("tabpanel");
+  const bounds = await canvas.boundingBox();
 
+  if (!bounds) {
+    throw new Error("Canvas bounds were not available.");
+  }
+
+  await page.mouse.dblclick(bounds.x + x, bounds.y + y);
   const editor = page.locator(".text-block-editor-content").last();
   await expect(editor).toBeFocused();
+  await page.keyboard.type("/");
   await expect(slashMenu(page)).toBeVisible();
 
   if (query) {

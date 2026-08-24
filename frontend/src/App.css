@@ -2306,6 +2306,15 @@ h2 {
   cursor: pointer;
 }
 
+/* A locked display remains selectable even when its content normally advertises
+   text insertion. Active inputs/contenteditable surfaces deliberately retain
+   their text cursor while an edit is in progress. */
+.canvas[data-active-tool="select"] .canvas-content [data-canvas-element-id][data-canvas-locked="true"] .shape-contained-text-display,
+.canvas[data-active-tool="select"] .canvas-content [data-canvas-element-id][data-canvas-locked="true"] .text-block-display,
+.canvas[data-active-tool="select"] .canvas-content [data-canvas-element-id][data-canvas-locked="true"] .connector-label:not(input) {
+  cursor: pointer;
+}
+
 .canvas[data-active-tool="select"] .canvas-content [data-canvas-element-id][data-canvas-locked="false"]:active {
   cursor: grabbing;
 }

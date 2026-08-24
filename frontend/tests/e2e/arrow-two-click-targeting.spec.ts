@@ -319,6 +319,10 @@ test("select cursors distinguish movable and locked objects while tools retain t
   const lockedBounds = await requiredBounds(lockedText, "locked text");
   await page.mouse.move(lockedBounds.x + lockedBounds.width / 2, lockedBounds.y + lockedBounds.height / 2);
   await expect.poll(() => canvas.evaluate((element) => getComputedStyle(element).cursor)).toBe("pointer");
+  expect(await page.evaluate(({ x, y }) => {
+    const target = document.elementFromPoint(x, y);
+    return target ? getComputedStyle(target).cursor : null;
+  }, { x: lockedBounds.x + lockedBounds.width / 2, y: lockedBounds.y + lockedBounds.height / 2 })).toBe("pointer");
 
   await selectTool(page, "arrow");
   await page.mouse.move(shapeBounds.x + shapeBounds.width / 2, shapeBounds.y + shapeBounds.height / 2);

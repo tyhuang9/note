@@ -1021,18 +1021,24 @@ test("horizontal arrow label reserves a live, centered content-sized gap before 
   if (!bounds) throw new Error("Arrow bounds were unavailable");
   await page.mouse.dblclick(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
   const editor = page.getByRole("textbox", { name: "Arrow label", exact: true });
+  const shaft = arrow.locator(".primitive-connector");
   await expect(editor).toBeFocused();
   const initial = await editor.boundingBox();
   if (!initial) throw new Error("Arrow label editor bounds were unavailable");
   expect(Math.abs(initial.x + initial.width / 2 - (bounds.x + bounds.width / 2))).toBeLessThanOrEqual(1);
   expect(initial.width).toBeGreaterThan(0);
+  const initialGap = Number(await shaft.getAttribute("data-label-gap-half-length"));
+  expect(initialGap).toBeGreaterThan(4);
   await editor.type("Live label");
   const typed = await editor.boundingBox();
   if (!typed) throw new Error("Typed arrow label editor bounds were unavailable");
   expect(Math.abs(typed.x + typed.width / 2 - (bounds.x + bounds.width / 2))).toBeLessThanOrEqual(1);
   expect(typed.width).toBeGreaterThan(initial.width);
+  const typedGap = Number(await shaft.getAttribute("data-label-gap-half-length"));
+  expect(typedGap).toBeGreaterThan(initialGap);
   await editor.press("Enter");
   await expect(arrow.locator(".connector-label")).toHaveText("Live label");
+  expect(Number(await shaft.getAttribute("data-label-gap-half-length"))).toBeCloseTo(typedGap, 3);
 });
 
 async function assertRichTreesRemainFormatted(page: Page) {

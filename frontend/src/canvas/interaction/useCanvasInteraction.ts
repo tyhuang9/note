@@ -530,8 +530,13 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
     selectHoverCursorRef.current = cursor;
     const canvas = optionsRef.current.canvasRef.current;
     if (!canvas) return;
-    if (cursor) canvas.style.cursor = cursor;
-    else canvas.style.removeProperty("cursor");
+    if (cursor) {
+      canvas.style.cursor = cursor;
+      canvas.dataset.selectHoverCursor = cursor;
+    } else {
+      canvas.style.removeProperty("cursor");
+      delete canvas.dataset.selectHoverCursor;
+    }
   }, []);
 
   const updateSelectHoverCursor = useCallback((event: ReactPointerEvent<HTMLElement>) => {
@@ -540,11 +545,17 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       setSelectHoverCursor(null);
       return;
     }
-    if (event.target instanceof Element && event.target.closest(
-      ".shape-contained-text-display, .text-block-display, .connector-label, input, textarea, [contenteditable='true']",
-    )) {
-      setSelectHoverCursor(null);
-      return;
+    if (event.target instanceof Element) {
+      const editableSurface = event.target.closest(
+        ".shape-contained-text-display, .text-block-display, .connector-label, input, textarea, [contenteditable='true']",
+      );
+      const owner = editableSurface?.closest<HTMLElement>("[data-canvas-element-id]");
+      // Locked text/labels are not editable, so their affordance remains
+      // selection rather than an insertion caret.
+      if (editableSurface && owner?.dataset.canvasLocked !== "true") {
+        setSelectHoverCursor(null);
+        return;
+      }
     }
     const point = getCanvasPoint(event.clientX, event.clientY);
     if (!point) {
@@ -557,7 +568,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       elementIdsBackToFront(current.visibleElements),
       point,
       screenToleranceToWorld(6, { zoom: Math.max(0.01, current.zoomLevelRef.current) }),
-    );
+    ) ?? getDirectBindableTargetAtPoint(current.visibleElements, point);
     setSelectHoverCursor(hit ? (hit.locked ? "pointer" : "grab") : null);
   }, [getCanvasPoint, setSelectHoverCursor]);
 
@@ -1016,6 +1027,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
 
   const handlePointerMove = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
+      updateSelectHoverCursor(event);
       const currentPrimitive = primitiveSession.current;
       if (currentPrimitive?.pointerId === event.pointerId) {
         const point = getCanvasPoint(event.clientX, event.clientY);
@@ -1083,7 +1095,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
         current.scheduleSelectionRectangle(getSelectionRect(currentSelection));
       }
     },
-    [getCanvasPoint, paintPrimitivePreview],
+    [getCanvasPoint, paintPrimitivePreview, updateSelectHoverCursor],
   );
 
   const handlePointerEnd = useCallback(

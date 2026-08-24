@@ -566,6 +566,7 @@ function FreeConnectorElementView({ activeSearchRange = null, element, isDragSou
     const start = { x: x1 + padding, y: y1 + padding };
     const end = { x: x2 + padding, y: y2 + padding };
     renderConnectorRoughSvg(svg, element.style, start, end, 1, labelGap);
+    svg.setAttribute("data-label-gap-half-length", String(labelGap));
     const hitTarget = document.createElementNS("http://www.w3.org/2000/svg", "line");
     hitTarget.setAttribute("class", "primitive-connector-hit-target");
     hitTarget.setAttribute("x1", String(start.x));
@@ -604,6 +605,9 @@ function FreeConnectorElementView({ activeSearchRange = null, element, isDragSou
         event.preventDefault(); event.stopPropagation(); beginLabelEdit();
       }}
       onKeyDown={(event) => {
+        if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || (event.target instanceof HTMLElement && event.target.isContentEditable)) {
+          return;
+        }
         if (event.key === "F2" && onLabelCommit && element.style.endArrowhead === "arrow") {
           event.preventDefault(); event.stopPropagation(); beginLabelEdit(); return;
         }

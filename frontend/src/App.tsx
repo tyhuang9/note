@@ -3657,6 +3657,10 @@ function App() {
   useEffect(() => {
     function handleKeyboard(event: KeyboardEvent) {
       if (guardCanvasSearchPanelKeyboardEvent(event)) return;
+      // Arrow-label inputs are lightweight canvas overlays rather than a
+      // Tiptap session. They must still own every printable key (including
+      // Space) before canvas hand/shortcut handling sees it.
+      if (isTextEntryTarget(event.target)) return;
       // Opening the endpoint chooser is a React state transition, so the portal
       // and its focus target may not exist for the next key in the same input
       // burst. The ref is set synchronously by the opener and remains the

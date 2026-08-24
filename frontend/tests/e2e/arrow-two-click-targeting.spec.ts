@@ -309,20 +309,24 @@ test("one direct or nearby target exposes a whole-object highlight and binding w
 });
 
 test("select cursors distinguish movable and locked objects while tools retain their own cursors", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
   const shape = page.locator('[data-canvas-element-id="target-shape"]');
   const lockedText = page.locator('[data-canvas-element-id="locked-text"]');
-  await shape.hover();
-  await expect.poll(() => shape.evaluate((element) => getComputedStyle(element).cursor)).toBe("grab");
-  await lockedText.hover();
-  await expect.poll(() => lockedText.evaluate((element) => getComputedStyle(element).cursor)).toBe("pointer");
+  await selectTool(page, "select");
+  const shapeBounds = await requiredBounds(shape, "shape");
+  await page.mouse.move(shapeBounds.x + shapeBounds.width / 2, shapeBounds.y + shapeBounds.height / 2);
+  await expect.poll(() => canvas.evaluate((element) => getComputedStyle(element).cursor)).toBe("grab");
+  const lockedBounds = await requiredBounds(lockedText, "locked text");
+  await page.mouse.move(lockedBounds.x + lockedBounds.width / 2, lockedBounds.y + lockedBounds.height / 2);
+  await expect.poll(() => canvas.evaluate((element) => getComputedStyle(element).cursor)).toBe("pointer");
 
   await selectTool(page, "arrow");
-  await shape.hover();
-  await expect.poll(() => shape.evaluate((element) => getComputedStyle(element).cursor)).toBe("crosshair");
+  await page.mouse.move(shapeBounds.x + shapeBounds.width / 2, shapeBounds.y + shapeBounds.height / 2);
+  await expect.poll(() => canvas.evaluate((element) => getComputedStyle(element).cursor)).toBe("crosshair");
 
   await selectTool(page, "hand");
-  await shape.hover();
-  await expect.poll(() => shape.evaluate((element) => getComputedStyle(element).cursor)).toBe("grab");
+  await page.mouse.move(shapeBounds.x + shapeBounds.width / 2, shapeBounds.y + shapeBounds.height / 2);
+  await expect.poll(() => canvas.evaluate((element) => getComputedStyle(element).cursor)).toBe("grab");
 });
 
 test("pre-click Arrow feedback clears on cancellation and tool changes", async ({ page }) => {

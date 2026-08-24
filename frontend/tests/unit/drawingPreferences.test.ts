@@ -9,6 +9,7 @@ import {
   reboxInkForBrush,
   updateDrawingPreference,
 } from "../../src/canvas/model/drawingPreferences";
+import { isConnectorBindingPersistable, resolveConnectorPoints } from "../../src/canvas/model/connectorBinding";
 import { PEN_BRUSH } from "../../src/canvas/model/ink";
 
 const base = {
@@ -128,6 +129,17 @@ describe("drawing preferences", () => {
     expect(preferences.line).toMatchObject({ startArrowhead: "none", endArrowhead: "arrow" });
   });
 
+  it("keeps Arrow defaults headed when either endpoint is cleared", () => {
+    const defaults = createDefaultDrawingPreferences();
+    const startCleared = updateDrawingPreference(defaults, "arrow", { property: "endArrowhead", value: "none" });
+    expect(startCleared.arrow).toMatchObject({ startArrowhead: "arrow", endArrowhead: "none" });
+    const endCleared = updateDrawingPreference(startCleared, "arrow", { property: "startArrowhead", value: "none" });
+    expect(endCleared.arrow).toMatchObject({ startArrowhead: "none", endArrowhead: "arrow" });
+    expect(normalizeDrawingPreferences({
+      arrow: { startArrowhead: "none", endArrowhead: "none" },
+    }).arrow).toMatchObject({ startArrowhead: "none", endArrowhead: "arrow" });
+  });
+
   it("keeps explicit sharp rectangle preferences while filling missing values with the rounded default", () => {
     expect(normalizeDrawingPreferences({ rectangle: { roundness: 0 } }).rectangle.roundness).toBe(0);
     expect(normalizeDrawingPreferences({ rectangle: {} }).rectangle.roundness).toBe(0.18);
@@ -173,6 +185,46 @@ describe("drawing preferences", () => {
     expect(updated[0].style).toMatchObject({ startArrowhead: "none", endArrowhead: "arrow" });
     expect(updated[1].style).toMatchObject({ startArrowhead: "arrow", endArrowhead: "arrow" });
     expect(updated[2]).toBe(locked);
+  });
+
+  it("detaches bound arrows and removes labels when the last head is cleared", () => {
+    const target = { ...rectangle, id: "binding-target", x: 300 };
+    const boundArrow: ConnectorElement = {
+      ...connector,
+      end: { kind: "element", targetElementId: target.id, anchor: { t: 0.75 }, gap: 6 },
+      id: "bound-arrow",
+      labelStyle: {
+        color: { kind: "fixed", value: "#ff0000" },
+        fontFamily: "Arial",
+        fontSize: "16px",
+        orientation: "follow",
+      },
+      semantic: { label: "Removed label", relationshipType: "supports" },
+      start: { kind: "element", targetElementId: rectangle.id, anchor: { t: 0.25 }, gap: 6 },
+      style: { ...connector.style, endArrowhead: "arrow" },
+    };
+    const elements = [rectangle, target, boundArrow];
+    const elementsById = Object.fromEntries(elements.map((element) => [element.id, element]));
+    const points = resolveConnectorPoints(boundArrow, elementsById);
+    if (!points) throw new Error("Expected bound arrow points.");
+
+    const [,, updated] = applyDrawingPropertyUpdate(
+      elements,
+      new Set([boundArrow.id]),
+      { property: "endArrowhead", value: "none" },
+      10,
+    ) as [ShapeElement, ShapeElement, ConnectorElement];
+
+    expect(updated).toMatchObject({
+      end: { kind: "free", ...points.end },
+      labelStyle: undefined,
+      semantic: { relationshipType: "supports" },
+      start: { kind: "free", ...points.start },
+      style: { startArrowhead: "none", endArrowhead: "none" },
+      updatedAt: 10,
+    });
+    expect(updated.semantic).not.toHaveProperty("label");
+    expect(isConnectorBindingPersistable(updated, elementsById)).toBe(true);
   });
 
   it("updates text background mode without regressing text opacity or locked text", () => {

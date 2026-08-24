@@ -102,6 +102,43 @@ test("arrow binding exposes a whole-object highlight, follows target transforms,
   await expect(page.getByRole("button", { name: "Move connector start endpoint" })).toBeVisible();
 });
 
+test("clearing a bound arrow's last head detaches it and clears its label", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  const canvasBounds = await requiredBounds(canvas, "canvas");
+  await createRectangle(page, canvasBounds.x + 360, canvasBounds.y + 300);
+  const rectangle = page.getByRole("button", { name: "Select and move rectangle shape. Press F2 to edit contained text." });
+  const rectangleBounds = await requiredBounds(rectangle, "binding target");
+
+  await selectTool(page, "arrow");
+  await page.mouse.click(rectangleBounds.x + rectangleBounds.width - 1, rectangleBounds.y + rectangleBounds.height / 2);
+  await page.mouse.click(canvasBounds.x + canvasBounds.width * 0.82, canvasBounds.y + canvasBounds.height * 0.72);
+  const arrow = page.getByRole("button", { name: "Select and move arrow connector" });
+  await expect(arrow).toBeVisible();
+  await selectTool(page, "select");
+  await arrow.focus();
+  await page.keyboard.press("F2");
+  await page.getByRole("textbox", { name: "Arrow label", exact: true }).fill("Detached label");
+  await page.keyboard.press("Escape");
+
+  const properties = page.getByRole("complementary", { name: "Drawing properties" });
+  await properties.getByRole("button", { name: "No end arrowhead" }).click();
+  const line = page.getByRole("button", { name: "Select and move line connector" });
+  await expect(line).toBeVisible();
+  const lineBeforeTargetMove = await roundedBounds(line);
+  await rectangle.focus();
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Shift+ArrowRight");
+  await expect.poll(() => roundedBounds(line)).toEqual(lineBeforeTargetMove);
+
+  await line.focus();
+  await page.keyboard.press("Enter");
+  await properties.getByRole("button", { name: "Arrow start arrowhead" }).click();
+  const reheadedArrow = page.getByRole("button", { name: "Select and move arrow connector" });
+  await reheadedArrow.focus();
+  await page.keyboard.press("F2");
+  await expect(page.getByRole("textbox", { name: "Arrow label", exact: true })).toHaveValue("");
+});
+
 test("lines stay free while arrows remain bound through keyboard movement and rebind through endpoint controls at every supported zoom", async ({ page }) => {
   const canvas = page.getByRole("tabpanel");
   const canvasBounds = await requiredBounds(canvas, "canvas");

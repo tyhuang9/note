@@ -201,6 +201,27 @@ describe("scene repository", () => {
     expect(loadedMalformed?.style).toMatchObject({ startArrowhead: "none", endArrowhead: "none" });
   });
 
+  it("strips invisible label metadata from plain connectors at the load boundary", () => {
+    const plain = normalizeLoadedCanvasElement({
+      createdAt: 1,
+      end: { kind: "free", x: 140, y: 20 },
+      id: "plain-label",
+      labelStyle: { color: { kind: "fixed", value: "#ff0000" }, fontFamily: "Arial", fontSize: "16px", orientation: "follow" },
+      locked: false,
+      opacity: 1,
+      pageId: "page",
+      routing: "straight",
+      semantic: { label: "Invisible", relationshipType: "supports" },
+      start: { kind: "free", x: 20, y: 20 },
+      style: { endArrowhead: "none", fillColor: null, roughness: 1, roundness: 0, seed: 1, startArrowhead: "none", strokeColor: { kind: "theme", token: "foreground" }, strokeStyle: "solid", strokeWidth: 2 },
+      type: "connector",
+      updatedAt: 1,
+      zIndex: 1,
+    } satisfies ConnectorElement);
+    expect(plain).toMatchObject({ labelStyle: undefined, semantic: { relationshipType: "supports" } });
+    expect((plain as ConnectorElement).semantic).not.toHaveProperty("label");
+  });
+
   it("matches the backend asset-size limit before FileReader allocation", () => {
     expect(isAssetBlobWithinLimit({ size: MAX_ASSET_BYTES })).toBe(true);
     expect(isAssetBlobWithinLimit({ size: MAX_ASSET_BYTES + 1 })).toBe(false);

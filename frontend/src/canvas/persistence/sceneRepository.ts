@@ -130,22 +130,24 @@ export function normalizeLoadedCanvasElement(element: CanvasElement): CanvasElem
     }).style;
     const rawSemantic = element.semantic;
     const label = normalizeConnectorLabel(rawSemantic?.label);
+    const normalizedStyle: ConnectorElement["style"] = {
+      ...normalizeRoughStyle(style, element.id),
+      endArrowhead: style?.endArrowhead === "arrow" ? "arrow" : "none",
+      startArrowhead: style?.startArrowhead === "arrow" ? "arrow" : "none",
+    };
+    const normalizedConnector = { ...element, style: normalizedStyle };
+    const isArrow = isArrowConnector(normalizedConnector);
     const semantic = rawSemantic && typeof rawSemantic === "object"
       ? {
           ...(typeof rawSemantic.relationshipType === "string" ? { relationshipType: rawSemantic.relationshipType } : {}),
-          ...(label ? { label } : {}),
+          ...(isArrow && label ? { label } : {}),
         }
       : undefined;
     const rawLabelStyle = (element as ConnectorElement & { labelStyle?: unknown }).labelStyle;
     return {
-      ...element,
+      ...normalizedConnector,
       ...(semantic && Object.keys(semantic).length > 0 ? { semantic } : { semantic: undefined }),
-      ...(isConnectorLabelStyle(rawLabelStyle) ? { labelStyle: rawLabelStyle } : { labelStyle: undefined }),
-      style: {
-        ...normalizeRoughStyle(style, element.id),
-        endArrowhead: style?.endArrowhead === "arrow" ? "arrow" : "none",
-        startArrowhead: style?.startArrowhead === "arrow" ? "arrow" : "none",
-      },
+      ...(isArrow && isConnectorLabelStyle(rawLabelStyle) ? { labelStyle: rawLabelStyle } : { labelStyle: undefined }),
     };
   }
   return element;

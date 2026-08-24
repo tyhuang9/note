@@ -150,6 +150,18 @@ function adaptiveFlattenPointBoundaryDistance(target: ShapeElement | TextElement
 }
 
 describe("connector shape binding", () => {
+  it("rejects element-bound headless connectors before persistence", () => {
+    const target = shape("rectangle", { id: "target", x: 200, y: 100 });
+    const boundLine = {
+      ...arrow(
+        { kind: "element", targetElementId: target.id, anchor: { t: 0.25 }, gap: 4 },
+        { kind: "free", x: 400, y: 150 },
+      ),
+      style: { ...style, endArrowhead: "none" as const, startArrowhead: "none" as const },
+    };
+    expect(isConnectorBindingPersistable(boundLine, { [target.id]: target })).toBe(false);
+  });
+
   it("matches the shared object-level closest-boundary vectors", () => {
     for (const vector of objectBindingVectors.vectors) {
       const targets = vector.targets.map((target) => target.kind === "text"

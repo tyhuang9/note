@@ -2494,6 +2494,12 @@ fn validate_session_state(state: &Value) -> Result<(), String> {
                     }
                 }
             }
+            if tool == "arrow"
+                && preference.get("startArrowhead").and_then(Value::as_str) == Some("none")
+                && preference.get("endArrowhead").and_then(Value::as_str) == Some("none")
+            {
+                return Err(format!("{context} must include an arrowhead"));
+            }
         }
     }
     Ok(())
@@ -2778,6 +2784,13 @@ mod tests {
         let error = validate_session_state(&json!({"drawingPreferences":invalid_arrowheads}))
             .unwrap_err();
         assert!(error.contains("arrow.startArrowhead"));
+
+        let mut headless_arrow = drawing_preferences();
+        headless_arrow["arrow"]["startArrowhead"] = json!("none");
+        headless_arrow["arrow"]["endArrowhead"] = json!("none");
+        let error = validate_session_state(&json!({"drawingPreferences":headless_arrow}))
+            .unwrap_err();
+        assert!(error.contains("arrow must include an arrowhead"));
 
         assert!(
             validate_session_state(&json!({"isDrawingToolLocked":"yes"}))

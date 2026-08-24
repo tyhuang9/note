@@ -1,19 +1,20 @@
-import type {
-  CanvasColor,
-  ConnectorElement,
-  ConnectorLabelOrientation,
-  ConnectorLabelStyle,
-  CanvasElement,
-  InkElement,
-  RoughStyle,
-  ShapeElement,
-  TextBackgroundMode,
-  TextElement,
-  TextFontFamily,
-  TextFontSize,
+import {
+  isArrowConnector,
+  type CanvasColor,
+  type ConnectorElement,
+  type ConnectorLabelOrientation,
+  type ConnectorLabelStyle,
+  type CanvasElement,
+  type InkElement,
+  type RoughStyle,
+  type ShapeElement,
+  type TextBackgroundMode,
+  type TextElement,
+  type TextFontFamily,
+  type TextFontSize,
 } from "./elements";
+import { getConnectorEndpointDetachPoint } from "./connectorBinding";
 import { resolveConnectorLabelStyle } from "./connectorLabel";
-import { isArrowConnector } from "./elements";
 import type { TextPreferences } from "./textPreferences";
 
 export type DrawingPreferenceTool =
@@ -159,7 +160,7 @@ export function normalizeDrawingPreferences(value: unknown): DrawingPreferences 
     const candidate = source[tool];
     if (!candidate || typeof candidate !== "object") return [tool, fallback];
     const raw = candidate as Partial<DrawingToolPreference>;
-    return [tool, {
+    const normalized = {
       backgroundColor: raw.backgroundColor === null || isCanvasColor(raw.backgroundColor)
         ? raw.backgroundColor
         : fallback.backgroundColor,
@@ -177,7 +178,8 @@ export function normalizeDrawingPreferences(value: unknown): DrawingPreferences 
         ? raw.strokeStyle
         : fallback.strokeStyle,
       strokeWidth: finiteInRange(raw.strokeWidth, fallback.strokeWidth, 0.25, 512),
-    }];
+    };
+    return [tool, tool === "arrow" ? ensureArrowPreferenceHead(normalized) : normalized];
   })) as DrawingPreferences;
 }
 
@@ -187,10 +189,21 @@ export function updateDrawingPreference(
   update: DrawingPropertyUpdate,
 ): DrawingPreferences {
   if (!isPropertySupportedByTool(tool, update.property)) return preferences;
+  const nextPreference = { ...preferences[tool], [update.property]: update.value };
   return {
     ...preferences,
-    [tool]: { ...preferences[tool], [update.property]: update.value },
+    [tool]: tool === "arrow" ? ensureArrowPreferenceHead(nextPreference, update.property) : nextPreference,
   };
+}
+
+function ensureArrowPreferenceHead(
+  preference: DrawingToolPreference,
+  changedProperty?: DrawingProperty,
+): DrawingToolPreference {
+  if (preference.startArrowhead === "arrow" || preference.endArrowhead === "arrow") return preference;
+  return changedProperty === "endArrowhead"
+    ? { ...preference, startArrowhead: "arrow" }
+    : { ...preference, endArrowhead: "arrow" };
 }
 
 export function isDrawingPreferenceTool(tool: string): tool is DrawingPreferenceTool {
@@ -323,6 +336,7 @@ export function applyDrawingPropertyUpdate(
   update: DrawingPropertyUpdate,
   updatedAt = Date.now(),
 ): CanvasElement[] {
+  const elementsById = Object.fromEntries(elements.map((element) => [element.id, element]));
   return elements.map((element) => {
     if (!selectedIds.has(element.id) || element.locked) return element;
     if (update.property === "opacity") {
@@ -331,7 +345,7 @@ export function applyDrawingPropertyUpdate(
     if (element.type === "text") return updateText(element, update, updatedAt);
     if (element.type === "ink") return updateInk(element, update, updatedAt);
     if (element.type === "shape") return updateShape(element, update, updatedAt);
-    if (element.type === "connector") return updateConnector(element, update, updatedAt);
+    if (element.type === "connector") return updateConnector(element, update, updatedAt, elementsById);
     return element;
   });
 }
@@ -385,11 +399,28 @@ function updateShape(element: ShapeElement, update: DrawingPropertyUpdate, updat
   return element;
 }
 
-function updateConnector(element: ConnectorElement, update: DrawingPropertyUpdate, updatedAt: number): ConnectorElement {
+function updateConnector(
+  element: ConnectorElement,
+  update: DrawingPropertyUpdate,
+  updatedAt: number,
+  elementsById: Readonly<Record<string, CanvasElement>>,
+): ConnectorElement {
   if (update.property === "startArrowhead" || update.property === "endArrowhead") {
-    return element.style[update.property] === update.value
-      ? element
-      : { ...element, style: { ...element.style, [update.property]: update.value }, updatedAt };
+    if (element.style[update.property] === update.value) return element;
+    const next = { ...element, style: { ...element.style, [update.property]: update.value } };
+    if (isArrowConnector(next)) return { ...next, updatedAt };
+    const start = detachConnectorEndpoint(element, "start", elementsById);
+    const end = detachConnectorEndpoint(element, "end", elementsById);
+    if (!start || !end) return element;
+    const { label: _label, ...semantic } = element.semantic ?? {};
+    return {
+      ...next,
+      end,
+      labelStyle: undefined,
+      semantic: Object.keys(semantic).length > 0 ? semantic : undefined,
+      start,
+      updatedAt,
+    };
   }
   if (update.property === "labelColor" || update.property === "labelFontFamily" || update.property === "labelFontSize" || update.property === "labelOrientation") {
     const property = update.property === "labelColor" ? "color"
@@ -404,6 +435,17 @@ function updateConnector(element: ConnectorElement, update: DrawingPropertyUpdat
     return withStyle(element, update.property, update.value, updatedAt);
   }
   return element;
+}
+
+function detachConnectorEndpoint(
+  connector: ConnectorElement,
+  endpoint: "start" | "end",
+  elementsById: Readonly<Record<string, CanvasElement>>,
+): ConnectorElement["start"] | null {
+  const current = connector[endpoint];
+  if (current.kind === "free") return current;
+  const point = getConnectorEndpointDetachPoint(connector, endpoint, elementsById);
+  return point ? { kind: "free", ...point } : null;
 }
 
 function withStyle<T extends ShapeElement | ConnectorElement>(

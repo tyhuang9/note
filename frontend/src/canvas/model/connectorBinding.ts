@@ -1,11 +1,12 @@
-import type {
-  CanvasElement,
-  ConnectorElement,
-  ConnectorEndpoint,
-  ElementId,
-  PerimeterAnchor,
-  ShapeElement,
-  TextElement,
+import {
+  isArrowConnector,
+  type CanvasElement,
+  type ConnectorElement,
+  type ConnectorEndpoint,
+  type ElementId,
+  type PerimeterAnchor,
+  type ShapeElement,
+  type TextElement,
 } from "./elements";
 import type { CanvasPoint } from "./geometry";
 import {
@@ -190,6 +191,10 @@ export function isConnectorBindingPersistable(
   connector: ConnectorElement,
   elementsById: Readonly<Record<ElementId, CanvasElement>>,
 ): boolean {
+  if (
+    !isArrowConnector(connector)
+    && (connector.start.kind === "element" || connector.end.kind === "element")
+  ) return false;
   return getConnectorBindingCacheEntry(connector, elementsById).valid;
 }
 

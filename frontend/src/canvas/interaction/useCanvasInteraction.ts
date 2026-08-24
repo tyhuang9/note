@@ -68,6 +68,15 @@ type CapturedPointer = Readonly<{
   target: HTMLElement;
 }>;
 
+type PendingElementDrag = {
+  cancellationKey: string;
+  didStart: boolean;
+  elementId: string;
+  pointerId: number;
+  startClientX: number;
+  startClientY: number;
+};
+
 type ArrowAuthoringSession = {
   cancellationKey: string;
   currentEndpoint: ConnectorEndpoint;
@@ -114,6 +123,10 @@ type CanvasInteractionOptions = {
   onImagePreviewPointChange: (point: CanvasPoint | null) => void;
   onPlaceImage: (point: CanvasPoint) => void;
   onRequestImagePicker: () => void;
+  onVisualDragCancel: (updateState?: boolean) => void;
+  onVisualDragEnd: (clientX: number, clientY: number) => void;
+  onVisualDragMove: (clientX: number, clientY: number) => void;
+  onVisualDragStart: (elementId: string, clientX: number, clientY: number) => boolean;
   panOffsetRef: RefObject<PanOffset>;
   scheduleCanvasContentTransform: (panOffset: PanOffset) => void;
   scheduleSelectionRectangle: (rect: SelectionRect) => void;
@@ -263,6 +276,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
   const panState = useRef<PanState | null>(null);
   const selectionState = useRef<SelectionState | null>(null);
   const primitiveSession = useRef<PrimitiveSession | null>(null);
+  const pendingElementDrag = useRef<PendingElementDrag | null>(null);
   const capturedPointerRef = useRef<CapturedPointer | null>(null);
   const primitivePreviewRef = useRef<SVGSVGElement | null>(null);
   const arrowSession = useRef<ArrowAuthoringSession | null>(null);
@@ -855,6 +869,17 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
           current.setSelectedElementIds(nextIds);
           current.setInsertionPoint(null);
           current.setActiveMode(nextIds.length > 0 ? "selected" : "canvas");
+          if (!hitElement.locked && nextIds.includes(hitElement.id)) {
+            pendingElementDrag.current = {
+              cancellationKey: current.interactionCancellationKey,
+              didStart: false,
+              elementId: hitElement.id,
+              pointerId: event.pointerId,
+              startClientX: event.clientX,
+              startClientY: event.clientY,
+            };
+            capturePointer(event);
+          }
           return;
         }
 
@@ -1058,6 +1083,24 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       const currentPan = panState.current;
       const currentSelection = selectionState.current;
       const current = optionsRef.current;
+      const pendingDrag = pendingElementDrag.current;
+      if (pendingDrag?.pointerId === event.pointerId) {
+        if (!pendingDrag.didStart && Math.hypot(
+          event.clientX - pendingDrag.startClientX,
+          event.clientY - pendingDrag.startClientY,
+        ) >= 3) {
+          pendingDrag.didStart = current.onVisualDragStart(
+            pendingDrag.elementId,
+            pendingDrag.startClientX,
+            pendingDrag.startClientY,
+          );
+          if (pendingDrag.didStart) current.setActiveMode("dragging");
+        }
+        if (pendingDrag.didStart) current.onVisualDragMove(event.clientX, event.clientY);
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       if (currentPan) {
         const nextPanOffset = {
           x: currentPan.startPanX + event.clientX - currentPan.startClientX,
@@ -1146,6 +1189,20 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
         event.stopPropagation();
         return;
       }
+      const pendingDrag = pendingElementDrag.current;
+      if (pendingDrag?.pointerId === event.pointerId) {
+        pendingElementDrag.current = null;
+        releaseCapturedPointer(event.pointerId);
+        if (pendingDrag.didStart) {
+          optionsRef.current.onVisualDragEnd(event.clientX, event.clientY);
+        } else {
+          const selectedIds = optionsRef.current.selectedElementIdsRef.current;
+          optionsRef.current.setActiveMode(selectedIds.length > 0 ? "selected" : "canvas");
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       const currentPan = panState.current;
       const currentSelection = selectionState.current;
 
@@ -1196,7 +1253,10 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       const currentPan = panState.current;
       const currentSelection = selectionState.current;
       const currentPrimitive = primitiveSession.current;
-      const hadCapturedSession = Boolean(currentPan || currentSelection || currentPrimitive);
+      const currentPendingElementDrag = pendingElementDrag.current;
+      const hadCapturedSession = Boolean(
+        currentPan || currentSelection || currentPrimitive || currentPendingElementDrag,
+      );
       if (!hadCapturedSession && !capturedPointerRef.current) return false;
       if (currentPan && updateUi) {
         const startPan = { x: currentPan.startPanX, y: currentPan.startPanY };
@@ -1205,15 +1265,21 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       }
       panState.current = null;
       primitiveSession.current = null;
+      pendingElementDrag.current = null;
       clearPrimitivePreview();
       cancelMarquee();
       releaseCapturedPointer();
+      if (currentPendingElementDrag?.didStart) optionsRef.current.onVisualDragCancel(updateUi);
       if (updateUi && hadCapturedSession) {
         const restorableSelection = currentPrimitive && isShapePrimitiveTool(currentPrimitive.tool)
           ? currentPrimitive.previousSelection.filter((id) =>
               optionsRef.current.visibleElements.some((element) => element.id === id)
             )
-          : [];
+          : currentPendingElementDrag
+            ? optionsRef.current.selectedElementIdsRef.current.filter((id) =>
+                optionsRef.current.visibleElements.some((element) => element.id === id)
+              )
+            : [];
         optionsRef.current.selectedElementIdsRef.current = restorableSelection;
         optionsRef.current.setSelectedElementIds(restorableSelection);
         optionsRef.current.setActiveMode(restorableSelection.length > 0 ? "selected" : "canvas");
@@ -1271,6 +1337,12 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
     if (
       primitiveSession.current
       && primitiveSession.current.cancellationKey !== options.interactionCancellationKey
+    ) {
+      cancelCapturedPointerInteraction();
+    }
+    if (
+      pendingElementDrag.current
+      && pendingElementDrag.current.cancellationKey !== options.interactionCancellationKey
     ) {
       cancelCapturedPointerInteraction();
     }

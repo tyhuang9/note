@@ -489,6 +489,99 @@ test("cancellation paths restore selection without writes and Line and Arrow kee
   expect(arrow?.style).toMatchObject({ endArrowhead: "arrow", startArrowhead: "none" });
 });
 
+test("a canceled pending object drag leaves its scene record and persistence untouched", async ({ page }) => {
+  await installPendingDragObjects(page);
+  const movable = page.locator('[data-canvas-element-id="drag-source"]');
+  const beforeBounds = await requiredBounds(movable, "movable shape before cancellation");
+  const start = shapeHitPoint(beforeBounds);
+  const beforeScene = await workspaceElement(page, "drag-source");
+  await page.getByRole("button", { name: "Select (V / 1)" }).click();
+  await settleAndResetCounts(page);
+
+  const pointerId = await beginCapturedDrag(
+    page,
+    start,
+    { x: start.x + 36, y: start.y + 24 },
+  );
+  await expect(page.locator("body")).toHaveClass(/is-interacting/);
+  await dispatchCapturedTermination(page, pointerId, "pointercancel", {
+    x: start.x + 36,
+    y: start.y + 24,
+  });
+  await page.mouse.up();
+
+  await expect(page.locator("body")).not.toHaveClass(/is-interacting/);
+  await expect.poll(() => workspaceElement(page, "drag-source")).toEqual(beforeScene);
+  await expect.poll(() => counts(page)).toMatchObject({ apply: 0 });
+  await expect(movable).toHaveAttribute("aria-pressed", "true");
+});
+
+test("locked objects select but never create a pending drag, movement, or scene write", async ({ page }) => {
+  await installPendingDragObjects(page);
+  const locked = page.locator('[data-canvas-element-id="locked-shape"]');
+  const beforeScene = await workspaceElement(page, "locked-shape");
+  const bounds = await requiredBounds(locked, "locked shape before drag");
+  const start = shapeHitPoint(bounds);
+  await page.getByRole("button", { name: "Select (V / 1)" }).click();
+  await settleAndResetCounts(page);
+
+  await drag(page, start, { x: start.x + 48, y: start.y + 32 });
+
+  await expect(locked).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("body")).not.toHaveClass(/is-interacting/);
+  await expect.poll(() => workspaceElement(page, "locked-shape")).toEqual(beforeScene);
+  await expect.poll(() => counts(page)).toMatchObject({ apply: 0 });
+});
+
+test("additive object clicks add to selection without beginning a drag or scene write", async ({ page }) => {
+  await installPendingDragObjects(page);
+  const first = page.locator('[data-canvas-element-id="drag-source"]');
+  const second = page.locator('[data-canvas-element-id="additive-shape"]');
+  const beforeFirst = await workspaceElement(page, "drag-source");
+  const beforeSecond = await workspaceElement(page, "additive-shape");
+  const firstBounds = await requiredBounds(first, "first additive shape");
+  const secondBounds = await requiredBounds(second, "second additive shape");
+  await page.getByRole("button", { name: "Select (V / 1)" }).click();
+  await page.mouse.click(...pointValues(shapeHitPoint(firstBounds)));
+  await settleAndResetCounts(page);
+
+  await page.keyboard.down("Shift");
+  await page.mouse.click(...pointValues(shapeHitPoint(secondBounds)));
+  await page.keyboard.up("Shift");
+  await expect(first).toHaveAttribute("aria-pressed", "true");
+  await expect(second).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".selection-frame")).toHaveCount(1);
+
+  await expect.poll(() => workspaceElement(page, "drag-source")).toEqual(beforeFirst);
+  await expect.poll(() => workspaceElement(page, "additive-shape")).toEqual(beforeSecond);
+  await expect.poll(() => counts(page)).toMatchObject({ apply: 0 });
+});
+
+test("object click and double-click edit paths stay drag- and scene-write-free", async ({ page }) => {
+  await installPendingDragObjects(page);
+  const editable = page.locator('[data-canvas-element-id="editable-shape"]');
+  const bounds = await requiredBounds(editable, "editable shape");
+  const clickPoint = shapeHitPoint(bounds);
+  const editPoint = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+  const beforeScene = await workspaceElement(page, "editable-shape");
+  await page.getByRole("button", { name: "Select (V / 1)" }).click();
+  await settleAndResetCounts(page);
+
+  await page.mouse.click(...pointValues(clickPoint));
+  await expect(editable).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("body")).not.toHaveClass(/is-interacting/);
+  await expect.poll(() => counts(page)).toMatchObject({ apply: 0 });
+
+  await page.mouse.dblclick(...pointValues(editPoint));
+  await expect(page.getByRole("textbox", { name: "Edit text inside rectangle" })).toBeFocused();
+  await expect(page.locator("body")).not.toHaveClass(/is-interacting/);
+  await expect.poll(() => workspaceElement(page, "editable-shape")).toEqual(beforeScene);
+  await expect.poll(() => counts(page)).toMatchObject({ apply: 0 });
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("textbox", { name: "Edit text inside rectangle" })).toHaveCount(0);
+  await expect.poll(() => counts(page)).toMatchObject({ apply: 0 });
+});
+
 async function drag(page: Page, start: { x: number; y: number }, end: { x: number; y: number }) {
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
@@ -670,6 +763,41 @@ async function newestShape(page: Page) {
 
 async function newestConnector(page: Page) {
   return [...await workspaceElements(page)].reverse().find((element) => element.type === "connector");
+}
+
+function shapeHitPoint(bounds: Readonly<{ x: number; y: number; height: number }>) {
+  return { x: bounds.x + 4, y: bounds.y + bounds.height / 2 };
+}
+
+function pointValues(point: Readonly<{ x: number; y: number }>): [number, number] {
+  return [point.x, point.y];
+}
+
+async function workspaceElement(page: Page, id: string) {
+  const element = (await workspaceElements(page)).find((candidate) => candidate.id === id);
+  if (!element) throw new Error(`Workspace element ${id} was unavailable.`);
+  return element;
+}
+
+async function installPendingDragObjects(page: Page) {
+  await page.evaluate((storageKey) => {
+    type Shape = Record<string, unknown> & { id: string };
+    const runtime = window as unknown as { __shapeDragWorkspace: { elements: Shape[] } };
+    const workspace = runtime.__shapeDragWorkspace;
+    const template = workspace.elements.find((element) => element.id === "existing-shape");
+    if (!template) throw new Error("Pending-drag shape template was unavailable.");
+    workspace.elements = [
+      { ...template, id: "drag-source", x: 180, y: 160, zIndex: 1 },
+      { ...template, id: "additive-shape", x: 470, y: 160, zIndex: 2 },
+      { ...template, id: "locked-shape", locked: true, x: 760, y: 160, zIndex: 3 },
+      { ...template, id: "editable-shape", text: { content: "Editable" }, x: 240, y: 400, zIndex: 4 },
+    ];
+    runtime.__shapeDragWorkspace = workspace;
+    localStorage.setItem(storageKey, JSON.stringify(workspace));
+  }, STORAGE_KEY);
+  await page.reload();
+  await expect(page.getByRole("tabpanel")).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator('[data-canvas-element-id="editable-shape"]')).toBeVisible();
 }
 
 async function installWorkspace(page: Page) {

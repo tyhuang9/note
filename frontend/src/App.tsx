@@ -921,7 +921,7 @@ function createOffscreenGroup(
   return {
     count: elements.length,
     direction,
-    itemKind: elements.every((element) => isTextElement(element) || hasShapeContainedText(element))
+    itemKind: elements.every(isTextElement)
       ? "textbox"
       : "canvas-item",
   };

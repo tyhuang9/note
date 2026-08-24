@@ -516,6 +516,31 @@ test("a canceled pending object drag leaves its scene record and persistence unt
   await expect(movable).toHaveAttribute("aria-pressed", "true");
 });
 
+test("pointerup starts a pending object drag only after the screen threshold", async ({ page }) => {
+  await installPendingDragObjects(page);
+  const movable = page.locator('[data-canvas-element-id="drag-source"]');
+  const before = await workspaceElement(page, "drag-source");
+  const start = shapeHitPoint(await requiredBounds(movable, "movable shape"));
+  await page.getByRole("button", { name: "Select (V / 1)" }).click();
+  await settleAndResetCounts(page);
+
+  await releasePendingObjectDragWithoutMove(page, start, { x: start.x + 2, y: start.y + 1 });
+  await expect.poll(() => workspaceElement(page, "drag-source")).toEqual(before);
+  await expect.poll(() => counts(page)).toEqual({ apply: 0, persistence: 0, session: 0 });
+
+  const canvasBounds = await requiredBounds(page.getByRole("tabpanel"), "canvas");
+  await page.mouse.click(canvasBounds.x + canvasBounds.width - 40, canvasBounds.y + canvasBounds.height - 40);
+  await settleAndResetCounts(page);
+
+  await releasePendingObjectDragWithoutMove(page, start, { x: start.x + 28, y: start.y + 18 });
+  await expect.poll(() => counts(page)).toEqual({ apply: 1, persistence: 2, session: 1 });
+  const moved = await workspaceElement(page, "drag-source");
+  expect(Number(moved.x)).toBeCloseTo(Number(before.x) + 28, 4);
+  expect(Number(moved.y)).toBeCloseTo(Number(before.y) + 18, 4);
+  await page.keyboard.press("Control+z");
+  await expect.poll(() => workspaceElement(page, "drag-source")).toEqual(before);
+});
+
 test("locked objects select but never create a pending drag, movement, or scene write", async ({ page }) => {
   await installPendingDragObjects(page);
   const locked = page.locator('[data-canvas-element-id="locked-shape"]');
@@ -672,6 +697,33 @@ async function releaseCapturedWithoutMove(
   const pointerId = Number(await page.locator("body").getAttribute("data-shape-drag-pointer-id"));
   if (!Number.isFinite(pointerId)) throw new Error("Shape drag pointer id was unavailable.");
   await dispatchCapturedPointerUp(page, pointerId, end);
+  await page.mouse.up();
+}
+
+async function releasePendingObjectDragWithoutMove(
+  page: Page,
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+) {
+  await page.evaluate(() => {
+    document.addEventListener("pointerdown", (event) => {
+      document.body.dataset.shapeDragPointerId = String(event.pointerId);
+    }, { capture: true, once: true });
+  });
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  const pointerId = Number(await page.locator("body").getAttribute("data-shape-drag-pointer-id"));
+  if (!Number.isFinite(pointerId)) throw new Error("Shape drag pointer id was unavailable.");
+  await page.getByRole("tabpanel").evaluate((target, { end, pointerId }) => {
+    target.dispatchEvent(new PointerEvent("pointerup", {
+      bubbles: true,
+      button: 0,
+      buttons: 0,
+      clientX: end.x,
+      clientY: end.y,
+      pointerId,
+    }));
+  }, { end, pointerId });
   await page.mouse.up();
 }
 

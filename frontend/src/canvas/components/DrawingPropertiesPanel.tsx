@@ -45,7 +45,14 @@ export function DrawingPropertiesPanel({
   const isAdjustingOpacity = useRef(false);
   const hasOpacityPreviewChange = useRef(false);
   const opacityDescriptionId = useId();
+  const arrowheadDefaultsHelpId = useId();
   const cancelOpacityRef = useRef<() => void>(() => undefined);
+  const disablesStartNone = !isSelection
+    && isValue(values.startArrowhead, "arrow")
+    && isValue(values.endArrowhead, "none");
+  const disablesEndNone = !isSelection
+    && isValue(values.startArrowhead, "none")
+    && isValue(values.endArrowhead, "arrow");
 
   useEffect(() => {
     if (!isAdjustingOpacity.current) setOpacityDraft(percent(values.opacity));
@@ -141,6 +148,8 @@ export function DrawingPropertiesPanel({
             {(["none", "arrow"] as const).map((value) => (
               <ChoiceButton
                 active={isValue(values.startArrowhead, value)}
+                describedBy={value === "none" && disablesStartNone ? arrowheadDefaultsHelpId : undefined}
+                disabled={value === "none" && disablesStartNone}
                 key={value}
                 label={`${value === "none" ? "No" : "Arrow"} start arrowhead`}
                 mixed={values.startArrowhead.kind === "mixed"}
@@ -158,6 +167,8 @@ export function DrawingPropertiesPanel({
             {(["none", "arrow"] as const).map((value) => (
               <ChoiceButton
                 active={isValue(values.endArrowhead, value)}
+                describedBy={value === "none" && disablesEndNone ? arrowheadDefaultsHelpId : undefined}
+                disabled={value === "none" && disablesEndNone}
                 key={value}
                 label={`${value === "none" ? "No" : "Arrow"} end arrowhead`}
                 mixed={values.endArrowhead.kind === "mixed"}
@@ -166,6 +177,11 @@ export function DrawingPropertiesPanel({
               />
             ))}
           </ChoiceGroup>
+          {!isSelection ? (
+            <p className="drawing-property-help" id={arrowheadDefaultsHelpId}>
+              Arrows require at least one arrowhead. Use Line for neither.
+            </p>
+          ) : null}
         </PropertySection>
       ) : null}
 
@@ -346,9 +362,11 @@ function ChoiceGroup({ children, label, mixed = false }: { children: ReactNode; 
   );
 }
 
-function ChoiceButton({ active = false, children, label, mixed = false, onClick, text }: {
+function ChoiceButton({ active = false, children, describedBy, disabled = false, label, mixed = false, onClick, text }: {
   active?: boolean;
   children?: ReactNode;
+  describedBy?: string;
+  disabled?: boolean;
   label: string;
   mixed?: boolean;
   onClick: () => void;
@@ -356,10 +374,12 @@ function ChoiceButton({ active = false, children, label, mixed = false, onClick,
 }) {
   return (
     <button
+      aria-describedby={describedBy}
       aria-label={label}
       aria-pressed={active}
       className={mixed ? "has-mixed-value" : undefined}
       data-tooltip={label}
+      disabled={disabled}
       onClick={onClick}
       title={label}
       type="button"

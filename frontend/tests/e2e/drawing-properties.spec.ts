@@ -205,12 +205,9 @@ test("authors and edits independent connector arrowheads with arrow labels and e
   const arrowEnd = properties.getByRole("button", { name: "Arrow end arrowhead" });
   await expect(noStart).toHaveAttribute("aria-pressed", "true");
   await expect(arrowEnd).toHaveAttribute("aria-pressed", "true");
-  await noEnd.click();
-  await expect(arrowStart).toHaveAttribute("aria-pressed", "true");
-  await expect(noEnd).toHaveAttribute("aria-pressed", "true");
-  await noStart.click();
-  await expect(noStart).toHaveAttribute("aria-pressed", "true");
-  await expect(arrowEnd).toHaveAttribute("aria-pressed", "true");
+  await expect(noEnd).toBeDisabled();
+  await expect(noEnd).toHaveAccessibleDescription("Arrows require at least one arrowhead. Use Line for neither.");
+  await expect(properties.getByText("Arrows require at least one arrowhead. Use Line for neither.")).toBeVisible();
   await arrowStart.click();
   await noEnd.click();
   await expect(arrowStart).toHaveAttribute("aria-pressed", "true");

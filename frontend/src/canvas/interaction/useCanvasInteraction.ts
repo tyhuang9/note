@@ -869,7 +869,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
           current.setSelectedElementIds(nextIds);
           current.setInsertionPoint(null);
           current.setActiveMode(nextIds.length > 0 ? "selected" : "canvas");
-          if (!hitElement.locked && nextIds.includes(hitElement.id)) {
+          if (!event.shiftKey && !hitElement.locked && nextIds.includes(hitElement.id)) {
             pendingElementDrag.current = {
               cancellationKey: current.interactionCancellationKey,
               didStart: false,
@@ -1193,6 +1193,20 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       if (pendingDrag?.pointerId === event.pointerId) {
         pendingElementDrag.current = null;
         releaseCapturedPointer(event.pointerId);
+        if (!pendingDrag.didStart && Math.hypot(
+          event.clientX - pendingDrag.startClientX,
+          event.clientY - pendingDrag.startClientY,
+        ) >= 3) {
+          pendingDrag.didStart = optionsRef.current.onVisualDragStart(
+            pendingDrag.elementId,
+            pendingDrag.startClientX,
+            pendingDrag.startClientY,
+          );
+          if (pendingDrag.didStart) {
+            optionsRef.current.setActiveMode("dragging");
+            optionsRef.current.onVisualDragMove(event.clientX, event.clientY);
+          }
+        }
         if (pendingDrag.didStart) {
           optionsRef.current.onVisualDragEnd(event.clientX, event.clientY);
         } else {

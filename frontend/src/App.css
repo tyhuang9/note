@@ -5946,6 +5946,13 @@ h2 {
   margin: 0;
 }
 
+.drawing-property-help {
+  margin: 7px 0 0;
+  color: #575762;
+  font-size: 11px;
+  line-height: 16px;
+}
+
 .drawing-properties-header h2 {
   font-size: 14px;
   font-weight: 700;
@@ -6021,6 +6028,11 @@ h2 {
 .drawing-color-picker button:hover,
 .drawing-custom-color:hover {
   background: #e8e8ed;
+}
+
+.drawing-choice-group button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .drawing-choice-group button[aria-pressed="true"],
@@ -6138,6 +6150,7 @@ h2 {
 
 .app-shell.is-dark .drawing-properties-header span,
 .app-shell.is-dark .drawing-property-section h3,
+.app-shell.is-dark .drawing-property-help,
 .app-shell.is-dark .drawing-opacity-row output,
 .app-shell.is-dark .drawing-mixed-label {
   color: #c0c0ca;

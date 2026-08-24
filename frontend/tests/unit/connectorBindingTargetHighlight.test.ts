@@ -70,4 +70,15 @@ describe("ConnectorBindingTargetHighlight", () => {
     expect(markup).toContain('class="connector-binding-target-halo-outer" height="60" width="200" x="0" y="0"');
     expect(markup).toContain('class="connector-binding-target-halo-inner" height="60" width="200" x="0" y="0"');
   });
+
+  it("adds a screen-constant active boundary marker at the hovered anchor", () => {
+    const markup = renderToStaticMarkup(createElement(ConnectorBindingTargetHighlight, {
+      anchor: { x: 165, y: 80 },
+      isSnapped: true,
+      target: rectangle,
+      zoom: 2,
+    }));
+    expect(markup).toContain('class="connector-binding-target-anchor is-active"');
+    expect(markup).toContain('r="2.875"');
+  });
 });

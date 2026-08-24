@@ -2296,6 +2296,20 @@ h2 {
   cursor: inherit !important;
 }
 
+/* Select mode tells the truth about what a drag will do. Text remains an
+   insertion affordance only on a real editable text surface or arrow label. */
+.canvas[data-active-tool="select"] .canvas-content [data-canvas-element-id][data-canvas-locked="false"] {
+  cursor: grab;
+}
+
+.canvas[data-active-tool="select"] .canvas-content [data-canvas-element-id][data-canvas-locked="true"] {
+  cursor: pointer;
+}
+
+.canvas[data-active-tool="select"] .canvas-content [data-canvas-element-id][data-canvas-locked="false"]:active {
+  cursor: grabbing;
+}
+
 .canvas::after {
   position: absolute;
   inset: 0;
@@ -2488,7 +2502,7 @@ h2 {
 }
 
 .primitive-connector-hit-target {
-  cursor: text;
+  cursor: inherit;
   stroke: transparent;
   stroke-width: 16px;
   vector-effect: non-scaling-stroke;
@@ -2577,7 +2591,7 @@ h2 {
 }
 
 .connector-label-editor {
-  min-width: 3ch;
+  min-width: 1px;
   outline: 1px solid var(--canvas-focus);
   outline-offset: 2px;
 }
@@ -2684,6 +2698,19 @@ h2 {
 
 .canvas:focus-visible .canvas-tool-palette button {
   outline: none;
+}
+
+.connector-binding-target-anchor {
+  fill: var(--canvas-tool-bg, #ffffff);
+  stroke: var(--canvas-selection, #7c3aed);
+  stroke-width: 2px;
+  vector-effect: non-scaling-stroke;
+}
+
+.connector-binding-target-anchor.is-active {
+  fill: var(--canvas-selection, #7c3aed);
+  stroke: #ffffff;
+  stroke-width: 2.5px;
 }
 
 .canvas-interaction-overlay {

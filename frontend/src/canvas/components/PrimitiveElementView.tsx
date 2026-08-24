@@ -9,8 +9,10 @@ import { resolveConnectorPoints } from "../model/connectorBinding";
 import { getShapeTextInsets } from "../model/hitTesting";
 import { roundedDiamondPath, roundedRectanglePath } from "../model/shapeBoundary";
 import {
+  connectorLabelFontPixels,
   getConnectorLabel,
   getConnectorLabelGapHalfLength,
+  measureConnectorLabelWidth,
   normalizeConnectorLabel,
   readableConnectorLabelAngle,
   resolveConnectorLabelStyle,
@@ -199,6 +201,7 @@ export function ShapeElementView({ activeSearchRange, canvasTheme, caretPlacemen
       aria-pressed={isEditing ? undefined : isSelected}
       className={`primitive-element shape-element ${isEditing ? "is-editing" : ""} ${isDragSourceHidden ? "is-drag-source-hidden" : ""}`}
       data-canvas-element-id={element.id}
+      data-canvas-locked={element.locked}
       data-canvas-element-type="shape"
       onKeyDown={(event) => {
         if (event.key === "F2") {
@@ -513,6 +516,7 @@ type FreeConnectorElement = Omit<ConnectorElement, "start" | "end"> & {
 function FreeConnectorElementView({ activeSearchRange = null, element, isDragSourceHidden = false, isSelected, labelEditRequest, onElementChange, onKeyboardMove, onLabelCommit, onSelect, searchRanges = [] }: PrimitiveElementViewProps<FreeConnectorElement> & Pick<ConnectorElementViewProps, "activeSearchRange" | "labelEditRequest" | "onLabelCommit" | "searchRanges">) {
   const ref = useRef<SVGSVGElement | null>(null);
   const [isEditingLabel, setIsEditingLabel] = useState(false);
+  const [labelDraft, setLabelDraft] = useState("");
   const handledLabelEditRequestRef = useRef(labelEditRequest);
   const minX = Math.min(element.start.x, element.end.x);
   const minY = Math.min(element.start.y, element.end.y);
@@ -521,7 +525,16 @@ function FreeConnectorElementView({ activeSearchRange = null, element, isDragSou
   const padding = Math.max(8, element.style.strokeWidth * 2);
   const label = element.style.endArrowhead === "arrow" ? getConnectorLabel(element) : undefined;
   const labelStyle = resolveConnectorLabelStyle(element.labelStyle);
-  const labelGap = label ? getConnectorLabelGapHalfLength(label, labelStyle) : 0;
+  const editorMinimumWidth = connectorLabelFontPixels(labelStyle.fontSize) * 0.6;
+  const displayedLabel = isEditingLabel ? labelDraft : label;
+  const labelWidth = isEditingLabel
+    ? Math.max(editorMinimumWidth, measureConnectorLabelWidth(labelDraft, labelStyle))
+    : label
+      ? measureConnectorLabelWidth(label, labelStyle)
+      : 0;
+  const labelGap = displayedLabel !== undefined
+    ? getConnectorLabelGapHalfLength(displayedLabel, labelStyle, isEditingLabel ? editorMinimumWidth : 0)
+    : 0;
   const width = Math.max(1, Math.abs(x2 - x1) + padding * 2);
   const height = Math.max(1, Math.abs(y2 - y1) + padding * 2);
   useEffect(() => {
@@ -532,8 +545,12 @@ function FreeConnectorElementView({ activeSearchRange = null, element, isDragSou
       || !onLabelCommit
     ) return;
     handledLabelEditRequestRef.current = labelEditRequest;
+    setLabelDraft(label ?? "");
     setIsEditingLabel(true);
-  }, [element.style.endArrowhead, labelEditRequest, onLabelCommit]);
+  }, [element.style.endArrowhead, label, labelEditRequest, onLabelCommit]);
+  useEffect(() => {
+    if (!isEditingLabel) setLabelDraft(label ?? "");
+  }, [isEditingLabel, label]);
   useLayoutEffect(() => {
     const svg = ref.current;
     if (!svg) return;
@@ -555,12 +572,17 @@ function FreeConnectorElementView({ activeSearchRange = null, element, isDragSou
     const normalized = normalizeConnectorLabel(draft);
     if (normalized !== label) onLabelCommit?.(element.id, normalized);
   };
+  const beginLabelEdit = () => {
+    setLabelDraft(label ?? "");
+    setIsEditingLabel(true);
+  };
   return (
     <div
       aria-label={`${element.locked ? "Select locked" : "Select and move"} ${element.style.endArrowhead === "arrow" ? "arrow" : "line"} connector${label ? `, label: ${label}` : ""}`}
       aria-pressed={isSelected}
       className={`primitive-element ${isDragSourceHidden ? "is-drag-source-hidden" : ""}`}
       data-canvas-element-id={element.id}
+      data-canvas-locked={element.locked}
       data-canvas-element-type="connector"
       data-connector-end-x={element.end.x}
       data-connector-end-y={element.end.y}
@@ -568,11 +590,11 @@ function FreeConnectorElementView({ activeSearchRange = null, element, isDragSou
       data-connector-start-y={element.start.y}
       onDoubleClick={(event) => {
         if (!onLabelCommit || element.style.endArrowhead !== "arrow") return;
-        event.preventDefault(); event.stopPropagation(); setIsEditingLabel(true);
+        event.preventDefault(); event.stopPropagation(); beginLabelEdit();
       }}
       onKeyDown={(event) => {
         if (event.key === "F2" && onLabelCommit && element.style.endArrowhead === "arrow") {
-          event.preventDefault(); event.stopPropagation(); setIsEditingLabel(true); return;
+          event.preventDefault(); event.stopPropagation(); beginLabelEdit(); return;
         }
         primitiveKeyDown(event, element, onKeyboardMove, onSelect);
       }}
@@ -587,22 +609,34 @@ function FreeConnectorElementView({ activeSearchRange = null, element, isDragSou
           aria-label="Arrow label"
           autoFocus
           className="connector-label connector-label-editor"
-          defaultValue={label ?? ""}
           maxLength={MAX_CONNECTOR_LABEL_INPUT_LENGTH}
-          onBlur={(event) => commitLabel(event.currentTarget.value)}
+          onBlur={() => commitLabel(labelDraft)}
+          onChange={(event) => setLabelDraft(event.currentTarget.value.replace(/[\r\n]+/g, " "))}
           onKeyDown={(event) => {
-            if (event.key === "Escape") { event.preventDefault(); setIsEditingLabel(false); }
-            if (event.key === "Enter" || (event.key === "Enter" && (event.ctrlKey || event.metaKey))) { event.preventDefault(); commitLabel(event.currentTarget.value); }
+            if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+            if (event.key === "Escape") {
+              event.preventDefault();
+              event.stopPropagation();
+              setLabelDraft(label ?? "");
+              setIsEditingLabel(false);
+              return;
+            }
+            if (event.key === "Enter") {
+              event.preventDefault();
+              event.stopPropagation();
+              commitLabel(labelDraft);
+            }
           }}
           onPointerDown={(event) => event.stopPropagation()}
-          style={connectorLabelStyle(midpoint, labelStyle, labelAngle)}
+          style={{ ...connectorLabelStyle(midpoint, labelStyle, labelAngle), width: labelWidth }}
           type="text"
+          value={labelDraft}
         />
       ) : label ? (
         <span
           aria-hidden="true"
           className="connector-label"
-          onDoubleClick={(event) => { event.preventDefault(); event.stopPropagation(); setIsEditingLabel(true); }}
+          onDoubleClick={(event) => { event.preventDefault(); event.stopPropagation(); beginLabelEdit(); }}
           style={connectorLabelStyle(midpoint, labelStyle, labelAngle)}
         >
           {renderConnectorLabelSearchHighlights(label, searchRanges, activeSearchRange)}

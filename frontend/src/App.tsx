@@ -230,6 +230,7 @@ import {
   getDefaultKeyboardArrowEndpoints,
   getConnectorEndpointDetachPoint,
   getConnectorAuthoringCandidate,
+  getNearestBindableBoundaryAnchor,
   isBindableElement,
   isConnectorBindingPersistable,
   normalizeFreeConnectorEndpoint,
@@ -7475,6 +7476,7 @@ function App() {
       : null;
     announceConnectorEndpointRetargetCandidate(candidate);
     setConnectorEndpointRetargetVisual(candidate ? {
+      anchor: getNearestBindableBoundaryAnchor(candidate.target, point)?.point ?? null,
       isSnapped: candidate.endpoint.kind === "element",
       target: candidate.target,
     } : null);
@@ -9304,13 +9306,17 @@ function App() {
             ))}
             {canvasInteraction.arrowAuthoringVisual ? (
               <ConnectorBindingTargetHighlight
+                anchor={canvasInteraction.arrowAuthoringVisual.anchor}
                 isSnapped={canvasInteraction.arrowAuthoringVisual.isSnapped}
                 target={canvasInteraction.arrowAuthoringVisual.target}
+                zoom={zoomLevel}
               />
             ) : isConnectorEndpointRetargeting && connectorEndpointRetargetVisual ? (
               <ConnectorBindingTargetHighlight
+                anchor={connectorEndpointRetargetVisual.anchor}
                 isSnapped={connectorEndpointRetargetVisual.isSnapped}
                 target={connectorEndpointRetargetVisual.target}
+                zoom={zoomLevel}
               />
             ) : null}
             {pendingImagePlacement?.point ? (

@@ -19,6 +19,7 @@ import {
   getConnectorAuthoringCandidate,
   getConnectorCandidateAnnouncement,
   getConnectorCandidateAnnouncementKey,
+  getNearestBindableBoundaryAnchor,
   normalizeFreeConnectorEndpoint,
   resolveConnectorPoints,
   snapConnectorPointToAngle,
@@ -78,6 +79,7 @@ type ArrowAuthoringSession = {
 };
 
 export type ArrowAuthoringVisual = Readonly<{
+  anchor: CanvasPoint | null;
   isSnapped: boolean;
   target: BindableElement;
 }>;
@@ -278,6 +280,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
   }> | null>(null);
   const suppressDraftOriginDoubleClickRef = useRef(Number.NEGATIVE_INFINITY);
   const lastArrowCandidateAnnouncementRef = useRef<string | null>(null);
+  const selectHoverCursorRef = useRef<"grab" | "pointer" | null>(null);
   const [arrowAuthoringVisual, setArrowAuthoringVisual] = useState<ArrowAuthoringVisual | null>(null);
 
   optionsRef.current = options;
@@ -397,27 +400,36 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       : null;
   }, []);
 
-  const updateArrowVisual = useCallback((candidate: ReturnType<typeof getConnectorAuthoringCandidate>) => {
+  const updateArrowVisual = useCallback((
+    candidate: ReturnType<typeof getConnectorAuthoringCandidate>,
+    pointer: CanvasPoint,
+    announce = true,
+  ) => {
     const next = candidate
       ? {
+          anchor: getNearestBindableBoundaryAnchor(candidate.target, pointer)?.point ?? null,
           isSnapped: candidate.endpoint.kind === "element",
           target: candidate.target,
         }
       : null;
-    const announcementKey = getConnectorCandidateAnnouncementKey(candidate);
-    const previousAnnouncementKey = lastArrowCandidateAnnouncementRef.current;
-    if (announcementKey !== previousAnnouncementKey) {
-      lastArrowCandidateAnnouncementRef.current = announcementKey;
-      if (candidate) {
-        const targetLabel = optionsRef.current.getArrowTargetLabel(candidate.target);
-        optionsRef.current.onArrowStatusChange(getConnectorCandidateAnnouncement(candidate, targetLabel));
-      } else if (previousAnnouncementKey !== null) {
-        optionsRef.current.onArrowStatusChange(getConnectorCandidateAnnouncement(null));
+    if (announce) {
+      const announcementKey = getConnectorCandidateAnnouncementKey(candidate);
+      const previousAnnouncementKey = lastArrowCandidateAnnouncementRef.current;
+      if (announcementKey !== previousAnnouncementKey) {
+        lastArrowCandidateAnnouncementRef.current = announcementKey;
+        if (candidate) {
+          const targetLabel = optionsRef.current.getArrowTargetLabel(candidate.target);
+          optionsRef.current.onArrowStatusChange(getConnectorCandidateAnnouncement(candidate, targetLabel));
+        } else if (previousAnnouncementKey !== null) {
+          optionsRef.current.onArrowStatusChange(getConnectorCandidateAnnouncement(null));
+        }
       }
     }
     setArrowAuthoringVisual((current) =>
       current?.target === next?.target
       && current?.isSnapped === next?.isSnapped
+      && current?.anchor?.x === next?.anchor?.x
+      && current?.anchor?.y === next?.anchor?.y
         ? current
         : next,
     );
@@ -508,6 +520,42 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
     [],
   );
 
+  const setSelectHoverCursor = useCallback((cursor: "grab" | "pointer" | null) => {
+    if (selectHoverCursorRef.current === cursor) return;
+    selectHoverCursorRef.current = cursor;
+    const canvas = optionsRef.current.canvasRef.current;
+    if (!canvas) return;
+    if (cursor) canvas.style.cursor = cursor;
+    else canvas.style.removeProperty("cursor");
+  }, []);
+
+  const updateSelectHoverCursor = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    const current = optionsRef.current;
+    if (current.activeToolRef.current !== "select" || panState.current || arrowSession.current) {
+      setSelectHoverCursor(null);
+      return;
+    }
+    if (event.target instanceof Element && event.target.closest(
+      ".shape-contained-text-display, .text-block-display, .connector-label, input, textarea, [contenteditable='true']",
+    )) {
+      setSelectHoverCursor(null);
+      return;
+    }
+    const point = getCanvasPoint(event.clientX, event.clientY);
+    if (!point) {
+      setSelectHoverCursor(null);
+      return;
+    }
+    const elementsById = Object.fromEntries(current.visibleElements.map((element) => [element.id, element]));
+    const hit = getTopmostElementAtPoint(
+      elementsById,
+      elementIdsBackToFront(current.visibleElements),
+      point,
+      screenToleranceToWorld(6, { zoom: Math.max(0.01, current.zoomLevelRef.current) }),
+    );
+    setSelectHoverCursor(hit ? (hit.locked ? "pointer" : "grab") : null);
+  }, [getCanvasPoint, setSelectHoverCursor]);
+
   const capturePointer = useCallback((event: ReactPointerEvent<HTMLElement>) => {
     ignoredLostCapturePointerIdRef.current = null;
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -585,7 +633,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
             startEndpoint: resolved.adjustedEndpoint,
             startPoint: resolved.adjustedPoint,
           };
-          updateArrowVisual(resolved.candidate);
+          updateArrowVisual(resolved.candidate, point);
           paintArrowPreview(arrowSession.current);
           current.onArrowStatusChange(
             resolved.adjustedEndpoint.kind === "element"
@@ -600,7 +648,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
           }
           pending.currentEndpoint = resolved.adjustedEndpoint;
           pending.currentPoint = resolved.adjustedPoint;
-          updateArrowVisual(resolved.candidate);
+          updateArrowVisual(resolved.candidate, point);
           paintArrowPreview(pending);
           if (Math.hypot(
             pending.currentPoint.x - pending.startPoint.x,
@@ -693,23 +741,43 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       const current = optionsRef.current;
       const currentArrow = arrowSession.current;
       if (currentArrow && !panState.current) {
+        setSelectHoverCursor(null);
         const point = getCanvasPoint(event.clientX, event.clientY);
         if (!point) return;
         const resolved = resolveArrowEndpoint(point, event.shiftKey, currentArrow.startPoint);
         if (!resolved) return;
         currentArrow.currentEndpoint = resolved.adjustedEndpoint;
         currentArrow.currentPoint = resolved.adjustedPoint;
-        updateArrowVisual(resolved.candidate);
+        updateArrowVisual(resolved.candidate, point);
         paintArrowPreview(currentArrow);
         event.preventDefault();
         event.stopPropagation();
         return;
       }
+      // Before the first click the Arrow tool still exposes the exact same
+      // compatible target and boundary marker. This makes binding discoverable
+      // without starting an authoring session or touching scene state.
+      if (current.activeToolRef.current === "arrow" && !panState.current) {
+        setSelectHoverCursor(null);
+        const point = getCanvasPoint(event.clientX, event.clientY);
+        if (point) {
+          const candidate = getConnectorAuthoringCandidate(
+            point,
+            current.visibleElements,
+            current.zoomLevelRef.current,
+            directHoveredElementId(point, current.visibleElements),
+          );
+          updateArrowVisual(candidate, point, false);
+        }
+        return;
+      }
+      updateSelectHoverCursor(event);
+      setArrowAuthoringVisual((visual) => visual === null ? visual : null);
       if (current.activeToolRef.current !== "image" || !current.hasPendingImage()) return;
       const point = getCanvasPoint(event.clientX, event.clientY);
       if (point) current.onImagePreviewPointChange(point);
     },
-    [getCanvasPoint, paintArrowPreview, resolveArrowEndpoint, updateArrowVisual],
+    [getCanvasPoint, paintArrowPreview, resolveArrowEndpoint, setSelectHoverCursor, updateArrowVisual, updateSelectHoverCursor],
   );
 
   const handlePointerDown = useCallback(

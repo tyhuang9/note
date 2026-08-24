@@ -166,6 +166,7 @@ export const InkElementView = memo(function InkElementView({
       className={`ink-element ${element.brush.kind === "highlighter" ? "is-highlighter" : ""} ${isSelected ? "is-selected" : ""} ${isSelected && isMultiSelected ? "is-multi-selected" : ""} ${isDragSourceHidden ? "is-drag-source-hidden" : ""}`}
       data-block-id={element.id}
       data-canvas-element-id={element.id}
+      data-canvas-locked={element.locked}
       data-canvas-element-type="ink"
       ref={setRoot}
       style={{

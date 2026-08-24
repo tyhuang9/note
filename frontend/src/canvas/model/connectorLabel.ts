@@ -55,9 +55,43 @@ export function connectorLabelFontPixels(size: TextFontSize) {
   return Number.parseInt(size, 10);
 }
 
-/** A stable conservative width lets SVG/canvas make a real transparent line gap. */
-export function getConnectorLabelGapHalfLength(label: string, style: ConnectorLabelStyle = defaultConnectorLabelStyle) {
-  return Math.max(0, label.length * connectorLabelFontPixels(style.fontSize) * 0.31 + 4);
+export const CONNECTOR_LABEL_GAP_PADDING = 4;
+
+let measurementContext: CanvasRenderingContext2D | null | undefined;
+
+/** Deterministic fallback for workers and test environments without canvas text metrics. */
+export function estimateConnectorLabelWidth(label: string, style: ConnectorLabelStyle = defaultConnectorLabelStyle) {
+  return Math.max(0, label.length * connectorLabelFontPixels(style.fontSize) * 0.62);
+}
+
+/** Uses the same browser font metrics for committed, editing, and transient connector gaps. */
+export function measureConnectorLabelWidth(label: string, style: ConnectorLabelStyle = defaultConnectorLabelStyle) {
+  if (measurementContext === undefined) {
+    measurementContext = null;
+    if (typeof document !== "undefined") {
+      try {
+        measurementContext = document.createElement("canvas").getContext("2d");
+      } catch {
+        measurementContext = null;
+      }
+    }
+  }
+  if (measurementContext) {
+    measurementContext.font = `${style.fontSize} ${style.fontFamily}`;
+    const measured = measurementContext.measureText(label).width;
+    if (Number.isFinite(measured) && measured >= 0) return measured;
+  }
+  return estimateConnectorLabelWidth(label, style);
+}
+
+/** Half of the real transparent line break, including four pixels per side. */
+export function getConnectorLabelGapHalfLength(
+  label: string,
+  style: ConnectorLabelStyle = defaultConnectorLabelStyle,
+  minimumTextWidth = 0,
+) {
+  const measuredWidth = Math.max(minimumTextWidth, measureConnectorLabelWidth(label, style));
+  return Math.max(0, measuredWidth / 2 + CONNECTOR_LABEL_GAP_PADDING);
 }
 
 /** Follow labels never render upside down. */

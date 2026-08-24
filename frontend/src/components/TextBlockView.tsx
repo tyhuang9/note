@@ -860,6 +860,7 @@ export const TextBlockView = memo(function TextBlockView({
       onPointerUp={handleRootPointerEnd}
       data-block-id={block.id}
       data-canvas-element-id={block.id}
+      data-canvas-locked={block.locked}
       data-canvas-element-type={block.type}
       style={{
         left: block.x,

@@ -261,8 +261,19 @@ test("one direct or nearby target exposes a whole-object highlight and binding w
   for (const zoom of [50, 100, 200]) {
     await setZoom(page, canvas, zoom);
     await selectTool(page, "arrow");
-    await page.mouse.click(bounds.x + bounds.width * 0.82, bounds.y + bounds.height * 0.82);
     const shapeBounds = await requiredBounds(shape, "shape");
+    // Binding affordances are discoverable before the first Arrow click; no
+    // pending authoring session is required to see the compatible target.
+    await page.mouse.move(shapeBounds.x + shapeBounds.width + 16, shapeBounds.y + shapeBounds.height / 2);
+    const preClickHighlight = page.locator('[data-connector-target-id="target-shape"]');
+    await expect(preClickHighlight).toHaveAttribute("data-connector-binding-state", "snapped");
+    const marker = preClickHighlight.locator(".connector-binding-target-anchor");
+    await expect(marker).toHaveClass(/is-active/);
+    // SVG client bounds omit non-scaling stroke, so verify the exact local
+    // radius instead: 5.75 world units plus the 2.5px outline is 14px.
+    const markerRadius = Number(await marker.getAttribute("r"));
+    expect(markerRadius * (zoom / 100)).toBeCloseTo(5.75, 4);
+    await page.mouse.click(bounds.x + bounds.width * 0.82, bounds.y + bounds.height * 0.82);
     await page.mouse.move(shapeBounds.x + shapeBounds.width + 24, shapeBounds.y + shapeBounds.height / 2);
     const highlight = page.locator('[data-connector-target-id="target-shape"]');
     await expect(highlight).toHaveCount(1);
@@ -295,6 +306,23 @@ test("one direct or nearby target exposes a whole-object highlight and binding w
   await expect.poll(async () => newestConnector(page)).toMatchObject({
     end: { kind: "element", targetElementId: "locked-text" },
   });
+});
+
+test("select cursors distinguish movable and locked objects while tools retain their own cursors", async ({ page }) => {
+  const shape = page.locator('[data-canvas-element-id="target-shape"]');
+  const lockedText = page.locator('[data-canvas-element-id="locked-text"]');
+  await shape.hover();
+  await expect.poll(() => shape.evaluate((element) => getComputedStyle(element).cursor)).toBe("grab");
+  await lockedText.hover();
+  await expect.poll(() => lockedText.evaluate((element) => getComputedStyle(element).cursor)).toBe("pointer");
+
+  await selectTool(page, "arrow");
+  await shape.hover();
+  await expect.poll(() => shape.evaluate((element) => getComputedStyle(element).cursor)).toBe("crosshair");
+
+  await selectTool(page, "hand");
+  await shape.hover();
+  await expect.poll(() => shape.evaluate((element) => getComputedStyle(element).cursor)).toBe("grab");
 });
 
 test("zero length, cancellation paths, Space pan, and Line regression do not create partial arrows", async ({ page }) => {

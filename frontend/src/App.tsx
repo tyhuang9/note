@@ -12,6 +12,7 @@ import type { Editor, JSONContent } from "@tiptap/core";
 import type {
   DragEvent,
   KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
   Ref,
 } from "react";
@@ -1349,6 +1350,10 @@ function App() {
   const [shapeCaretPlacement, setShapeCaretPlacement] = useState<Readonly<{
     elementId: string;
     request: CaretPlacementRequest;
+  }> | null>(null);
+  const [connectorLabelEditRequest, setConnectorLabelEditRequest] = useState<Readonly<{
+    elementId: string;
+    request: number;
   }> | null>(null);
   const [isCanvasKeyboardActive, setIsCanvasKeyboardActive] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
@@ -7713,6 +7718,13 @@ function App() {
         event.preventDefault();
         event.stopPropagation();
         editBlock(selected.id);
+      } else if (selected?.type === "connector" && selected.style.endArrowhead === "arrow") {
+        event.preventDefault();
+        event.stopPropagation();
+        setConnectorLabelEditRequest((current) => ({
+          elementId: selected.id,
+          request: (current?.request ?? 0) + 1,
+        }));
       }
       return;
     }
@@ -8476,12 +8488,13 @@ function App() {
         `Shape gesture ${pointerShapeAnnouncementSequenceRef.current} was not created. ${label} needs horizontal and vertical size within the available canvas area.`,
       );
     },
-    onCreateText: (point) =>
-      createTextBlock(point.x, point.y, "", {
-        fromTool: true,
-        placement: "block-origin",
-      }),
     onEditBindableText: editBlock,
+    onEditConnectorLabel: (elementId) => {
+      setConnectorLabelEditRequest((current) => ({
+        elementId,
+        request: (current?.request ?? 0) + 1,
+      }));
+    },
     onImagePreviewPointChange: (point) => {
       const current = pendingImagePlacementRef.current;
       if (!current) return;
@@ -8948,7 +8961,7 @@ function App() {
         ) : null}
         {isKeyboardTextCreationAvailable ? (
           <span className="canvas-accessibility-status" id="canvas-text-authoring-instruction">
-            Text tool selected. Click to add text, or press Enter to start an editable text block in the current viewport.
+            Text tool selected. Double-click to add text, or press Enter to start an editable text block in the current viewport.
           </span>
         ) : null}
         <CanvasViewport
@@ -9159,6 +9172,11 @@ function App() {
                     element={connector}
                     elementsById={renderedCanvasElementsById}
                     isSelected={selectedBlockIds.includes(connector.id)}
+                    labelEditRequest={
+                      connectorLabelEditRequest?.elementId === connector.id
+                        ? connectorLabelEditRequest.request
+                        : undefined
+                    }
                     onElementChange={registerBlockElement}
                     onKeyboardMove={moveCanvasElementByKeyboard}
                     onLabelCommit={updateConnectorLabel}
@@ -9382,10 +9400,51 @@ function App() {
                 connectorEndpointHandles,
                 height: bounds.height * zoomLevel + framePadding * 2,
                 moveLabel: selectionHasLockedElements ? "Move unlocked selected elements" : "Move selected elements",
+                onClick: selected?.type === "connector" && selected.style.endArrowhead === "arrow"
+                  ? (event: ReactMouseEvent<HTMLButtonElement>) => {
+                      if (event.detail < 2) return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setConnectorLabelEditRequest((current) => ({
+                        elementId: selected.id,
+                        request: (current?.request ?? 0) + 1,
+                      }));
+                    }
+                  : undefined,
                 onMoveKeyDown: moveSelectionByKeyboard,
+                onDoubleClick: selected?.type === "shape" || selected?.type === "text"
+                    ? (event: ReactMouseEvent<HTMLButtonElement>) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        editBlock(selected.id, {
+                          clientX: event.clientX,
+                          clientY: event.clientY,
+                          textOffset: null,
+                        });
+                      }
+                    : undefined,
                 onPointerCancel: (event: ReactPointerEvent<HTMLButtonElement>) => finishSelectionFrameInteraction(event, true),
                 onLostPointerCapture: (event: ReactPointerEvent<HTMLButtonElement>) => finishSelectionFrameInteraction(event, true),
-                onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => startSelectionFrameInteraction(event, null),
+                onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => {
+                  if (
+                    selected?.type === "connector"
+                    && selected.style.endArrowhead === "arrow"
+                    && canvasInteraction.consumeRecentConnectorClick(
+                      selected.id,
+                      event.clientX,
+                      event.clientY,
+                    )
+                  ) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setConnectorLabelEditRequest((current) => ({
+                      elementId: selected.id,
+                      request: (current?.request ?? 0) + 1,
+                    }));
+                    return;
+                  }
+                  startSelectionFrameInteraction(event, null);
+                },
                 onPointerMove: moveSelectionFrameInteraction,
                 onPointerUp: finishSelectionFrameInteraction,
                 onResizeKeyDown: resizeSelectionByKeyboard,

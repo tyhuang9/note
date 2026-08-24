@@ -30,6 +30,7 @@ import {
   getDirectBindableTargetAtPoint,
   getElementBounds,
   getTopmostElementAtPoint,
+  shapeTextEditingContainsPoint,
   shapeTextContainsPoint,
 } from "../model/hitTesting";
 import {
@@ -106,8 +107,8 @@ type CanvasInteractionOptions = {
   onCreatePrimitive: (elementId: string, tool: PrimitiveTool, geometry: PrimitiveGeometry, appearance: Readonly<{ opacity: number; style: RoughStyle }>) => boolean;
   onPrimitiveStatusChange: (tool: ShapeElement["shape"]) => void;
   onArrowStatusChange: (message: string) => void;
-  onCreateText: (point: CanvasPoint) => void;
   onEditBindableText: (elementId: string, caretPlacement?: CaretPlacementRequest) => void;
+  onEditConnectorLabel: (elementId: string) => void;
   onImagePreviewPointChange: (point: CanvasPoint | null) => void;
   onPlaceImage: (point: CanvasPoint) => void;
   onRequestImagePicker: () => void;
@@ -181,6 +182,7 @@ type EditableTextCanvasElement = Extract<CanvasElement, { type: "shape" | "text"
 
 export type DirectTextEntryHit =
   | Readonly<{ element: EditableTextCanvasElement; kind: "editable" }>
+  | Readonly<{ element: ConnectorElement; kind: "connector-label" }>
   | Readonly<{ kind: "blocked" }>
   | Readonly<{ kind: "blank" }>;
 
@@ -201,6 +203,7 @@ const directTextEntryHitByNativeEvent = new WeakMap<object, CachedDirectTextEntr
 export function resolveDirectTextEntryHit(
   elements: readonly CanvasElement[],
   point: CanvasPoint,
+  connectorTolerance = 0,
 ): DirectTextEntryHit {
   const elementsById = Object.fromEntries(
     elements.map((element) => [element.id, element]),
@@ -209,8 +212,17 @@ export function resolveDirectTextEntryHit(
   for (let index = orderedIds.length - 1; index >= 0; index -= 1) {
     const element = elementsById[orderedIds[index]];
     if (!element) continue;
-    if (element.type === "shape" && shapeTextContainsPoint(element, point)) {
+    if (element.type === "shape" && (
+      shapeTextContainsPoint(element, point) || shapeTextEditingContainsPoint(element, point)
+    )) {
       return { element, kind: "editable" };
+    }
+    if (
+      element.type === "connector"
+      && element.style.endArrowhead === "arrow"
+      && canvasElementContainsPoint(element, point, connectorTolerance, elementsById)
+    ) {
+      return { element, kind: "connector-label" };
     }
     if (canvasElementContainsPoint(element, point, 0, elementsById)) {
       return element.type === "text" || element.type === "shape"
@@ -257,6 +269,12 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
   const blankClickSelectionRef = useRef<Readonly<{
     capturedAt: number;
     elementIds: readonly string[];
+  }> | null>(null);
+  const recentConnectorClickRef = useRef<Readonly<{
+    clientX: number;
+    clientY: number;
+    elementId: string;
+    time: number;
   }> | null>(null);
   const suppressDraftOriginDoubleClickRef = useRef(Number.NEGATIVE_INFINITY);
   const lastArrowCandidateAnnouncementRef = useRef<string | null>(null);
@@ -608,6 +626,12 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       }
       if (!isDragPrimitiveTool(tool)) {
         if (tool !== "text" && tool !== "image") return;
+        if (tool === "text") {
+          current.setInsertionPoint(null);
+          current.setIsCanvasKeyboardActive(true);
+          event.currentTarget.focus({ preventScroll: true });
+          return;
+        }
         const point = getCanvasPoint(event.clientX, event.clientY);
         if (!point) return;
         event.preventDefault();
@@ -616,9 +640,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
         current.cleanupMarquee();
         current.setInsertionPoint(null);
         current.setIsCanvasKeyboardActive(true);
-        if (tool === "text") {
-          current.onCreateText(point);
-        } else if (current.hasPendingImage()) {
+        if (current.hasPendingImage()) {
           current.onPlaceImage(point);
         } else {
           current.onRequestImagePicker();
@@ -730,6 +752,14 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
           tolerance,
         );
         if (hitElement) {
+          recentConnectorClickRef.current = hitElement.type === "connector"
+            ? {
+                clientX: event.clientX,
+                clientY: event.clientY,
+                elementId: hitElement.id,
+                time: performance.now(),
+              }
+            : null;
           blankClickSelectionRef.current = null;
           const currentIds = current.selectedElementIdsRef.current;
           const nextIds = event.shiftKey
@@ -767,7 +797,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
           currentY: startPoint.y,
           didMove: false,
         };
-        current.setInsertionPoint(startPoint);
+        current.setInsertionPoint(null);
         current.cleanupMarquee();
       }
 
@@ -815,7 +845,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       if (
         event.button !== 0
         || performance.now() - suppressDraftOriginDoubleClickRef.current < 750
-        || current.activeToolRef.current !== "select"
+        || current.activeToolRef.current !== "select" && current.activeToolRef.current !== "text"
         || current.isTextEditing()
         || isCanvasDoubleClickExcludedTarget(event.target)
       ) return;
@@ -825,8 +855,22 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
         event.nativeEvent,
         current.visibleElements,
         point,
+        (elements, hitPoint) => resolveDirectTextEntryHit(
+          elements,
+          hitPoint,
+          screenToleranceToWorld(8, { zoom: Math.max(0.01, current.zoomLevelRef.current) }),
+        ),
       );
       if (hit.kind === "blocked") return;
+      if (hit.kind === "connector-label") {
+        event.preventDefault();
+        event.stopPropagation();
+        current.cleanupMarquee();
+        current.setInsertionPoint(null);
+        current.setIsCanvasKeyboardActive(true);
+        current.onEditConnectorLabel(hit.element.id);
+        return;
+      }
       if (hit.kind === "blank" && !isCanvasBackgroundTarget(event.target)) return;
       if (hit.kind === "blank") {
         event.preventDefault();
@@ -845,13 +889,28 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
     [editDirectTextElement, getCanvasPoint],
   );
 
+  const consumeRecentConnectorClick = useCallback((
+    elementId: string,
+    clientX: number,
+    clientY: number,
+  ) => {
+    const recent = recentConnectorClickRef.current;
+    recentConnectorClickRef.current = null;
+    return Boolean(
+      recent
+      && recent.elementId === elementId
+      && performance.now() - recent.time <= 750
+      && Math.hypot(clientX - recent.clientX, clientY - recent.clientY) <= 8
+    );
+  }, []);
+
   const handleDoubleClickCapture = useCallback(
     (event: ReactMouseEvent<HTMLElement>) => {
       const current = optionsRef.current;
       if (
         event.button !== 0
         || performance.now() - suppressDraftOriginDoubleClickRef.current < 750
-        || current.activeToolRef.current !== "select"
+        || current.activeToolRef.current !== "select" && current.activeToolRef.current !== "text"
         || current.isTextEditing()
         || isCanvasDoubleClickExcludedTarget(event.target)
       ) return;
@@ -861,7 +920,21 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
         event.nativeEvent,
         current.visibleElements,
         point,
+        (elements, hitPoint) => resolveDirectTextEntryHit(
+          elements,
+          hitPoint,
+          screenToleranceToWorld(8, { zoom: Math.max(0.01, current.zoomLevelRef.current) }),
+        ),
       );
+      if (hit.kind === "connector-label") {
+        event.preventDefault();
+        event.stopPropagation();
+        current.cleanupMarquee();
+        current.setInsertionPoint(null);
+        current.setIsCanvasKeyboardActive(true);
+        current.onEditConnectorLabel(hit.element.id);
+        return;
+      }
       if (hit.kind !== "editable") return;
       editDirectTextElement(event, hit.element);
     },
@@ -1197,6 +1270,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
     cancelArrowAuthoring,
     cancelCapturedPointerInteraction,
     cancelMarquee,
+    consumeRecentConnectorClick,
     startPan,
   };
 }

@@ -481,11 +481,12 @@ function ShapeContainedTextEditor({ canvasTheme, caretPlacementRequest, element,
 type ConnectorElementViewProps = PrimitiveElementViewProps<ConnectorElement> & {
   elementsById: Readonly<Record<ElementId, CanvasElement>>;
   activeSearchRange?: SearchMatch | null;
+  labelEditRequest?: number;
   onLabelCommit?: (elementId: string, label: string | undefined) => void;
   searchRanges?: readonly SearchMatch[];
 };
 
-export function ConnectorElementView({ activeSearchRange = null, element, elementsById, isDragSourceHidden = false, isSelected, onElementChange, onKeyboardMove, onLabelCommit, onSelect, searchRanges = [] }: ConnectorElementViewProps) {
+export function ConnectorElementView({ activeSearchRange = null, element, elementsById, isDragSourceHidden = false, isSelected, labelEditRequest, onElementChange, onKeyboardMove, onLabelCommit, onSelect, searchRanges = [] }: ConnectorElementViewProps) {
   const points = resolveConnectorPoints(element, elementsById);
   if (!points) return null;
   return (
@@ -493,6 +494,7 @@ export function ConnectorElementView({ activeSearchRange = null, element, elemen
       element={{ ...element, start: { kind: "free", ...points.start }, end: { kind: "free", ...points.end } }}
       isDragSourceHidden={isDragSourceHidden}
       isSelected={isSelected}
+      labelEditRequest={labelEditRequest}
       onElementChange={onElementChange}
       onKeyboardMove={onKeyboardMove}
       activeSearchRange={activeSearchRange}
@@ -508,7 +510,7 @@ type FreeConnectorElement = Omit<ConnectorElement, "start" | "end"> & {
   end: Extract<ConnectorElement["end"], { kind: "free" }>;
 };
 
-function FreeConnectorElementView({ activeSearchRange = null, element, isDragSourceHidden = false, isSelected, onElementChange, onKeyboardMove, onLabelCommit, onSelect, searchRanges = [] }: PrimitiveElementViewProps<FreeConnectorElement> & Pick<ConnectorElementViewProps, "activeSearchRange" | "onLabelCommit" | "searchRanges">) {
+function FreeConnectorElementView({ activeSearchRange = null, element, isDragSourceHidden = false, isSelected, labelEditRequest, onElementChange, onKeyboardMove, onLabelCommit, onSelect, searchRanges = [] }: PrimitiveElementViewProps<FreeConnectorElement> & Pick<ConnectorElementViewProps, "activeSearchRange" | "labelEditRequest" | "onLabelCommit" | "searchRanges">) {
   const ref = useRef<SVGSVGElement | null>(null);
   const [isEditingLabel, setIsEditingLabel] = useState(false);
   const minX = Math.min(element.start.x, element.end.x);
@@ -521,12 +523,23 @@ function FreeConnectorElementView({ activeSearchRange = null, element, isDragSou
   const labelGap = label ? getConnectorLabelGapHalfLength(label, labelStyle) : 0;
   const width = Math.max(1, Math.abs(x2 - x1) + padding * 2);
   const height = Math.max(1, Math.abs(y2 - y1) + padding * 2);
+  useEffect(() => {
+    if (labelEditRequest === undefined || element.style.endArrowhead !== "arrow" || !onLabelCommit) return;
+    setIsEditingLabel(true);
+  }, [element.style.endArrowhead, labelEditRequest, onLabelCommit]);
   useLayoutEffect(() => {
     const svg = ref.current;
     if (!svg) return;
     const start = { x: x1 + padding, y: y1 + padding };
     const end = { x: x2 + padding, y: y2 + padding };
     renderConnectorRoughSvg(svg, element.style, start, end, 1, labelGap);
+    const hitTarget = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    hitTarget.setAttribute("class", "primitive-connector-hit-target");
+    hitTarget.setAttribute("x1", String(start.x));
+    hitTarget.setAttribute("y1", String(start.y));
+    hitTarget.setAttribute("x2", String(end.x));
+    hitTarget.setAttribute("y2", String(end.y));
+    svg.append(hitTarget);
   }, [element, height, labelGap, padding, width, x1, x2, y1, y2]);
   const midpoint = { x: (x1 + x2) / 2 + padding, y: (y1 + y2) / 2 + padding };
   const labelAngle = readableConnectorLabelAngle({ x: x1, y: y1 }, { x: x2, y: y2 }, labelStyle.orientation);

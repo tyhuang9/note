@@ -109,6 +109,35 @@ export function shapeTextContainsPoint(element: ShapeElement, point: CanvasPoint
     && local.y <= element.y + element.height - insets.vertical;
 }
 
+/** Hit the shape's complete visual interior for contained-text editing, even when hollow. */
+export function shapeTextEditingContainsPoint(element: ShapeElement, worldPoint: CanvasPoint) {
+  const point = unrotatePoint(element, worldPoint);
+  const rect = normalizeBounds(element);
+  if (element.shape === "ellipse") {
+    const rx = rect.width / 2;
+    const ry = rect.height / 2;
+    return rx > 0 && ry > 0 && Math.hypot(
+      (point.x - (rect.x + rx)) / rx,
+      (point.y - (rect.y + ry)) / ry,
+    ) <= 1;
+  }
+  const vertices = element.shape === "diamond"
+    ? [
+        { x: rect.x + rect.width / 2, y: rect.y },
+        { x: rect.x + rect.width, y: rect.y + rect.height / 2 },
+        { x: rect.x + rect.width / 2, y: rect.y + rect.height },
+        { x: rect.x, y: rect.y + rect.height / 2 },
+      ]
+    : [
+        { x: rect.x, y: rect.y },
+        { x: rect.x + rect.width, y: rect.y },
+        { x: rect.x + rect.width, y: rect.y + rect.height },
+        { x: rect.x, y: rect.y + rect.height },
+      ];
+  return pointInPolygon(point, vertices)
+    || distanceToPolygon(point, vertices) <= element.style.strokeWidth / 2;
+}
+
 function shapeContainsPoint(element: ShapeElement, worldPoint: CanvasPoint, tolerance: number) {
   const point = unrotatePoint(element, worldPoint);
   const radius = Math.max(0, tolerance) + element.style.strokeWidth / 2;

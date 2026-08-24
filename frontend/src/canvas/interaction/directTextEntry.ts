@@ -46,7 +46,9 @@ export function canStartDirectTextEntry({
     && !hasPendingImage
     && !isEditingText
     && !isModalOrOverlayOpen
-    && (source === "pointer" ? activeTool === "select" : activeTool === "text");
+    && (source === "pointer"
+      ? activeTool === "select" || activeTool === "text"
+      : activeTool === "text");
 }
 
 /** Places the first editable caret exactly at a world-space canvas point. */

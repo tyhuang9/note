@@ -2487,6 +2487,13 @@ h2 {
   pointer-events: none;
 }
 
+.primitive-connector-hit-target {
+  cursor: text;
+  stroke: transparent;
+  stroke-width: 16px;
+  pointer-events: stroke;
+}
+
 .shape-contained-text {
   position: absolute;
   z-index: 1;

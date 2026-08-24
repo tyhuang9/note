@@ -240,9 +240,7 @@ export function scaleSelection(
   });
 }
 
-/** Applies independent local-axis resize factors. Corners are deliberately
- * still routed through scaleSelection by the caller so their proportional
- * behavior remains unchanged. */
+/** Applies independent local-axis resize factors for both edge and corner handles. */
 export function resizeSelection(
   elements: readonly CanvasElement[],
   selectedIds: ReadonlySet<ElementId>,
@@ -256,42 +254,49 @@ export function resizeSelection(
     if (element.type === "connector") return resizeConnector(element, bounds, transform);
     if (!isBoxCanvasElement(element)) return element;
 
-    const center = { x: element.x + element.width / 2, y: element.y + element.height / 2 };
-    const nextCenter = resizeWorldPoint(center, bounds, transform);
     if (element.type === "text") {
       const measured = textSizes.get(element.id);
       const width = finiteAtLeast(measured?.width ?? element.width * transform.scaleX, MIN_BLOCK_WIDTH);
       const contentHeight = finiteAtLeast(measured?.height ?? element.height, MIN_BLOCK_HEIGHT);
       const requestedHeight = finiteAtLeast(element.height * transform.scaleY, MIN_BLOCK_HEIGHT);
-      const height = transform.handle === "n" || transform.handle === "s"
+      const changesY = transform.handle.includes("n") || transform.handle.includes("s");
+      const height = changesY
         ? Math.max(contentHeight, requestedHeight)
         : contentHeight;
+      const originalOppositeLocal = {
+        x: transform.handle.includes("w") ? element.width : transform.handle.includes("e") ? 0 : element.width / 2,
+        y: transform.handle.includes("n") ? element.height : transform.handle.includes("s") ? 0 : element.height / 2,
+      };
+      const transformedOpposite = resizeWorldPoint(
+        getRotatedLocalPoint(element, originalOppositeLocal),
+        bounds,
+        transform,
+      );
+      const nextOppositeLocal = {
+        x: transform.handle.includes("w") ? width : transform.handle.includes("e") ? 0 : width / 2,
+        y: transform.handle.includes("n") ? height : transform.handle.includes("s") ? 0 : height / 2,
+      };
       const next = {
         ...element,
         height,
         isWidthManuallyResized: transform.scaleX !== 1 ? true : element.isWidthManuallyResized,
-        ...(transform.handle === "n" || transform.handle === "s" ? { manualHeight: height } : {}),
+        ...(changesY ? { manualHeight: height } : {}),
         width,
-        x: nextCenter.x - width / 2,
-        y: nextCenter.y - height / 2,
         updatedAt: Date.now(),
-      };
-      // Keep the opposite local edge fixed after content reflow changes height.
-      const oppositeLocal = {
-        x: transform.handle.includes("w") ? width : transform.handle.includes("e") ? 0 : width / 2,
-        y: transform.handle.includes("n") ? height : transform.handle.includes("s") ? 0 : height / 2,
       };
       return {
         ...next,
         ...getBoxPositionForRotatedLocalPoint(
           { width, height },
           next.rotation,
-          oppositeLocal,
-          transform.anchor,
+          nextOppositeLocal,
+          transformedOpposite,
         ),
       };
     }
 
+    const center = { x: element.x + element.width / 2, y: element.y + element.height / 2 };
+    const nextCenter = resizeWorldPoint(center, bounds, transform);
     const width = Math.max(8, element.width * transform.scaleX);
     const height = Math.max(8, element.height * transform.scaleY);
     const next = {

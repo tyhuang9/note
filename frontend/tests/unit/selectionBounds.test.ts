@@ -316,6 +316,55 @@ describe("composite transforms", () => {
     expect(resized).toMatchObject({ x: 10, y: 13, width: 200, height: 54, isWidthManuallyResized: true });
   });
 
+  it("keeps every textbox at its own transformed opposite edge or corner", () => {
+    const second = { ...text, height: 60, id: "second", width: 120, x: 210, y: 100 };
+    const elements = [text, second];
+    const selectedIds = new Set(elements.map((element) => element.id));
+    const frame = { x: 10, y: 20, width: 320, height: 140, rotation: 0 };
+    const draggedPoints = {
+      e: { x: 650, y: 90 },
+      n: { x: 170, y: -50 },
+      ne: { x: 650, y: -50 },
+      nw: { x: -310, y: -50 },
+      s: { x: 170, y: 230 },
+      se: { x: 650, y: 230 },
+      sw: { x: -310, y: 230 },
+      w: { x: -310, y: 90 },
+    } as const;
+
+    for (const handle of ["n", "ne", "e", "se", "s", "sw", "w", "nw"] as const) {
+      const transform = getSelectionResizeTransform(frame, handle, draggedPoints[handle]);
+      const sizes = new Map(elements.map((element) => [element.id, {
+        height: element.id === text.id ? 54 : 70,
+        width: Math.max(140, element.width * transform.scaleX),
+      }]));
+      const resized = resizeSelection(elements, selectedIds, frame, transform, sizes) as TextElement[];
+      for (let index = 0; index < elements.length; index += 1) {
+        const original = elements[index];
+        const result = resized[index];
+        const originalOpposite = resizedHandleOppositeWorldPoint(original, handle);
+        const expectedOpposite = {
+          x: transform.anchor.x + (originalOpposite.x - transform.anchor.x) * transform.scaleX,
+          y: transform.anchor.y + (originalOpposite.y - transform.anchor.y) * transform.scaleY,
+        };
+        const actualOpposite = resizedHandleOppositeWorldPoint(result, handle);
+        expect(actualOpposite.x).toBeCloseTo(expectedOpposite.x);
+        expect(actualOpposite.y).toBeCloseTo(expectedOpposite.y);
+      }
+      expect(resized[0].x).not.toBeCloseTo(resized[1].x);
+      expect(resized[0].y).not.toBeCloseTo(resized[1].y);
+    }
+  });
+
+  it("uses independent width and height factors for corner handles", () => {
+    const frame = { x: 10, y: 20, width: 100, height: 40, rotation: 0 };
+    const transform = getSelectionResizeTransform(frame, "se", { x: 210, y: 80 });
+    expect(transform).toMatchObject({ anchor: { x: 10, y: 20 }, scaleX: 2, scaleY: 1.5 });
+    const [resized] = resizeSelection([text], new Set([text.id]), frame, transform,
+      new Map([[text.id, { height: 54, width: 200 }]]));
+    expect(resized).toMatchObject({ height: 60, manualHeight: 60, width: 200, x: 10, y: 20 });
+  });
+
   it("keeps the south edge fixed and records a non-clipping manual text height", () => {
     const frame = { x: text.x, y: text.y, width: text.width, height: text.height, rotation: 0 };
     const transform = getSelectionResizeTransform(frame, "n", { x: 60, y: 0 });
@@ -362,4 +411,14 @@ function oppositeLocalPoint(block: Pick<TextElement, "height" | "width">, corner
     x: corner.includes("w") ? block.width : 0,
     y: corner.includes("n") ? block.height : 0,
   };
+}
+
+function resizedHandleOppositeWorldPoint(
+  block: Pick<TextElement, "height" | "rotation" | "width" | "x" | "y">,
+  handle: "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw",
+) {
+  return rotatedLocalWorldPoint(block, {
+    x: handle.includes("w") ? block.width : handle.includes("e") ? 0 : block.width / 2,
+    y: handle.includes("n") ? block.height : handle.includes("s") ? 0 : block.height / 2,
+  });
 }

@@ -23,7 +23,7 @@ test("all-text selections render a four-corner composite frame and move as one g
   await expect(blocks.second.locator(".text-block-header")).toHaveCSS("opacity", "1");
   await expect(blocks.first.locator(".resize-e")).toHaveCount(0);
   await expect(blocks.second.locator(".resize-e")).toHaveCount(0);
-  await expect(page.locator(".selection-frame-handle")).toHaveCount(4);
+  await expect(page.locator(".selection-frame-handle")).toHaveCount(8);
 
   const before = await Promise.all([readWorldPosition(blocks.first), readWorldPosition(blocks.second)]);
   const moveSurface = page.getByRole("button", { name: "Move selected elements" });
@@ -183,6 +183,55 @@ test("all-text corner resize commits once and reloads without collapsing", async
   await editor.fill(Array.from({ length: 14 }, (_, index) => `Growing line ${index + 1}`).join("\n"));
   await expect.poll(async () => (await readWorldSize(blocks.first)).height)
     .toBeGreaterThan(committedSizes[0].height);
+});
+
+test("single text uses its native border with eight invisible resize hit zones", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  const bounds = await requiredBounds(canvas, "canvas");
+  const block = await createTextBlock(page, bounds.x + 440, bounds.y + 260, "Native text border");
+  await block.locator(".text-block-display").click();
+
+  const frame = page.locator(".selection-frame.is-native-text-frame");
+  await expect(frame).toHaveCount(1);
+  await expect(frame).toHaveCSS("box-shadow", "none");
+  await expect(page.locator(".selection-frame-move-surface")).toHaveCount(0);
+
+  const handles = frame.locator(".selection-frame-handle");
+  await expect(handles).toHaveCount(8);
+  const expectedCursors = {
+    n: "ns-resize",
+    ne: "nesw-resize",
+    e: "ew-resize",
+    se: "nwse-resize",
+    s: "ns-resize",
+    sw: "nesw-resize",
+    w: "ew-resize",
+    nw: "nwse-resize",
+  } as const;
+  for (const [handle, cursor] of Object.entries(expectedCursors)) {
+    const control = frame.locator(`[data-selection-resize-handle="${handle}"]`);
+    await expect(control).toHaveCSS("cursor", cursor);
+    expect(await control.evaluate((element) => getComputedStyle(element, "::after").content)).toBe("none");
+  }
+
+  const east = frame.locator('[data-selection-resize-handle="e"]');
+  const eastBounds = await requiredBounds(east, "east resize zone");
+  expect(eastBounds.width).toBeCloseTo(12, 0);
+  const eastHit = await page.evaluate(({ x, y }) =>
+    document.elementFromPoint(x, y)?.getAttribute("data-selection-resize-handle"), {
+      x: eastBounds.x + eastBounds.width / 2,
+      y: eastBounds.y + eastBounds.height / 2,
+    });
+  expect(eastHit).toBe("e");
+
+  const northwest = frame.locator('[data-selection-resize-handle="nw"]');
+  const northwestBounds = await requiredBounds(northwest, "northwest resize zone");
+  const northwestHit = await page.evaluate(({ x, y }) =>
+    document.elementFromPoint(x, y)?.getAttribute("data-selection-resize-handle"), {
+      x: northwestBounds.x + northwestBounds.width / 2,
+      y: northwestBounds.y + northwestBounds.height / 2,
+    });
+  expect(northwestHit).toBe("nw");
 });
 
 test("east text resize preserves manual height until content outgrows it", async ({ page }) => {

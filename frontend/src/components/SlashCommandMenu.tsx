@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   Code2,
   FileText,
@@ -66,17 +66,38 @@ export function SlashCommandMenu({
     );
   }
 
+  function scrollActiveOptionIntoView() {
+    const menuElement = menuRef.current;
+    const optionElement = document.getElementById(
+      `${menuId}-option-${activeIndex}`,
+    );
+
+    if (!menuElement || !optionElement || !menuElement.contains(optionElement)) {
+      return;
+    }
+
+    const menuBounds = menuElement.getBoundingClientRect();
+    const optionBounds = optionElement.getBoundingClientRect();
+    const visibleTop = menuBounds.top + menuElement.clientTop;
+    const visibleBottom = visibleTop + menuElement.clientHeight;
+
+    if (optionBounds.top < visibleTop) {
+      menuElement.scrollTop += optionBounds.top - visibleTop;
+    } else if (optionBounds.bottom > visibleBottom) {
+      menuElement.scrollTop += optionBounds.bottom - visibleBottom;
+    }
+  }
+
   useEffect(() => {
     const frameId = window.requestAnimationFrame(updateScrollCue);
 
     return () => window.cancelAnimationFrame(frameId);
   }, [items]);
 
-  useEffect(() => {
-    document.getElementById(`${menuId}-option-${activeIndex}`)?.scrollIntoView({
-      block: "nearest",
-    });
-  }, [activeIndex, menuId]);
+  useLayoutEffect(() => {
+    scrollActiveOptionIntoView();
+    updateScrollCue();
+  }, [activeIndex, items, menuId]);
 
   return (
     <>
@@ -127,7 +148,7 @@ export function SlashCommandMenu({
                     key={item.id}
                     onClick={() => onSelect(item)}
                     onPointerDown={(event) => event.preventDefault()}
-                    onPointerEnter={() => {
+                    onPointerMove={() => {
                       if (index !== activeIndex) {
                         onActiveIndexChange(index);
                       }

@@ -206,14 +206,14 @@ test("labels offscreen text while preserving genuine keyboard navigation", async
 
   const canvas = page.getByRole("tabpanel");
   const activeTool = page.locator('.canvas-tool-palette [data-tool="select"]');
-  const offscreenGroup = page.locator(".offscreen-indicators");
+  const offscreenGroup = page.getByRole("group", { name: "Offscreen textboxes" });
   const offscreenButton = page.getByRole("button", { name: "1 textbox offscreen east" });
   const status = page.locator('[role="status"].canvas-accessibility-status');
   const textbox = page.locator('[data-canvas-element-id="offscreen-text"]');
   const textboxHeader = textbox.locator(".text-block-header");
 
   await expect(canvas).toBeVisible();
-  await expect(offscreenGroup).toHaveAttribute("aria-label", "Offscreen textboxes");
+  await expect(offscreenGroup).toBeVisible();
   await expect(offscreenButton).toBeVisible();
   await expect(offscreenButton).toHaveJSProperty("tabIndex", 0);
   await activeTool.focus();
@@ -249,12 +249,12 @@ test("labels an offscreen rectangle as a canvas item and focuses its root", asyn
   await page.goto("/");
 
   const canvas = page.getByRole("tabpanel");
-  const offscreenGroup = page.locator(".offscreen-indicators");
+  const offscreenGroup = page.getByRole("group", { name: "Offscreen canvas items" });
   const offscreenButton = page.getByRole("button", { name: "1 canvas item offscreen east" });
   const shape = page.locator('[data-canvas-element-id="offscreen-shape"]');
   const status = page.locator('[role="status"].canvas-accessibility-status');
 
-  await expect(offscreenGroup).toHaveAttribute("aria-label", "Offscreen canvas items");
+  await expect(offscreenGroup).toBeVisible();
   await expect(offscreenButton).toBeVisible();
   await offscreenButton.focus();
   await page.keyboard.press("Enter");
@@ -270,10 +270,10 @@ test("labels an offscreen image as a canvas item", async ({ page }) => {
   await installOffscreenNavigationWorkspace(page, { targetKind: "image" });
   await page.goto("/");
 
-  const offscreenGroup = page.locator(".offscreen-indicators");
+  const offscreenGroup = page.getByRole("group", { name: "Offscreen canvas items" });
   const offscreenButton = page.getByRole("button", { name: "1 canvas item offscreen east" });
   const status = page.locator('[role="status"].canvas-accessibility-status');
-  await expect(offscreenGroup).toHaveAttribute("aria-label", "Offscreen canvas items");
+  await expect(offscreenGroup).toBeVisible();
   await expect(offscreenButton).toBeVisible();
   await offscreenButton.press("Enter");
   await expect(status).toHaveText("Navigated to 1 canvas item offscreen east.");
@@ -283,10 +283,10 @@ test("labels mixed offscreen elements as canvas items", async ({ page }) => {
   await installOffscreenNavigationWorkspace(page, { targetKind: "mixed" });
   await page.goto("/");
 
-  const offscreenGroup = page.locator(".offscreen-indicators");
+  const offscreenGroup = page.getByRole("group", { name: "Offscreen canvas items" });
   const offscreenButton = page.getByRole("button", { name: "2 canvas items offscreen east" });
   const status = page.locator('[role="status"].canvas-accessibility-status');
-  await expect(offscreenGroup).toHaveAttribute("aria-label", "Offscreen canvas items");
+  await expect(offscreenGroup).toBeVisible();
   await expect(offscreenButton).toBeVisible();
   await offscreenButton.press("Enter");
   await expect(status).toHaveText("Navigated to 2 canvas items offscreen east.");
@@ -296,10 +296,10 @@ test("keeps a rectangle with contained text in the canvas-item offscreen group",
   await installOffscreenNavigationWorkspace(page, { targetKind: "shape-text" });
   await page.goto("/");
 
-  const offscreenGroup = page.locator(".offscreen-indicators");
+  const offscreenGroup = page.getByRole("group", { name: "Offscreen canvas items" });
   const offscreenButton = page.getByRole("button", { name: "1 canvas item offscreen east" });
   const status = page.locator('[role="status"].canvas-accessibility-status');
-  await expect(offscreenGroup).toHaveAttribute("aria-label", "Offscreen canvas items");
+  await expect(offscreenGroup).toBeVisible();
   await expect(offscreenButton).toBeVisible();
   await offscreenButton.press("Enter");
   await expect(status).toHaveText("Navigated to 1 canvas item offscreen east.");

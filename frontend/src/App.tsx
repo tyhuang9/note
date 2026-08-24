@@ -8977,6 +8977,7 @@ function App() {
               }`}
               aria-label={getOffscreenGroupsContainerLabel(offscreenGroups)}
               inert={isSearchOpen ? true : undefined}
+              role="group"
             >
               {offscreenGroups.map((group) => (
                 <button

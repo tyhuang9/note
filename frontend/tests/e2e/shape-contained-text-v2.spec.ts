@@ -67,6 +67,15 @@ test("double-click and blur preserve empty omission, then rich text survives rel
   await page.locator(".selection-frame-move-surface").dblclick();
   const editor = shape.locator('.shape-contained-text-editor-content[role="textbox"]');
   await expect(editor).toBeFocused();
+  const [shapeBounds, emptyParagraphBounds] = await Promise.all([
+    shape.boundingBox(),
+    editor.locator("p").boundingBox(),
+  ]);
+  if (!shapeBounds || !emptyParagraphBounds) throw new Error("Empty shape caret geometry was unavailable");
+  expect(Math.abs(
+    emptyParagraphBounds.y + emptyParagraphBounds.height / 2
+      - (shapeBounds.y + shapeBounds.height / 2),
+  )).toBeLessThanOrEqual(4);
   await page.getByRole("tabpanel").click({ position: { x: 40, y: 80 } });
   await expect.poll(() => writeCount(page)).toBe(baselineWrites);
   await expect(page.locator(".canvas-accessibility-status")).toContainText("Shape text unchanged");

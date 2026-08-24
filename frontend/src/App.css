@@ -2549,6 +2549,16 @@ h2 {
   outline: none;
 }
 
+.shape-contained-text-editor.is-empty .shape-contained-text-editor-surface {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.shape-contained-text-editor.is-empty .shape-contained-text-editor-content {
+  min-height: 0;
+}
+
 .shape-contained-text-editor-hint { display: none; }
 
 .connector-label {

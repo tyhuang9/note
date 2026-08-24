@@ -466,7 +466,7 @@ function ShapeContainedTextEditor({ canvasTheme, caretPlacementRequest, element,
   }, [editor, element.id, onActiveEditorChange, onEditSessionChange]);
 
   return (
-    <div className="shape-contained-text shape-contained-text-editor" style={shapeTextInsetStyle(element, canvasTheme)}>
+    <div className={`shape-contained-text shape-contained-text-editor ${element.text ? "" : "is-empty"}`} style={shapeTextInsetStyle(element, canvasTheme)}>
       <EditorContent className="shape-contained-text-editor-surface" editor={editor} />
       <span className="editor-shortcut-instructions" id={instructionsId}>
         Escape cancels this shape text edit. Control+Enter or Command+Enter saves it.

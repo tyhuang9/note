@@ -7,6 +7,46 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByRole("tabpanel")).toBeVisible();
 });
 
+test("an initially unselected shape or connector moves on its first drag gesture", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  const canvasBounds = await requiredBounds(canvas, "canvas");
+  await createRectangle(page, canvasBounds.x + 320, canvasBounds.y + 260);
+  const rectangle = page.getByRole("button", { name: "Select and move rectangle shape. Press F2 to edit contained text." });
+  const rectangleBefore = await requiredBounds(rectangle, "rectangle before first drag");
+
+  await page.mouse.click(canvasBounds.x + 120, canvasBounds.y + 700);
+  await page.mouse.move(rectangleBefore.x + rectangleBefore.width / 2, rectangleBefore.y + rectangleBefore.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(rectangleBefore.x + rectangleBefore.width / 2 + 48, rectangleBefore.y + rectangleBefore.height / 2 + 30, { steps: 4 });
+  await expect(page.locator("body")).toHaveClass(/is-interacting/);
+  await page.mouse.up();
+  const rectangleAfter = await requiredBounds(rectangle, "rectangle after first drag");
+  expect(Math.round(rectangleAfter.x - rectangleBefore.x)).toBe(48);
+  expect(Math.round(rectangleAfter.y - rectangleBefore.y)).toBe(30);
+
+  await selectTool(page, "arrow");
+  await authorArrow(
+    page,
+    canvasBounds.x + 700,
+    canvasBounds.y + 330,
+    canvasBounds.x + 900,
+    canvasBounds.y + 390,
+  );
+  const arrow = page.getByRole("button", { name: "Select and move arrow connector" });
+  await selectTool(page, "select");
+  const arrowBefore = await requiredBounds(arrow, "arrow before first drag");
+
+  await page.mouse.click(canvasBounds.x + 120, canvasBounds.y + 700);
+  await page.mouse.move(arrowBefore.x + arrowBefore.width / 2, arrowBefore.y + arrowBefore.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(arrowBefore.x + arrowBefore.width / 2 + 42, arrowBefore.y + arrowBefore.height / 2 + 24, { steps: 4 });
+  await expect(page.locator("body")).toHaveClass(/is-interacting/);
+  await page.mouse.up();
+  const arrowAfter = await requiredBounds(arrow, "arrow after first drag");
+  expect(Math.round(arrowAfter.x - arrowBefore.x)).toBe(42);
+  expect(Math.round(arrowAfter.y - arrowBefore.y)).toBe(24);
+});
+
 test("arrow binding exposes a whole-object highlight, follows target transforms, and detaches before target deletion", async ({ page }) => {
   const canvas = page.getByRole("tabpanel");
   const canvasBounds = await requiredBounds(canvas, "canvas");

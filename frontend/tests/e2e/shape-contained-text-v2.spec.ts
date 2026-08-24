@@ -27,7 +27,9 @@ test("locked shape edits contained text as one stable connector target and one h
 
   await shape.press("F2");
   await expect(editor).toBeFocused();
-  await editor.fill("Committed label");
+  await editor.fill("Committed");
+  await editor.press("Space");
+  await editor.type("label");
   await editor.press("Control+Enter");
   await expect(shape).toContainText("Committed label");
   await expect(shape).toBeFocused();

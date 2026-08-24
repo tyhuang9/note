@@ -982,7 +982,12 @@ test("arrow stroke and selected overlay double clicks enter label editing", asyn
   await page.mouse.dblclick(hitPoint.x, hitPoint.y);
   const editor = page.getByRole("textbox", { name: "Arrow label", exact: true });
   await expect(editor).toBeFocused();
-  await editor.fill("First label");
+  await editor.fill("First");
+  await editor.press("Space");
+  await editor.type("label");
+  await editor.press("F2");
+  await expect(editor).toBeFocused();
+  await expect(editor).toHaveValue("First label");
   await editor.press("Enter");
   await expect(arrow.locator(".connector-label")).toHaveText("First label");
 

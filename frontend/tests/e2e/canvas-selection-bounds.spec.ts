@@ -80,6 +80,7 @@ for (const zoom of [50, 100, 200]) {
     ])).toEqual(before);
 
     const beforeSizes = await Promise.all([readWorldSize(blocks.first), readWorldSize(blocks.second)]);
+    const beforeResizePositions = await Promise.all([readWorldPosition(blocks.first), readWorldPosition(blocks.second)]);
     const { bounds: handleBounds, corner } = await interactiveResizeHandle(page);
     const start = {
       x: handleBounds.x + handleBounds.width / 2,
@@ -95,17 +96,94 @@ for (const zoom of [50, 100, 200]) {
     const textClones = page.locator('.resize-layer-clone[data-canvas-element-type="text"]');
     await expect(textClones).toHaveCount(2);
     const previewSizes = await Promise.all([readWorldSize(textClones.nth(0)), readWorldSize(textClones.nth(1))]);
+    const previewBounds = await Promise.all([
+      requiredBounds(textClones.nth(0), "first text resize preview"),
+      requiredBounds(textClones.nth(1), "second text resize preview"),
+    ]);
     expect(previewSizes[0].width).toBeGreaterThan(beforeSizes[0].width);
     expect(previewSizes[1].width).toBeGreaterThan(beforeSizes[1].width);
+    expect(Math.hypot(
+      previewBounds[1].x - previewBounds[0].x,
+      previewBounds[1].y - previewBounds[0].y,
+    )).toBeGreaterThan(50 * zoom / 100);
     await expect.poll(() => Promise.all([readWorldSize(blocks.first), readWorldSize(blocks.second)])).toEqual(beforeSizes);
+    await expect.poll(() => Promise.all([readWorldPosition(blocks.first), readWorldPosition(blocks.second)]))
+      .toEqual(beforeResizePositions);
     await page.mouse.up();
-    await expect.poll(() => Promise.all([readWorldSize(blocks.first), readWorldSize(blocks.second)])).toEqual(previewSizes);
+    await expect.poll(() => Promise.all([readWorldWidth(blocks.first), readWorldWidth(blocks.second)]))
+      .toEqual(previewSizes.map((size) => size.width));
+    const committedPositions = await Promise.all([readWorldPosition(blocks.first), readWorldPosition(blocks.second)]);
+    expect(committedPositions[0]).not.toEqual(committedPositions[1]);
+    const committedBounds = await Promise.all([
+      requiredBounds(blocks.first, "first committed resized text"),
+      requiredBounds(blocks.second, "second committed resized text"),
+    ]);
+    for (let index = 0; index < committedBounds.length; index += 1) {
+      expect(committedBounds[index].x).toBeCloseTo(previewBounds[index].x, 0);
+      expect(committedBounds[index].y).toBeCloseTo(previewBounds[index].y, 0);
+      expect(committedBounds[index].width).toBeCloseTo(previewBounds[index].width, 0);
+    }
 
     await canvas.focus();
     await page.keyboard.press("Control+z");
     await expect.poll(() => Promise.all([readWorldSize(blocks.first), readWorldSize(blocks.second)])).toEqual(beforeSizes);
+    await expect.poll(() => Promise.all([readWorldPosition(blocks.first), readWorldPosition(blocks.second)]))
+      .toEqual(beforeResizePositions);
+    await page.keyboard.press("Control+y");
+    await expect.poll(() => Promise.all([readWorldWidth(blocks.first), readWorldWidth(blocks.second)]))
+      .toEqual(previewSizes.map((size) => size.width));
+    await expect.poll(() => Promise.all([readWorldPosition(blocks.first), readWorldPosition(blocks.second)]))
+      .toEqual(committedPositions);
   });
 }
+
+test("all-text corner resize commits once and reloads without collapsing", async ({ page }) => {
+  await installAllTextResizeWorkspace(page);
+  await page.reload();
+  const canvas = page.getByRole("tabpanel");
+  const bounds = await requiredBounds(canvas, "canvas");
+  const blocks = {
+    first: page.locator('[data-canvas-element-id="resize-text-first"]'),
+    second: page.locator('[data-canvas-element-id="resize-text-second"]'),
+  };
+  await expect(blocks.first).toBeVisible();
+  await expect(blocks.second).toBeVisible();
+  await marqueeSelect(page, bounds, [blocks.first, blocks.second]);
+  await resetSelectionFramePersistenceCounts(page);
+
+  const { bounds: handleBounds, corner } = await interactiveResizeHandle(page);
+  const start = { x: handleBounds.x + handleBounds.width / 2, y: handleBounds.y + handleBounds.height / 2 };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    start.x + (corner.includes("e") ? 120 : -120),
+    start.y + (corner.includes("s") ? 70 : -70),
+    { steps: 8 },
+  );
+  await expect.poll(() => selectionFramePersistenceCounts(page)).toEqual({ apply: 0, session: 0 });
+  await page.mouse.up();
+  await expect.poll(async () => (await selectionFramePersistenceCounts(page)).apply).toBe(1);
+
+  const committedPositions = await Promise.all([readWorldPosition(blocks.first), readWorldPosition(blocks.second)]);
+  const committedSizes = await Promise.all([readWorldSize(blocks.first), readWorldSize(blocks.second)]);
+  expect(Math.hypot(
+    committedPositions[1].x - committedPositions[0].x,
+    committedPositions[1].y - committedPositions[0].y,
+  )).toBeGreaterThan(100);
+
+  await page.reload();
+  await expect.poll(() => Promise.all([readWorldPosition(blocks.first), readWorldPosition(blocks.second)]))
+    .toEqual(committedPositions);
+  await expect.poll(() => Promise.all([readWorldSize(blocks.first), readWorldSize(blocks.second)]))
+    .toEqual(committedSizes);
+
+  await blocks.first.locator(".text-block-display").dblclick();
+  const editor = blocks.first.locator(".text-block-editor-content");
+  await expect(editor).toBeFocused();
+  await editor.fill(Array.from({ length: 14 }, (_, index) => `Growing line ${index + 1}`).join("\n"));
+  await expect.poll(async () => (await readWorldSize(blocks.first)).height)
+    .toBeGreaterThan(committedSizes[0].height);
+});
 
 for (const cancelPath of ["Escape", "tool change", "page change", "window blur", "pointer cancel", "lost pointer capture"] as const) {
   test(`all-text header drag releases capture without committing on ${cancelPath}`, async ({ page }) => {
@@ -1128,6 +1206,70 @@ async function installSelectionFrameWorkspace(page: Page) {
   });
 }
 
+async function installAllTextResizeWorkspace(page: Page) {
+  await page.addInitScript(() => {
+    type ElementRecord = Record<string, unknown> & { id: string; pageId: string };
+    const storageKey = "note-all-text-resize-playwright-workspace";
+    const initialWorkspace = {
+      elements: [
+        {
+          backgroundMode: "surface", content: "First resize target", createdAt: 1, height: 80,
+          id: "resize-text-first", isWidthManuallyResized: true, locked: false, opacity: 1,
+          pageId: "resize-page", rotation: 0, type: "text", updatedAt: 1, width: 200,
+          x: 300, y: 220, zIndex: 1,
+        },
+        {
+          backgroundMode: "surface", content: "Second resize target with wrapped content", createdAt: 1, height: 100,
+          id: "resize-text-second", isWidthManuallyResized: true, locked: false, opacity: 1,
+          pageId: "resize-page", rotation: 0, type: "text", updatedAt: 1, width: 240,
+          x: 650, y: 310, zIndex: 2,
+        },
+      ] as ElementRecord[],
+      folders: [],
+      isDarkMode: true,
+      pages: [{ folderId: "", id: "resize-page", isBookmarked: false, revision: 0, title: "All-text resize" }],
+      sessionState: { openPageTabIds: ["resize-page"], selectedFolderId: "", selectedPageId: "resize-page" },
+      warnings: [],
+    };
+    const stored = localStorage.getItem(storageKey);
+    const workspace = stored ? JSON.parse(stored) as typeof initialWorkspace : initialWorkspace;
+    const runtime = window as unknown as {
+      __selectionFrameCounts: { apply: number; session: number };
+      __TAURI_INTERNALS__: { invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> };
+      isTauri: boolean;
+    };
+    runtime.isTauri = true;
+    runtime.__selectionFrameCounts = { apply: 0, session: 0 };
+    runtime.__TAURI_INTERNALS__ = { invoke: async (command, args = {}) => {
+      if (command === "initialize_storage") return { databasePath: "all-text-resize.db", importedLegacyData: false, schemaVersion: 1, warnings: [] };
+      if (command === "load_workspace_data") return workspace;
+      if (command === "reconcile_workspace_structure") return { pages: workspace.pages };
+      if (command === "apply_scene_changes") {
+        runtime.__selectionFrameCounts.apply += 1;
+        const batch = args.batch as { deletedElementIds: string[]; pageId: string; upserts: ElementRecord[] };
+        const deletedIds = new Set(batch.deletedElementIds);
+        const upserts = new Map(batch.upserts.map((element) => [element.id, element]));
+        workspace.elements = workspace.elements
+          .filter((element) => !deletedIds.has(element.id))
+          .map((element) => upserts.get(element.id) ?? element);
+        for (const element of batch.upserts) {
+          if (!workspace.elements.some((candidate) => candidate.id === element.id)) workspace.elements.push(element);
+        }
+        workspace.pages[0].revision += 1;
+        localStorage.setItem(storageKey, JSON.stringify(workspace));
+        return { newRevision: workspace.pages[0].revision, pageId: batch.pageId };
+      }
+      if (command === "save_session_state") {
+        runtime.__selectionFrameCounts.session += 1;
+        workspace.sessionState = args.state as typeof workspace.sessionState;
+        localStorage.setItem(storageKey, JSON.stringify(workspace));
+        return;
+      }
+      return undefined;
+    } };
+  });
+}
+
 async function createMixedSelection(page: Page, bounds: { x: number; y: number }) {
   await page.getByRole("button", { name: "Rectangle (R / 2)" }).click();
   await page.mouse.move(bounds.x + 330, bounds.y + 220);
@@ -1147,7 +1289,7 @@ async function createMixedSelection(page: Page, bounds: { x: number; y: number }
 
 async function createTextBlock(page: Page, x: number, y: number, text: string) {
   await page.getByRole("button", { name: "Text (T / 8)" }).click();
-  await page.mouse.click(x, y);
+  await page.mouse.dblclick(x, y);
   const editor = page.locator(".text-block-editor-content").last();
   await expect(editor).toBeVisible();
   await editor.fill(text);

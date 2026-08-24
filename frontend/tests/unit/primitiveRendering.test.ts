@@ -9,7 +9,6 @@ import {
   shapeTextSurfaceColors,
   shapeRenderPadding,
   shapeRoughOptions,
-  shouldRenderShapeTextSurface,
 } from "../../src/canvas/components/PrimitiveElementView";
 import { elementIdsBackToFront } from "../../src/canvas/interaction/useCanvasInteraction";
 import type { CanvasElement, RoughStyle, ShapeElement, TextElement } from "../../src/canvas/model/elements";
@@ -134,12 +133,9 @@ describe("primitive rendering", () => {
 
     expect(roughOptions(unlabeled.style)).toMatchObject({ fill: "#e8e2ff", seed: 314159 });
     expect(roughOptions(labeled.style)).toEqual(roughOptions(unlabeled.style));
-    expect(shouldRenderShapeTextSurface(unlabeled, false)).toBe(false);
-    expect(shouldRenderShapeTextSurface(labeled, false)).toBe(true);
-    expect(shouldRenderShapeTextSurface(unlabeled, true)).toBe(true);
-    expect(shouldRenderShapeTextSurface({ ...labeled, style: { ...filledStyle, fillColor: undefined } }, false)).toBe(false);
     expect(shapeTextInsetStyle(labeled)).toEqual({
       inset: "45px 75px",
+      color: "#000000",
       "--shape-text-surface-color": "#000000",
       "--shape-text-surface-fill": "#e8e2ff",
       "--shape-text-surface-radius": "8px",

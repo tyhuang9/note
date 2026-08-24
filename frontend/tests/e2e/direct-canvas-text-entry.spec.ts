@@ -10,6 +10,30 @@ test.beforeEach(async ({ page }) => {
   await resetCounts(page);
 });
 
+test("single canvas clicks never arm typing and the Text tool waits for a double click", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  const firstPoint = await blankPoint(canvas, 100);
+
+  await page.mouse.click(firstPoint.x, firstPoint.y);
+  await expect(page.locator(".canvas-caret")).toHaveCount(0);
+  await page.keyboard.press("q");
+  await expect(page.locator('[data-canvas-element-type="text"]')).toHaveCount(1);
+  await expect(page.locator(".text-block-editor-content")).toHaveCount(0);
+
+  await page.getByRole("button", { name: /Text \(T \/ 8\)/ }).click();
+  const secondPoint = { x: firstPoint.x - 90, y: firstPoint.y + 70 };
+  await page.mouse.click(secondPoint.x, secondPoint.y);
+  await expect(page.locator(".canvas-caret")).toHaveCount(0);
+  await expect(page.locator('[data-canvas-element-type="text"]')).toHaveCount(1);
+  await page.waitForTimeout(600);
+
+  await page.mouse.dblclick(secondPoint.x, secondPoint.y);
+  await expect(page.locator(".text-block-editor-content")).toBeFocused();
+  await expect(page.locator('[data-canvas-element-type="text"]')).toHaveCount(2);
+  await page.keyboard.press("Escape");
+  await expect(page.locator('[data-canvas-element-type="text"]')).toHaveCount(1);
+});
+
 test("blank double click stays transient until one non-empty rich commit", async ({ page }) => {
   const canvas = page.getByRole("tabpanel");
   const selectedHeader = page.locator('[data-canvas-element-id="text-one"] .text-block-header');

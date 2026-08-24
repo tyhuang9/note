@@ -967,6 +967,51 @@ test("Find stays available from selected shapes and arrows with one composite fo
   await expect(query).toHaveCSS("border-top-color", "rgb(138, 180, 255)");
 });
 
+test("arrow stroke and selected overlay double clicks enter label editing", async ({ page }) => {
+  await installSearchWorkspace(page);
+  await page.setViewportSize({ width: 1_440, height: 900 });
+  await page.goto("/");
+
+  const arrow = page.locator('[data-canvas-element-id="search-connector"]');
+  const arrowBounds = await arrow.boundingBox();
+  if (!arrowBounds) throw new Error("Arrow bounds were unavailable");
+  const hitPoint = {
+    x: arrowBounds.x + arrowBounds.width / 2,
+    y: arrowBounds.y + arrowBounds.height / 2,
+  };
+  await page.mouse.dblclick(hitPoint.x, hitPoint.y);
+  const editor = page.getByRole("textbox", { name: "Arrow label", exact: true });
+  await expect(editor).toBeFocused();
+  await editor.fill("First label");
+  await editor.press("Enter");
+  await expect(arrow.locator(".connector-label")).toHaveText("First label");
+
+  await arrow.focus();
+  await arrow.press("Enter");
+  await page.locator(".selection-frame-move-surface").dblclick();
+  await expect(editor).toBeFocused();
+  await editor.fill("Selected label");
+  await editor.press("Enter");
+  await expect(arrow.locator(".connector-label")).toHaveText("Selected label");
+
+  const moveSurface = page.locator(".selection-frame-move-surface");
+  const moveBounds = await moveSurface.boundingBox();
+  if (!moveBounds) throw new Error("Selected arrow move surface was unavailable");
+  const moveStart = {
+    x: moveBounds.x + moveBounds.width / 2,
+    y: moveBounds.y + moveBounds.height / 2,
+  };
+  await page.mouse.move(moveStart.x, moveStart.y);
+  await page.mouse.down();
+  await page.mouse.move(moveStart.x + 36, moveStart.y + 24, { steps: 4 });
+  await page.mouse.up();
+  await expect.poll(async () => {
+    const connector = (await workspaceElements(page)).find((element) => element.id === "search-connector");
+    return (connector?.start as { x?: number } | undefined)?.x;
+  }).toBe(896);
+  await expect(page.getByRole("textbox", { name: "Arrow label", exact: true })).toHaveCount(0);
+});
+
 async function assertRichTreesRemainFormatted(page: Page) {
   for (const id of ["text-rich", "shape-rectangle", "shape-ellipse", "shape-diamond"]) {
     const element = page.locator(`[data-canvas-element-id="${id}"]`);

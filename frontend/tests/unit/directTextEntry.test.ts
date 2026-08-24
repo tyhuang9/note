@@ -8,7 +8,7 @@ import {
   resolveDirectTextEntryHit,
   resolveDirectTextEntryHitForNativeEvent,
 } from "../../src/canvas/interaction/useCanvasInteraction";
-import type { CanvasElement, ImageElement, ShapeElement } from "../../src/canvas/model/elements";
+import type { CanvasElement, ConnectorElement, ImageElement, ShapeElement } from "../../src/canvas/model/elements";
 
 describe("direct canvas text entry geometry", () => {
   it("keeps advertised keyboard entry aligned with modal and editor guards", () => {
@@ -26,7 +26,7 @@ describe("direct canvas text entry geometry", () => {
     expect(canStartDirectTextEntry(available)).toBe(true);
     expect(canStartDirectTextEntry({ ...available, isModalOrOverlayOpen: true })).toBe(false);
     expect(canStartDirectTextEntry({ ...available, hasPendingImage: true })).toBe(false);
-    expect(canStartDirectTextEntry({ ...available, source: "pointer" })).toBe(false);
+    expect(canStartDirectTextEntry({ ...available, source: "pointer" })).toBe(true);
     expect(canStartDirectTextEntry({ ...available, activeTool: "select", source: "pointer" })).toBe(true);
   });
 
@@ -107,6 +107,42 @@ describe("direct canvas text entry geometry", () => {
     });
   });
 
+  it.each(["rectangle", "ellipse", "diamond"] as const)(
+    "edits anywhere inside a hollow %s even before it has text",
+    (shapeKind) => {
+      const shape: ShapeElement = {
+        createdAt: 1,
+        height: 100,
+        id: `empty-${shapeKind}`,
+        locked: false,
+        opacity: 1,
+        pageId: "page",
+        rotation: 17,
+        shape: shapeKind,
+        style: {
+          fillColor: null,
+          roughness: 1,
+          roundness: 1,
+          seed: 1,
+          strokeColor: { kind: "fixed", value: "#000" },
+          strokeStyle: "solid",
+          strokeWidth: 2,
+        },
+        type: "shape",
+        updatedAt: 1,
+        width: 200,
+        x: 0,
+        y: 0,
+        zIndex: 1,
+      };
+
+      expect(resolveDirectTextEntryHit([shape], { x: 100, y: 50 })).toMatchObject({
+        element: { id: shape.id },
+        kind: "editable",
+      });
+    },
+  );
+
   it("blocks editing when the front ordinary geometry belongs to a non-editable element", () => {
     const image: ImageElement = {
       assetId: "asset",
@@ -130,6 +166,39 @@ describe("direct canvas text entry geometry", () => {
     };
 
     expect(resolveDirectTextEntryHit([image], { x: 100, y: 50 })).toEqual({ kind: "blocked" });
+  });
+
+  it("routes an arrow stroke to label editing with a screen-derived tolerance", () => {
+    const arrow: ConnectorElement = {
+      createdAt: 1,
+      end: { kind: "free", x: 200, y: 50 },
+      id: "arrow",
+      locked: false,
+      opacity: 1,
+      pageId: "page",
+      routing: "straight",
+      start: { kind: "free", x: 0, y: 50 },
+      style: {
+        endArrowhead: "arrow",
+        fillColor: null,
+        roughness: 1,
+        roundness: 0,
+        seed: 1,
+        startArrowhead: "none",
+        strokeColor: { kind: "fixed", value: "#000" },
+        strokeStyle: "solid",
+        strokeWidth: 2,
+      },
+      type: "connector",
+      updatedAt: 1,
+      zIndex: 1,
+    };
+
+    expect(resolveDirectTextEntryHit([arrow], { x: 100, y: 57 }, 8)).toMatchObject({
+      element: { id: "arrow" },
+      kind: "connector-label",
+    });
+    expect(resolveDirectTextEntryHit([arrow], { x: 100, y: 70 }, 8)).toEqual({ kind: "blank" });
   });
 
   it("resolves a 5,000-element blank double click once across capture and bubble", () => {

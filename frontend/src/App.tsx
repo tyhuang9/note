@@ -1442,6 +1442,7 @@ function App() {
   const copiedBlocksRef = useRef<CopiedBlock[]>([]);
   const copiedPagesRef = useRef<CopiedPage[]>([]);
   const copiedContentKindRef = useRef<"blocks" | "pages" | null>(null);
+  const lastCanvasPointerClientRef = useRef<CanvasPoint | null>(null);
   // In-memory assets may outlive their elements during this migration; reclamation is deferred.
   const imageSourcesByAssetIdRef = useRef<Map<string, string>>(new Map());
   const pendingAssetUploadsRef = useRef<Map<string, PendingAssetUpload>>(new Map());
@@ -1505,6 +1506,13 @@ function App() {
     cancelCanvasInteractionTransitionRef.current();
     setSelectedPageIdState(nextPageId);
   }, []);
+
+  useEffect(() => {
+    lastCanvasPointerClientRef.current = null;
+    return () => {
+      lastCanvasPointerClientRef.current = null;
+    };
+  }, [selectedPageId]);
 
   useLayoutEffect(() => {
     const bounds = selectionFrameVisualBoundsRef.current;
@@ -3253,24 +3261,59 @@ function App() {
     return true;
   }
 
-  function getPasteOrigin() {
+  function getCanvasPointerPasteOrigin() {
+    const pointer = lastCanvasPointerClientRef.current;
+    const canvas = canvasRef.current;
+    if (!pointer || !canvas) return null;
+
+    const bounds = canvas.getBoundingClientRect();
+    if (
+      pointer.x < bounds.left
+      || pointer.x > bounds.right
+      || pointer.y < bounds.top
+      || pointer.y > bounds.bottom
+    ) return null;
+
+    return {
+      x: (pointer.x - bounds.left - panOffsetRef.current.x) / zoomLevelRef.current,
+      y: (pointer.y - bounds.top - panOffsetRef.current.y) / zoomLevelRef.current,
+    };
+  }
+
+  function getPastePlacement() {
+    const pointerOrigin = getCanvasPointerPasteOrigin();
+    if (pointerOrigin) return { centerGroup: true, point: pointerOrigin };
+
     if (insertionPoint) {
-      return insertionPoint;
+      return { centerGroup: false, point: insertionPoint };
     }
 
     const currentCanvasViewport = canvasViewportRef.current;
 
     if (currentCanvasViewport) {
       return {
-        x: currentCanvasViewport.x + currentCanvasViewport.width / 2,
-        y: currentCanvasViewport.y + currentCanvasViewport.height / 2,
+        centerGroup: true,
+        point: {
+          x: currentCanvasViewport.x + currentCanvasViewport.width / 2,
+          y: currentCanvasViewport.y + currentCanvasViewport.height / 2,
+        },
       };
     }
 
-    return { x: PASTED_BLOCK_OFFSET, y: PASTED_BLOCK_OFFSET };
+    return {
+      centerGroup: false,
+      point: { x: PASTED_BLOCK_OFFSET, y: PASTED_BLOCK_OFFSET },
+    };
+  }
+
+  function getPasteOrigin() {
+    return getPastePlacement().point;
   }
 
   function getImagePasteOrigin() {
+    const pointerOrigin = getCanvasPointerPasteOrigin();
+    if (pointerOrigin) return pointerOrigin;
+
     if (insertionPoint) {
       return insertionPoint;
     }
@@ -3479,9 +3522,8 @@ function App() {
       return false;
     }
 
-    const pasteOrigin = snapPoint(getPasteOrigin());
-    const isViewportCenteredPaste =
-      !insertionPoint && Boolean(canvasViewportRef.current);
+    const pastePlacement = getPastePlacement();
+    const pasteOrigin = snapPoint(pastePlacement.point);
     const pastedGroupSize = copiedBlocksRef.current.reduce(
       (currentSize, block) => ({
         width: Math.max(currentSize.width, block.offsetX + block.width),
@@ -3489,7 +3531,7 @@ function App() {
       }),
       { width: 0, height: 0 },
     );
-    const pastedGroupOrigin = isViewportCenteredPaste
+    const pastedGroupOrigin = pastePlacement.centerGroup
       ? {
           x: pasteOrigin.x - pastedGroupSize.width / 2,
           y: pasteOrigin.y - pastedGroupSize.height / 2,
@@ -3507,7 +3549,7 @@ function App() {
 
     setBlocksWithHistory((currentBlocks) => [
       ...currentBlocks,
-      ...pastedBlocks.map(snapBlockPosition),
+      ...pastedBlocks,
     ]);
     setSelectedBlockIds(pastedBlocks.map((block) => block.id));
     setEditingBlockId(null);
@@ -4036,9 +4078,10 @@ function App() {
 
       const pastedText = event.clipboardData?.getData("text/plain");
 
-      if (pastedText && insertionPoint) {
+      if (pastedText) {
+        const pasteOrigin = getPasteOrigin();
         event.preventDefault();
-        createTextBlock(insertionPoint.x, insertionPoint.y, pastedText, {
+        createTextBlock(pasteOrigin.x, pasteOrigin.y, pastedText, {
           placement: "text-caret",
         });
       }
@@ -8981,8 +9024,15 @@ function App() {
             canvasInteraction.handlePointerDownCapture(event);
             if (!event.defaultPrevented) inkInteraction.handlePointerDownCapture(event);
           }}
+          onPointerLeave={() => {
+            lastCanvasPointerClientRef.current = null;
+          }}
           onPointerMove={canvasInteraction.handlePointerMove}
           onPointerMoveCapture={(event) => {
+            lastCanvasPointerClientRef.current = {
+              x: event.clientX,
+              y: event.clientY,
+            };
             canvasInteraction.handlePointerMoveCapture(event);
             inkInteraction.handlePointerMoveCapture(event);
           }}

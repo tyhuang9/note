@@ -21,6 +21,7 @@ type CanvasViewportProps = {
   onPointerCancelCapture?: PointerEventHandler<HTMLElement>;
   onPointerDown: PointerEventHandler<HTMLElement>;
   onPointerDownCapture?: PointerEventHandler<HTMLElement>;
+  onPointerLeave?: PointerEventHandler<HTMLElement>;
   onPointerMove: PointerEventHandler<HTMLElement>;
   onPointerMoveCapture?: PointerEventHandler<HTMLElement>;
   onPointerUp: PointerEventHandler<HTMLElement>;
@@ -47,6 +48,7 @@ export const CanvasViewport = forwardRef<HTMLElement, CanvasViewportProps>(
       onPointerCancelCapture,
       onPointerDown,
       onPointerDownCapture,
+      onPointerLeave,
       onPointerMove,
       onPointerMoveCapture,
       onPointerUp,
@@ -112,6 +114,7 @@ export const CanvasViewport = forwardRef<HTMLElement, CanvasViewportProps>(
           if (isSearchPanelEvent(event)) return;
           onLostPointerCapture?.(event);
         }}
+        onPointerLeave={onPointerLeave}
         onPointerMove={(event) => {
           if (isSearchPanelEvent(event)) return;
           onPointerMove(event);

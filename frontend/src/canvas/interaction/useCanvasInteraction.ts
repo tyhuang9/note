@@ -359,7 +359,12 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
 
   const cancelArrowAuthoring = useCallback((message = "Arrow canceled.", updateUi = true) => {
     const session = arrowSession.current;
-    if (!session) return false;
+    if (!session) {
+      lastArrowCandidateAnnouncementRef.current = null;
+      clearArrowPreview();
+      setArrowAuthoringVisual(null);
+      return false;
+    }
     arrowSession.current = null;
     lastArrowCandidateAnnouncementRef.current = null;
     clearArrowPreview();
@@ -1260,6 +1265,10 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
     }
     if (arrowSession.current?.cancellationKey !== options.interactionCancellationKey) {
       cancelArrowAuthoring();
+    }
+    if (!arrowSession.current && options.activeToolRef.current !== "arrow") {
+      lastArrowCandidateAnnouncementRef.current = null;
+      setArrowAuthoringVisual(null);
     }
   }, [cancelArrowAuthoring, cancelCapturedPointerInteraction, options.interactionCancellationKey]);
 

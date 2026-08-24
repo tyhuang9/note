@@ -2579,7 +2579,7 @@ h2 {
   position: absolute;
   z-index: 2;
   box-sizing: border-box;
-  max-width: 100%;
+  max-width: calc(100vw - 32px);
   padding: 0;
   border: 0;
   background: transparent;

@@ -325,6 +325,21 @@ test("select cursors distinguish movable and locked objects while tools retain t
   await expect.poll(() => shape.evaluate((element) => getComputedStyle(element).cursor)).toBe("grab");
 });
 
+test("pre-click Arrow feedback clears on cancellation and tool changes", async ({ page }) => {
+  const shape = page.locator('[data-canvas-element-id="target-shape"]');
+  const shapeBounds = await requiredBounds(shape, "shape");
+  await selectTool(page, "arrow");
+  await page.mouse.move(shapeBounds.x + shapeBounds.width + 16, shapeBounds.y + shapeBounds.height / 2);
+  await expect(page.locator('[data-connector-target-id="target-shape"]')).toHaveCount(1);
+
+  await selectTool(page, "select");
+  await expect(page.locator(".connector-binding-target-highlight")).toHaveCount(0);
+  await selectTool(page, "arrow");
+  await page.mouse.move(shapeBounds.x + shapeBounds.width + 16, shapeBounds.y + shapeBounds.height / 2);
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await expect(page.locator(".connector-binding-target-highlight")).toHaveCount(0);
+});
+
 test("zero length, cancellation paths, Space pan, and Line regression do not create partial arrows", async ({ page }) => {
   const canvas = page.getByRole("tabpanel");
   const bounds = await requiredBounds(canvas, "canvas");

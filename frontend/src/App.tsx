@@ -6408,7 +6408,13 @@ function App() {
       commands.push({
         end,
         endArrowhead: connector.style.endArrowhead,
-        ...(getConnectorLabel(connector) ? { labelGapHalfLength: getConnectorLabelGapHalfLength(getConnectorLabel(connector)!, resolveConnectorLabelStyle(connector.labelStyle)) * zoom } : {}),
+        ...(getConnectorLabel(connector) ? { labelGapHalfLength: getConnectorLabelGapHalfLength(
+          getConnectorLabel(connector)!,
+          resolveConnectorLabelStyle(connector.labelStyle),
+          0,
+          points.start,
+          points.end,
+        ) * zoom } : {}),
         opacity: connector.opacity,
         roughness: connector.style.roughness * zoom,
         sceneIndex: sceneIndex++,

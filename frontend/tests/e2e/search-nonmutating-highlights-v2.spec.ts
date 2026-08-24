@@ -1012,6 +1012,29 @@ test("arrow stroke and selected overlay double clicks enter label editing", asyn
   await expect(page.getByRole("textbox", { name: "Arrow label", exact: true })).toHaveCount(0);
 });
 
+test("horizontal arrow label reserves a live, centered content-sized gap before commit", async ({ page }) => {
+  await installSearchWorkspace(page);
+  await page.setViewportSize({ width: 1_440, height: 900 });
+  await page.goto("/");
+  const arrow = page.locator('[data-canvas-element-id="search-connector"]');
+  const bounds = await arrow.boundingBox();
+  if (!bounds) throw new Error("Arrow bounds were unavailable");
+  await page.mouse.dblclick(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+  const editor = page.getByRole("textbox", { name: "Arrow label", exact: true });
+  await expect(editor).toBeFocused();
+  const initial = await editor.boundingBox();
+  if (!initial) throw new Error("Arrow label editor bounds were unavailable");
+  expect(Math.abs(initial.x + initial.width / 2 - (bounds.x + bounds.width / 2))).toBeLessThanOrEqual(1);
+  expect(initial.width).toBeGreaterThan(0);
+  await editor.type("Live label");
+  const typed = await editor.boundingBox();
+  if (!typed) throw new Error("Typed arrow label editor bounds were unavailable");
+  expect(Math.abs(typed.x + typed.width / 2 - (bounds.x + bounds.width / 2))).toBeLessThanOrEqual(1);
+  expect(typed.width).toBeGreaterThan(initial.width);
+  await editor.press("Enter");
+  await expect(arrow.locator(".connector-label")).toHaveText("Live label");
+});
+
 async function assertRichTreesRemainFormatted(page: Page) {
   for (const id of ["text-rich", "shape-rectangle", "shape-ellipse", "shape-diamond"]) {
     const element = page.locator(`[data-canvas-element-id="${id}"]`);

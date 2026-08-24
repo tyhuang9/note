@@ -515,6 +515,7 @@ type FreeConnectorElement = Omit<ConnectorElement, "start" | "end"> & {
 
 function FreeConnectorElementView({ activeSearchRange = null, element, isDragSourceHidden = false, isSelected, labelEditRequest, onElementChange, onKeyboardMove, onLabelCommit, onSelect, searchRanges = [] }: PrimitiveElementViewProps<FreeConnectorElement> & Pick<ConnectorElementViewProps, "activeSearchRange" | "labelEditRequest" | "onLabelCommit" | "searchRanges">) {
   const ref = useRef<SVGSVGElement | null>(null);
+  const connectorRootRef = useRef<HTMLDivElement | null>(null);
   const [isEditingLabel, setIsEditingLabel] = useState(false);
   const [labelDraft, setLabelDraft] = useState("");
   const handledLabelEditRequestRef = useRef(labelEditRequest);
@@ -532,8 +533,16 @@ function FreeConnectorElementView({ activeSearchRange = null, element, isDragSou
     : label
       ? measureConnectorLabelWidth(label, labelStyle)
       : 0;
+  const localLabelStart = { x: x1, y: y1 };
+  const localLabelEnd = { x: x2, y: y2 };
   const labelGap = displayedLabel !== undefined
-    ? getConnectorLabelGapHalfLength(displayedLabel, labelStyle, isEditingLabel ? editorMinimumWidth : 0)
+    ? getConnectorLabelGapHalfLength(
+      displayedLabel,
+      labelStyle,
+      isEditingLabel ? editorMinimumWidth : 0,
+      localLabelStart,
+      localLabelEnd,
+    )
     : 0;
   const width = Math.max(1, Math.abs(x2 - x1) + padding * 2);
   const height = Math.max(1, Math.abs(y2 - y1) + padding * 2);
@@ -567,10 +576,11 @@ function FreeConnectorElementView({ activeSearchRange = null, element, isDragSou
   }, [element, height, labelGap, padding, width, x1, x2, y1, y2]);
   const midpoint = { x: (x1 + x2) / 2 + padding, y: (y1 + y2) / 2 + padding };
   const labelAngle = readableConnectorLabelAngle({ x: x1, y: y1 }, { x: x2, y: y2 }, labelStyle.orientation);
-  const commitLabel = (draft: string) => {
+  const commitLabel = (draft: string, restoreFocus = true) => {
     setIsEditingLabel(false);
     const normalized = normalizeConnectorLabel(draft);
     if (normalized !== label) onLabelCommit?.(element.id, normalized);
+    if (restoreFocus) requestAnimationFrame(() => connectorRootRef.current?.focus({ preventScroll: true }));
   };
   const beginLabelEdit = () => {
     setLabelDraft(label ?? "");
@@ -579,6 +589,7 @@ function FreeConnectorElementView({ activeSearchRange = null, element, isDragSou
   return (
     <div
       aria-label={`${element.locked ? "Select locked" : "Select and move"} ${element.style.endArrowhead === "arrow" ? "arrow" : "line"} connector${label ? `, label: ${label}` : ""}`}
+      aria-keyshortcuts={element.style.endArrowhead === "arrow" ? "F2" : undefined}
       aria-pressed={isSelected}
       className={`primitive-element ${isDragSourceHidden ? "is-drag-source-hidden" : ""}`}
       data-canvas-element-id={element.id}
@@ -598,7 +609,10 @@ function FreeConnectorElementView({ activeSearchRange = null, element, isDragSou
         }
         primitiveKeyDown(event, element, onKeyboardMove, onSelect);
       }}
-      ref={rootRef}
+      ref={(node) => {
+        connectorRootRef.current = node;
+        rootRef(node);
+      }}
       role="button"
       style={{ height, left: minX - padding, opacity: element.opacity, position: "absolute", top: minY - padding, width, zIndex: element.zIndex }}
       tabIndex={0}
@@ -610,7 +624,7 @@ function FreeConnectorElementView({ activeSearchRange = null, element, isDragSou
           autoFocus
           className="connector-label connector-label-editor"
           maxLength={MAX_CONNECTOR_LABEL_INPUT_LENGTH}
-          onBlur={() => commitLabel(labelDraft)}
+          onBlur={() => commitLabel(labelDraft, false)}
           onChange={(event) => setLabelDraft(event.currentTarget.value.replace(/[\r\n]+/g, " "))}
           onKeyDown={(event) => {
             if (event.nativeEvent.isComposing || event.keyCode === 229) return;
@@ -619,6 +633,7 @@ function FreeConnectorElementView({ activeSearchRange = null, element, isDragSou
               event.stopPropagation();
               setLabelDraft(label ?? "");
               setIsEditingLabel(false);
+              requestAnimationFrame(() => connectorRootRef.current?.focus({ preventScroll: true }));
               return;
             }
             if (event.key === "Enter") {

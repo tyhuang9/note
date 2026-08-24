@@ -56,6 +56,7 @@ export function connectorLabelFontPixels(size: TextFontSize) {
 }
 
 export const CONNECTOR_LABEL_GAP_PADDING = 4;
+export const CONNECTOR_LABEL_LINE_HEIGHT = 1.2;
 
 let measurementContext: CanvasRenderingContext2D | null | undefined;
 
@@ -89,9 +90,25 @@ export function getConnectorLabelGapHalfLength(
   label: string,
   style: ConnectorLabelStyle = defaultConnectorLabelStyle,
   minimumTextWidth = 0,
+  start?: Readonly<{ x: number; y: number }>,
+  end?: Readonly<{ x: number; y: number }>,
 ) {
-  const measuredWidth = Math.max(minimumTextWidth, measureConnectorLabelWidth(label, style));
-  return Math.max(0, measuredWidth / 2 + CONNECTOR_LABEL_GAP_PADDING);
+  const width = Math.max(minimumTextWidth, measureConnectorLabelWidth(label, style));
+  if (style.orientation !== "upright" || !start || !end) {
+    return Math.max(0, width / 2 + CONNECTOR_LABEL_GAP_PADDING);
+  }
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const distance = Math.hypot(dx, dy);
+  if (!Number.isFinite(distance) || distance < Number.EPSILON) {
+    return Math.max(0, width / 2 + CONNECTOR_LABEL_GAP_PADDING);
+  }
+  const lineHeight = connectorLabelFontPixels(style.fontSize) * CONNECTOR_LABEL_LINE_HEIGHT;
+  // An upright rectangle clips the shaft according to its projection on the
+  // shaft axis; a following label's longitudinal footprint is just its width.
+  const projectedHalfLength = Math.abs(dx / distance) * width / 2
+    + Math.abs(dy / distance) * lineHeight / 2;
+  return Math.max(0, projectedHalfLength + CONNECTOR_LABEL_GAP_PADDING);
 }
 
 /** Follow labels never render upside down. */

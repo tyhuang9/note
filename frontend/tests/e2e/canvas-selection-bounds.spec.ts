@@ -185,6 +185,33 @@ test("all-text corner resize commits once and reloads without collapsing", async
     .toBeGreaterThan(committedSizes[0].height);
 });
 
+test("east text resize preserves manual height until content outgrows it", async ({ page }) => {
+  await installAllTextResizeWorkspace(page);
+  await page.reload();
+  const block = page.locator('[data-canvas-element-id="resize-text-first"]');
+  const header = block.locator(".text-block-header");
+  await expect(block).toBeVisible();
+  await header.click();
+  const initialHeight = (await readWorldSize(block)).height;
+  expect(initialHeight).toBe(180);
+
+  const eastHandle = page.getByRole("button", { name: "Resize selected elements from e", exact: true });
+  const handleBounds = await requiredBounds(eastHandle, "east text resize handle");
+  const start = { x: handleBounds.x + handleBounds.width / 2, y: handleBounds.y + handleBounds.height / 2 };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x + 120, start.y, { steps: 6 });
+  await page.mouse.up();
+  await expect.poll(async () => (await readWorldSize(block)).height).toBe(initialHeight);
+
+  await header.focus();
+  await header.press("F2");
+  const editor = block.locator(".text-block-editor-content");
+  await expect(editor).toBeFocused();
+  await editor.fill(Array.from({ length: 14 }, (_, index) => `Overflow line ${index + 1}`).join("\n"));
+  await expect.poll(async () => (await readWorldSize(block)).height).toBeGreaterThan(initialHeight);
+});
+
 for (const cancelPath of ["Escape", "tool change", "page change", "window blur", "pointer cancel", "lost pointer capture"] as const) {
   test(`all-text header drag releases capture without committing on ${cancelPath}`, async ({ page }) => {
     const canvas = page.getByRole("tabpanel");
@@ -1213,9 +1240,9 @@ async function installAllTextResizeWorkspace(page: Page) {
     const initialWorkspace = {
       elements: [
         {
-          backgroundMode: "surface", content: "First resize target", createdAt: 1, height: 80,
+          backgroundMode: "surface", content: "First resize target", createdAt: 1, height: 180,
           id: "resize-text-first", isWidthManuallyResized: true, locked: false, opacity: 1,
-          pageId: "resize-page", rotation: 0, type: "text", updatedAt: 1, width: 200,
+          manualHeight: 180, pageId: "resize-page", rotation: 0, type: "text", updatedAt: 1, width: 200,
           x: 300, y: 220, zIndex: 1,
         },
         {

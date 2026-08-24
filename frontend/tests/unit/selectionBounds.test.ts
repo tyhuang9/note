@@ -316,6 +316,19 @@ describe("composite transforms", () => {
     expect(resized).toMatchObject({ x: 10, y: 13, width: 200, height: 54, isWidthManuallyResized: true });
   });
 
+  it("keeps an existing manual height through width-only reflow unless content grows beyond it", () => {
+    const manual = { ...text, height: 180, manualHeight: 180 };
+    const frame = { x: manual.x, y: manual.y, width: manual.width, height: manual.height, rotation: 0 };
+    const transform = getSelectionResizeTransform(frame, "e", { x: 210, y: 110 });
+    const [preserved] = resizeSelection([manual], new Set([manual.id]), frame, transform,
+      new Map([[manual.id, { width: 200, height: 80 }]]));
+    expect(preserved).toMatchObject({ height: 180, manualHeight: 180, width: 200 });
+
+    const [grown] = resizeSelection([manual], new Set([manual.id]), frame, transform,
+      new Map([[manual.id, { width: 200, height: 240 }]]));
+    expect(grown).toMatchObject({ height: 240, manualHeight: 180, width: 200 });
+  });
+
   it("keeps every textbox at its own transformed opposite edge or corner", () => {
     const second = { ...text, height: 60, id: "second", width: 120, x: 210, y: 100 };
     const elements = [text, second];

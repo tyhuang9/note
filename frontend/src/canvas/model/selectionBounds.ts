@@ -262,7 +262,7 @@ export function resizeSelection(
       const changesY = transform.handle.includes("n") || transform.handle.includes("s");
       const height = changesY
         ? Math.max(contentHeight, requestedHeight)
-        : contentHeight;
+        : Math.max(contentHeight, element.manualHeight ?? 0);
       const originalOppositeLocal = {
         x: transform.handle.includes("w") ? element.width : transform.handle.includes("e") ? 0 : element.width / 2,
         y: transform.handle.includes("n") ? element.height : transform.handle.includes("s") ? 0 : element.height / 2,

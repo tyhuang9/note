@@ -151,6 +151,56 @@ describe("scene repository", () => {
     expect(workspace.elements[0]).not.toHaveProperty("text");
   });
 
+  it("normalizes connector heads independently while preserving start-arrow bindings", async () => {
+    const rectangle: ShapeElement = {
+      createdAt: 1,
+      height: 60,
+      id: "rectangle",
+      locked: false,
+      opacity: 1,
+      pageId: "page",
+      rotation: 0,
+      shape: "rectangle",
+      style: { fillColor: null, roughness: 1, roundness: 0, seed: 1, strokeColor: { kind: "theme", token: "foreground" }, strokeStyle: "solid", strokeWidth: 2 },
+      type: "shape",
+      updatedAt: 1,
+      width: 100,
+      x: 10,
+      y: 20,
+      zIndex: 0,
+    };
+    const startArrow: ConnectorElement = {
+      createdAt: 1,
+      end: { kind: "free", x: 180, y: 60 },
+      id: "start-arrow",
+      locked: false,
+      opacity: 1,
+      pageId: "page",
+      routing: "straight",
+      start: { kind: "element", targetElementId: rectangle.id, anchor: { t: 0.25 }, gap: 6 },
+      style: { endArrowhead: "none", fillColor: null, roughness: 1, roundness: 0, seed: 1, startArrowhead: "arrow", strokeColor: { kind: "theme", token: "foreground" }, strokeStyle: "solid", strokeWidth: 2 },
+      type: "connector",
+      updatedAt: 1,
+      zIndex: 1,
+    };
+    const malformed = {
+      ...startArrow,
+      id: "malformed",
+      style: { ...startArrow.style, startArrowhead: "invalid", endArrowhead: "invalid" },
+    } as unknown as ConnectorElement;
+    const invoke: Invoke = async (command) => command === "load_workspace_data"
+      ? { elements: [rectangle, startArrow, malformed], folders: [], pages: [], warnings: [] } as never
+      : undefined as never;
+    const loaded = await createSceneRepository(invoke).loadWorkspace();
+    const loadedStartArrow = loaded.elements.find((element): element is ConnectorElement => element.id === startArrow.id);
+    const loadedMalformed = loaded.elements.find((element): element is ConnectorElement => element.id === malformed.id);
+    expect(loadedStartArrow).toMatchObject({
+      start: { kind: "element", targetElementId: rectangle.id, gap: 6 },
+      style: { startArrowhead: "arrow", endArrowhead: "none" },
+    });
+    expect(loadedMalformed?.style).toMatchObject({ startArrowhead: "none", endArrowhead: "none" });
+  });
+
   it("matches the backend asset-size limit before FileReader allocation", () => {
     expect(isAssetBlobWithinLimit({ size: MAX_ASSET_BYTES })).toBe(true);
     expect(isAssetBlobWithinLimit({ size: MAX_ASSET_BYTES + 1 })).toBe(false);

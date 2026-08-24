@@ -1,5 +1,6 @@
 import type { Drawable, Options } from "roughjs/bin/core";
 import { RoughGenerator } from "roughjs/bin/generator";
+import { getConnectorArrowheadPoints, type ConnectorArrowheadPosition } from "../model/connectorArrowheads";
 
 export type ConnectorPreviewCommand = Readonly<{
   end: Readonly<{ x: number; y: number }>;
@@ -11,6 +12,7 @@ export type ConnectorPreviewCommand = Readonly<{
   sceneIndex: number;
   seed: number;
   start: Readonly<{ x: number; y: number }>;
+  startArrowhead: "arrow" | "none";
   stroke: string;
   strokeStyle: "dashed" | "dotted" | "solid";
   strokeWidth: number;
@@ -163,22 +165,12 @@ function previewOptions(command: ConnectorPreviewCommand): Options {
   };
 }
 
-function arrowheadPoints(command: ConnectorPreviewCommand): [[number, number], [number, number], [number, number]] | null {
-  const dx = command.end.x - command.start.x;
-  const dy = command.end.y - command.start.y;
-  const distance = Math.hypot(dx, dy);
-  if (distance < 0.01) return null;
-  const unitX = dx / distance;
-  const unitY = dy / distance;
-  const length = 12 * command.visualScale;
-  const halfWidth = 5 * command.visualScale;
-  const baseX = command.end.x - unitX * Math.min(length, distance * 0.45);
-  const baseY = command.end.y - unitY * Math.min(length, distance * 0.45);
-  return [
-    [command.end.x, command.end.y],
-    [baseX + unitY * halfWidth, baseY - unitX * halfWidth],
-    [baseX - unitY * halfWidth, baseY + unitX * halfWidth],
-  ];
+function arrowheadPoints(command: ConnectorPreviewCommand, position: ConnectorArrowheadPosition) {
+  return getConnectorArrowheadPoints(command.start, command.end, position, command.visualScale);
+}
+
+function arrowheadSeed(command: ConnectorPreviewCommand, position: ConnectorArrowheadPosition) {
+  return ((command.seed + (position === "end" ? 1 : 2)) >>> 0) || 1;
 }
 
 function roughOffset(random: RoughRandom, magnitude: number, roughness: number, gain = 1) {
@@ -243,10 +235,21 @@ export function paintExactConnectorPreview(context: PreviewContext, command: Con
   context.stroke();
   context.restore();
 
-  if (command.endArrowhead !== "arrow") return;
-  const points = arrowheadPoints(command);
-  if (!points) return;
-  const random = new RoughRandom(((command.seed + 1) >>> 0) || 1);
+  for (const position of ["start", "end"] as const) {
+    if (command[`${position}Arrowhead`] !== "arrow") continue;
+    const points = arrowheadPoints(command, position);
+    if (!points) continue;
+    paintExactArrowhead(context, command, points, arrowheadSeed(command, position));
+  }
+}
+
+function paintExactArrowhead(
+  context: PreviewContext,
+  command: ConnectorPreviewCommand,
+  points: NonNullable<ReturnType<typeof arrowheadPoints>>,
+  seed: number,
+) {
+  const random = new RoughRandom(seed);
   const segments = [
     [points[0], points[1]],
     [points[1], points[2]],
@@ -284,16 +287,18 @@ export function generateConnectorPreviewDrawables(command: ConnectorPreviewComma
   const drawables = connectorShaftSegments(command).map(([x1, y1, x2, y2], index) =>
     generator.line(x1, y1, x2, y2, { ...options, seed: index === 0 ? options.seed : ((command.seed + index * 37) >>> 0) || 1 }),
   );
-  if (command.endArrowhead !== "arrow") return drawables;
-  const points = arrowheadPoints(command);
-  if (!points) return drawables;
-  drawables.push(generator.polygon(points, {
-    ...options,
-    fill: command.stroke,
-    fillStyle: "solid",
-    seed: ((command.seed + 1) >>> 0) || 1,
-    strokeLineDash: undefined,
-  }));
+  for (const position of ["start", "end"] as const) {
+    if (command[`${position}Arrowhead`] !== "arrow") continue;
+    const points = arrowheadPoints(command, position);
+    if (!points) continue;
+    drawables.push(generator.polygon(points, {
+      ...options,
+      fill: command.stroke,
+      fillStyle: "solid",
+      seed: arrowheadSeed(command, position),
+      strokeLineDash: undefined,
+    }));
+  }
   return drawables;
 }
 

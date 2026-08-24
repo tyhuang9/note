@@ -3,10 +3,11 @@ import type { Editor } from "@tiptap/core";
 import { EditorContent, useEditor } from "@tiptap/react";
 import { RoughSVG } from "roughjs/bin/svg";
 import type { Options } from "roughjs/bin/core";
-import type { CanvasColor, CanvasElement, ConnectorElement, ElementId, RichTextValue, RoughStyle, ShapeElement } from "../model/elements";
+import { isArrowConnector, type CanvasColor, type CanvasElement, type ConnectorElement, type ElementId, type RichTextValue, type RoughStyle, type ShapeElement } from "../model/elements";
 import type { SearchMatch } from "../../appTypes";
 import { resolveConnectorPoints } from "../model/connectorBinding";
 import { getShapeTextInsets } from "../model/hitTesting";
+import { getConnectorArrowheadPaintPadding, getConnectorArrowheadPoints } from "../model/connectorArrowheads";
 import { roundedDiamondPath, roundedRectanglePath } from "../model/shapeBoundary";
 import {
   connectorLabelFontPixels,
@@ -139,19 +140,12 @@ export function arrowheadPoints(
   length = 12,
   halfWidth = 5,
 ): [[number, number], [number, number], [number, number]] | null {
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
-  const distance = Math.hypot(dx, dy);
-  if (distance < 0.01) return null;
-  const unitX = dx / distance;
-  const unitY = dy / distance;
-  const baseX = end.x - unitX * Math.min(length, distance * 0.45);
-  const baseY = end.y - unitY * Math.min(length, distance * 0.45);
-  return [
-    [end.x, end.y],
-    [baseX + unitY * halfWidth, baseY - unitX * halfWidth],
-    [baseX - unitY * halfWidth, baseY + unitX * halfWidth],
-  ];
+  const points = getConnectorArrowheadPoints(start, end, "end", 1, length, halfWidth);
+  return points ? [
+    [...points[0]],
+    [...points[1]],
+    [...points[2]],
+  ] : null;
 }
 
 function keyboardDelta(event: KeyboardEvent<HTMLDivElement>) {
@@ -529,8 +523,13 @@ function FreeConnectorElementView({ activeSearchRange = null, element, isDragSou
   const minY = Math.min(element.start.y, element.end.y);
   const x1 = element.start.x - minX; const y1 = element.start.y - minY; const x2 = element.end.x - minX; const y2 = element.end.y - minY;
   const rootRef = createPrimitiveRootRef(element.id, onElementChange);
-  const padding = Math.max(8, element.style.strokeWidth * 2);
-  const label = element.style.endArrowhead === "arrow" ? getConnectorLabel(element) : undefined;
+  const isArrow = isArrowConnector(element);
+  const padding = Math.max(
+    8,
+    element.style.strokeWidth * 2,
+    isArrow ? getConnectorArrowheadPaintPadding(element.style.strokeWidth, element.style.roughness) : 0,
+  );
+  const label = isArrow ? getConnectorLabel(element) : undefined;
   const labelStyle = resolveConnectorLabelStyle(element.labelStyle);
   const editorMinimumWidth = connectorLabelFontPixels(labelStyle.fontSize) * 0.6;
   const displayedLabel = isEditingLabel ? labelDraft : label;
@@ -556,14 +555,14 @@ function FreeConnectorElementView({ activeSearchRange = null, element, isDragSou
     if (
       labelEditRequest === undefined
       || labelEditRequest === handledLabelEditRequestRef.current
-      || element.style.endArrowhead !== "arrow"
+      || !isArrow
       || !onLabelCommit
     ) return;
     handledLabelEditRequestRef.current = labelEditRequest;
     setLabelDraft(label ?? "");
     setLabelValidationError("");
     setIsEditingLabel(true);
-  }, [element.style.endArrowhead, label, labelEditRequest, onLabelCommit]);
+  }, [isArrow, label, labelEditRequest, onLabelCommit]);
   useEffect(() => {
     if (!isEditingLabel) setLabelDraft(label ?? "");
   }, [isEditingLabel, label]);
@@ -602,8 +601,8 @@ function FreeConnectorElementView({ activeSearchRange = null, element, isDragSou
   };
   return (
     <div
-      aria-label={`${element.locked ? "Select locked" : "Select and move"} ${element.style.endArrowhead === "arrow" ? "arrow" : "line"} connector${label ? `, label: ${label}` : ""}`}
-      aria-keyshortcuts={element.style.endArrowhead === "arrow" ? "F2" : undefined}
+      aria-label={`${element.locked ? "Select locked" : "Select and move"} ${isArrow ? "arrow" : "line"} connector${label ? `, label: ${label}` : ""}`}
+      aria-keyshortcuts={isArrow ? "F2" : undefined}
       aria-pressed={isSelected}
       className={`primitive-element ${isDragSourceHidden ? "is-drag-source-hidden" : ""}`}
       data-canvas-element-id={element.id}
@@ -614,11 +613,11 @@ function FreeConnectorElementView({ activeSearchRange = null, element, isDragSou
       data-connector-start-x={element.start.x}
       data-connector-start-y={element.start.y}
       onDoubleClick={(event) => {
-        if (!onLabelCommit || element.style.endArrowhead !== "arrow") return;
+        if (!onLabelCommit || !isArrow) return;
         event.preventDefault(); event.stopPropagation(); beginLabelEdit();
       }}
       onKeyDown={(event) => {
-        if (!isTextEntryTarget(event.target) && event.key === "F2" && onLabelCommit && element.style.endArrowhead === "arrow") {
+        if (!isTextEntryTarget(event.target) && event.key === "F2" && onLabelCommit && isArrow) {
           event.preventDefault(); event.stopPropagation(); beginLabelEdit(); return;
         }
         primitiveKeyDown(event, element, onKeyboardMove, onSelect);
@@ -737,13 +736,14 @@ export function renderConnectorRoughSvg(
   } else {
     svg.append(finishRoughNode(draw.line(start.x, start.y, end.x, end.y, options)));
   }
-  if (style.endArrowhead === "arrow") {
-    const points = arrowheadPoints(start, end, 12 * safeVisualScale, 5 * safeVisualScale);
+  for (const position of ["start", "end"] as const) {
+    if (style[`${position}Arrowhead`] !== "arrow") continue;
+    const points = getConnectorArrowheadPoints(start, end, position, safeVisualScale);
     if (points) svg.append(finishRoughNode(draw.polygon(points, {
       ...options,
       fill: canvasColorToCss(style.strokeColor),
       fillStyle: "solid",
-      seed: ((style.seed + 1) >>> 0) || 1,
+      seed: ((style.seed + (position === "end" ? 1 : 2)) >>> 0) || 1,
       strokeLineDash: undefined,
     })));
   }

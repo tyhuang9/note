@@ -10,6 +10,7 @@ import type {
 import {
   canvasElementContainsPoint,
   getEraserElementIds,
+  getElementBounds,
   shapeTextContainsPoint,
 } from "../../src/canvas/model/hitTesting";
 import { PEN_BRUSH } from "../../src/canvas/model/ink";
@@ -138,6 +139,21 @@ describe("canvas element hit testing", () => {
     expect(canvasElementContainsPoint(diamond, { x: 370, y: 101 }, 2)).toBe(true);
     expect(canvasElementContainsPoint(connector, { x: 80, y: 255 }, 2)).toBe(true);
     expect(canvasElementContainsPoint(connector, { x: 80, y: 280 }, 2)).toBe(false);
+  });
+
+  it("includes painted start and end arrowhead triangles in hits and bounds", () => {
+    const horizontal = {
+      ...connector,
+      end: { kind: "free" as const, x: 120, y: 100 },
+      start: { kind: "free" as const, x: 20, y: 100 },
+      style: { ...connector.style, endArrowhead: "none" as const, startArrowhead: "none" as const },
+    };
+    const startArrow = { ...horizontal, style: { ...horizontal.style, endArrowhead: "none" as const, startArrowhead: "arrow" as const } };
+    const endArrow = { ...horizontal, style: { ...horizontal.style, endArrowhead: "arrow" as const, startArrowhead: "none" as const } };
+    expect(canvasElementContainsPoint(startArrow, { x: 29, y: 96 }, 0)).toBe(true);
+    expect(canvasElementContainsPoint(endArrow, { x: 111, y: 96 }, 0)).toBe(true);
+    expect(canvasElementContainsPoint(horizontal, { x: 29, y: 96 }, 0)).toBe(false);
+    expect(getElementBounds(startArrow)).toMatchObject({ x: 15, y: 95, width: 110, height: 10 });
   });
 
   it("collects every unlocked geometry hit while preserving locked elements", () => {

@@ -1005,12 +1005,7 @@ fn validate_final_connector_bindings(
         let connector: Value = serde_json::from_str(&payload).map_err(|error| {
             format!("connector {connector_id} has invalid stored payload: {error}")
         })?;
-        let is_arrow = connector
-            .get("style")
-            .and_then(Value::as_object)
-            .and_then(|style| style.get("endArrowhead"))
-            .and_then(Value::as_str)
-            == Some("arrow");
+        let is_arrow = is_arrow_connector(&connector);
         let mut binding_targets = Vec::new();
         for endpoint_name in ["start", "end"] {
             let context = format!("connector {connector_id}.{endpoint_name}");
@@ -1076,6 +1071,17 @@ fn validate_final_connector_bindings(
         }
     }
     Ok(target_index.stats())
+}
+
+fn is_arrow_connector(connector: &Value) -> bool {
+    connector
+        .get("style")
+        .and_then(Value::as_object)
+        .is_some_and(|style| {
+            ["startArrowhead", "endArrowhead"]
+                .iter()
+                .any(|key| style.get(*key).and_then(Value::as_str) == Some("arrow"))
+        })
 }
 
 enum IndexedConnectorBindingTarget {
@@ -2481,6 +2487,13 @@ fn validate_session_state(state: &Value) -> Result<(), String> {
             ) {
                 return Err(format!("{context}.strokeStyle is invalid"));
             }
+            for key in ["startArrowhead", "endArrowhead"] {
+                if let Some(arrowhead) = preference.get(key) {
+                    if !matches!(arrowhead.as_str(), Some("none" | "arrow")) {
+                        return Err(format!("{context}.{key} is invalid"));
+                    }
+                }
+            }
         }
     }
     Ok(())
@@ -2754,6 +2767,18 @@ mod tests {
         invalid["pen"]["strokeWidth"] = json!(0);
         let error = validate_session_state(&json!({"drawingPreferences":invalid})).unwrap_err();
         assert!(error.contains("pen.strokeWidth"));
+
+        let mut valid_arrowheads = drawing_preferences();
+        valid_arrowheads["arrow"]["startArrowhead"] = json!("arrow");
+        valid_arrowheads["arrow"]["endArrowhead"] = json!("none");
+        assert!(validate_session_state(&json!({"drawingPreferences":valid_arrowheads})).is_ok());
+
+        let mut invalid_arrowheads = drawing_preferences();
+        invalid_arrowheads["arrow"]["startArrowhead"] = json!("triangle");
+        let error = validate_session_state(&json!({"drawingPreferences":invalid_arrowheads}))
+            .unwrap_err();
+        assert!(error.contains("arrow.startArrowhead"));
+
         assert!(
             validate_session_state(&json!({"isDrawingToolLocked":"yes"}))
                 .unwrap_err()
@@ -3379,6 +3404,15 @@ mod tests {
         let target = shape_element("shape-1", "p");
         let bound_start =
             json!({"kind":"element","targetElementId":"shape-1","anchor":{"t":0.25},"gap":4.0});
+        let mut start_arrow = connector_element_on_page(
+            "start-arrow",
+            "p",
+            bound_start.clone(),
+            json!({"kind":"free","x":160.0,"y":60.0}),
+            true,
+        );
+        start_arrow["style"]["startArrowhead"] = json!("arrow");
+        start_arrow["style"]["endArrowhead"] = json!("none");
         apply_scene_changes_at(
             directory.path(),
             SceneChangeBatch {
@@ -3390,6 +3424,7 @@ mod tests {
                         bound_start.clone(),
                         json!({"kind":"free","x":160.0,"y":60.0}),
                     ),
+                    start_arrow,
                 ],
                 deleted_element_ids: vec![],
             },

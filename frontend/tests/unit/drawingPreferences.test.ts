@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { CanvasElement, InkElement, ShapeElement, TextElement } from "../../src/canvas/model/elements";
+import type { CanvasElement, ConnectorElement, InkElement, ShapeElement, TextElement } from "../../src/canvas/model/elements";
 import {
   applyDrawingPropertyUpdate,
   createDefaultDrawingPreferences,
+  isPropertySupportedByTool,
   normalizeDrawingPreferences,
   readDrawingProperties,
   reboxInkForBrush,
@@ -76,6 +77,27 @@ const ink: InkElement = {
   zIndex: 3,
 };
 
+const connector: ConnectorElement = {
+  ...base,
+  end: { kind: "free", x: 120, y: 0 },
+  id: "connector",
+  routing: "straight",
+  start: { kind: "free", x: 0, y: 0 },
+  style: {
+    endArrowhead: "none",
+    fillColor: null,
+    roughness: 1,
+    roundness: 0,
+    seed: 1,
+    startArrowhead: "none",
+    strokeColor: { kind: "fixed", value: "#000000" },
+    strokeStyle: "solid",
+    strokeWidth: 2,
+  },
+  type: "connector",
+  zIndex: 4,
+};
+
 describe("drawing preferences", () => {
   it("normalizes untrusted session values per tool without discarding valid fields", () => {
     const normalized = normalizeDrawingPreferences({
@@ -90,7 +112,20 @@ describe("drawing preferences", () => {
   it("uses a rounded rectangle default and keeps unsupported defaults unchanged", () => {
     const preferences = createDefaultDrawingPreferences();
     expect(preferences.rectangle.roundness).toBe(0.18);
+    expect(preferences.arrow).toMatchObject({ startArrowhead: "none", endArrowhead: "arrow" });
+    expect(preferences.line).toMatchObject({ startArrowhead: "none", endArrowhead: "none" });
+    expect(isPropertySupportedByTool("arrow", "startArrowhead")).toBe(true);
+    expect(isPropertySupportedByTool("line", "startArrowhead")).toBe(false);
     expect(updateDrawingPreference(preferences, "pen", { property: "roughness", value: 2 })).toBe(preferences);
+  });
+
+  it("normalizes legacy endpoint defaults separately for arrows and lines", () => {
+    const preferences = normalizeDrawingPreferences({
+      arrow: { endArrowhead: "invalid" },
+      line: { endArrowhead: "arrow", startArrowhead: "invalid" },
+    });
+    expect(preferences.arrow).toMatchObject({ startArrowhead: "none", endArrowhead: "arrow" });
+    expect(preferences.line).toMatchObject({ startArrowhead: "none", endArrowhead: "arrow" });
   });
 
   it("keeps explicit sharp rectangle preferences while filling missing values with the rounded default", () => {
@@ -121,6 +156,23 @@ describe("drawing preferences", () => {
     expect(updated[1]).toBe(ellipse);
     expect(updated[2]).toBe(text);
     expect(updated[3]).toBe(lockedRectangle);
+  });
+
+  it("reports mixed endpoint heads and updates selected unlocked connectors independently", () => {
+    const startArrow = { ...connector, id: "start-arrow", style: { ...connector.style, startArrowhead: "arrow" as const } };
+    const locked = { ...connector, id: "locked-connector", locked: true };
+    const values = readDrawingProperties([connector, startArrow, locked]);
+    expect(values.startArrowhead).toEqual({ kind: "mixed" });
+    expect(values.endArrowhead).toEqual({ kind: "value", value: "none" });
+    const updated = applyDrawingPropertyUpdate(
+      [connector, startArrow, locked],
+      new Set([connector.id, startArrow.id, locked.id]),
+      { property: "endArrowhead", value: "arrow" },
+      10,
+    ) as ConnectorElement[];
+    expect(updated[0].style).toMatchObject({ startArrowhead: "none", endArrowhead: "arrow" });
+    expect(updated[1].style).toMatchObject({ startArrowhead: "arrow", endArrowhead: "arrow" });
+    expect(updated[2]).toBe(locked);
   });
 
   it("updates text background mode without regressing text opacity or locked text", () => {

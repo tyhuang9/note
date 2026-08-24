@@ -193,6 +193,40 @@ test("uses context-specific width presets and five curated stroke swatches", asy
   await expect(properties.getByRole("button", { name: "Thick stroke (32px)" })).toBeVisible();
 });
 
+test("authors and edits independent connector arrowheads with arrow labels and endpoint controls", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  const bounds = await canvas.boundingBox();
+  if (!bounds) throw new Error("Canvas bounds were not available.");
+  await page.getByRole("button", { name: "Arrow (A / 6)" }).click();
+  const properties = page.getByRole("complementary", { name: "Drawing properties" });
+  const noStart = properties.getByRole("button", { name: "No start arrowhead" });
+  const arrowStart = properties.getByRole("button", { name: "Arrow start arrowhead" });
+  const noEnd = properties.getByRole("button", { name: "No end arrowhead" });
+  const arrowEnd = properties.getByRole("button", { name: "Arrow end arrowhead" });
+  await expect(noStart).toHaveAttribute("aria-pressed", "true");
+  await expect(arrowEnd).toHaveAttribute("aria-pressed", "true");
+  await arrowStart.click();
+  await noEnd.click();
+  await expect(arrowStart).toHaveAttribute("aria-pressed", "true");
+  await expect(noEnd).toHaveAttribute("aria-pressed", "true");
+
+  await page.mouse.click(bounds.x + 220, bounds.y + 220);
+  await expect(page.locator(".arrow-authoring-preview")).toHaveCount(1);
+  await page.mouse.click(bounds.x + 460, bounds.y + 280);
+  const connector = page.getByRole("button", { name: "Select and move arrow connector" });
+  await expect(connector).toBeVisible();
+  await expect(connector).toHaveAttribute("aria-keyshortcuts", "F2");
+  await expect(page.getByRole("button", { name: "Move connector start endpoint" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Move connector end endpoint" })).toBeVisible();
+
+  await connector.focus();
+  await page.keyboard.press("F2");
+  await expect(page.getByRole("textbox", { name: "Arrow label" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await arrowEnd.click();
+  await expect(arrowEnd).toHaveAttribute("aria-pressed", "true");
+});
+
 test("remembers text background choices, supports radio keys, and keeps selection history atomic", async ({ page }) => {
   const canvas = page.getByRole("tabpanel");
   const canvasBounds = await canvas.boundingBox();

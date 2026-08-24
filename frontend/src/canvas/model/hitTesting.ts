@@ -5,8 +5,9 @@ import type {
   ShapeElement,
   TextElement,
 } from "./elements";
-import { isBoxCanvasElement } from "./elements";
+import { isArrowConnector, isBoxCanvasElement } from "./elements";
 import { resolveConnectorPoints } from "./connectorBinding";
+import { getConnectorArrowheadPaintPadding, getConnectorArrowheadPoints } from "./connectorArrowheads";
 import { containsPointInsideShapeBoundaryFast } from "./shapeBoundary";
 import type { CanvasPoint, CanvasRect } from "./geometry";
 
@@ -29,7 +30,7 @@ export function getElementBounds(
     const points = resolveConnectorPoints(element, elementsById);
     if (!points) return null;
     const { start, end } = points;
-    const padding = Math.max(0, element.style.strokeWidth / 2);
+    const padding = connectorPaintPadding(element);
     return {
       x: Math.min(start.x, end.x) - padding,
       y: Math.min(start.y, end.y) - padding,
@@ -183,7 +184,17 @@ export function canvasElementContainsPoint(
   if (element.type === "ink") return inkContainsPoint(element, point, tolerance);
   if (element.type === "connector") {
     const points = resolveConnectorPoints(element, elementsById);
-    return Boolean(points && pointToSegmentDistance(point, points.start, points.end) <= Math.max(0, tolerance) + element.style.strokeWidth / 2);
+    if (!points) return false;
+    const radius = Math.max(0, tolerance) + element.style.strokeWidth / 2;
+    if (pointToSegmentDistance(point, points.start, points.end) <= radius) return true;
+    if (!isArrowConnector(element)) return false;
+    return (["start", "end"] as const).some((position) => {
+      if (element.style[`${position}Arrowhead`] !== "arrow") return false;
+      const arrowhead = getConnectorArrowheadPoints(points.start, points.end, position);
+      if (!arrowhead) return false;
+      const vertices = arrowhead.map(([x, y]) => ({ x, y }));
+      return pointInPolygon(point, vertices) || distanceToPolygon(point, vertices) <= radius;
+    });
   }
   if (element.type === "shape") return shapeContainsPoint(element, point, tolerance);
   return boundsContainPoint(element, unrotatePoint(element, point), tolerance);
@@ -236,6 +247,12 @@ export function pointToSegmentDistance(
   if (lengthSquared === 0) return Math.hypot(point.x - start.x, point.y - start.y);
   const t = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared));
   return Math.hypot(point.x - (start.x + dx * t), point.y - (start.y + dy * t));
+}
+
+function connectorPaintPadding(element: Extract<CanvasElement, { type: "connector" }>) {
+  return isArrowConnector(element)
+    ? getConnectorArrowheadPaintPadding(element.style.strokeWidth, element.style.roughness)
+    : Math.max(0, element.style.strokeWidth / 2);
 }
 
 /** Tests a world point against the actual local stroke path, not its rectangular bounds. */

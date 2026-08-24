@@ -1,6 +1,6 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type { AppData, AppSessionState, Folder, Page } from "../../types";
-import type { CanvasElement, ConnectorElement, RoughStyle, ShapeElement } from "../model/elements";
+import { isArrowConnector, type CanvasElement, type ConnectorElement, type RoughStyle, type ShapeElement } from "../model/elements";
 import { isConnectorLabelStyle, normalizeConnectorLabel } from "../model/connectorLabel";
 import { normalizeTextBackgroundMode } from "../model/textPreferences";
 import {
@@ -143,8 +143,8 @@ export function normalizeLoadedCanvasElement(element: CanvasElement): CanvasElem
       ...(isConnectorLabelStyle(rawLabelStyle) ? { labelStyle: rawLabelStyle } : { labelStyle: undefined }),
       style: {
         ...normalizeRoughStyle(style, element.id),
-        endArrowhead: style?.endArrowhead ?? "none",
-        startArrowhead: style?.startArrowhead ?? "none",
+        endArrowhead: style?.endArrowhead === "arrow" ? "arrow" : "none",
+        startArrowhead: style?.startArrowhead === "arrow" ? "arrow" : "none",
       },
     };
   }
@@ -183,7 +183,7 @@ function normalizeLoadedConnectorEndpoints(
   const start = normalizeLoadedConnectorEndpoint(connector.start, connector, elementsById);
   const end = normalizeLoadedConnectorEndpoint(connector.end, connector, elementsById);
   if (
-    connector.style.endArrowhead === "arrow"
+    isArrowConnector(connector)
     && start.kind === "element"
     && end.kind === "element"
     && start.targetElementId === end.targetElementId
@@ -203,7 +203,7 @@ function normalizeLoadedConnectorEndpoints(
     }
     return [{ kind: "free", x: 0, y: 0 }, { kind: "free", x: 0, y: 0 }];
   }
-  if (connector.style.endArrowhead === "arrow") {
+  if (isArrowConnector(connector)) {
     const candidate = { ...connector, start, end };
     return isConnectorBindingPersistable(candidate, elementsById)
       ? [start, end]

@@ -296,6 +296,17 @@ describe("composite transforms", () => {
     expect(getProportionalScale({ x: 0, y: 0, width: 100, height: 50 }, "se", { x: 150, y: 60 })).toBe(1.5);
   });
 
+  it("expands selection bounds for each painted arrowhead", () => {
+    const startArrow: ConnectorElement = {
+      ...connector,
+      end: { kind: "free", x: 120, y: 100 },
+      start: { kind: "free", x: 20, y: 100 },
+      style: { ...connector.style, startArrowhead: "arrow" },
+    };
+    const bounds = getSelectionElementBounds(startArrow)!;
+    expect(bounds).toEqual({ x: 15, y: 95, width: 110, height: 10 });
+  });
+
   it("uses true cardinal width resizing while retaining the opposite text edge", () => {
     const frame = { x: text.x, y: text.y, width: text.width, height: text.height, rotation: 0 };
     const transform = getSelectionResizeTransform(frame, "e", { x: 210, y: 40 });

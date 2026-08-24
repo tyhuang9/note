@@ -14,7 +14,7 @@ import type {
   SelectionState,
 } from "../../appTypes";
 import { getSelectionRect, rectsIntersect } from "../../editorUtils";
-import type { CanvasElement, ConnectorElement, ConnectorEndpoint, RoughStyle, ShapeElement } from "../model/elements";
+import { isArrowConnector, type CanvasElement, type ConnectorElement, type ConnectorEndpoint, type RoughStyle, type ShapeElement } from "../model/elements";
 import {
   getConnectorAuthoringCandidate,
   getConnectorCandidateAnnouncement,
@@ -234,7 +234,7 @@ export function resolveDirectTextEntryHit(
     }
     if (
       element.type === "connector"
-      && element.style.endArrowhead === "arrow"
+      && isArrowConnector(element)
       && canvasElementContainsPoint(element, point, connectorTolerance, elementsById)
     ) {
       return { element, kind: "connector-label" };

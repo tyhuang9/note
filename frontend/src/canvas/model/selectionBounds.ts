@@ -8,6 +8,8 @@ import type {
 } from "./elements";
 import { isBoxCanvasElement } from "./elements";
 import { resolveConnectorPoints } from "./connectorBinding";
+import { getConnectorArrowheadPaintPadding } from "./connectorArrowheads";
+import { isArrowConnector } from "./elements";
 import type { CanvasPoint } from "./geometry";
 import type { Bounds } from "./hitTesting";
 import { normalizeBounds } from "./hitTesting";
@@ -436,7 +438,9 @@ function getConnectorBounds(
   const points = resolveConnectorPoints(connector, elementsById);
   if (!points) return null;
   const { start, end } = points;
-  const padding = Math.max(0, connector.style.strokeWidth / 2);
+  const padding = isArrowConnector(connector)
+    ? getConnectorArrowheadPaintPadding(connector.style.strokeWidth, connector.style.roughness)
+    : Math.max(0, connector.style.strokeWidth / 2);
   return {
     x: Math.min(start.x, end.x) - padding,
     y: Math.min(start.y, end.y) - padding,

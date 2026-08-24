@@ -1,6 +1,6 @@
 import { useId, useLayoutEffect, useRef, useState, type MouseEvent } from "react";
 import type { CanvasSize, PanOffset } from "../../appTypes";
-import type { CanvasElement, ConnectorElement, ElementId } from "../model/elements";
+import { isArrowConnector, type CanvasElement, type ConnectorElement, type ElementId } from "../model/elements";
 import { isBindableElement, resolveConnectorPoints } from "../model/connectorBinding";
 import { getSelectionElementBounds, unionBounds } from "../model/selectionBounds";
 
@@ -24,7 +24,7 @@ export function isCanonicalConnectorRouteSuppressed(
   if (
     connector.start.kind !== "element"
     || connector.end.kind !== "element"
-    || connector.style.endArrowhead !== "arrow"
+    || !isArrowConnector(connector)
     || connector.start.anchor
     || connector.end.anchor
     || connector.start.targetElementId === connector.end.targetElementId

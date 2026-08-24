@@ -200,7 +200,7 @@ export function isDrawingPreferenceTool(tool: string): tool is DrawingPreference
 export function isPropertySupportedByTool(tool: DrawingPreferenceTool, property: DrawingProperty) {
   if (property === "opacity" || property === "strokeColor" || property === "strokeWidth") return true;
   if (tool === "pen" || tool === "highlighter") return false;
-  if (property === "startArrowhead" || property === "endArrowhead") return tool === "line" || tool === "arrow";
+  if (property === "startArrowhead" || property === "endArrowhead") return tool === "arrow";
   if (property === "backgroundColor") return tool !== "line" && tool !== "arrow";
   if (property === "roundness") return tool === "rectangle";
   return true;
@@ -295,7 +295,7 @@ function readElementProperty<P extends DrawingProperty>(
   }
   if (element.type === "shape" || element.type === "connector") {
     if (element.type === "connector" && (property === "startArrowhead" || property === "endArrowhead")) {
-      return element.style[property] as PropertyType<P>;
+      return element.style[property as "startArrowhead" | "endArrowhead"] as PropertyType<P>;
     }
     if (property === "backgroundColor") {
       return element.type === "shape" ? (element.style.fillColor ?? null) as PropertyType<P> : unavailable;

@@ -25,6 +25,7 @@ const command: ConnectorPreviewCommand = {
   sceneIndex: 3,
   seed: 314159,
   start: { x: 18.25, y: 7.5 },
+  startArrowhead: "none",
   stroke: "rgba(32, 41, 54, 1)",
   strokeStyle: "dashed",
   strokeWidth: 3,
@@ -94,6 +95,23 @@ describe("connector transform preview canvas", () => {
     );
     expect(arrow.options).toMatchObject({ fill: command.stroke, fillStyle: "solid", seed: command.seed + 1 });
     expect(arrow.options.strokeLineDash).toBeUndefined();
+  });
+
+  it.each([
+    { endArrowhead: "none" as const, startArrowhead: "none" as const, expectedSeeds: [] },
+    { endArrowhead: "none" as const, startArrowhead: "arrow" as const, expectedSeeds: [command.seed + 2] },
+    { endArrowhead: "arrow" as const, startArrowhead: "none" as const, expectedSeeds: [command.seed + 1] },
+    { endArrowhead: "arrow" as const, startArrowhead: "arrow" as const, expectedSeeds: [command.seed + 2, command.seed + 1] },
+  ])("renders independent $startArrowhead/$endArrowhead heads with stable seeds", ({ endArrowhead, expectedSeeds, startArrowhead }) => {
+    const drawables = generateConnectorPreviewDrawables({ ...command, endArrowhead, startArrowhead });
+    expect(drawables).toHaveLength(1 + expectedSeeds.length);
+    expect(drawables.slice(1).map((drawable) => drawable.options.seed)).toEqual(expectedSeeds);
+    const context = new RecordingContext();
+    paintExactConnectorPreview(context as unknown as CanvasRenderingContext2D, { ...command, endArrowhead, startArrowhead });
+    const expected = drawables.flatMap((drawable) =>
+      drawable.sets.flatMap((set) => set.ops.map((operation) => ({ data: operation.data, op: operation.op }))),
+    );
+    expect(context.operations).toEqual(expected);
   });
 
   it("orders opaque connectors by z-index then scene index", () => {

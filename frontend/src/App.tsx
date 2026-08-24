@@ -167,6 +167,7 @@ import {
   submitLlamaHarnessNoteToolResults,
 } from "./services/llamaHarnessAssistant";
 import {
+  isArrowConnector,
   isTextElement,
   isBoxCanvasElement,
   type ImageElement,
@@ -1945,7 +1946,7 @@ function App() {
     let lineOrdinal = 0;
     return visibleCanvasElements.flatMap((element) => {
       if (element.type !== "connector") return [];
-      const isArrow = element.style.endArrowhead === "arrow";
+      const isArrow = isArrowConnector(element);
       const ordinal = isArrow ? ++arrowOrdinal : ++lineOrdinal;
       if (!isCanonicalConnectorRouteSuppressed(element, visibleCanvasElementsById)) return [];
       const semanticLabel = element.semantic?.label?.trim();
@@ -6227,7 +6228,7 @@ function App() {
 
   const updateConnectorLabel = useCallback((elementId: string, label: string | undefined) => {
     setBlocksWithHistory((elements) => elements.map((element) => {
-      if (element.id !== elementId || element.type !== "connector" || element.style.endArrowhead !== "arrow") return element;
+      if (element.id !== elementId || element.type !== "connector" || !isArrowConnector(element)) return element;
       const previousLabel = element.semantic?.label;
       if (previousLabel === label) return element;
       const semantic = label
@@ -6424,6 +6425,7 @@ function App() {
         sceneIndex: sceneIndex++,
         seed: connector.style.seed,
         start,
+        startArrowhead: connector.style.startArrowhead,
         stroke: resolvedPreviewColor(connector.style.strokeColor, isDarkMode),
         strokeStyle: connector.style.strokeStyle,
         strokeWidth: connector.style.strokeWidth * zoom,
@@ -7371,7 +7373,7 @@ function App() {
         element.id === selectedBlockIdsRef.current[0] && element.type === "connector",
       )
       : null;
-    setIsConnectorEndpointRetargeting(selectedConnector?.style.endArrowhead === "arrow");
+    setIsConnectorEndpointRetargeting(Boolean(selectedConnector && isArrowConnector(selectedConnector)));
   }
 
   function startTextResizeInteraction(event: ReactPointerEvent<HTMLButtonElement>) {
@@ -7470,7 +7472,7 @@ function App() {
     const opposite = connector[endpoint === "start" ? "end" : "start"];
     const oppositeTargetId = opposite.kind === "element" ? opposite.targetElementId : null;
     const directTargetId = getDirectBindableTargetAtPoint(targets, point)?.id;
-    const unfilteredCandidate = connector.style.endArrowhead === "arrow"
+    const unfilteredCandidate = isArrowConnector(connector)
       ? getConnectorAuthoringCandidate(point, targets, zoomLevelRef.current, directTargetId)
       : null;
     if (oppositeTargetId && unfilteredCandidate?.target.id === oppositeTargetId) {
@@ -7481,7 +7483,7 @@ function App() {
     const eligibleTargets = oppositeTargetId
       ? targets.filter((target) => target.id !== oppositeTargetId)
       : targets;
-    const candidate = connector.style.endArrowhead === "arrow"
+    const candidate = isArrowConnector(connector)
       ? getConnectorAuthoringCandidate(point, eligibleTargets, zoomLevelRef.current, directTargetId)
       : null;
     announceConnectorEndpointRetargetCandidate(candidate);
@@ -7491,7 +7493,7 @@ function App() {
       target: candidate.target,
     } : null);
     const nextEndpoint = candidate?.endpoint ?? snapConnectorEndpoint(
-      point, eligibleTargets, zoomLevelRef.current, connector.style.endArrowhead === "arrow",
+      point, eligibleTargets, zoomLevelRef.current, isArrowConnector(connector),
     );
     const preview = endpoint === "start"
       ? { ...connector, start: nextEndpoint }
@@ -7627,7 +7629,7 @@ function App() {
             const liveConnector = currentBlocks.find((element): element is ConnectorElement =>
               element.id === preview.id && element.type === "connector",
             );
-            if (!liveConnector || liveConnector.style.endArrowhead !== "arrow") return currentBlocks;
+            if (!liveConnector || !isArrowConnector(liveConnector)) return currentBlocks;
             const proposedEndpoint = preview[connectorEndpoint];
             const oppositeEndpoint = liveConnector[connectorEndpoint === "start" ? "end" : "start"];
             if (
@@ -7730,7 +7732,7 @@ function App() {
         event.preventDefault();
         event.stopPropagation();
         editBlock(selected.id);
-      } else if (selected?.type === "connector" && selected.style.endArrowhead === "arrow") {
+      } else if (selected?.type === "connector" && isArrowConnector(selected)) {
         event.preventDefault();
         event.stopPropagation();
         setConnectorLabelEditRequest((current) => ({
@@ -7882,7 +7884,7 @@ function App() {
         element.id === selectedId && element.type === "connector",
       )
       : null;
-    return connector?.style.endArrowhead === "arrow" ? connector : null;
+    return connector && isArrowConnector(connector) ? connector : null;
   }
 
   function getConnectorBindingTargets(pageId: string): readonly Readonly<{ element: ShapeElement | TextElement; label: string }>[] {
@@ -7929,7 +7931,7 @@ function App() {
     endpoint: "start" | "end",
   ): string {
     const current = connector[endpoint];
-    if (connector.style.endArrowhead !== "arrow") {
+    if (!isArrowConnector(connector)) {
       return `Currently free. This line endpoint cannot bind to elements. Arrow keys move it.`;
     }
     if (current.kind !== "element") {
@@ -8418,12 +8420,12 @@ function App() {
       routing: "straight",
       start,
       style: {
-        endArrowhead: "arrow",
+        endArrowhead: preference.endArrowhead,
         fillColor: null,
         roughness: preference.roughness,
         roundness: 0,
         seed: deterministicSeed(elementId),
-        startArrowhead: "none",
+        startArrowhead: preference.startArrowhead,
         strokeColor: preference.strokeColor,
         strokeStyle: preference.strokeStyle,
         strokeWidth: preference.strokeWidth,
@@ -8465,12 +8467,12 @@ function App() {
     getArrowPreviewStyle: (elementId) => {
       const preference = drawingPreferencesRef.current.arrow;
       return {
-        endArrowhead: "arrow",
+        endArrowhead: preference.endArrowhead,
         fillColor: null,
         roughness: preference.roughness,
         roundness: 0,
         seed: deterministicSeed(elementId),
-        startArrowhead: "none",
+        startArrowhead: preference.startArrowhead,
         strokeColor: preference.strokeColor,
         strokeStyle: preference.strokeStyle,
         strokeWidth: preference.strokeWidth,
@@ -9420,7 +9422,7 @@ function App() {
                 connectorEndpointHandles,
                 height: bounds.height * zoomLevel + framePadding * 2,
                 moveLabel: selectionHasLockedElements ? "Move unlocked selected elements" : "Move selected elements",
-                onClick: selected?.type === "connector" && selected.style.endArrowhead === "arrow"
+                onClick: selected?.type === "connector" && isArrowConnector(selected)
                   ? (event: ReactMouseEvent<HTMLButtonElement>) => {
                       if (event.detail < 2) return;
                       event.preventDefault();
@@ -9448,7 +9450,7 @@ function App() {
                 onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => {
                   if (
                     selected?.type === "connector"
-                    && selected.style.endArrowhead === "arrow"
+                    && isArrowConnector(selected)
                     && canvasInteraction.consumeRecentConnectorClick(
                       selected.id,
                       event.clientX,
@@ -9504,7 +9506,7 @@ function App() {
           </CanvasInteractionOverlay>
           {connectorEndpointChooser && (() => {
             const connector = visibleCanvasElements.find((element): element is ConnectorElement =>
-              element.id === selectedBlockIds[0] && element.type === "connector" && element.style.endArrowhead === "arrow",
+              element.id === selectedBlockIds[0] && element.type === "connector" && isArrowConnector(element),
             );
             if (!connector) return null;
             const chooserEndpoint = connector[connectorEndpointChooser.endpoint];

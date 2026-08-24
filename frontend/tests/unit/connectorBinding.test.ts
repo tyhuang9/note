@@ -654,8 +654,8 @@ describe("connector shape binding", () => {
     expect(resolveConnectorEndpoint(connector.start, elementsById)).toEqual({ x: 112, y: 50 });
     const points = resolveConnectorPoints(connector, elementsById)!;
     expect(points).toEqual({ start: { x: 114, y: 50 }, end: { x: 190, y: 50 } });
-    expect(getSelectionElementBounds(connector, elementsById)).toEqual({ x: 113, y: 49, width: 78, height: 2 });
-    expect(getElementBounds(connector, elementsById)).toEqual({ x: 113, y: 49, width: 78, height: 2 });
+    expect(getSelectionElementBounds(connector, elementsById)).toEqual({ x: 109, y: 45, width: 86, height: 10 });
+    expect(getElementBounds(connector, elementsById)).toEqual({ x: 109, y: 45, width: 86, height: 10 });
     expect(canvasElementContainsPoint(connector, { x: 150, y: 50 }, 0, elementsById)).toBe(true);
   });
 

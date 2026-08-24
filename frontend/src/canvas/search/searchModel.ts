@@ -1,4 +1,5 @@
-import type { CanvasElement, ShapeElement, TextElement } from "../model/elements";
+import type { CanvasElement, ConnectorElement, ShapeElement, TextElement } from "../model/elements";
+import { getConnectorLabel } from "../model/connectorLabel";
 import {
   hasRichTextRenderableSearchContent,
   projectRichTextForSearch,
@@ -7,7 +8,7 @@ import {
 export const MAX_CANVAS_SEARCH_MATCHES = 500;
 export const MAX_CANVAS_SEARCH_MATCHES_PER_ELEMENT = 100;
 
-export type CanvasTextSearchSource = "text" | "shape-text";
+export type CanvasTextSearchSource = "text" | "shape-text" | "connector-label";
 
 export type CanvasTextSearchMatch = Readonly<{
   elementId: string;
@@ -41,6 +42,7 @@ export function getSearchableText(
       ? projectRichText(element.text.richContent)?.text ?? element.text.content
       : element.text.content;
   }
+  if (element.type === "connector") return getConnectorLabel(element) ?? null;
   return null;
 }
 
@@ -99,13 +101,14 @@ export function findCanvasTextSearchResult(
 
   const ordered = elements
     .map((element, sourceIndex) => ({ element, sourceIndex }))
-    .filter((entry): entry is { element: TextElement | (ShapeElement & { text: NonNullable<ShapeElement["text"]> }); sourceIndex: number } => (
+    .filter((entry): entry is { element: TextElement | (ShapeElement & { text: NonNullable<ShapeElement["text"]> }) | ConnectorElement; sourceIndex: number } => (
       entry.element.type === "text"
       || entry.element.type === "shape" && entry.element.text !== undefined
+      || entry.element.type === "connector" && getConnectorLabel(entry.element) !== undefined
     ))
     .sort((first, second) => (
-      first.element.y - second.element.y
-      || first.element.x - second.element.x
+      searchSortY(first.element) - searchSortY(second.element)
+      || searchSortX(first.element) - searchSortX(second.element)
       || first.element.zIndex - second.element.zIndex
       || first.sourceIndex - second.sourceIndex
       || first.element.id.localeCompare(second.element.id)
@@ -124,7 +127,7 @@ export function findCanvasTextSearchResult(
       for (const range of result.ranges) {
         matches.push({
           elementId: element.id,
-          source: element.type === "text" ? "text" : "shape-text",
+          source: element.type === "text" ? "text" : element.type === "shape" ? "shape-text" : "connector-label",
           start: range.start,
           end: range.end,
         });
@@ -136,6 +139,14 @@ export function findCanvasTextSearchResult(
       }
   }
   return { matches, isTruncated };
+}
+
+function searchSortX(element: TextElement | ShapeElement | ConnectorElement) {
+  return "x" in element ? element.x : element.start.kind === "free" ? element.start.x : 0;
+}
+
+function searchSortY(element: TextElement | ShapeElement | ConnectorElement) {
+  return "y" in element ? element.y : element.start.kind === "free" ? element.start.y : 0;
 }
 
 function escapeRegExp(value: string) {

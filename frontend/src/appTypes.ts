@@ -67,7 +67,7 @@ export type OffscreenGroup = {
 export type SearchMatch = {
   elementId: string;
   end: number;
-  source: "text" | "shape-text";
+  source: "text" | "shape-text" | "connector-label";
   start: number;
 };
 

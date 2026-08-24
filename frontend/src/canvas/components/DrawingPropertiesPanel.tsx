@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Activity, ArrowDown, ArrowUp, Ban, ChevronsDown, ChevronsUp, Circle, Minus, Palette, Square, Waves } from "lucide-react";
-import type { CanvasColor, RoughStyle, TextBackgroundMode } from "../model/elements";
+import type { CanvasColor, RoughStyle, TextBackgroundMode, TextFontFamily, TextFontSize } from "../model/elements";
 import type {
   DrawingProperty,
   DrawingPropertyUpdate,
@@ -135,6 +135,29 @@ export function DrawingPropertiesPanel({
         </PropertySection>
       ) : null}
 
+      {supports("labelOrientation") ? (
+        <PropertySection label="Arrow label orientation">
+          <ChoiceGroup label="Arrow label orientation" mixed={values.labelOrientation.kind === "mixed"}>
+            {(["upright", "follow"] as const).map((value) => (
+              <ChoiceButton active={isValue(values.labelOrientation, value)} key={value} label={value === "upright" ? "Keep label upright" : "Follow arrow direction"} mixed={values.labelOrientation.kind === "mixed"} onClick={() => onUpdate({ property: "labelOrientation", value })} text={value === "upright" ? "Upright" : "Follow"} />
+            ))}
+          </ChoiceGroup>
+        </PropertySection>
+      ) : null}
+
+      {supports("labelFontFamily") ? (
+        <PropertySection label="Arrow label font">
+          <LabelSelect<TextFontFamily> label="Arrow label font family" onChange={(value) => onUpdate({ property: "labelFontFamily", value })} options={[["system-ui", "System"], ["Arial", "Arial"], ["Georgia", "Georgia"], ["Times New Roman", "Times"], ["Courier New", "Mono"]]} value={values.labelFontFamily} />
+          <LabelSelect<TextFontSize> label="Arrow label font size" onChange={(value) => onUpdate({ property: "labelFontSize", value })} options={[["12px", "12"], ["14px", "14"], ["16px", "16"], ["18px", "18"], ["24px", "24"], ["32px", "32"]]} value={values.labelFontSize} />
+        </PropertySection>
+      ) : null}
+
+      {supports("labelColor") ? (
+        <PropertySection label="Arrow label color">
+          <ColorPicker colors={strokeColors} label="Arrow label color" onChange={(value) => onUpdate({ property: "labelColor", value })} value={values.labelColor} />
+        </PropertySection>
+      ) : null}
+
       {supports("strokeWidth") ? (
         <PropertySection label="Stroke width">
           <ChoiceGroup label="Stroke width" mixed={values.strokeWidth.kind === "mixed"}>
@@ -249,6 +272,24 @@ export function DrawingPropertiesPanel({
         </PropertySection>
       ) : null}
     </aside>
+  );
+}
+
+function LabelSelect<T extends string>({ label, onChange, options, value }: {
+  label: string;
+  onChange: (value: T) => void;
+  options: readonly (readonly [T, string])[];
+  value: PropertyValue<T>;
+}) {
+  const selected = value.kind === "value" ? value.value : options[0][0];
+  return (
+    <label className="drawing-label-select">
+      <span>{label}</span>
+      <select aria-label={label} onChange={(event) => onChange(event.currentTarget.value as T)} value={selected}>
+        {options.map(([option, text]) => <option key={option} value={option}>{text}</option>)}
+      </select>
+      {value.kind === "mixed" ? <span className="drawing-mixed-label">Mixed</span> : null}
+    </label>
   );
 }
 

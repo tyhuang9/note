@@ -1,5 +1,7 @@
 import type {
   CanvasColor,
+  ConnectorLabelOrientation,
+  ConnectorLabelStyle,
   CanvasElement,
   ConnectorElement,
   InkElement,
@@ -7,7 +9,10 @@ import type {
   ShapeElement,
   TextBackgroundMode,
   TextElement,
+  TextFontFamily,
+  TextFontSize,
 } from "./elements";
+import { resolveConnectorLabelStyle } from "./connectorLabel";
 import type { TextPreferences } from "./textPreferences";
 
 export type DrawingPreferenceTool =
@@ -34,6 +39,10 @@ export type DrawingPreferences = Readonly<Record<DrawingPreferenceTool, DrawingT
 export type DrawingProperty =
   | "backgroundColor"
   | "backgroundMode"
+  | "labelColor"
+  | "labelFontFamily"
+  | "labelFontSize"
+  | "labelOrientation"
   | "opacity"
   | "roughness"
   | "roundness"
@@ -44,6 +53,10 @@ export type DrawingProperty =
 export type DrawingPropertyUpdate =
   | { property: "backgroundColor"; value: CanvasColor | null }
   | { property: "backgroundMode"; value: TextBackgroundMode }
+  | { property: "labelColor"; value: CanvasColor }
+  | { property: "labelFontFamily"; value: TextFontFamily }
+  | { property: "labelFontSize"; value: TextFontSize }
+  | { property: "labelOrientation"; value: ConnectorLabelOrientation }
   | { property: "opacity"; value: number }
   | { property: "roughness"; value: number }
   | { property: "roundness"; value: number }
@@ -59,6 +72,10 @@ export type PropertyValue<T> =
 export type DrawingPropertyValues = Readonly<{
   backgroundColor: PropertyValue<CanvasColor | null>;
   backgroundMode: PropertyValue<TextBackgroundMode>;
+  labelColor: PropertyValue<CanvasColor>;
+  labelFontFamily: PropertyValue<TextFontFamily>;
+  labelFontSize: PropertyValue<TextFontSize>;
+  labelOrientation: PropertyValue<ConnectorLabelOrientation>;
   opacity: PropertyValue<number>;
   roughness: PropertyValue<number>;
   roundness: PropertyValue<number>;
@@ -175,6 +192,10 @@ export function readDrawingProperties(elements: readonly CanvasElement[]): Drawi
   return {
     backgroundColor: readCompatible(elements, "backgroundColor"),
     backgroundMode: readCompatible(elements, "backgroundMode"),
+    labelColor: readCompatible(elements, "labelColor"),
+    labelFontFamily: readCompatible(elements, "labelFontFamily"),
+    labelFontSize: readCompatible(elements, "labelFontSize"),
+    labelOrientation: readCompatible(elements, "labelOrientation"),
     opacity: readCompatible(elements, "opacity"),
     roughness: readCompatible(elements, "roughness"),
     roundness: readCompatible(elements, "roundness"),
@@ -188,6 +209,10 @@ export function drawingPropertiesFromPreference(preference: DrawingToolPreferenc
   return {
     backgroundColor: { kind: "value", value: preference.backgroundColor },
     backgroundMode: { kind: "unavailable" },
+    labelColor: { kind: "unavailable" },
+    labelFontFamily: { kind: "unavailable" },
+    labelFontSize: { kind: "unavailable" },
+    labelOrientation: { kind: "unavailable" },
     opacity: { kind: "value", value: preference.opacity },
     roughness: { kind: "value", value: preference.roughness },
     roundness: { kind: "value", value: preference.roundness },
@@ -215,6 +240,10 @@ function readCompatible<P extends DrawingProperty>(
 type PropertyType<P extends DrawingProperty> =
   P extends "backgroundColor" ? CanvasColor | null :
   P extends "backgroundMode" ? TextBackgroundMode :
+  P extends "labelColor" ? CanvasColor :
+  P extends "labelFontFamily" ? TextFontFamily :
+  P extends "labelFontSize" ? TextFontSize :
+  P extends "labelOrientation" ? ConnectorLabelOrientation :
   P extends "strokeColor" ? CanvasColor :
   P extends "strokeStyle" ? RoughStyle["strokeStyle"] : number;
 
@@ -227,6 +256,14 @@ function readElementProperty<P extends DrawingProperty>(
   if (property === "opacity") return element.opacity as PropertyType<P>;
   if (element.type === "text" && property === "backgroundMode") {
     return element.backgroundMode as PropertyType<P>;
+  }
+  if (element.type === "connector" && property.startsWith("label")) {
+    if (element.style.endArrowhead !== "arrow") return unavailable;
+    const style = resolveConnectorLabelStyle(element.labelStyle);
+    if (property === "labelColor") return style.color as PropertyType<P>;
+    if (property === "labelFontFamily") return style.fontFamily as PropertyType<P>;
+    if (property === "labelFontSize") return style.fontSize as PropertyType<P>;
+    return style.orientation as PropertyType<P>;
   }
   if (element.type === "ink") {
     if (property === "strokeColor") return element.brush.color as PropertyType<P>;
@@ -279,6 +316,10 @@ export function drawingPropertiesFromTextPreferences(
   return {
     backgroundColor: { kind: "unavailable" },
     backgroundMode: { kind: "value", value: preferences.backgroundMode },
+    labelColor: { kind: "unavailable" },
+    labelFontFamily: { kind: "unavailable" },
+    labelFontSize: { kind: "unavailable" },
+    labelOrientation: { kind: "unavailable" },
     opacity: { kind: "unavailable" },
     roughness: { kind: "unavailable" },
     roundness: { kind: "unavailable" },
@@ -317,6 +358,15 @@ function updateShape(element: ShapeElement, update: DrawingPropertyUpdate, updat
 }
 
 function updateConnector(element: ConnectorElement, update: DrawingPropertyUpdate, updatedAt: number): ConnectorElement {
+  if (update.property === "labelColor" || update.property === "labelFontFamily" || update.property === "labelFontSize" || update.property === "labelOrientation") {
+    const property = update.property === "labelColor" ? "color"
+      : update.property === "labelFontFamily" ? "fontFamily"
+      : update.property === "labelFontSize" ? "fontSize" : "orientation";
+    const labelStyle: ConnectorLabelStyle = { ...resolveConnectorLabelStyle(element.labelStyle), [property]: update.value } as ConnectorLabelStyle;
+    return JSON.stringify(labelStyle) === JSON.stringify(element.labelStyle)
+      ? element
+      : { ...element, labelStyle, updatedAt };
+  }
   if (update.property === "strokeColor" || update.property === "strokeStyle" || update.property === "strokeWidth" || update.property === "roughness") {
     return withStyle(element, update.property, update.value, updatedAt);
   }

@@ -4,6 +4,8 @@ import { RoughGenerator } from "roughjs/bin/generator";
 export type ConnectorPreviewCommand = Readonly<{
   end: Readonly<{ x: number; y: number }>;
   endArrowhead: "arrow" | "none";
+  /** Half of the screen-space transparent line gap occupied by a DOM label. */
+  labelGapHalfLength?: number;
   opacity: number;
   roughness: number;
   sceneIndex: number;
@@ -58,6 +60,7 @@ function isFinitePreviewCommand(command: ConnectorPreviewCommand): boolean {
   return [
     command.end.x,
     command.end.y,
+    command.labelGapHalfLength ?? 0,
     command.opacity,
     command.roughness,
     command.sceneIndex,
@@ -76,6 +79,7 @@ function isFinitePreviewCommand(command: ConnectorPreviewCommand): boolean {
     && command.opacity <= 1
     && command.roughness >= 0
     && command.strokeWidth >= 0
+    && (command.labelGapHalfLength === undefined || command.labelGapHalfLength >= 0)
     && command.visualScale > 0;
 }
 
@@ -224,23 +228,18 @@ function replayRoughLine(context: PreviewContext, data: Float64Array, offsetInde
 
 /** Allocation-free production replay, scalar-for-scalar equivalent to the generated drawables above. */
 export function paintExactConnectorPreview(context: PreviewContext, command: ConnectorPreviewCommand) {
-  writeRoughLine(
-    shaftData,
-    0,
-    command.start.x,
-    command.start.y,
-    command.end.x,
-    command.end.y,
-    command.roughness,
-    new RoughRandom(command.seed),
-  );
+  const shaftSegments = connectorShaftSegments(command);
   context.save();
   context.strokeStyle = command.stroke;
   context.lineWidth = command.strokeWidth;
   if (command.strokeStyle === "dashed") context.setLineDash([8 * command.visualScale, 5 * command.visualScale]);
   else if (command.strokeStyle === "dotted") context.setLineDash([2 * command.visualScale, 4 * command.visualScale]);
   context.beginPath();
-  replayRoughLine(context, shaftData, 0);
+  for (let index = 0; index < shaftSegments.length; index += 1) {
+    const [x1, y1, x2, y2] = shaftSegments[index];
+    writeRoughLine(shaftData, 0, x1, y1, x2, y2, command.roughness, new RoughRandom(((command.seed + index * 37) >>> 0) || 1));
+    replayRoughLine(context, shaftData, 0);
+  }
   context.stroke();
   context.restore();
 
@@ -282,7 +281,9 @@ export function paintExactConnectorPreview(context: PreviewContext, command: Con
 /** Generates the same seeded RoughJS drawables used by the committed SVG painter. */
 export function generateConnectorPreviewDrawables(command: ConnectorPreviewCommand): readonly Drawable[] {
   const options = previewOptions(command);
-  const drawables = [generator.line(command.start.x, command.start.y, command.end.x, command.end.y, options)];
+  const drawables = connectorShaftSegments(command).map(([x1, y1, x2, y2], index) =>
+    generator.line(x1, y1, x2, y2, { ...options, seed: index === 0 ? options.seed : ((command.seed + index * 37) >>> 0) || 1 }),
+  );
   if (command.endArrowhead !== "arrow") return drawables;
   const points = arrowheadPoints(command);
   if (!points) return drawables;
@@ -294,6 +295,20 @@ export function generateConnectorPreviewDrawables(command: ConnectorPreviewComma
     strokeLineDash: undefined,
   }));
   return drawables;
+}
+
+function connectorShaftSegments(command: ConnectorPreviewCommand): readonly (readonly [number, number, number, number])[] {
+  const dx = command.end.x - command.start.x;
+  const dy = command.end.y - command.start.y;
+  const distance = Math.hypot(dx, dy);
+  const gap = Math.min(Math.max(0, command.labelGapHalfLength ?? 0), Math.max(0, distance / 2 - 1));
+  if (gap <= 0 || distance <= 0.01) return [[command.start.x, command.start.y, command.end.x, command.end.y]];
+  const ux = dx / distance; const uy = dy / distance;
+  const middleX = (command.start.x + command.end.x) / 2; const middleY = (command.start.y + command.end.y) / 2;
+  return [
+    [command.start.x, command.start.y, middleX - ux * gap, middleY - uy * gap],
+    [middleX + ux * gap, middleY + uy * gap, command.end.x, command.end.y],
+  ];
 }
 
 type ClippedConnectorBounds = Readonly<{

@@ -929,8 +929,52 @@ fn validate_element(value: &Value, page_id: &str) -> Result<(), String> {
                     }
                 }
             }
+            validate_connector_label(value)?;
         }
         _ => {}
+    }
+    Ok(())
+}
+
+const MAX_CONNECTOR_LABEL_BYTES: usize = 2_048;
+
+/// Optional label fields are intentionally strict when present, while absent
+/// fields remain valid for scenes authored before arrow labels shipped.
+fn validate_connector_label(value: &Value) -> Result<(), String> {
+    if let Some(semantic) = value.get("semantic") {
+        let semantic = semantic
+            .as_object()
+            .ok_or("connector.semantic must be an object")?;
+        if let Some(label) = semantic.get("label") {
+            let label = label
+                .as_str()
+                .ok_or("connector.semantic.label must be a string")?;
+            if label.is_empty()
+                || label.len() > MAX_CONNECTOR_LABEL_BYTES
+                || label.trim() != label
+                || label.contains(['\r', '\n'])
+            {
+                return Err("connector.semantic.label must be a trimmed one-line UTF-8 string up to 2048 bytes".into());
+            }
+        }
+    }
+    if let Some(label_style) = value.get("labelStyle") {
+        let style = label_style
+            .as_object()
+            .ok_or("connector.labelStyle must be an object")?;
+        if !matches!(style.get("orientation").and_then(Value::as_str), Some("upright" | "follow")) {
+            return Err("connector.labelStyle.orientation is invalid".into());
+        }
+        if !matches!(style.get("fontFamily").and_then(Value::as_str), Some("system-ui" | "Arial" | "Georgia" | "Times New Roman" | "Courier New")) {
+            return Err("connector.labelStyle.fontFamily is invalid".into());
+        }
+        if !matches!(style.get("fontSize").and_then(Value::as_str), Some("12px" | "14px" | "16px" | "18px" | "24px" | "32px")) {
+            return Err("connector.labelStyle.fontSize is invalid".into());
+        }
+        let color = style
+            .get("color")
+            .ok_or("connector.labelStyle.color is required")?;
+        validate_ink_color(color)?;
     }
     Ok(())
 }
@@ -2763,6 +2807,30 @@ mod tests {
         assert!(validate_session_state(&json!({"textPreferences":{}}))
             .unwrap_err()
             .contains("backgroundMode"));
+    }
+
+    #[test]
+    fn connector_labels_accept_legacy_omission_and_reject_malformed_present_values() {
+        let base = || connector_element(
+            json!({"kind":"free","x":1.0,"y":2.0}),
+            json!({"kind":"free","x":80.0,"y":2.0}),
+        );
+        assert!(validate_element(&base(), "p").is_ok());
+        let mut valid = base();
+        valid["semantic"] = json!({"label":"Flows to"});
+        valid["labelStyle"] = json!({
+            "orientation":"follow","fontFamily":"Georgia","fontSize":"14px",
+            "color":{"kind":"theme","token":"foreground"}
+        });
+        assert!(validate_element(&valid, "p").is_ok());
+        for label in [json!(""), json!(" leading"), json!("two\nlines"), json!("x".repeat(2_049)), json!(12)] {
+            let mut invalid = base();
+            invalid["semantic"] = json!({"label":label});
+            assert!(validate_element(&invalid, "p").unwrap_err().contains("label"));
+        }
+        let mut invalid_style = base();
+        invalid_style["labelStyle"] = json!({"orientation":"sideways"});
+        assert!(validate_element(&invalid_style, "p").unwrap_err().contains("labelStyle"));
     }
 
     #[test]

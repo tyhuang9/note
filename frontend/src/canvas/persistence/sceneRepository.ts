@@ -1,6 +1,7 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type { AppData, AppSessionState, Folder, Page } from "../../types";
 import type { CanvasElement, ConnectorElement, RoughStyle, ShapeElement } from "../model/elements";
+import { isConnectorLabelStyle, normalizeConnectorLabel } from "../model/connectorLabel";
 import { normalizeTextBackgroundMode } from "../model/textPreferences";
 import {
   isSafeCanvasCoordinate,
@@ -127,8 +128,19 @@ export function normalizeLoadedCanvasElement(element: CanvasElement): CanvasElem
     const style = (element as ConnectorElement & {
       style?: Partial<ConnectorElement["style"]>;
     }).style;
+    const rawSemantic = element.semantic;
+    const label = normalizeConnectorLabel(rawSemantic?.label);
+    const semantic = rawSemantic && typeof rawSemantic === "object"
+      ? {
+          ...(typeof rawSemantic.relationshipType === "string" ? { relationshipType: rawSemantic.relationshipType } : {}),
+          ...(label ? { label } : {}),
+        }
+      : undefined;
+    const rawLabelStyle = (element as ConnectorElement & { labelStyle?: unknown }).labelStyle;
     return {
       ...element,
+      ...(semantic && Object.keys(semantic).length > 0 ? { semantic } : { semantic: undefined }),
+      ...(isConnectorLabelStyle(rawLabelStyle) ? { labelStyle: rawLabelStyle } : { labelStyle: undefined }),
       style: {
         ...normalizeRoughStyle(style, element.id),
         endArrowhead: style?.endArrowhead ?? "none",

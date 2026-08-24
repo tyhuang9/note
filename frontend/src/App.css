@@ -2515,36 +2515,11 @@ h2 {
   min-width: 0;
 }
 
-.shape-element.has-contained-text-surface .shape-contained-text-content,
-.shape-element.has-contained-text-surface .shape-contained-text-editor-surface {
-  border-radius: var(--shape-text-surface-radius, 6px);
-  background: var(--shape-text-surface-fill, var(--canvas-shape-text-surface));
-  box-shadow: 0 0 5px 3px var(--shape-text-surface-fill, var(--canvas-shape-text-surface));
-}
-
-.shape-element.has-contained-text-surface .shape-contained-text {
-  color: var(--shape-text-surface-color, var(--canvas-tool-text));
-}
-
-.shape-element.has-contained-text-surface .shape-contained-text h1,
-.shape-element.has-contained-text-surface .shape-contained-text h2,
-.shape-element.has-contained-text-surface .shape-contained-text h3,
-.shape-element.has-contained-text-surface .shape-contained-text h4,
-.shape-element.has-contained-text-surface .shape-contained-text h5,
-.shape-element.has-contained-text-surface .shape-contained-text h6 {
-  color: var(--shape-text-surface-color, var(--canvas-tool-text));
-}
-
-.shape-element.has-contained-text-surface .canvas-search-match {
-  color: var(--canvas-tool-text);
-}
-
 .shape-contained-text-editor {
   align-items: stretch;
   justify-content: stretch;
   overflow: auto;
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--canvas-tool-bg) 88%, transparent);
+  background: transparent;
   pointer-events: auto;
 }
 
@@ -2557,27 +2532,36 @@ h2 {
 
 .shape-contained-text-editor-content {
   box-sizing: border-box;
-  padding: 4px 4px 24px;
+  padding: 4px;
   outline: none;
   cursor: text;
 }
 
-.shape-contained-text-editor-hint {
-  position: absolute;
-  right: 6px;
-  bottom: 4px;
-  padding: 2px 4px;
-  border-radius: 3px;
-  color: color-mix(in srgb, var(--canvas-tool-text) 78%, transparent);
-  background: color-mix(in srgb, var(--canvas-tool-bg) 92%, transparent);
-  font-size: 11px;
-  line-height: 1.25;
-  pointer-events: none;
-  user-select: none;
+.shape-contained-text-editor-content:focus-visible {
+  outline: none;
 }
 
-.shape-contained-text-editor-content:focus-visible {
-  box-shadow: inset 0 0 0 2px var(--canvas-focus);
+.shape-contained-text-editor-hint { display: none; }
+
+.connector-label {
+  position: absolute;
+  z-index: 2;
+  box-sizing: border-box;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: text;
+  pointer-events: auto;
+}
+
+.connector-label-editor {
+  min-width: 3ch;
+  outline: 1px solid var(--canvas-focus);
+  outline-offset: 2px;
 }
 
 .shape-contained-text .text-block-rich-image {

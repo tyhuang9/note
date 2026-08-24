@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, type CSSProperties, type KeyboardEvent, type RefCallback } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode, type RefCallback } from "react";
 import type { Editor } from "@tiptap/core";
 import { EditorContent, useEditor } from "@tiptap/react";
 import { RoughSVG } from "roughjs/bin/svg";
@@ -8,6 +8,13 @@ import type { SearchMatch } from "../../appTypes";
 import { resolveConnectorPoints } from "../model/connectorBinding";
 import { getShapeTextInsets } from "../model/hitTesting";
 import { roundedDiamondPath, roundedRectanglePath } from "../model/shapeBoundary";
+import {
+  getConnectorLabel,
+  getConnectorLabelGapHalfLength,
+  normalizeConnectorLabel,
+  readableConnectorLabelAngle,
+  resolveConnectorLabelStyle,
+} from "../model/connectorLabel";
 export { roundedDiamondPath, roundedRectanglePath } from "../model/shapeBoundary";
 import {
   canvasColorToCss,
@@ -57,10 +64,6 @@ type ShapeElementViewProps = PrimitiveElementViewProps<ShapeElement> & {
 
 export type ShapeTextEditOutcome = "canceled" | "committed" | "unchanged";
 export type ShapeTextEditSession = Readonly<{ cancel: () => void; commit: () => void }>;
-
-export function shouldRenderShapeTextSurface(element: ShapeElement, isEditing: boolean) {
-  return element.style.fillColor != null && (isEditing || element.text !== undefined);
-}
 
 function createPrimitiveRootRef(elementId: string, onElementChange?: PrimitiveElementViewProps<ShapeElement>["onElementChange"]): RefCallback<HTMLDivElement> {
   return (element) => onElementChange?.(elementId, element);
@@ -194,7 +197,7 @@ export function ShapeElementView({ activeSearchRange, canvasTheme, caretPlacemen
       aria-label={isEditing ? shapeEditingAccessibleName(element) : accessibleName}
       aria-keyshortcuts={isEditing ? "Escape Control+Enter" : "F2"}
       aria-pressed={isEditing ? undefined : isSelected}
-      className={`primitive-element shape-element ${isEditing ? "is-editing" : ""} ${shouldRenderShapeTextSurface(element, isEditing) ? "has-contained-text-surface" : ""} ${isDragSourceHidden ? "is-drag-source-hidden" : ""}`}
+      className={`primitive-element shape-element ${isEditing ? "is-editing" : ""} ${isDragSourceHidden ? "is-drag-source-hidden" : ""}`}
       data-canvas-element-id={element.id}
       data-canvas-element-type="shape"
       onKeyDown={(event) => {
@@ -304,6 +307,7 @@ export function shapeTextInsetStyle(element: ShapeElement, theme: CanvasTheme = 
   const { horizontal, vertical } = getShapeTextInsets(element);
   const surfaceColors = shapeTextSurfaceColors(element.style.fillColor, theme);
   return {
+    color: surfaceColors.color,
     inset: `${vertical}px ${horizontal}px`,
     "--shape-text-surface-color": surfaceColors.color,
     "--shape-text-surface-fill": surfaceColors.fill,
@@ -476,9 +480,12 @@ function ShapeContainedTextEditor({ canvasTheme, caretPlacementRequest, element,
 
 type ConnectorElementViewProps = PrimitiveElementViewProps<ConnectorElement> & {
   elementsById: Readonly<Record<ElementId, CanvasElement>>;
+  activeSearchRange?: SearchMatch | null;
+  onLabelCommit?: (elementId: string, label: string | undefined) => void;
+  searchRanges?: readonly SearchMatch[];
 };
 
-export function ConnectorElementView({ element, elementsById, isDragSourceHidden = false, isSelected, onElementChange, onKeyboardMove, onSelect }: ConnectorElementViewProps) {
+export function ConnectorElementView({ activeSearchRange = null, element, elementsById, isDragSourceHidden = false, isSelected, onElementChange, onKeyboardMove, onLabelCommit, onSelect, searchRanges = [] }: ConnectorElementViewProps) {
   const points = resolveConnectorPoints(element, elementsById);
   if (!points) return null;
   return (
@@ -488,7 +495,10 @@ export function ConnectorElementView({ element, elementsById, isDragSourceHidden
       isSelected={isSelected}
       onElementChange={onElementChange}
       onKeyboardMove={onKeyboardMove}
+      activeSearchRange={activeSearchRange}
+      onLabelCommit={onLabelCommit}
       onSelect={onSelect}
+      searchRanges={searchRanges}
     />
   );
 }
@@ -498,13 +508,17 @@ type FreeConnectorElement = Omit<ConnectorElement, "start" | "end"> & {
   end: Extract<ConnectorElement["end"], { kind: "free" }>;
 };
 
-function FreeConnectorElementView({ element, isDragSourceHidden = false, isSelected, onElementChange, onKeyboardMove, onSelect }: PrimitiveElementViewProps<FreeConnectorElement>) {
+function FreeConnectorElementView({ activeSearchRange = null, element, isDragSourceHidden = false, isSelected, onElementChange, onKeyboardMove, onLabelCommit, onSelect, searchRanges = [] }: PrimitiveElementViewProps<FreeConnectorElement> & Pick<ConnectorElementViewProps, "activeSearchRange" | "onLabelCommit" | "searchRanges">) {
   const ref = useRef<SVGSVGElement | null>(null);
+  const [isEditingLabel, setIsEditingLabel] = useState(false);
   const minX = Math.min(element.start.x, element.end.x);
   const minY = Math.min(element.start.y, element.end.y);
   const x1 = element.start.x - minX; const y1 = element.start.y - minY; const x2 = element.end.x - minX; const y2 = element.end.y - minY;
   const rootRef = createPrimitiveRootRef(element.id, onElementChange);
   const padding = Math.max(8, element.style.strokeWidth * 2);
+  const label = element.style.endArrowhead === "arrow" ? getConnectorLabel(element) : undefined;
+  const labelStyle = resolveConnectorLabelStyle(element.labelStyle);
+  const labelGap = label ? getConnectorLabelGapHalfLength(label, labelStyle) : 0;
   const width = Math.max(1, Math.abs(x2 - x1) + padding * 2);
   const height = Math.max(1, Math.abs(y2 - y1) + padding * 2);
   useLayoutEffect(() => {
@@ -512,11 +526,18 @@ function FreeConnectorElementView({ element, isDragSourceHidden = false, isSelec
     if (!svg) return;
     const start = { x: x1 + padding, y: y1 + padding };
     const end = { x: x2 + padding, y: y2 + padding };
-    renderConnectorRoughSvg(svg, element.style, start, end);
-  }, [element, height, padding, width, x1, x2, y1, y2]);
+    renderConnectorRoughSvg(svg, element.style, start, end, 1, labelGap);
+  }, [element, height, labelGap, padding, width, x1, x2, y1, y2]);
+  const midpoint = { x: (x1 + x2) / 2 + padding, y: (y1 + y2) / 2 + padding };
+  const labelAngle = readableConnectorLabelAngle({ x: x1, y: y1 }, { x: x2, y: y2 }, labelStyle.orientation);
+  const commitLabel = (draft: string) => {
+    setIsEditingLabel(false);
+    const normalized = normalizeConnectorLabel(draft);
+    if (normalized !== label) onLabelCommit?.(element.id, normalized);
+  };
   return (
     <div
-      aria-label={`${element.locked ? "Select locked" : "Select and move"} ${element.style.endArrowhead === "arrow" ? "arrow" : "line"} connector`}
+      aria-label={`${element.locked ? "Select locked" : "Select and move"} ${element.style.endArrowhead === "arrow" ? "arrow" : "line"} connector${label ? `, label: ${label}` : ""}`}
       aria-pressed={isSelected}
       className={`primitive-element ${isDragSourceHidden ? "is-drag-source-hidden" : ""}`}
       data-canvas-element-id={element.id}
@@ -525,15 +546,77 @@ function FreeConnectorElementView({ element, isDragSourceHidden = false, isSelec
       data-connector-end-y={element.end.y}
       data-connector-start-x={element.start.x}
       data-connector-start-y={element.start.y}
-      onKeyDown={(event) => primitiveKeyDown(event, element, onKeyboardMove, onSelect)}
+      onDoubleClick={(event) => {
+        if (!onLabelCommit || element.style.endArrowhead !== "arrow") return;
+        event.preventDefault(); event.stopPropagation(); setIsEditingLabel(true);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "F2" && onLabelCommit && element.style.endArrowhead === "arrow") {
+          event.preventDefault(); event.stopPropagation(); setIsEditingLabel(true); return;
+        }
+        primitiveKeyDown(event, element, onKeyboardMove, onSelect);
+      }}
       ref={rootRef}
       role="button"
       style={{ height, left: minX - padding, opacity: element.opacity, position: "absolute", top: minY - padding, width, zIndex: element.zIndex }}
       tabIndex={0}
     >
       <svg aria-label="Connector" className="primitive-connector" data-seed={element.style.seed} height="100%" overflow="visible" ref={ref} width="100%" />
+      {isEditingLabel ? (
+        <input
+          aria-label="Arrow label"
+          autoFocus
+          className="connector-label connector-label-editor"
+          defaultValue={label ?? ""}
+          maxLength={MAX_CONNECTOR_LABEL_INPUT_LENGTH}
+          onBlur={(event) => commitLabel(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") { event.preventDefault(); setIsEditingLabel(false); }
+            if (event.key === "Enter" || (event.key === "Enter" && (event.ctrlKey || event.metaKey))) { event.preventDefault(); commitLabel(event.currentTarget.value); }
+          }}
+          onPointerDown={(event) => event.stopPropagation()}
+          style={connectorLabelStyle(midpoint, labelStyle, labelAngle)}
+          type="text"
+        />
+      ) : label ? (
+        <span
+          aria-hidden="true"
+          className="connector-label"
+          onDoubleClick={(event) => { event.preventDefault(); event.stopPropagation(); setIsEditingLabel(true); }}
+          style={connectorLabelStyle(midpoint, labelStyle, labelAngle)}
+        >
+          {renderConnectorLabelSearchHighlights(label, searchRanges, activeSearchRange)}
+        </span>
+      ) : null}
     </div>
   );
+}
+
+const MAX_CONNECTOR_LABEL_INPUT_LENGTH = 2048;
+
+function connectorLabelStyle(midpoint: Readonly<{ x: number; y: number }>, style: ReturnType<typeof resolveConnectorLabelStyle>, angle: number): CSSProperties {
+  return {
+    color: canvasColorToCss(style.color),
+    fontFamily: style.fontFamily,
+    fontSize: style.fontSize,
+    left: midpoint.x,
+    top: midpoint.y,
+    transform: `translate(-50%, -50%) rotate(${angle}deg)`,
+  };
+}
+
+function renderConnectorLabelSearchHighlights(label: string, ranges: readonly SearchMatch[], active: SearchMatch | null) {
+  const labelRanges = ranges.filter((range) => range.source === "connector-label");
+  if (labelRanges.length === 0) return label;
+  const pieces: ReactNode[] = [];
+  let cursor = 0;
+  for (const range of labelRanges) {
+    if (range.start > cursor) pieces.push(label.slice(cursor, range.start));
+    pieces.push(<mark className={`canvas-search-match ${active?.start === range.start && active.end === range.end ? "is-active" : ""}`} key={`${range.start}-${range.end}`}>{label.slice(range.start, range.end)}</mark>);
+    cursor = range.end;
+  }
+  if (cursor < label.length) pieces.push(label.slice(cursor));
+  return pieces;
 }
 
 /** Shared seeded connector painter for React elements and transient transform previews. */
@@ -543,12 +626,24 @@ export function renderConnectorRoughSvg(
   start: Readonly<{ x: number; y: number }>,
   end: Readonly<{ x: number; y: number }>,
   visualScale = 1,
+  labelGapHalfLength = 0,
 ) {
   svg.replaceChildren();
   const draw = new RoughSVG(svg);
   const safeVisualScale = Number.isFinite(visualScale) && visualScale > 0 ? visualScale : 1;
   const options = roughOptions(style, safeVisualScale);
-  svg.append(finishRoughNode(draw.line(start.x, start.y, end.x, end.y, options)));
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const distance = Math.hypot(dx, dy);
+  const gap = Math.min(Math.max(0, labelGapHalfLength), Math.max(0, distance / 2 - 1));
+  if (gap > 0 && distance > 0.01) {
+    const ux = dx / distance; const uy = dy / distance;
+    const middleX = (start.x + end.x) / 2; const middleY = (start.y + end.y) / 2;
+    svg.append(finishRoughNode(draw.line(start.x, start.y, middleX - ux * gap, middleY - uy * gap, options)));
+    svg.append(finishRoughNode(draw.line(middleX + ux * gap, middleY + uy * gap, end.x, end.y, { ...options, seed: ((style.seed + 37) >>> 0) || 1 })));
+  } else {
+    svg.append(finishRoughNode(draw.line(start.x, start.y, end.x, end.y, options)));
+  }
   if (style.endArrowhead === "arrow") {
     const points = arrowheadPoints(start, end, 12 * safeVisualScale, 5 * safeVisualScale);
     if (points) svg.append(finishRoughNode(draw.polygon(points, {

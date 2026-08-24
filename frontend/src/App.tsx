@@ -204,6 +204,7 @@ import {
   DEFAULT_TEXT_PREFERENCES,
   normalizeTextPreferences,
 } from "./canvas/model/textPreferences";
+import { getConnectorLabel, getConnectorLabelGapHalfLength, readableConnectorLabelAngle, resolveConnectorLabelStyle } from "./canvas/model/connectorLabel";
 import { reorderLayers, type LayerAction } from "./canvas/model/layerOrdering";
 import {
   getProportionalScale,
@@ -415,6 +416,7 @@ type ConnectorPreviewElement = HTMLCanvasElement & {
 };
 
 type ConnectorPreviewLayer = {
+  labels: HTMLDivElement | null;
   renderer: ConnectorPreviewCanvas | null;
 };
 
@@ -542,12 +544,14 @@ const DEFAULT_PAN_OFFSET: PanOffset = { x: 0, y: 0 };
 const SEARCH_CONTROL_COMMAND_KEYS = new Set(["a", "f", "n", "o", "y", "z", "+", "=", "-", "0"]);
 
 function createConnectorPreviewLayer(): ConnectorPreviewLayer {
-  return { renderer: null };
+  return { labels: null, renderer: null };
 }
 
 function cleanupConnectorPreviewLayer(layer: ConnectorPreviewLayer) {
   layer.renderer?.dispose();
   layer.renderer = null;
+  layer.labels?.remove();
+  layer.labels = null;
 }
 
 const lightPreviewColorCache = new WeakMap<ConnectorElement["style"]["strokeColor"], string>();
@@ -6212,6 +6216,21 @@ function App() {
     }));
   }, []);
 
+  const updateConnectorLabel = useCallback((elementId: string, label: string | undefined) => {
+    setBlocksWithHistory((elements) => elements.map((element) => {
+      if (element.id !== elementId || element.type !== "connector" || element.style.endArrowhead !== "arrow") return element;
+      const previousLabel = element.semantic?.label;
+      if (previousLabel === label) return element;
+      const semantic = label
+        ? { ...element.semantic, label }
+        : (() => {
+            const { label: _label, ...rest } = element.semantic ?? {};
+            return Object.keys(rest).length > 0 ? rest : undefined;
+          })();
+      return { ...element, ...(semantic ? { semantic } : { semantic: undefined }), updatedAt: Date.now() };
+    }));
+  }, []);
+
   const updateImageElement = useCallback((elementId: string, updates: ImageElementUpdates) => {
     setData((currentData) => {
       let didChange = false;
@@ -6362,6 +6381,7 @@ function App() {
     const canvasBounds = canvas.getBoundingClientRect();
     const records = connectorIds.size <= 32 ? new Map<string, ConnectorPreviewRecord>() : null;
     const commands: ConnectorPreviewCommand[] = [];
+    const labels: Array<{ angle: number; color: string; fontFamily: string; fontSize: string; label: string; x: number; y: number; zIndex: number }> = [];
     let sceneIndex = 0;
     forEachAffectedConnectorGeometry(elementsById, connectorIds, ({ connector, points }) => {
       if (!points) return;
@@ -6383,6 +6403,7 @@ function App() {
       commands.push({
         end,
         endArrowhead: connector.style.endArrowhead,
+        ...(getConnectorLabel(connector) ? { labelGapHalfLength: getConnectorLabelGapHalfLength(getConnectorLabel(connector)!, resolveConnectorLabelStyle(connector.labelStyle)) * zoom } : {}),
         opacity: connector.opacity,
         roughness: connector.style.roughness * zoom,
         sceneIndex: sceneIndex++,
@@ -6394,6 +6415,20 @@ function App() {
         visualScale: zoom,
         zIndex: connector.zIndex,
       });
+      const label = getConnectorLabel(connector);
+      if (label) {
+        const labelStyle = resolveConnectorLabelStyle(connector.labelStyle);
+        labels.push({
+          angle: readableConnectorLabelAngle(start, end, labelStyle.orientation),
+          color: resolvedPreviewColor(labelStyle.color, isDarkMode),
+          fontFamily: labelStyle.fontFamily,
+          fontSize: labelStyle.fontSize,
+          label,
+          x: (start.x + end.x) / 2,
+          y: (start.y + end.y) / 2,
+          zIndex: connector.zIndex,
+        });
+      }
     });
     if (commands.length === 0) {
       cleanupConnectorPreviewLayer(previewLayer);
@@ -6412,6 +6447,30 @@ function App() {
       canvas.append(preview);
       previewLayer.renderer = new ConnectorPreviewCanvas(preview);
     }
+    if (!previewLayer.labels) {
+      const labelLayer = document.createElement("div");
+      labelLayer.className = "connector-transform-preview-labels";
+      labelLayer.setAttribute("aria-hidden", "true");
+      labelLayer.style.inset = "0";
+      labelLayer.style.pointerEvents = "none";
+      labelLayer.style.position = "absolute";
+      labelLayer.style.zIndex = "19";
+      canvas.append(labelLayer);
+      previewLayer.labels = labelLayer;
+    }
+    previewLayer.labels.replaceChildren(...labels.map((entry) => {
+      const label = document.createElement("span");
+      label.className = "connector-label";
+      label.textContent = entry.label;
+      label.style.color = entry.color;
+      label.style.fontFamily = entry.fontFamily;
+      label.style.fontSize = entry.fontSize;
+      label.style.left = `${entry.x}px`;
+      label.style.top = `${entry.y}px`;
+      label.style.transform = `translate(-50%, -50%) rotate(${entry.angle}deg)`;
+      label.style.zIndex = `${entry.zIndex}`;
+      return label;
+    }));
     const preview = previewLayer.renderer.element as ConnectorPreviewElement;
     preview.__connectorPreviewRecords = records ?? undefined;
     preview.dataset.connectorCount = `${commands.length}`;
@@ -9096,12 +9155,17 @@ function App() {
                 key={element.id}
                 renderConnector={(connector) => (
                   <ConnectorElementView
+                    activeSearchRange={
+                      activeSearchMatch?.elementId === connector.id ? activeSearchMatch : null
+                    }
                     element={connector}
                     elementsById={renderedCanvasElementsById}
                     isSelected={selectedBlockIds.includes(connector.id)}
                     onElementChange={registerBlockElement}
                     onKeyboardMove={moveCanvasElementByKeyboard}
+                    onLabelCommit={updateConnectorLabel}
                     onSelect={selectBlock}
+                    searchRanges={getCanvasSearchRangesForElement(searchMatchesByElementId, connector.id)}
                   />
                 )}
                 renderInk={(inkElement) => (

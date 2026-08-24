@@ -8,6 +8,16 @@ export type CanvasColor =
   | { kind: "theme"; token: "foreground" | "muted" }
   | { kind: "fixed"; value: string };
 export type TextBackgroundMode = "surface" | "transparent";
+/** Shared persisted text tokens. Connector labels deliberately use the same bounded set. */
+export type TextFontFamily = "system-ui" | "Arial" | "Georgia" | "Times New Roman" | "Courier New";
+export type TextFontSize = "12px" | "14px" | "16px" | "18px" | "24px" | "32px";
+export type ConnectorLabelOrientation = "upright" | "follow";
+export type ConnectorLabelStyle = {
+  orientation: ConnectorLabelOrientation;
+  fontFamily: TextFontFamily;
+  fontSize: TextFontSize;
+  color: CanvasColor;
+};
 
 export type ElementBase<TType extends CanvasElementType> = {
   id: ElementId; pageId: PageId; type: TType; zIndex: number; opacity: number;
@@ -50,7 +60,14 @@ export type ConnectorEndpoint =
   | { kind: "element"; targetElementId: ElementId; gap: number; anchor?: PerimeterAnchor }
   | { kind: "group"; targetGroupId: GroupId; anchor: PerimeterAnchor; gap: number }
   | { kind: "connector"; targetConnectorId: ElementId; pathT: number; gap: number };
-export type ConnectorElement = ElementBase<"connector"> & { start: ConnectorEndpoint; end: ConnectorEndpoint; routing: "straight"; style: RoughStyle & { startArrowhead: "none" | "arrow"; endArrowhead: "none" | "arrow" }; semantic?: { relationshipType?: string; label?: string } };
+export type ConnectorElement = ElementBase<"connector"> & {
+  start: ConnectorEndpoint; end: ConnectorEndpoint; routing: "straight";
+  style: RoughStyle & { startArrowhead: "none" | "arrow"; endArrowhead: "none" | "arrow" };
+  /** `semantic.label` is the canonical persisted one-line arrow label. */
+  semantic?: { relationshipType?: string; label?: string };
+  /** Optional for backward compatibility; omitted styles render with defaults. */
+  labelStyle?: ConnectorLabelStyle;
+};
 export type CanvasElement = TextElement | ImageElement | InkElement | ShapeElement | ConnectorElement;
 
 export function isBoxCanvasElement(element: CanvasElement): element is CanvasElement & BoxCanvasElement {

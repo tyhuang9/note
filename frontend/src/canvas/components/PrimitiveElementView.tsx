@@ -41,6 +41,7 @@ import {
   shapeRichTextExtensions,
   validateRichTextDocument,
 } from "../../editor/richText";
+import { isTextEntryTarget } from "../../editorUtils";
 
 type PrimitiveElementViewProps<T extends ShapeElement | ConnectorElement> = {
   element: T;
@@ -168,6 +169,9 @@ function primitiveKeyDown(
   onKeyboardMove: PrimitiveElementViewProps<ShapeElement>["onKeyboardMove"],
   onSelect: PrimitiveElementViewProps<ShapeElement>["onSelect"],
 ) {
+  // The primitive root receives bubbled key events from nested Tiptap editors
+  // and connector-label inputs. Leave those editable descendants untouched.
+  if (isTextEntryTarget(event.target)) return;
   if (event.key === "Enter" || event.key === " ") {
     event.preventDefault();
     onSelect(element.id, event.ctrlKey || event.metaKey);
@@ -205,7 +209,7 @@ export function ShapeElementView({ activeSearchRange, canvasTheme, caretPlacemen
       data-canvas-locked={element.locked}
       data-canvas-element-type="shape"
       onKeyDown={(event) => {
-        if (event.key === "F2") {
+        if (!isTextEntryTarget(event.target) && event.key === "F2") {
           event.preventDefault();
           event.stopPropagation();
           onEdit(element.id);
@@ -614,10 +618,7 @@ function FreeConnectorElementView({ activeSearchRange = null, element, isDragSou
         event.preventDefault(); event.stopPropagation(); beginLabelEdit();
       }}
       onKeyDown={(event) => {
-        if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || (event.target instanceof HTMLElement && event.target.isContentEditable)) {
-          return;
-        }
-        if (event.key === "F2" && onLabelCommit && element.style.endArrowhead === "arrow") {
+        if (!isTextEntryTarget(event.target) && event.key === "F2" && onLabelCommit && element.style.endArrowhead === "arrow") {
           event.preventDefault(); event.stopPropagation(); beginLabelEdit(); return;
         }
         primitiveKeyDown(event, element, onKeyboardMove, onSelect);

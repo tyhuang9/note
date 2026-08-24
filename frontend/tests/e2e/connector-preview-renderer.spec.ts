@@ -16,12 +16,20 @@ for (const scenario of [
     const canvas = page.getByRole("tabpanel");
     await selectBothTargets(page);
     await setZoom(page, canvas, scenario.zoom);
+    const committedLabel = page.locator('[data-canvas-element-id="solid-crossing"] .connector-label');
+    const committedLabelBounds = await requiredBounds(committedLabel, "committed connector label");
 
     await beginGroupDrag(page);
     let preview = page.locator(".connector-transform-preview");
     await expect(preview).toHaveAttribute("data-preview-renderer", "two-worker");
     await expect(preview).toHaveAttribute("data-presented-frame", /[1-9]\d*/);
     await expect(preview).toHaveAttribute("data-retained-bitmaps", "0");
+    const transientLabel = page.locator(".connector-transform-preview-labels .connector-label", { hasText: "Compact gap" });
+    await expect(transientLabel).toBeVisible();
+    const transientLabelBounds = await requiredBounds(transientLabel, "transient connector label");
+    expect(transientLabelBounds.height).toBeCloseTo(committedLabelBounds.height, 0);
+    expect(await transientLabel.evaluate((element) => getComputedStyle(element).fontSize))
+      .toBe(`${14 * scenario.zoom / 100}px`);
     await page.waitForTimeout(50);
     await preview.evaluate((element) => {
       const canvas = element as HTMLCanvasElement;
@@ -401,6 +409,10 @@ async function installComparisonWorkspace(page: Page, darkMode: boolean) {
     ) {
       return {
         createdAt: 1, end: { kind: "free", ...end }, id, locked: true, opacity, pageId: "page", routing: "straight",
+        ...(id === "solid-crossing" ? {
+          labelStyle: { color: { kind: "theme", token: "foreground" }, fontFamily: "system-ui", fontSize: "14px", orientation: "upright" },
+          semantic: { label: "Compact gap" },
+        } : {}),
         start: { gap: 0, kind: "element", targetElementId },
         style: { ...baseStyle, endArrowhead: "arrow", seed, startArrowhead: "none", strokeStyle, strokeWidth },
         type: "connector", updatedAt: 1, zIndex,

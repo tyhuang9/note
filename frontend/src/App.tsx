@@ -206,7 +206,7 @@ import {
   DEFAULT_TEXT_PREFERENCES,
   normalizeTextPreferences,
 } from "./canvas/model/textPreferences";
-import { getConnectorLabel, getConnectorLabelGapHalfLength, readableConnectorLabelAngle, resolveConnectorLabelStyle } from "./canvas/model/connectorLabel";
+import { connectorLabelFontPixels, getConnectorLabel, getConnectorLabelGapHalfLength, readableConnectorLabelAngle, resolveConnectorLabelStyle } from "./canvas/model/connectorLabel";
 import { reorderLayers, type LayerAction } from "./canvas/model/layerOrdering";
 import {
   getProportionalScale,
@@ -6439,7 +6439,7 @@ function App() {
           angle: readableConnectorLabelAngle(start, end, labelStyle.orientation),
           color: resolvedPreviewColor(labelStyle.color, isDarkMode),
           fontFamily: labelStyle.fontFamily,
-          fontSize: labelStyle.fontSize,
+          fontSize: `${connectorLabelFontPixels(labelStyle.fontSize) * zoom}px`,
           label,
           x: (start.x + end.x) / 2,
           y: (start.y + end.y) / 2,

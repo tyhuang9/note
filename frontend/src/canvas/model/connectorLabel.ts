@@ -104,11 +104,15 @@ export function getConnectorLabelGapHalfLength(
     return Math.max(0, width / 2 + CONNECTOR_LABEL_GAP_PADDING);
   }
   const lineHeight = connectorLabelFontPixels(style.fontSize) * CONNECTOR_LABEL_LINE_HEIGHT;
-  // An upright rectangle clips the shaft according to its projection on the
-  // shaft axis; a following label's longitudinal footprint is just its width.
-  const projectedHalfLength = Math.abs(dx / distance) * width / 2
-    + Math.abs(dy / distance) * lineHeight / 2;
-  return Math.max(0, projectedHalfLength + CONNECTOR_LABEL_GAP_PADDING);
+  const unitX = Math.abs(dx / distance);
+  const unitY = Math.abs(dy / distance);
+  // The gap ends where the centered shaft actually exits the upright label's
+  // axis-aligned rectangle. Using the rectangle's projection onto the shaft
+  // over-reserves space at diagonal and steep angles.
+  const horizontalExit = unitX > Number.EPSILON ? width / 2 / unitX : Number.POSITIVE_INFINITY;
+  const verticalExit = unitY > Number.EPSILON ? lineHeight / 2 / unitY : Number.POSITIVE_INFINITY;
+  const intersectionHalfLength = Math.min(horizontalExit, verticalExit);
+  return Math.max(0, intersectionHalfLength + CONNECTOR_LABEL_GAP_PADDING);
 }
 
 /** Follow labels never render upside down. */

@@ -1499,7 +1499,7 @@ function App() {
   useLayoutEffect(() => {
     const bounds = selectionFrameVisualBoundsRef.current;
     if (bounds) applySelectionFrameVisualBounds(bounds);
-  }, [livePanOffset.x, livePanOffset.y]);
+  });
 
   dataRef.current = data;
   activeToolRef.current = activeTool;

@@ -520,6 +520,145 @@ for (const zoom of [50, 100, 200]) {
   });
 }
 
+test("unrelated React commits cannot reset a transient mixed-selection frame", async ({ page }) => {
+  await installSelectionFrameWorkspace(page);
+  await page.reload();
+  await expect(page.getByRole("tabpanel")).toBeVisible();
+  const canvas = page.getByRole("tabpanel");
+  const bounds = await requiredBounds(canvas, "canvas");
+  const elements = {
+    shape: page.locator('[data-canvas-element-id="frame-shape"]:not(.drag-layer-clone)'),
+    text: page.locator('[data-canvas-element-id="frame-text"]:not(.drag-layer-clone)'),
+  };
+  await expect(elements.shape).toBeVisible();
+  await expect(elements.text).toBeVisible();
+  await marqueeSelect(page, bounds, [elements.shape, elements.text]);
+
+  const frame = page.locator(".selection-frame");
+  const moveSurface = page.getByRole("button", { name: "Move selected elements" });
+  const historyBaseline = await Promise.all([
+    readWorldPosition(elements.shape),
+    readWorldPosition(elements.text),
+  ]);
+  await moveSurface.focus();
+  await moveSurface.press("ArrowRight");
+  const originalPositions = historyBaseline.map((position) => ({
+    ...position,
+    x: position.x + 1,
+  }));
+  await expect.poll(() => Promise.all([
+    readWorldPosition(elements.shape),
+    readWorldPosition(elements.text),
+  ])).toEqual(originalPositions);
+  await expect.poll(() => selectionFramePersistenceCounts(page)).toEqual({ apply: 1, session: 1 });
+  await resetSelectionFramePersistenceCounts(page);
+  const originalFrame = await roundedBounds(frame);
+  const moveBounds = await requiredBounds(moveSurface, "selection move surface");
+  const moveStart = {
+    x: moveBounds.x + moveBounds.width / 2,
+    y: moveBounds.y + moveBounds.height / 2,
+  };
+  await page.mouse.move(moveStart.x, moveStart.y);
+  await page.mouse.down();
+  await page.mouse.move(moveStart.x + 64, moveStart.y + 42, { steps: 6 });
+  await expect(page.locator(".drag-layer-clone")).toHaveCount(2);
+  const dragPreviewFrame = await roundedBounds(frame);
+  expect(dragPreviewFrame).not.toEqual(originalFrame);
+  expect(await Promise.all([
+    readWorldPosition(elements.shape),
+    readWorldPosition(elements.text),
+  ])).toEqual(originalPositions);
+  expect(await selectionFramePersistenceCounts(page)).toEqual({ apply: 0, session: 0 });
+
+  await page.getByRole("button", { name: "Grid", exact: true }).dispatchEvent("click");
+  await expect.poll(() => roundedBounds(frame)).toEqual(dragPreviewFrame);
+  expect(await Promise.all([
+    readWorldPosition(elements.shape),
+    readWorldPosition(elements.text),
+  ])).toEqual(originalPositions);
+
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  await expect(page.locator(".drag-layer-clone")).toHaveCount(0);
+  await expect.poll(() => roundedBounds(frame)).toEqual(originalFrame);
+  expect(await Promise.all([
+    readWorldPosition(elements.shape),
+    readWorldPosition(elements.text),
+  ])).toEqual(originalPositions);
+  expect(await selectionFramePersistenceCounts(page)).toEqual({ apply: 0, session: 0 });
+
+  await canvas.focus();
+  await page.keyboard.press("Control+z");
+  await expect.poll(() => Promise.all([
+    readWorldPosition(elements.shape),
+    readWorldPosition(elements.text),
+  ])).toEqual(historyBaseline);
+  await expect.poll(async () => (await selectionFramePersistenceCounts(page)).apply).toBe(1);
+  await page.keyboard.press("Control+y");
+  await expect.poll(() => Promise.all([
+    readWorldPosition(elements.shape),
+    readWorldPosition(elements.text),
+  ])).toEqual(originalPositions);
+  await expect.poll(async () => (await selectionFramePersistenceCounts(page)).apply).toBe(2);
+  await resetSelectionFramePersistenceCounts(page);
+
+  const originalSizes = await Promise.all([
+    readWorldSize(elements.shape),
+    readWorldSize(elements.text),
+  ]);
+  const { bounds: handleBounds, corner } = await interactiveResizeHandle(page);
+  const resizeStart = {
+    x: handleBounds.x + handleBounds.width / 2,
+    y: handleBounds.y + handleBounds.height / 2,
+  };
+  const resizeEnd = {
+    x: resizeStart.x + (corner.includes("e") ? 72 : -72),
+    y: resizeStart.y + (corner.includes("s") ? 48 : -48),
+  };
+  await page.mouse.move(resizeStart.x, resizeStart.y);
+  await page.mouse.down();
+  await page.mouse.move(resizeEnd.x, resizeEnd.y, { steps: 6 });
+  await expect(page.locator(".resize-layer-clone")).toHaveCount(2);
+  const resizePreviewFrame = await roundedBounds(frame);
+  expect(resizePreviewFrame).not.toEqual(originalFrame);
+  expect(await Promise.all([
+    readWorldSize(elements.shape),
+    readWorldSize(elements.text),
+  ])).toEqual(originalSizes);
+  expect(await selectionFramePersistenceCounts(page)).toEqual({ apply: 0, session: 0 });
+
+  await page.getByRole("button", { name: "Grid", exact: true }).dispatchEvent("click");
+  await expect.poll(() => roundedBounds(frame)).toEqual(resizePreviewFrame);
+  expect(await Promise.all([
+    readWorldSize(elements.shape),
+    readWorldSize(elements.text),
+  ])).toEqual(originalSizes);
+
+  await page.mouse.up();
+  await expect(page.locator(".resize-layer-clone")).toHaveCount(0);
+  await expect.poll(() => roundedBounds(frame)).toEqual(resizePreviewFrame);
+  const committedSizes = await Promise.all([
+    readWorldSize(elements.shape),
+    readWorldSize(elements.text),
+  ]);
+  expect(committedSizes).not.toEqual(originalSizes);
+  await expect.poll(async () => (await selectionFramePersistenceCounts(page)).apply).toBe(1);
+
+  await canvas.focus();
+  await page.keyboard.press("Control+z");
+  await expect.poll(() => Promise.all([
+    readWorldSize(elements.shape),
+    readWorldSize(elements.text),
+  ])).toEqual(originalSizes);
+  await expect.poll(async () => (await selectionFramePersistenceCounts(page)).apply).toBe(2);
+  await page.keyboard.press("Control+y");
+  await expect.poll(() => Promise.all([
+    readWorldSize(elements.shape),
+    readWorldSize(elements.text),
+  ])).toEqual(committedSizes);
+  await expect.poll(async () => (await selectionFramePersistenceCounts(page)).apply).toBe(3);
+});
+
 test("mixed resize preview and frame return to their original geometry on pointer cancel", async ({ page }) => {
   const canvas = page.getByRole("tabpanel");
   const bounds = await requiredBounds(canvas, "canvas");
@@ -852,6 +991,141 @@ async function createTwoTextBlocks(page: Page, bounds: { x: number; y: number })
   const first = await createTextBlock(page, bounds.x + 320, bounds.y + 220, "First selection");
   const second = await createTextBlock(page, bounds.x + 680, bounds.y + 280, "Second selection");
   return { first, second };
+}
+
+async function selectionFramePersistenceCounts(page: Page) {
+  return page.evaluate(() => (window as unknown as {
+    __selectionFrameCounts: { apply: number; session: number };
+  }).__selectionFrameCounts);
+}
+
+async function resetSelectionFramePersistenceCounts(page: Page) {
+  await page.evaluate(() => {
+    (window as unknown as {
+      __selectionFrameCounts: { apply: number; session: number };
+    }).__selectionFrameCounts = { apply: 0, session: 0 };
+  });
+}
+
+async function installSelectionFrameWorkspace(page: Page) {
+  await page.addInitScript(() => {
+    type ElementRecord = Record<string, unknown> & { id: string; pageId: string };
+    const storageKey = "note-selection-frame-playwright-workspace";
+    const workspace = {
+      elements: [
+        {
+          createdAt: 1,
+          height: 110,
+          id: "frame-shape",
+          locked: false,
+          opacity: 1,
+          pageId: "frame-page",
+          rotation: 0,
+          shape: "rectangle",
+          style: {
+            fillColor: null,
+            roughness: 1,
+            roundness: 0,
+            seed: 17,
+            strokeColor: { kind: "fixed", value: "#4c6ef5" },
+            strokeStyle: "solid",
+            strokeWidth: 2,
+          },
+          type: "shape",
+          updatedAt: 1,
+          width: 150,
+          x: 330,
+          y: 220,
+          zIndex: 1,
+        },
+        {
+          backgroundMode: "surface",
+          content: "One two three four five six\nOne two three four five six",
+          createdAt: 1,
+          height: 92,
+          id: "frame-text",
+          locked: false,
+          opacity: 1,
+          pageId: "frame-page",
+          rotation: 0,
+          type: "text",
+          updatedAt: 1,
+          width: 240,
+          x: 560,
+          y: 300,
+          zIndex: 2,
+        },
+      ] as ElementRecord[],
+      folders: [],
+      isDarkMode: true,
+      pages: [{
+        folderId: "",
+        id: "frame-page",
+        isBookmarked: false,
+        revision: 0,
+        title: "Selection frame",
+      }],
+      sessionState: {
+        openPageTabIds: ["frame-page"],
+        selectedFolderId: "",
+        selectedPageId: "frame-page",
+      },
+      warnings: [],
+    };
+    const runtime = window as unknown as {
+      __selectionFrameCounts: { apply: number; session: number };
+      __TAURI_INTERNALS__: {
+        invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+      };
+      isTauri: boolean;
+    };
+    runtime.isTauri = true;
+    runtime.__selectionFrameCounts = { apply: 0, session: 0 };
+    runtime.__TAURI_INTERNALS__ = {
+      invoke: async (command, args = {}) => {
+        if (command === "initialize_storage") {
+          return {
+            databasePath: "selection-frame.db",
+            importedLegacyData: false,
+            schemaVersion: 1,
+            warnings: [],
+          };
+        }
+        if (command === "load_workspace_data") return workspace;
+        if (command === "reconcile_workspace_structure") return { pages: workspace.pages };
+        if (command === "apply_scene_changes") {
+          runtime.__selectionFrameCounts.apply += 1;
+          const batch = args.batch as {
+            deletedElementIds: string[];
+            pageId: string;
+            upserts: ElementRecord[];
+          };
+          const deletedIds = new Set(batch.deletedElementIds);
+          const upserts = new Map(batch.upserts.map((element) => [element.id, element]));
+          workspace.elements = workspace.elements
+            .filter((element) => element.pageId !== batch.pageId || !deletedIds.has(element.id))
+            .map((element) => upserts.get(element.id) ?? element);
+          for (const element of batch.upserts) {
+            if (!workspace.elements.some((candidate) => candidate.id === element.id)) {
+              workspace.elements.push(element);
+            }
+          }
+          workspace.pages[0].revision += 1;
+          localStorage.setItem(storageKey, JSON.stringify(workspace));
+          return { newRevision: workspace.pages[0].revision, pageId: batch.pageId };
+        }
+        if (command === "save_session_state") {
+          runtime.__selectionFrameCounts.session += 1;
+          workspace.sessionState = args.state as typeof workspace.sessionState;
+          localStorage.setItem(storageKey, JSON.stringify(workspace));
+          return;
+        }
+        if (command === "load_asset") throw new Error("Unexpected asset load");
+        if (command === "save_asset") throw new Error("Unexpected asset save");
+        throw new Error(`Unexpected command ${command}`);
+      },
+    };
+  });
 }
 
 async function createMixedSelection(page: Page, bounds: { x: number; y: number }) {

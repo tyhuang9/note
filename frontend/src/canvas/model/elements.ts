@@ -19,6 +19,8 @@ export type TextElement = ElementBase<"text"> & BoxGeometry & {
   backgroundMode: TextBackgroundMode;
   content: string;
   richContent?: JSONContent;
+  /** Optional user-authored frame height. Omitted text boxes continue to auto-size. */
+  manualHeight?: number;
   isWidthManuallyResized?: boolean;
 };
 export type RichTextValue = {

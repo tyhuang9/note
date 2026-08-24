@@ -207,13 +207,16 @@ import {
 import { reorderLayers, type LayerAction } from "./canvas/model/layerOrdering";
 import {
   getProportionalScale,
-  getOppositeCorner,
   getSelectionElementBounds,
   getSelectionBounds,
   getSelectionResizePreviewConnectorIds,
+  getSelectionResizeTransform,
+  resizeSelection,
   scaleSelection,
   translateSelection,
   type SelectionCorner,
+  type SelectionResizeHandle,
+  type SelectionResizeTransform,
   type TextSelectionSize,
 } from "./canvas/model/selectionBounds";
 import { getDrawingToolLockPreference } from "./canvas/state/drawingToolLock";
@@ -471,7 +474,7 @@ type TextResizeSession = {
 type SelectionTransformSession = {
   baseElementsById: Readonly<Record<string, CanvasElement>>;
   captureTarget: HTMLElement;
-  corner: SelectionCorner | null;
+  corner: SelectionResizeHandle | null;
   connectorEndpoint: "start" | "end" | null;
   didMove: boolean;
   pointerId: number;
@@ -480,6 +483,7 @@ type SelectionTransformSession = {
   startClientX: number;
   startClientY: number;
   selectionScale: number | null;
+  selectionResizeTransform: SelectionResizeTransform | null;
   textResize: boolean;
   textSizes: ReadonlyMap<string, TextSelectionSize> | null;
 };
@@ -1351,7 +1355,6 @@ function App() {
   const [isGridVisible, setIsGridVisible] = useState(false);
   const [isSnapToGridEnabled, setIsSnapToGridEnabled] = useState(false);
   const [selectionFramePreview, setSelectionFramePreview] = useState<SelectionRect | null>(null);
-  const [textResizeHandleGeometry, setTextResizeHandleGeometry] = useState<TextElement | null>(null);
   const [connectorEndpointPreview, setConnectorEndpointPreview] = useState<ConnectorElement | null>(null);
   const [isConnectorEndpointRetargeting, setIsConnectorEndpointRetargeting] = useState(false);
   const [connectorEndpointRetargetVisual, setConnectorEndpointRetargetVisual] = useState<ArrowAuthoringVisual | null>(null);
@@ -1587,35 +1590,6 @@ function App() {
     () => Object.fromEntries(visibleCanvasElements.map((element) => [element.id, element])),
     [visibleCanvasElements],
   );
-  useLayoutEffect(() => {
-    const selectedId = selectedBlockIds.length === 1 ? selectedBlockIds[0] : null;
-    const selected = selectedId
-      ? visibleCanvasElements.find((element): element is TextElement =>
-        element.id === selectedId && element.type === "text" && !element.locked,
-      )
-      : null;
-    const sourceElement = selected ? blockElementsRef.current.get(selected.id) : null;
-    const nextGeometry = selected
-      ? sourceElement
-        ? getRenderedTextResizeBlock(selected, sourceElement)
-        : selected
-      : null;
-    setTextResizeHandleGeometry((current) => {
-      if (
-        current &&
-        nextGeometry &&
-        current.id === nextGeometry.id &&
-        current.x === nextGeometry.x &&
-        current.y === nextGeometry.y &&
-        current.width === nextGeometry.width &&
-        current.height === nextGeometry.height &&
-        current.rotation === nextGeometry.rotation
-      ) {
-        return current;
-      }
-      return nextGeometry;
-    });
-  }, [selectedBlockIds, visibleCanvasElements]);
   const selectionWorldBounds = useMemo(() => {
     const selectedIds = new Set(selectedBlockIds);
     return getSelectionBounds(
@@ -6888,14 +6862,6 @@ function App() {
     };
   }
 
-  function getTextResizeCursorClass(rotation: number) {
-    const normalized = ((rotation % 180) + 180) % 180;
-    if (normalized < 22.5 || normalized >= 157.5) return "is-ew-resize";
-    if (normalized < 67.5) return "is-nwse-resize";
-    if (normalized < 112.5) return "is-ns-resize";
-    return "is-nesw-resize";
-  }
-
   function positionTextResizeHandle(handleElement: HTMLButtonElement | null, block: TextElement) {
     if (!handleElement) return;
     const point = getTextEastResizeHandlePoint(block);
@@ -7121,7 +7087,8 @@ function App() {
   }
 
   function updateSelectionResizePreview(
-    scale: number,
+    scaleX: number,
+    scaleY: number,
     previewElements: readonly CanvasElement[],
     previewElementsById: Readonly<Record<string, CanvasElement>>,
   ) {
@@ -7137,8 +7104,9 @@ function App() {
         item.cloneElement.style.width = `${preview.width}px`;
         item.cloneElement.style.height = `${preview.height}px`;
       }
-      const visualScale = zoom * (item.element.type === "text" ? 1 : scale);
-      item.wrapperElement.style.transform = `translate3d(${pan.x + preview.x * zoom}px, ${pan.y + preview.y * zoom}px, 0) scale(${visualScale})`;
+      const visualScaleX = zoom * (item.element.type === "text" ? 1 : scaleX);
+      const visualScaleY = zoom * (item.element.type === "text" ? 1 : scaleY);
+      item.wrapperElement.style.transform = `translate3d(${pan.x + preview.x * zoom}px, ${pan.y + preview.y * zoom}px, 0) scale(${visualScaleX}, ${visualScaleY})`;
     }
     renderTransientConnectorPreviews(
       previewElementsById,
@@ -7219,15 +7187,24 @@ function App() {
 
   function selectionResizePreview(
     bounds: SelectionRect,
-    corner: SelectionCorner,
+    corner: SelectionResizeHandle,
     clientX: number,
     clientY: number,
     session: SelectionTransformSession,
   ) {
-    const scale = getSelectionResizeScale(bounds, corner, clientX, clientY, session);
-    const anchor = getOppositeCorner(bounds, corner);
-    const width = bounds.width * scale;
-    const height = bounds.height * scale;
+    const isCorner = corner.length === 2;
+    const scale = isCorner ? getSelectionResizeScale(bounds, corner as SelectionCorner, clientX, clientY, session) : null;
+    const draggedHandle = {
+      x: (corner.includes("e") ? bounds.x + bounds.width : corner.includes("w") ? bounds.x : bounds.x + bounds.width / 2)
+        + (clientX - session.startClientX) / zoomLevelRef.current,
+      y: (corner.includes("s") ? bounds.y + bounds.height : corner.includes("n") ? bounds.y : bounds.y + bounds.height / 2)
+        + (clientY - session.startClientY) / zoomLevelRef.current,
+    };
+    const transform = isCorner ? null : getSelectionResizeTransform(
+      { ...bounds, rotation: getSelectionFrameRotation() },
+      corner,
+      draggedHandle,
+    );
     const resizeSession = resizeLayerSessionRef.current;
     if (!resizeSession) return null;
     const textSources = new Map(
@@ -7238,23 +7215,32 @@ function App() {
     const textSizes = getTextSelectionSizes(
       resizeSession.selectedElements,
       resizeSession.selectedIds,
-      scale,
+      scale ?? 1,
       textSources,
     );
-    const previewElements = scaleSelection(
-      resizeSession.selectedElements,
-      resizeSession.selectedIds,
-      bounds,
-      corner,
-      scale,
-      textSizes,
-    );
+    const previewElements = isCorner
+      ? scaleSelection(
+        resizeSession.selectedElements,
+        resizeSession.selectedIds,
+        bounds,
+        corner as SelectionCorner,
+        scale ?? 1,
+        textSizes,
+      )
+      : resizeSelection(
+        resizeSession.selectedElements,
+        resizeSession.selectedIds,
+        { ...bounds, rotation: getSelectionFrameRotation() },
+        transform!,
+        textSizes,
+      );
     const previewElementsById = overlayTransformedElements(
       resizeSession.baseElementsById,
       previewElements,
     );
     return {
       scale,
+      transform,
       textSizes,
       elements: previewElements,
       elementsById: previewElementsById,
@@ -7262,18 +7248,19 @@ function App() {
         previewElements,
         resizeSession.selectedIds,
         previewElementsById,
-      ) ?? {
-        x: corner.includes("e") ? anchor.x : anchor.x - width,
-        y: corner.includes("s") ? anchor.y : anchor.y - height,
-        width,
-        height,
-      },
+      ) ?? bounds,
     };
+  }
+
+  function getSelectionFrameRotation() {
+    if (selectedBlockIdsRef.current.length !== 1) return 0;
+    const selected = dataRef.current.elements.find((element) => element.id === selectedBlockIdsRef.current[0]);
+    return selected && isBoxCanvasElement(selected) ? selected.rotation : 0;
   }
 
   function startSelectionFrameInteraction(
     event: ReactPointerEvent<HTMLElement>,
-    corner: SelectionCorner | null,
+    corner: SelectionResizeHandle | null,
     connectorEndpoint: "start" | "end" | null = null,
   ) {
     const bounds = selectionWorldBounds;
@@ -7300,6 +7287,7 @@ function App() {
       startClientX: event.clientX,
       startClientY: event.clientY,
       selectionScale: null,
+      selectionResizeTransform: null,
       textResize: false,
       textSizes: null,
     };
@@ -7346,12 +7334,16 @@ function App() {
       startClientX: event.clientX,
       startClientY: event.clientY,
       selectionScale: null,
+      selectionResizeTransform: null,
       textResize: true,
       textSizes: null,
     };
     selectionTransformRef.current = session;
     setActiveMode("resizing");
   }
+  // Retained for cancellation compatibility with existing text-resize sessions;
+  // visual authoring now uses the shared cardinal selection frame.
+  void startTextResizeInteraction;
 
   function announceConnectorEndpointRetargetCandidate(
     candidate: ReturnType<typeof getConnectorAuthoringCandidate>,
@@ -7480,8 +7472,14 @@ function App() {
       const preview = selectionResizePreview(session.startBounds, session.corner, clientX, clientY, session);
       if (!preview) return;
       session.selectionScale = preview.scale;
+      session.selectionResizeTransform = preview.transform;
       session.textSizes = preview.textSizes;
-      updateSelectionResizePreview(preview.scale, preview.elements, preview.elementsById);
+      updateSelectionResizePreview(
+        preview.transform?.scaleX ?? preview.scale ?? 1,
+        preview.transform?.scaleY ?? preview.scale ?? 1,
+        preview.elements,
+        preview.elementsById,
+      );
       previewSelectionFrameVisualBounds(preview.bounds);
     }
   }
@@ -7596,24 +7594,41 @@ function App() {
       }
     } else if (session.corner && session.didMove) {
       const selectedIds = new Set(selectedBlockIdsRef.current);
-      const scale = session.selectionScale ?? getSelectionResizeScale(
+      const isCorner = session.corner.length === 2;
+      const scale = isCorner ? session.selectionScale ?? getSelectionResizeScale(
         session.startBounds,
-        session.corner,
+        session.corner as SelectionCorner,
         event.clientX,
         event.clientY,
         session,
-      );
+      ) : null;
+      const transform = !isCorner ? session.selectionResizeTransform ?? getSelectionResizeTransform(
+        { ...session.startBounds, rotation: getSelectionFrameRotation() },
+        session.corner,
+        {
+          x: (session.corner.includes("e") ? session.startBounds.x + session.startBounds.width : session.corner.includes("w") ? session.startBounds.x : session.startBounds.x + session.startBounds.width / 2) + (event.clientX - session.startClientX) / zoomLevelRef.current,
+          y: (session.corner.includes("s") ? session.startBounds.y + session.startBounds.height : session.corner.includes("n") ? session.startBounds.y : session.startBounds.y + session.startBounds.height / 2) + (event.clientY - session.startClientY) / zoomLevelRef.current,
+        },
+      ) : null;
       finishSelectionResizePreview();
       clearSelectionFrameVisualBounds();
       setBlocksWithHistory((currentBlocks) =>
-        scaleSelection(
-          currentBlocks,
-          selectedIds,
-          session.startBounds,
-          session.corner!,
-          scale,
-          session.textSizes ?? new Map(),
-        ),
+        isCorner
+          ? scaleSelection(
+            currentBlocks,
+            selectedIds,
+            session.startBounds,
+            session.corner as SelectionCorner,
+            scale ?? 1,
+            session.textSizes ?? new Map(),
+          )
+          : resizeSelection(
+            currentBlocks,
+            selectedIds,
+            { ...session.startBounds, rotation: getSelectionFrameRotation() },
+            transform!,
+            session.textSizes ?? new Map(),
+          ),
       );
     } else if (!session.corner && session.didMove) {
       endVisualDrag(event.clientX, event.clientY);
@@ -7661,7 +7676,7 @@ function App() {
     setActiveMode("selected");
   }
 
-  function resizeSelectionByKeyboard(corner: SelectionCorner) {
+  function resizeSelectionByKeyboard(corner: SelectionResizeHandle) {
     return (event: ReactKeyboardEvent<HTMLButtonElement>) => {
       const bounds = selectionWorldBounds;
       if (!bounds || !event.key.startsWith("Arrow")) return;
@@ -7676,11 +7691,20 @@ function App() {
       if (event.key === "ArrowDown") draggedCorner.y += step;
       event.preventDefault();
       event.stopPropagation();
-      const scale = getProportionalScale(bounds, corner, draggedCorner);
       const selectedIds = new Set(selectedBlockIdsRef.current);
+      const isCorner = corner.length === 2;
+      const scale = isCorner ? getProportionalScale(bounds, corner as SelectionCorner, draggedCorner) : 1;
       const textSizes = getTextSelectionSizes(dataRef.current.elements, selectedIds, scale);
       setBlocksWithHistory((currentBlocks) =>
-        scaleSelection(currentBlocks, selectedIds, bounds, corner, scale, textSizes),
+        isCorner
+          ? scaleSelection(currentBlocks, selectedIds, bounds, corner as SelectionCorner, scale, textSizes)
+          : resizeSelection(
+            currentBlocks,
+            selectedIds,
+            { ...bounds, rotation: getSelectionFrameRotation() },
+            getSelectionResizeTransform({ ...bounds, rotation: getSelectionFrameRotation() }, corner, draggedCorner),
+            textSizes,
+          ),
       );
       setActiveMode("selected");
     };
@@ -9234,41 +9258,6 @@ function App() {
           <CanvasInteractionOverlay
             marqueeRef={selectionRectRef}
             selectionFrameRef={selectionFrameRef}
-            textResizeHandle={(() => {
-              const selectedId = selectedBlockIds.length === 1 ? selectedBlockIds[0] : null;
-              const selected = selectedId
-                ? visibleCanvasElements.find((element): element is TextElement =>
-                  element.id === selectedId && element.type === "text" && !element.locked,
-                )
-                : null;
-              if (!selected || activeTool !== "select" || editingBlockId) return undefined;
-              const handleBlock = textResizeHandleGeometry?.id === selected.id
-                ? textResizeHandleGeometry
-                : selected;
-              const point = getTextEastResizeHandlePoint(handleBlock);
-              return {
-                cursorClass: getTextResizeCursorClass(handleBlock.rotation),
-                onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => {
-                  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-                  event.preventDefault();
-                  event.stopPropagation();
-                  resizeTextWidthByKeyboard(
-                    selected.id,
-                    event.key === "ArrowLeft" ? -1 : 1,
-                    zoomLevelRef.current,
-                  );
-                },
-                onLostPointerCapture: (event: ReactPointerEvent<HTMLButtonElement>) => finishSelectionFrameInteraction(event, true),
-                onPointerCancel: (event: ReactPointerEvent<HTMLButtonElement>) => finishSelectionFrameInteraction(event, true),
-                onPointerDown: startTextResizeInteraction,
-                onPointerMove: moveSelectionFrameInteraction,
-                onPointerUp: finishSelectionFrameInteraction,
-                ref: textResizeHandleRef,
-                rotation: handleBlock.rotation,
-                x: panOffset.x + point.x * zoomLevel,
-                y: panOffset.y + point.y * zoomLevel,
-              };
-            })()}
             selectionFrame={(() => {
               const bounds = selectionFramePreview ?? selectionWorldBounds;
               const isKeyboardArrowEndpointAccess = activeTool === "arrow"
@@ -9285,17 +9274,23 @@ function App() {
                   ? connectorEndpointPreview
                   : visibleCanvasElements.find((block) => block.id === selectedBlockIds[0])
                 : undefined;
-              if (selectedBlockIds.length === 1 && selected?.type === "text") return undefined;
               const usesNativeSingleElementInteraction = Boolean(
-                selected && (selected.type === "text" || selected.type === "image"),
+                selected && selected.type === "image",
               );
               const framePadding = SELECTION_FRAME_PADDING_PX;
-              const resizeCorners: readonly SelectionCorner[] = !selectionHasUnlockedElements
+              const mixedHasRotatedBox = selectedBlockIds.length > 1 && visibleCanvasElements.some((element) =>
+                selectedBlockIds.includes(element.id) && isBoxCanvasElement(element) && Math.abs(element.rotation % 360) > 0.001,
+              );
+              const resizeHandles: readonly SelectionResizeHandle[] = !selectionHasUnlockedElements
                 ? []
                 : selectedBlockIds.length > 1
-                  ? ["nw", "ne", "se", "sw"]
+                  ? mixedHasRotatedBox ? ["nw", "ne", "se", "sw"] : ["n", "ne", "e", "se", "s", "sw", "w", "nw"]
                   : selected?.type === "shape"
-                    ? ["nw", "ne", "se", "sw"]
+                    ? ["n", "ne", "e", "se", "s", "sw", "w", "nw"]
+                    : selected?.type === "text"
+                      ? ["n", "e", "s", "w"]
+                      : selected?.type === "image" || selected?.type === "ink"
+                        ? ["n", "e", "se", "s", "w"]
                     : [];
               const connectorEndpointPoints = selected?.type === "connector"
                 ? resolveConnectorPoints(selected, renderedCanvasElementsById)
@@ -9332,12 +9327,12 @@ function App() {
                 onPointerMove: moveSelectionFrameInteraction,
                 onPointerUp: finishSelectionFrameInteraction,
                 onResizeKeyDown: resizeSelectionByKeyboard,
-                onResizePointerDown: (corner: SelectionCorner) => (event: ReactPointerEvent<HTMLButtonElement>) => startSelectionFrameInteraction(event, corner),
+                onResizePointerDown: (corner: SelectionResizeHandle) => (event: ReactPointerEvent<HTMLButtonElement>) => startSelectionFrameInteraction(event, corner),
                 preserveNativeSoutheastHandle: selected?.type === "ink",
-                resizeLabel: (corner: SelectionCorner) => selectionHasLockedElements
+                resizeLabel: (corner: SelectionResizeHandle) => selectionHasLockedElements
                   ? `Resize unlocked selected elements from ${corner}`
                   : `Resize selected elements from ${corner}`,
-                resizeCorners,
+                resizeHandles,
                 showMoveSurface: activeTool === "select" && selectionHasUnlockedElements && !usesNativeSingleElementInteraction,
                 width: bounds.width * zoomLevel + framePadding * 2,
                 x: panOffset.x + bounds.x * zoomLevel - framePadding,

@@ -872,6 +872,16 @@ fn validate_element(value: &Value, page_id: &str) -> Result<(), String> {
                     return Err("text element.backgroundMode is invalid".into());
                 }
             }
+            if let Some(manual_height) = value.get("manualHeight") {
+                let Some(height) = manual_height.as_f64() else {
+                    return Err("text element.manualHeight must be a number".into());
+                };
+                if !height.is_finite() || !(height > 0.0 && height <= MAX_CANVAS_VALUE) {
+                    return Err(format!(
+                        "text element.manualHeight must be greater than 0 and at most {MAX_CANVAS_VALUE}"
+                    ));
+                }
+            }
         }
         "image"
             if value
@@ -2715,6 +2725,17 @@ mod tests {
         let mut transparent_text = element("transparent-text", 1);
         transparent_text["backgroundMode"] = json!("transparent");
         assert!(validate_element(&transparent_text, "p").is_ok());
+
+        let mut manually_sized = element("manual-height", 1);
+        manually_sized["manualHeight"] = json!(128.5);
+        assert!(validate_element(&manually_sized, "p").is_ok());
+        for invalid_height in [json!(0), json!(-1), json!(MAX_CANVAS_VALUE + 1.0), json!("128")] {
+            let mut invalid_manual_height = element("invalid-manual-height", 1);
+            invalid_manual_height["manualHeight"] = invalid_height;
+            assert!(validate_element(&invalid_manual_height, "p")
+                .unwrap_err()
+                .contains("manualHeight"));
+        }
 
         let mut invalid_text = element("invalid-text", 1);
         invalid_text["backgroundMode"] = json!("gradient");

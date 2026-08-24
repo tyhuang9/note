@@ -106,11 +106,17 @@ export function createSceneRepository(invoke: Invoke = tauriInvoke): SceneReposi
 /** Fills style fields that predate primitive styling without weakening write validation. */
 export function normalizeLoadedCanvasElement(element: CanvasElement): CanvasElement {
   if (element.type === "text") {
+    const rawManualHeight = (element as typeof element & { manualHeight?: unknown }).manualHeight;
+    const { manualHeight: _ignoredManualHeight, ...legacySafeElement } = element as typeof element & { manualHeight?: unknown };
+    const manualHeight = typeof rawManualHeight === "number" && Number.isFinite(rawManualHeight) && rawManualHeight > 0
+      ? rawManualHeight
+      : undefined;
     return {
-      ...element,
+      ...legacySafeElement,
       backgroundMode: normalizeTextBackgroundMode(
         (element as typeof element & { backgroundMode?: unknown }).backgroundMode,
       ),
+      ...(manualHeight === undefined ? {} : { manualHeight }),
     };
   }
   if (element.type === "shape") {

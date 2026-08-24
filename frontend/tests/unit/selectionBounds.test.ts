@@ -3,10 +3,12 @@ import type { CanvasElement, ConnectorElement, InkElement, ShapeElement, TextEle
 import { PEN_BRUSH } from "../../src/canvas/model/ink";
 import {
   getProportionalScale,
+  getSelectionResizeTransform,
   getSelectionBounds,
   getSelectionElementBounds,
   getSelectionResizePreviewConnectorIds,
   scaleSelection,
+  resizeSelection,
   translateSelection,
 } from "../../src/canvas/model/selectionBounds";
 import { resolveConnectorPoints } from "../../src/canvas/model/connectorBinding";
@@ -292,6 +294,42 @@ describe("composite transforms", () => {
 
   it("uses a single dominant-axis proportional scale from a corner drag", () => {
     expect(getProportionalScale({ x: 0, y: 0, width: 100, height: 50 }, "se", { x: 150, y: 60 })).toBe(1.5);
+  });
+
+  it("uses true cardinal width resizing while retaining the opposite text edge", () => {
+    const frame = { x: text.x, y: text.y, width: text.width, height: text.height, rotation: 0 };
+    const transform = getSelectionResizeTransform(frame, "e", { x: 210, y: 40 });
+    expect(transform).toMatchObject({ scaleX: 2, scaleY: 1, anchor: { x: 10, y: 40 } });
+    const [resized] = resizeSelection([text], new Set([text.id]), frame, transform,
+      new Map([[text.id, { width: 200, height: 40 }]]));
+    expect(resized).toMatchObject({ x: 10, y: 13, width: 200, height: 54, isWidthManuallyResized: true });
+  });
+
+  it("keeps the south edge fixed and records a non-clipping manual text height", () => {
+    const frame = { x: text.x, y: text.y, width: text.width, height: text.height, rotation: 0 };
+    const transform = getSelectionResizeTransform(frame, "n", { x: 60, y: 0 });
+    const [resized] = resizeSelection([text], new Set([text.id]), frame, transform,
+      new Map([[text.id, { width: 100, height: 54 }]]));
+    expect(resized).toMatchObject({ x: -10, y: 0, width: 140, height: 60, manualHeight: 60 });
+    expect((resized as TextElement).y + (resized as TextElement).height).toBe(60);
+  });
+
+  it("stretches ink coordinates on one axis without changing brush thickness", () => {
+    const frame = { x: ink.x, y: ink.y, width: ink.width, height: ink.height, rotation: 0 };
+    const transform = getSelectionResizeTransform(frame, "e", { x: 230, y: 60 });
+    const [resized] = resizeSelection([ink], new Set([ink.id]), frame, transform) as InkElement[];
+    expect(resized).toMatchObject({ width: 80, height: 20 });
+    expect(resized.points).toEqual([[0, 0, 0.5], [80, 20, 0.7]]);
+    expect(resized.brush.size).toBe(ink.brush.size);
+  });
+
+  it("calculates cardinal transforms in rotated local axes", () => {
+    const frame = { x: 10, y: 20, width: 100, height: 40, rotation: 90 };
+    const transform = getSelectionResizeTransform(frame, "e", { x: 60, y: 190 });
+    expect(transform.scaleX).toBeCloseTo(2);
+    expect(transform.scaleY).toBe(1);
+    expect(transform.anchor.x).toBeCloseTo(60);
+    expect(transform.anchor.y).toBeCloseTo(-10);
   });
 });
 

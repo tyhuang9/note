@@ -11,6 +11,7 @@ export type LegacyTextBlock = {
   imageData?: string;
   imageName?: string;
   isWidthManuallyResized?: boolean;
+  manualHeight?: number;
   pageId: string;
   richContent?: JSONContent;
   width: number;
@@ -54,6 +55,7 @@ function textElementFromLegacy(
     height: block.height,
     id: block.id,
     isWidthManuallyResized: block.isWidthManuallyResized,
+    manualHeight: block.manualHeight,
     locked: false,
     opacity: 1,
     pageId: block.pageId,

@@ -1,5 +1,5 @@
 import type { KeyboardEventHandler, MouseEventHandler, PointerEventHandler, ReactNode, Ref } from "react";
-import type { SelectionCorner } from "../model/selectionBounds";
+import type { SelectionResizeHandle } from "../model/selectionBounds";
 
 type CanvasInteractionOverlayProps = {
   children?: ReactNode;
@@ -37,11 +37,11 @@ type CanvasInteractionOverlayProps = {
     onPointerDown: PointerEventHandler<HTMLButtonElement>;
     onPointerMove: PointerEventHandler<HTMLButtonElement>;
     onPointerUp: PointerEventHandler<HTMLButtonElement>;
-    onResizeKeyDown: (corner: SelectionCorner) => KeyboardEventHandler<HTMLButtonElement>;
-    onResizePointerDown: (corner: SelectionCorner) => PointerEventHandler<HTMLButtonElement>;
+    onResizeKeyDown: (handle: SelectionResizeHandle) => KeyboardEventHandler<HTMLButtonElement>;
+    onResizePointerDown: (handle: SelectionResizeHandle) => PointerEventHandler<HTMLButtonElement>;
     preserveNativeSoutheastHandle?: boolean;
-    resizeLabel: (corner: SelectionCorner) => string;
-    resizeCorners: readonly SelectionCorner[];
+    resizeLabel: (handle: SelectionResizeHandle) => string;
+    resizeHandles: readonly SelectionResizeHandle[];
     showMoveSurface: boolean;
     width: number;
     x: number;
@@ -81,16 +81,16 @@ export function CanvasInteractionOverlay({
               type="button"
             />
           ) : null}
-          {selectionFrame.resizeCorners.map((corner) => (
+          {selectionFrame.resizeHandles.map((handle) => (
             <button
-              aria-label={selectionFrame.resizeLabel(corner)}
-              className={`selection-frame-handle selection-frame-handle-${corner}`}
-              key={corner}
-              onKeyDown={selectionFrame.onResizeKeyDown(corner)}
+              aria-label={selectionFrame.resizeLabel(handle)}
+              className={`selection-frame-handle selection-frame-handle-${handle}`}
+              key={handle}
+              onKeyDown={selectionFrame.onResizeKeyDown(handle)}
               onPointerCancel={selectionFrame.onPointerCancel}
               onPointerDown={(event) => {
                 event.stopPropagation();
-                selectionFrame.onResizePointerDown(corner)(event);
+                selectionFrame.onResizePointerDown(handle)(event);
               }}
               onLostPointerCapture={selectionFrame.onLostPointerCapture}
               onPointerMove={selectionFrame.onPointerMove}

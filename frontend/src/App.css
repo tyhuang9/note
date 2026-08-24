@@ -3032,8 +3032,8 @@ h2 {
 .selection-frame-handle {
   position: absolute;
   z-index: 1;
-  width: 24px;
-  height: 24px;
+  width: 44px;
+  height: 44px;
   border: 0;
   padding: 0;
   background: transparent;
@@ -3042,20 +3042,31 @@ h2 {
 
 .selection-frame-handle::after {
   position: absolute;
-  top: 7px;
-  left: 7px;
-  width: 10px;
-  height: 10px;
+  top: 17px;
+  left: 17px;
+  width: 8px;
+  height: 8px;
   border: 1px solid var(--canvas-selection, var(--accent-purple));
-  border-radius: 1px;
+  border-radius: 999px;
   background: var(--canvas-tool-bg, #fff);
   content: "";
 }
 
-.selection-frame-handle-nw { top: -12px; left: -12px; cursor: nwse-resize; }
-.selection-frame-handle-ne { top: -12px; right: -12px; cursor: nesw-resize; }
-.selection-frame-handle-se { right: -12px; bottom: -12px; cursor: nwse-resize; }
-.selection-frame-handle-sw { bottom: -12px; left: -12px; cursor: nesw-resize; }
+.selection-frame-handle-nw { top: -22px; left: -22px; cursor: nwse-resize; }
+.selection-frame-handle-ne { top: -22px; right: -22px; cursor: nesw-resize; }
+.selection-frame-handle-se { right: -22px; bottom: -22px; cursor: nwse-resize; }
+.selection-frame-handle-sw { bottom: -22px; left: -22px; cursor: nesw-resize; }
+.selection-frame-handle-n { top: -22px; left: calc(50% - 22px); cursor: ns-resize; }
+.selection-frame-handle-e { top: calc(50% - 22px); right: -22px; cursor: ew-resize; }
+.selection-frame-handle-s { bottom: -22px; left: calc(50% - 22px); cursor: ns-resize; }
+.selection-frame-handle-w { top: calc(50% - 22px); left: -22px; cursor: ew-resize; }
+
+/* The hit region is deliberately larger than the visible marker. Keep it
+   transparent so a text card's right edge remains continuous on hover. */
+.selection-frame-handle:hover,
+.selection-frame-handle:active {
+  background: transparent;
+}
 
 .selection-frame-handle:focus-visible {
   outline: 2px solid var(--canvas-focus, var(--accent-purple));

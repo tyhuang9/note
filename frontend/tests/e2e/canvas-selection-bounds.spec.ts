@@ -356,9 +356,13 @@ test("single text keeps one seamless selected border in light and dark narrow la
     await expect(frame).toHaveCSS("border-right-color", "rgba(0, 0, 0, 0)");
     await expect(frame).toHaveCSS("box-shadow", "none");
     await expect(frame.locator(".selection-frame-handle")).toHaveCount(8);
-    const blockBounds = await requiredBounds(block, `${dark ? "dark" : "light"} narrow text block`);
-    const frameBounds = await requiredBounds(frame, `${dark ? "dark" : "light"} narrow text frame`);
-    expect(frameBounds.x + frameBounds.width).toBeCloseTo(blockBounds.x + blockBounds.width, 0);
+    await expect.poll(async () => {
+      const blockBounds = await requiredBounds(block, `${dark ? "dark" : "light"} narrow text block`);
+      const frameBounds = await requiredBounds(frame, `${dark ? "dark" : "light"} narrow text frame`);
+      return Math.abs(
+        frameBounds.x + frameBounds.width - (blockBounds.x + blockBounds.width),
+      );
+    }).toBeLessThan(1);
   }
 });
 

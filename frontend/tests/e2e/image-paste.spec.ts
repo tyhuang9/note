@@ -108,7 +108,7 @@ test("image resizing uses world-space deltas when zoomed", async ({ page }) => {
 
 test("pasting a clipboard image while editing a textbox inserts a rich image", async ({ page }) => {
   await page.getByRole("button", { name: "Text (T / 8)" }).click();
-  await clickCanvas(page, 360, 260);
+  await doubleClickCanvas(page, 360, 260);
   await page.keyboard.type("hello");
   await expect(page.locator(".text-block-editor-content")).toBeVisible();
 
@@ -125,7 +125,7 @@ test("pressing Ctrl+V with a clipboard image while editing a textbox inserts a r
   page,
 }) => {
   await page.getByRole("button", { name: "Text (T / 8)" }).click();
-  await clickCanvas(page, 360, 260);
+  await doubleClickCanvas(page, 360, 260);
   await page.keyboard.type("hello");
   await expect(page.locator(".text-block-editor-content")).toBeVisible();
 
@@ -145,6 +145,17 @@ async function clickCanvas(page: Page, x: number, y: number) {
   }
 
   await page.mouse.click(bounds.x + x, bounds.y + y);
+}
+
+async function doubleClickCanvas(page: Page, x: number, y: number) {
+  const canvas = page.getByRole("tabpanel");
+  const bounds = await canvas.boundingBox();
+
+  if (!bounds) {
+    throw new Error("Canvas bounds were not available.");
+  }
+
+  await page.mouse.dblclick(bounds.x + x, bounds.y + y);
 }
 
 async function pastePngFile(page: Page, dispatchFromActiveElement = false) {

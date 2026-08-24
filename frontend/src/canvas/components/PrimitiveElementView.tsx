@@ -513,6 +513,7 @@ type FreeConnectorElement = Omit<ConnectorElement, "start" | "end"> & {
 function FreeConnectorElementView({ activeSearchRange = null, element, isDragSourceHidden = false, isSelected, labelEditRequest, onElementChange, onKeyboardMove, onLabelCommit, onSelect, searchRanges = [] }: PrimitiveElementViewProps<FreeConnectorElement> & Pick<ConnectorElementViewProps, "activeSearchRange" | "labelEditRequest" | "onLabelCommit" | "searchRanges">) {
   const ref = useRef<SVGSVGElement | null>(null);
   const [isEditingLabel, setIsEditingLabel] = useState(false);
+  const handledLabelEditRequestRef = useRef(labelEditRequest);
   const minX = Math.min(element.start.x, element.end.x);
   const minY = Math.min(element.start.y, element.end.y);
   const x1 = element.start.x - minX; const y1 = element.start.y - minY; const x2 = element.end.x - minX; const y2 = element.end.y - minY;
@@ -524,7 +525,13 @@ function FreeConnectorElementView({ activeSearchRange = null, element, isDragSou
   const width = Math.max(1, Math.abs(x2 - x1) + padding * 2);
   const height = Math.max(1, Math.abs(y2 - y1) + padding * 2);
   useEffect(() => {
-    if (labelEditRequest === undefined || element.style.endArrowhead !== "arrow" || !onLabelCommit) return;
+    if (
+      labelEditRequest === undefined
+      || labelEditRequest === handledLabelEditRequestRef.current
+      || element.style.endArrowhead !== "arrow"
+      || !onLabelCommit
+    ) return;
+    handledLabelEditRequestRef.current = labelEditRequest;
     setIsEditingLabel(true);
   }, [element.style.endArrowhead, labelEditRequest, onLabelCommit]);
   useLayoutEffect(() => {

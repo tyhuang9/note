@@ -2491,6 +2491,7 @@ h2 {
   cursor: text;
   stroke: transparent;
   stroke-width: 16px;
+  vector-effect: non-scaling-stroke;
   pointer-events: stroke;
 }
 

@@ -10,6 +10,7 @@ import { getShapeTextInsets } from "../model/hitTesting";
 import { roundedDiamondPath, roundedRectanglePath } from "../model/shapeBoundary";
 import {
   connectorLabelFontPixels,
+  MAX_CONNECTOR_LABEL_BYTES,
   getConnectorLabel,
   getConnectorLabelGapHalfLength,
   measureConnectorLabelWidth,
@@ -518,6 +519,7 @@ function FreeConnectorElementView({ activeSearchRange = null, element, isDragSou
   const connectorRootRef = useRef<HTMLDivElement | null>(null);
   const [isEditingLabel, setIsEditingLabel] = useState(false);
   const [labelDraft, setLabelDraft] = useState("");
+  const [labelValidationError, setLabelValidationError] = useState("");
   const handledLabelEditRequestRef = useRef(labelEditRequest);
   const minX = Math.min(element.start.x, element.end.x);
   const minY = Math.min(element.start.y, element.end.y);
@@ -555,6 +557,7 @@ function FreeConnectorElementView({ activeSearchRange = null, element, isDragSou
     ) return;
     handledLabelEditRequestRef.current = labelEditRequest;
     setLabelDraft(label ?? "");
+    setLabelValidationError("");
     setIsEditingLabel(true);
   }, [element.style.endArrowhead, label, labelEditRequest, onLabelCommit]);
   useEffect(() => {
@@ -578,13 +581,19 @@ function FreeConnectorElementView({ activeSearchRange = null, element, isDragSou
   const midpoint = { x: (x1 + x2) / 2 + padding, y: (y1 + y2) / 2 + padding };
   const labelAngle = readableConnectorLabelAngle({ x: x1, y: y1 }, { x: x2, y: y2 }, labelStyle.orientation);
   const commitLabel = (draft: string, restoreFocus = true) => {
-    setIsEditingLabel(false);
     const normalized = normalizeConnectorLabel(draft);
+    const intentionallyEmpty = draft.replace(/[\r\n]+/g, " ").trim().length === 0;
+    if (!normalized && !intentionallyEmpty) {
+      setLabelValidationError(`Arrow labels must be at most ${MAX_CONNECTOR_LABEL_BYTES} UTF-8 bytes.`);
+      return;
+    }
+    setIsEditingLabel(false);
     if (normalized !== label) onLabelCommit?.(element.id, normalized);
     if (restoreFocus) requestAnimationFrame(() => connectorRootRef.current?.focus({ preventScroll: true }));
   };
   const beginLabelEdit = () => {
     setLabelDraft(label ?? "");
+    setLabelValidationError("");
     setIsEditingLabel(true);
   };
   return (
@@ -629,7 +638,15 @@ function FreeConnectorElementView({ activeSearchRange = null, element, isDragSou
           className="connector-label connector-label-editor"
           maxLength={MAX_CONNECTOR_LABEL_INPUT_LENGTH}
           onBlur={() => commitLabel(labelDraft, false)}
-          onChange={(event) => setLabelDraft(event.currentTarget.value.replace(/[\r\n]+/g, " "))}
+          onChange={(event) => {
+            const next = event.currentTarget.value.replace(/[\r\n]+/g, " ");
+            if (new TextEncoder().encode(next).byteLength > MAX_CONNECTOR_LABEL_BYTES) {
+              setLabelValidationError(`Arrow labels must be at most ${MAX_CONNECTOR_LABEL_BYTES} UTF-8 bytes.`);
+              return;
+            }
+            setLabelValidationError("");
+            setLabelDraft(next);
+          }}
           onKeyDown={(event) => {
             if (event.nativeEvent.isComposing || event.keyCode === 229) return;
             if (event.key === "Escape") {
@@ -648,6 +665,8 @@ function FreeConnectorElementView({ activeSearchRange = null, element, isDragSou
           }}
           onPointerDown={(event) => event.stopPropagation()}
           style={{ ...connectorLabelStyle(midpoint, labelStyle, labelAngle), width: labelWidth }}
+          aria-invalid={labelValidationError ? true : undefined}
+          title={labelValidationError || undefined}
           type="text"
           value={labelDraft}
         />

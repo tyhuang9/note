@@ -1027,7 +1027,6 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
 
   const handlePointerMove = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
-      updateSelectHoverCursor(event);
       const currentPrimitive = primitiveSession.current;
       if (currentPrimitive?.pointerId === event.pointerId) {
         const point = getCanvasPoint(event.clientX, event.clientY);
@@ -1095,7 +1094,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
         current.scheduleSelectionRectangle(getSelectionRect(currentSelection));
       }
     },
-    [getCanvasPoint, paintPrimitivePreview, updateSelectHoverCursor],
+    [getCanvasPoint, paintPrimitivePreview],
   );
 
   const handlePointerEnd = useCallback(

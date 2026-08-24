@@ -7,7 +7,7 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByRole("tabpanel")).toBeVisible();
 });
 
-test("all-text selections render a four-corner composite frame and move as one group", async ({ page }) => {
+test("all-text selections render an eight-handle composite frame and move as one group", async ({ page }) => {
   const canvas = page.getByRole("tabpanel");
   const bounds = await requiredBounds(canvas, "canvas");
   const blocks = await createTwoTextBlocks(page, bounds);
@@ -232,6 +232,163 @@ test("single text uses its native border with eight invisible resize hit zones",
       y: northwestBounds.y + northwestBounds.height / 2,
     });
   expect(northwestHit).toBe("nw");
+
+  const header = block.locator(".text-block-header");
+  const headerBounds = await requiredBounds(header, "native text drag header");
+  const headerPoint = {
+    x: headerBounds.x + headerBounds.width / 2,
+    y: headerBounds.y + headerBounds.height / 2,
+  };
+  const headerHit = await page.evaluate(({ x, y }) =>
+    document.elementFromPoint(x, y)?.classList.contains("text-block-header"), headerPoint);
+  expect(headerHit).toBe(true);
+  const beforeDrag = await readWorldPosition(block);
+  await page.mouse.move(headerPoint.x, headerPoint.y);
+  await page.mouse.down();
+  await page.mouse.move(headerPoint.x + 48, headerPoint.y + 32, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(() => readWorldPosition(block)).toEqual({
+    x: beforeDrag.x + 48,
+    y: beforeDrag.y + 32,
+  });
+});
+
+for (const zoom of [50, 100, 200]) {
+  test(`single text resize hit zones stay screen-constant at ${zoom}%`, async ({ page }) => {
+    const canvas = page.getByRole("tabpanel");
+    const bounds = await requiredBounds(canvas, "canvas");
+    const block = await createTextBlock(page, bounds.x + 440, bounds.y + 260, `Native border ${zoom}`);
+    await block.locator(".text-block-display").click();
+    await setZoom(page, canvas, zoom);
+
+    const frame = page.locator(".selection-frame.is-native-text-frame");
+    const blockBounds = await requiredBounds(block, "native text block");
+    const frameBounds = await requiredBounds(frame, "native text frame");
+    expect(frameBounds.x).toBeCloseTo(blockBounds.x, 0);
+    expect(frameBounds.y).toBeCloseTo(blockBounds.y, 0);
+    expect(frameBounds.width).toBeCloseTo(blockBounds.width, 0);
+    expect(frameBounds.height).toBeCloseTo(blockBounds.height, 0);
+
+    const eastBounds = await requiredBounds(
+      frame.locator('[data-selection-resize-handle="e"]'),
+      "east resize zone",
+    );
+    const northeastBounds = await requiredBounds(
+      frame.locator('[data-selection-resize-handle="ne"]'),
+      "northeast resize zone",
+    );
+    expect(eastBounds.width).toBeCloseTo(12, 0);
+    expect(northeastBounds.width).toBeCloseTo(28, 0);
+    expect(northeastBounds.height).toBeCloseTo(28, 0);
+    expect(await page.evaluate(({ x, y }) =>
+      document.elementFromPoint(x, y)?.getAttribute("data-selection-resize-handle"), {
+        x: eastBounds.x + eastBounds.width / 2,
+        y: eastBounds.y + eastBounds.height / 2,
+      })).toBe("e");
+  });
+}
+
+test("single text supports pointer resizing from all eight native-border zones", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  const bounds = await requiredBounds(canvas, "canvas");
+  const block = await createTextBlock(page, bounds.x + 440, bounds.y + 260, "Resize every side");
+  await block.locator(".text-block-display").click();
+  const originalPosition = await readWorldPosition(block);
+  const originalSize = await readWorldSize(block);
+  const outwardDelta = {
+    n: { x: 0, y: -28 },
+    ne: { x: 36, y: -28 },
+    e: { x: 36, y: 0 },
+    se: { x: 36, y: 28 },
+    s: { x: 0, y: 28 },
+    sw: { x: -36, y: 28 },
+    w: { x: -36, y: 0 },
+    nw: { x: -36, y: -28 },
+  } as const;
+
+  for (const [handle, delta] of Object.entries(outwardDelta)) {
+    const control = page.locator(`[data-selection-resize-handle="${handle}"]`);
+    const handleBounds = await requiredBounds(control, `${handle} resize zone`);
+    const start = {
+      x: handleBounds.x + handleBounds.width / 2,
+      y: handleBounds.y + handleBounds.height / 2,
+    };
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(start.x + delta.x, start.y + delta.y, { steps: 4 });
+    await page.mouse.up();
+
+    const resizedPosition = await readWorldPosition(block);
+    const resizedSize = await readWorldSize(block);
+    if (handle.includes("w")) {
+      expect(resizedPosition.x).toBeLessThan(originalPosition.x);
+      expect(resizedSize.width).toBeGreaterThan(originalSize.width);
+    } else if (handle.includes("e")) {
+      expect(resizedPosition.x).toBeCloseTo(originalPosition.x, 2);
+      expect(resizedSize.width).toBeGreaterThan(originalSize.width);
+    }
+    if (handle.includes("n")) {
+      expect(resizedPosition.y).toBeLessThan(originalPosition.y);
+      expect(resizedSize.height).toBeGreaterThan(originalSize.height);
+    } else if (handle.includes("s")) {
+      expect(resizedPosition.y).toBeCloseTo(originalPosition.y, 2);
+      expect(resizedSize.height).toBeGreaterThan(originalSize.height);
+    }
+
+    await canvas.focus();
+    await page.keyboard.press("Control+z");
+    await expect.poll(() => readWorldPosition(block)).toEqual(originalPosition);
+    await expect.poll(() => readWorldSize(block)).toEqual(originalSize);
+  }
+});
+
+test("single text keeps one seamless selected border in light and dark narrow layouts", async ({ page }) => {
+  const canvas = page.getByRole("tabpanel");
+  const bounds = await requiredBounds(canvas, "canvas");
+  const block = await createTextBlock(page, bounds.x + 440, bounds.y + 260, "Narrow native border");
+  await block.locator(".text-block-display").click();
+  await page.setViewportSize({ width: 320, height: 720 });
+  const frame = page.locator(".selection-frame.is-native-text-frame");
+  const themeToggle = page.getByRole("button", { name: "Dark mode" });
+
+  for (const dark of [true, false]) {
+    if ((await themeToggle.getAttribute("aria-pressed")) !== String(dark)) await themeToggle.click();
+    await expect(frame).toHaveCSS("border-right-color", "rgba(0, 0, 0, 0)");
+    await expect(frame).toHaveCSS("box-shadow", "none");
+    await expect(frame.locator(".selection-frame-handle")).toHaveCount(8);
+    const blockBounds = await requiredBounds(block, `${dark ? "dark" : "light"} narrow text block`);
+    const frameBounds = await requiredBounds(frame, `${dark ? "dark" : "light"} narrow text frame`);
+    expect(frameBounds.x + frameBounds.width).toBeCloseTo(blockBounds.x + blockBounds.width, 0);
+  }
+});
+
+test("rotated single text keeps local frame geometry and rotated edge cursors during preview", async ({ page }) => {
+  await installSelectionFrameWorkspace(page, 30);
+  await page.reload();
+  await expect(page.getByRole("tabpanel")).toBeVisible();
+  const block = page.locator('[data-canvas-element-id="frame-text"]:not(.drag-layer-clone)');
+  await block.locator(".text-block-display").click();
+  const frame = page.locator(".selection-frame.is-native-text-frame");
+  await expect(frame).toHaveCSS("transform", /matrix\(0\.866/);
+  await expect(frame.locator('[data-selection-resize-handle="e"]')).toHaveCSS("cursor", "nwse-resize");
+  await expect(frame.locator('[data-selection-resize-handle="n"]')).toHaveCSS("cursor", "nesw-resize");
+  await expect(frame).toHaveCSS("width", "240px");
+  await expect(frame).toHaveCSS("height", "92px");
+
+  await resetSelectionFramePersistenceCounts(page);
+  const east = frame.locator('[data-selection-resize-handle="e"]');
+  const eastBounds = await requiredBounds(east, "rotated east resize zone");
+  const start = { x: eastBounds.x + eastBounds.width / 2, y: eastBounds.y + eastBounds.height / 2 };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x + 35, start.y + 20, { steps: 4 });
+  await expect(page.locator(".drag-layer-clone")).toHaveCount(1);
+  await expect(frame).toHaveCSS("transform", /matrix\(0\.866/);
+  expect(await selectionFramePersistenceCounts(page)).toEqual({ apply: 0, session: 0 });
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  await expect(page.locator(".drag-layer-clone")).toHaveCount(0);
+  expect(await selectionFramePersistenceCounts(page)).toEqual({ apply: 0, session: 0 });
 });
 
 test("east text resize preserves manual height until content outgrows it", async ({ page }) => {
@@ -1161,8 +1318,8 @@ async function resetSelectionFramePersistenceCounts(page: Page) {
   });
 }
 
-async function installSelectionFrameWorkspace(page: Page) {
-  await page.addInitScript(() => {
+async function installSelectionFrameWorkspace(page: Page, textRotation = 0) {
+  await page.addInitScript((textRotation) => {
     type ElementRecord = Record<string, unknown> & { id: string; pageId: string };
     const storageKey = "note-selection-frame-playwright-workspace";
     const workspace = {
@@ -1201,7 +1358,7 @@ async function installSelectionFrameWorkspace(page: Page) {
           locked: false,
           opacity: 1,
           pageId: "frame-page",
-          rotation: 0,
+          rotation: textRotation,
           type: "text",
           updatedAt: 1,
           width: 240,
@@ -1279,7 +1436,7 @@ async function installSelectionFrameWorkspace(page: Page) {
         throw new Error(`Unexpected command ${command}`);
       },
     };
-  });
+  }, textRotation);
 }
 
 async function installAllTextResizeWorkspace(page: Page) {
@@ -1369,7 +1526,8 @@ async function createTextBlock(page: Page, x: number, y: number, text: string) {
   const editor = page.locator(".text-block-editor-content").last();
   await expect(editor).toBeVisible();
   await editor.fill(text);
-  await page.mouse.click(x + 380, y + 180);
+  const canvasBounds = await requiredBounds(page.getByRole("tabpanel"), "text creation canvas");
+  await page.mouse.click(canvasBounds.x + 24, canvasBounds.y + 24);
   const allBlocks = page.locator(".text-block");
   const block = allBlocks.nth((await allBlocks.count()) - 1);
   await expect(block.locator(".text-block-display")).toContainText(text.replaceAll("\n", ""));

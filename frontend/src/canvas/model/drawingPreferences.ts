@@ -1,9 +1,9 @@
 import type {
   CanvasColor,
+  ConnectorElement,
   ConnectorLabelOrientation,
   ConnectorLabelStyle,
   CanvasElement,
-  ConnectorElement,
   InkElement,
   RoughStyle,
   ShapeElement,
@@ -13,6 +13,7 @@ import type {
   TextFontSize,
 } from "./elements";
 import { resolveConnectorLabelStyle } from "./connectorLabel";
+import { isArrowConnector } from "./elements";
 import type { TextPreferences } from "./textPreferences";
 
 export type DrawingPreferenceTool =
@@ -26,9 +27,11 @@ export type DrawingPreferenceTool =
 
 export type DrawingToolPreference = Readonly<{
   backgroundColor: CanvasColor | null;
+  endArrowhead: ConnectorElement["style"]["endArrowhead"];
   opacity: number;
   roughness: number;
   roundness: number;
+  startArrowhead: ConnectorElement["style"]["startArrowhead"];
   strokeColor: CanvasColor;
   strokeStyle: RoughStyle["strokeStyle"];
   strokeWidth: number;
@@ -39,6 +42,7 @@ export type DrawingPreferences = Readonly<Record<DrawingPreferenceTool, DrawingT
 export type DrawingProperty =
   | "backgroundColor"
   | "backgroundMode"
+  | "endArrowhead"
   | "labelColor"
   | "labelFontFamily"
   | "labelFontSize"
@@ -46,6 +50,7 @@ export type DrawingProperty =
   | "opacity"
   | "roughness"
   | "roundness"
+  | "startArrowhead"
   | "strokeColor"
   | "strokeStyle"
   | "strokeWidth";
@@ -53,6 +58,7 @@ export type DrawingProperty =
 export type DrawingPropertyUpdate =
   | { property: "backgroundColor"; value: CanvasColor | null }
   | { property: "backgroundMode"; value: TextBackgroundMode }
+  | { property: "endArrowhead"; value: ConnectorElement["style"]["endArrowhead"] }
   | { property: "labelColor"; value: CanvasColor }
   | { property: "labelFontFamily"; value: TextFontFamily }
   | { property: "labelFontSize"; value: TextFontSize }
@@ -60,6 +66,7 @@ export type DrawingPropertyUpdate =
   | { property: "opacity"; value: number }
   | { property: "roughness"; value: number }
   | { property: "roundness"; value: number }
+  | { property: "startArrowhead"; value: ConnectorElement["style"]["startArrowhead"] }
   | { property: "strokeColor"; value: CanvasColor }
   | { property: "strokeStyle"; value: RoughStyle["strokeStyle"] }
   | { property: "strokeWidth"; value: number };
@@ -72,6 +79,7 @@ export type PropertyValue<T> =
 export type DrawingPropertyValues = Readonly<{
   backgroundColor: PropertyValue<CanvasColor | null>;
   backgroundMode: PropertyValue<TextBackgroundMode>;
+  endArrowhead: PropertyValue<ConnectorElement["style"]["endArrowhead"]>;
   labelColor: PropertyValue<CanvasColor>;
   labelFontFamily: PropertyValue<TextFontFamily>;
   labelFontSize: PropertyValue<TextFontSize>;
@@ -79,6 +87,7 @@ export type DrawingPropertyValues = Readonly<{
   opacity: PropertyValue<number>;
   roughness: PropertyValue<number>;
   roundness: PropertyValue<number>;
+  startArrowhead: PropertyValue<ConnectorElement["style"]["startArrowhead"]>;
   strokeColor: PropertyValue<CanvasColor>;
   strokeStyle: PropertyValue<RoughStyle["strokeStyle"]>;
   strokeWidth: PropertyValue<number>;
@@ -90,9 +99,11 @@ const fixed = (value: string): CanvasColor => ({ kind: "fixed", value });
 function preference(overrides: Partial<DrawingToolPreference> = {}): DrawingToolPreference {
   return {
     backgroundColor: null,
+    endArrowhead: "none",
     opacity: 1,
     roughness: 1.2,
     roundness: 0,
+    startArrowhead: "none",
     strokeColor: foreground(),
     strokeStyle: "solid",
     strokeWidth: 2,
@@ -102,7 +113,7 @@ function preference(overrides: Partial<DrawingToolPreference> = {}): DrawingTool
 
 export function createDefaultDrawingPreferences(): DrawingPreferences {
   return {
-    arrow: preference(),
+    arrow: preference({ endArrowhead: "arrow" }),
     diamond: preference(),
     ellipse: preference(),
     highlighter: preference({ opacity: 0.38, roughness: 0, strokeColor: fixed("#f4c542"), strokeWidth: 18 }),
@@ -152,9 +163,15 @@ export function normalizeDrawingPreferences(value: unknown): DrawingPreferences 
       backgroundColor: raw.backgroundColor === null || isCanvasColor(raw.backgroundColor)
         ? raw.backgroundColor
         : fallback.backgroundColor,
+      endArrowhead: raw.endArrowhead === "arrow" || raw.endArrowhead === "none"
+        ? raw.endArrowhead
+        : fallback.endArrowhead,
       opacity: finiteInRange(raw.opacity, fallback.opacity, 0, 1),
       roughness: finiteInRange(raw.roughness, fallback.roughness, 0, 10),
       roundness: finiteInRange(raw.roundness, fallback.roundness, 0, 1),
+      startArrowhead: raw.startArrowhead === "arrow" || raw.startArrowhead === "none"
+        ? raw.startArrowhead
+        : fallback.startArrowhead,
       strokeColor: isCanvasColor(raw.strokeColor) ? raw.strokeColor : fallback.strokeColor,
       strokeStyle: raw.strokeStyle === "solid" || raw.strokeStyle === "dashed" || raw.strokeStyle === "dotted"
         ? raw.strokeStyle
@@ -183,6 +200,7 @@ export function isDrawingPreferenceTool(tool: string): tool is DrawingPreference
 export function isPropertySupportedByTool(tool: DrawingPreferenceTool, property: DrawingProperty) {
   if (property === "opacity" || property === "strokeColor" || property === "strokeWidth") return true;
   if (tool === "pen" || tool === "highlighter") return false;
+  if (property === "startArrowhead" || property === "endArrowhead") return tool === "line" || tool === "arrow";
   if (property === "backgroundColor") return tool !== "line" && tool !== "arrow";
   if (property === "roundness") return tool === "rectangle";
   return true;
@@ -192,6 +210,7 @@ export function readDrawingProperties(elements: readonly CanvasElement[]): Drawi
   return {
     backgroundColor: readCompatible(elements, "backgroundColor"),
     backgroundMode: readCompatible(elements, "backgroundMode"),
+    endArrowhead: readCompatible(elements, "endArrowhead"),
     labelColor: readCompatible(elements, "labelColor"),
     labelFontFamily: readCompatible(elements, "labelFontFamily"),
     labelFontSize: readCompatible(elements, "labelFontSize"),
@@ -199,6 +218,7 @@ export function readDrawingProperties(elements: readonly CanvasElement[]): Drawi
     opacity: readCompatible(elements, "opacity"),
     roughness: readCompatible(elements, "roughness"),
     roundness: readCompatible(elements, "roundness"),
+    startArrowhead: readCompatible(elements, "startArrowhead"),
     strokeColor: readCompatible(elements, "strokeColor"),
     strokeStyle: readCompatible(elements, "strokeStyle"),
     strokeWidth: readCompatible(elements, "strokeWidth"),
@@ -209,6 +229,7 @@ export function drawingPropertiesFromPreference(preference: DrawingToolPreferenc
   return {
     backgroundColor: { kind: "value", value: preference.backgroundColor },
     backgroundMode: { kind: "unavailable" },
+    endArrowhead: { kind: "value", value: preference.endArrowhead },
     labelColor: { kind: "unavailable" },
     labelFontFamily: { kind: "unavailable" },
     labelFontSize: { kind: "unavailable" },
@@ -216,6 +237,7 @@ export function drawingPropertiesFromPreference(preference: DrawingToolPreferenc
     opacity: { kind: "value", value: preference.opacity },
     roughness: { kind: "value", value: preference.roughness },
     roundness: { kind: "value", value: preference.roundness },
+    startArrowhead: { kind: "value", value: preference.startArrowhead },
     strokeColor: { kind: "value", value: preference.strokeColor },
     strokeStyle: { kind: "value", value: preference.strokeStyle },
     strokeWidth: { kind: "value", value: preference.strokeWidth },
@@ -240,6 +262,7 @@ function readCompatible<P extends DrawingProperty>(
 type PropertyType<P extends DrawingProperty> =
   P extends "backgroundColor" ? CanvasColor | null :
   P extends "backgroundMode" ? TextBackgroundMode :
+  P extends "endArrowhead" | "startArrowhead" ? ConnectorElement["style"]["endArrowhead"] :
   P extends "labelColor" ? CanvasColor :
   P extends "labelFontFamily" ? TextFontFamily :
   P extends "labelFontSize" ? TextFontSize :
@@ -258,7 +281,7 @@ function readElementProperty<P extends DrawingProperty>(
     return element.backgroundMode as PropertyType<P>;
   }
   if (element.type === "connector" && property.startsWith("label")) {
-    if (element.style.endArrowhead !== "arrow") return unavailable;
+    if (!isArrowConnector(element)) return unavailable;
     const style = resolveConnectorLabelStyle(element.labelStyle);
     if (property === "labelColor") return style.color as PropertyType<P>;
     if (property === "labelFontFamily") return style.fontFamily as PropertyType<P>;
@@ -271,6 +294,9 @@ function readElementProperty<P extends DrawingProperty>(
     return unavailable;
   }
   if (element.type === "shape" || element.type === "connector") {
+    if (element.type === "connector" && (property === "startArrowhead" || property === "endArrowhead")) {
+      return element.style[property] as PropertyType<P>;
+    }
     if (property === "backgroundColor") {
       return element.type === "shape" ? (element.style.fillColor ?? null) as PropertyType<P> : unavailable;
     }
@@ -316,6 +342,7 @@ export function drawingPropertiesFromTextPreferences(
   return {
     backgroundColor: { kind: "unavailable" },
     backgroundMode: { kind: "value", value: preferences.backgroundMode },
+    endArrowhead: { kind: "unavailable" },
     labelColor: { kind: "unavailable" },
     labelFontFamily: { kind: "unavailable" },
     labelFontSize: { kind: "unavailable" },
@@ -323,6 +350,7 @@ export function drawingPropertiesFromTextPreferences(
     opacity: { kind: "unavailable" },
     roughness: { kind: "unavailable" },
     roundness: { kind: "unavailable" },
+    startArrowhead: { kind: "unavailable" },
     strokeColor: { kind: "unavailable" },
     strokeStyle: { kind: "unavailable" },
     strokeWidth: { kind: "unavailable" },
@@ -358,6 +386,11 @@ function updateShape(element: ShapeElement, update: DrawingPropertyUpdate, updat
 }
 
 function updateConnector(element: ConnectorElement, update: DrawingPropertyUpdate, updatedAt: number): ConnectorElement {
+  if (update.property === "startArrowhead" || update.property === "endArrowhead") {
+    return element.style[update.property] === update.value
+      ? element
+      : { ...element, style: { ...element.style, [update.property]: update.value }, updatedAt };
+  }
   if (update.property === "labelColor" || update.property === "labelFontFamily" || update.property === "labelFontSize" || update.property === "labelOrientation") {
     const property = update.property === "labelColor" ? "color"
       : update.property === "labelFontFamily" ? "fontFamily"

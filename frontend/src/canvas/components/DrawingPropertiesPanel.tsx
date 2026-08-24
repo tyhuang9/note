@@ -135,6 +135,40 @@ export function DrawingPropertiesPanel({
         </PropertySection>
       ) : null}
 
+      {supports("startArrowhead") ? (
+        <PropertySection label="Start arrowhead">
+          <ChoiceGroup label="Start arrowhead" mixed={values.startArrowhead.kind === "mixed"}>
+            {(["none", "arrow"] as const).map((value) => (
+              <ChoiceButton
+                active={isValue(values.startArrowhead, value)}
+                key={value}
+                label={`${value === "none" ? "No" : "Arrow"} start arrowhead`}
+                mixed={values.startArrowhead.kind === "mixed"}
+                onClick={() => onUpdate({ property: "startArrowhead", value })}
+                text={value === "none" ? "None" : "Arrow"}
+              />
+            ))}
+          </ChoiceGroup>
+        </PropertySection>
+      ) : null}
+
+      {supports("endArrowhead") ? (
+        <PropertySection label="End arrowhead">
+          <ChoiceGroup label="End arrowhead" mixed={values.endArrowhead.kind === "mixed"}>
+            {(["none", "arrow"] as const).map((value) => (
+              <ChoiceButton
+                active={isValue(values.endArrowhead, value)}
+                key={value}
+                label={`${value === "none" ? "No" : "Arrow"} end arrowhead`}
+                mixed={values.endArrowhead.kind === "mixed"}
+                onClick={() => onUpdate({ property: "endArrowhead", value })}
+                text={value === "none" ? "None" : "Arrow"}
+              />
+            ))}
+          </ChoiceGroup>
+        </PropertySection>
+      ) : null}
+
       {supports("labelOrientation") ? (
         <PropertySection label="Arrow label orientation">
           <ChoiceGroup label="Arrow label orientation" mixed={values.labelOrientation.kind === "mixed"}>

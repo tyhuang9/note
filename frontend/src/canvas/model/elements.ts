@@ -70,6 +70,11 @@ export type ConnectorElement = ElementBase<"connector"> & {
 };
 export type CanvasElement = TextElement | ImageElement | InkElement | ShapeElement | ConnectorElement;
 
+/** A connector is an arrow whenever either endpoint has an arrowhead. */
+export function isArrowConnector(element: ConnectorElement) {
+  return element.style.startArrowhead === "arrow" || element.style.endArrowhead === "arrow";
+}
+
 export function isBoxCanvasElement(element: CanvasElement): element is CanvasElement & BoxCanvasElement {
   return "x" in element && "y" in element && "width" in element && "height" in element;
 }

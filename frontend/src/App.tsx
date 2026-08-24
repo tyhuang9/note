@@ -4405,7 +4405,6 @@ function App() {
   function isCanvasSearchInteractionBlocked() {
     return Boolean(
       editingBlockIdRef.current
-      || activeTextEditor && !activeTextEditor.isDestroyed
       || shapeTextEditSessionRef.current
       || isEditingHeaderTitle
       || editingFolderId
@@ -8796,7 +8795,6 @@ function App() {
       : `Result ${activeSearchDisplayIndex} of ${searchMatches.length}${isSearchTruncated ? " or more" : ""}, ${canvasSearchSourceLabel}`;
   const isCanvasSearchUnavailable = Boolean(
     editingBlockId
-    || activeTextEditor && !activeTextEditor.isDestroyed
     || isEditingHeaderTitle
     || editingFolderId
     || editingPageId

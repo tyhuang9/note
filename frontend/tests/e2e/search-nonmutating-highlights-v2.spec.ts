@@ -931,6 +931,42 @@ test("Find uses normal tabs, contextual Escape, and Ctrl+F re-focuses the query"
   await expect(page.locator(".search-panel")).toHaveCount(0);
 });
 
+test("Find stays available from selected shapes and arrows with one composite focus ring", async ({ page }) => {
+  await installSearchWorkspace(page);
+  await page.goto("/");
+
+  const shape = page.locator('[data-canvas-element-id="shape-rectangle"]');
+  await shape.focus();
+  await shape.press("Enter");
+  await page.keyboard.press("Control+f");
+
+  const search = page.getByRole("textbox", { name: "Find in canvas" });
+  const query = page.locator(".search-panel-query");
+  await expect(search).toBeFocused();
+  expect(await search.evaluate((input) => {
+    const style = getComputedStyle(input);
+    return { background: style.backgroundColor, outline: style.outlineStyle };
+  })).toEqual({ background: "rgba(0, 0, 0, 0)", outline: "none" });
+  await expect(query).toHaveCSS("border-top-color", "rgb(37, 99, 235)");
+  await search.press("Escape");
+
+  const arrow = page.locator('[data-canvas-element-id="search-connector"]');
+  await arrow.focus();
+  await arrow.press("Enter");
+  const findButton = page.getByRole("button", { name: "Find in canvas" });
+  await expect(findButton).toBeEnabled();
+  await findButton.click();
+  await expect(search).toBeFocused();
+
+  await page.getByRole("button", { name: "Dark mode" }).click();
+  await search.focus();
+  expect(await search.evaluate((input) => {
+    const style = getComputedStyle(input);
+    return { background: style.backgroundColor, outline: style.outlineStyle };
+  })).toEqual({ background: "rgba(0, 0, 0, 0)", outline: "none" });
+  await expect(query).toHaveCSS("border-top-color", "rgb(138, 180, 255)");
+});
+
 async function assertRichTreesRemainFormatted(page: Page) {
   for (const id of ["text-rich", "shape-rectangle", "shape-ellipse", "shape-diamond"]) {
     const element = page.locator(`[data-canvas-element-id="${id}"]`);

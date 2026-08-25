@@ -849,6 +849,12 @@ export const TextBlockView = memo(function TextBlockView({
           return;
         }
 
+        if (isEditing) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+
         event.preventDefault();
         event.stopPropagation();
         cacheCaretFromPoint(event.clientX, event.clientY);
@@ -877,21 +883,25 @@ export const TextBlockView = memo(function TextBlockView({
       }}
     >
       <div
-        aria-keyshortcuts={isSelected
+        aria-hidden={isEditing || undefined}
+        aria-keyshortcuts={!isEditing && isSelected
           ? block.locked
             ? "F2"
             : "F2 Alt+Shift+ArrowLeft Alt+Shift+ArrowRight"
           : undefined}
-        aria-label={block.locked
+        aria-label={isEditing
+          ? undefined
+          : block.locked
           ? isSelected
             ? "Select locked text block; press F2 to edit"
             : "Select locked text block"
           : isSelected
             ? "Select and move text block; press F2 to edit; resize width with Alt+Shift+Left or Right Arrow"
             : "Select and move text block"}
-        aria-pressed={isSelected}
+        aria-pressed={isEditing ? undefined : isSelected}
         className="text-block-header"
-        onClick={(event) => {
+        inert={isEditing || undefined}
+        onClick={isEditing ? undefined : (event) => {
           event.stopPropagation();
 
           if (event.ctrlKey || event.metaKey) {
@@ -900,16 +910,14 @@ export const TextBlockView = memo(function TextBlockView({
 
           leaveEditorForBlockSelection();
         }}
-        onDoubleClick={(event) => {
+        onDoubleClick={isEditing ? undefined : (event) => {
           event.stopPropagation();
-          if (!isEditing) {
-            editTextBlockAtCachedCaret(event.clientX, event.clientY);
-          }
+          editTextBlockAtCachedCaret(event.clientX, event.clientY);
         }}
-        onPointerDown={startDrag}
-        onKeyDown={handleHeaderKeyDown}
-        role="button"
-        tabIndex={0}
+        onPointerDown={isEditing ? undefined : startDrag}
+        onKeyDown={isEditing ? undefined : handleHeaderKeyDown}
+        role={isEditing ? undefined : "button"}
+        tabIndex={isEditing ? -1 : 0}
       />
       {isEditing ? (
         <>
@@ -1132,6 +1140,12 @@ function TiptapBlockEditor({
         handleKeyDown: (view, event) => {
           if (event.isComposing || event.keyCode === 229) {
             return false;
+          }
+
+          if (event.key === "Tab" && event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
+            event.preventDefault();
+            event.stopPropagation();
+            return true;
           }
 
           const isDraftEscape = event.key === "Escape" && Boolean(onCancelDraftRef.current);

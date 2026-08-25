@@ -43,8 +43,14 @@ for (const scenario of [
     await expect(page.locator(".selection-frame")).toHaveCount(0);
     await expect(block).toHaveCSS("border-left-color", "rgba(0, 0, 0, 0)");
     await expect(block).toHaveCSS("box-shadow", "none");
-    await expect(block.locator(".text-block-header")).toHaveCSS("opacity", "0");
-    expect(await block.locator(".text-block-header").evaluate((element) =>
+    const header = block.locator(".text-block-header");
+    await expect(header).toHaveCSS("opacity", "0");
+    await expect(header).toHaveCSS("pointer-events", "none");
+    await expect(header).toHaveAttribute("aria-hidden", "true");
+    await expect(header).toHaveAttribute("tabindex", "-1");
+    await expect(header).not.toHaveAttribute("role", "button");
+    expect(await header.evaluate((element) => (element as HTMLElement).inert)).toBe(true);
+    expect(await header.evaluate((element) =>
       getComputedStyle(element, "::after").opacity)).toBe("0");
     const background = await block.evaluate((element) => getComputedStyle(element).backgroundColor);
     if (scenario.background === "transparent") expect(background).toBe("rgba(0, 0, 0, 0)");
@@ -52,8 +58,20 @@ for (const scenario of [
     const caretOffset = await page.evaluate(() => window.getSelection()?.focusOffset ?? -1);
     expect(caretOffset).toBeGreaterThan(0);
     expect(caretOffset).toBeLessThan("Caret focus target".length);
+
+    await page.keyboard.press("Shift+Tab");
+    await expect(header).not.toBeFocused();
+    await expect(editor).toBeFocused();
+    await expect(block).toHaveClass(/is-editing/);
+    const editorCaretOffset = await page.evaluate(() => window.getSelection()?.focusOffset ?? -1);
+    const headerBounds = await requiredBounds(header, "text header spacer");
+    await page.mouse.click(headerBounds.x + headerBounds.width / 2, headerBounds.y + headerBounds.height / 2);
+    await expect(editor).toBeFocused();
+    await expect(block).toHaveClass(/is-editing/);
+    expect(await page.evaluate(() => window.getSelection()?.focusOffset ?? -1)).toBe(editorCaretOffset);
+
     await editor.type("!");
-    await expect(block.locator(".text-block-header")).toHaveCSS("opacity", "0");
+    await expect(header).toHaveCSS("opacity", "0");
   });
 }
 

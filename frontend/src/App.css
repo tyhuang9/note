@@ -5559,6 +5559,7 @@ h2 {
   border-bottom-color: transparent;
   background: transparent;
   opacity: 0;
+  pointer-events: none;
 }
 
 .text-block.is-editing .text-block-header::after,

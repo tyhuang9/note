@@ -41,7 +41,7 @@ struct LegacyPage {
     folder_id: String,
     title: String,
     #[serde(default)]
-    is_bookmarked: bool,
+    is_bookmarked: Option<bool>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -184,7 +184,12 @@ pub fn import_if_needed(
             }
             tx.execute(
                 "INSERT INTO pages(id,folder_id,title,is_bookmarked) VALUES(?,?,?,?)",
-                params![p.id, p.folder_id, p.title, p.is_bookmarked as i64],
+                params![
+                    p.id,
+                    p.folder_id,
+                    p.title,
+                    p.is_bookmarked.unwrap_or(false) as i64
+                ],
             )
             .map_err(|e| format!("import page {}: {e}", p.id))?;
         }

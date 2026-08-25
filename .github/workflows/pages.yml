@@ -1,0 +1,93 @@
+name: Publish Documentation
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate documentation site
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Verify local documentation links
+        run: |
+          node --input-type=module <<'NODE'
+          import { existsSync, readFileSync } from "node:fs";
+          import { resolve } from "node:path";
+
+          const docsRoot = resolve("docs");
+          const pages = ["index.html", "install.html"];
+          const referencePattern = /(?:href|src)="([^"]+)"/g;
+          const ignored = /^(?:#|[a-z][a-z0-9+.-]*:|\/\/)/i;
+
+          for (const page of pages) {
+            const pagePath = resolve(docsRoot, page);
+            if (!existsSync(pagePath)) throw new Error(`Missing documentation page: ${page}`);
+            const content = readFileSync(pagePath, "utf8");
+            for (const match of content.matchAll(referencePattern)) {
+              const reference = match[1].split("#", 1)[0].split("?", 1)[0];
+              if (!reference || ignored.test(reference)) continue;
+              const target = resolve(docsRoot, reference);
+              if (!target.startsWith(`${docsRoot}/`) || !existsSync(target)) {
+                throw new Error(`${page} references a missing local file: ${match[1]}`);
+              }
+            }
+          }
+          NODE
+
+  deploy:
+    name: Deploy documentation site
+    needs: validate
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v6
+
+      - name: Archive documentation site
+        run: |
+          tar \
+            --dereference --hard-dereference \
+            --directory docs \
+            -cvf "$RUNNER_TEMP/artifact.tar" \
+            --exclude=.git \
+            --exclude=.github \
+            --exclude=".[^/]*" \
+            .
+
+      - name: Upload documentation site
+        uses: actions/upload-artifact@v7
+        with:
+          name: github-pages
+          path: ${{ runner.temp }}/artifact.tar
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Deploy documentation site
+        id: deployment
+        uses: actions/deploy-pages@v5

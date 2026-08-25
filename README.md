@@ -1,126 +1,55 @@
 # Note
 
-Note is a lightweight desktop note-taking app for freeform thinking. It uses a canvas-style page where notes are represented as movable, resizable textboxes instead of a traditional linear document.
+[![Build and release](https://github.com/tyhuang9/note/actions/workflows/release.yml/badge.svg)](https://github.com/tyhuang9/note/actions/workflows/release.yml)
+[![Documentation](https://github.com/tyhuang9/note/actions/workflows/pages.yml/badge.svg)](https://github.com/tyhuang9/note/actions/workflows/pages.yml)
 
-The app is local-first: folders, pages, textboxes, images, layout, and preferences are saved to a local JSON file through the Tauri desktop shell.
+Note is a local-first desktop workspace for arranging ideas on a freeform canvas.
+Create pages, place text, images, and drawing elements, then keep working without
+leaving your device.
 
-## Technologies
+![A short visual tour of the Note canvas](docs/assets/note-demo.gif)
 
-- Tauri 2 for the desktop application shell
-- React 19 for the frontend UI
-- TypeScript for frontend type safety
-- Vite for frontend development and builds
-- Rust for Tauri commands and local persistence
-- Serde and serde_json for JSON serialization
-- npm for frontend/workspace scripts
-- Cargo for Rust/Tauri checks and builds
+## Install
 
-## Local Development
+Download a build from the [latest GitHub Release](https://github.com/tyhuang9/note/releases/latest).
+Stable asset names make direct downloads convenient:
 
-Install dependencies from the frontend folder if they are not installed yet:
+| Platform | Download | Install |
+| --- | --- | --- |
+| Windows | [Note-Setup.exe](https://github.com/tyhuang9/note/releases/latest/download/Note-Setup.exe) | Run it; the NSIS installer installs for the current user. |
+| macOS | [Note.dmg](https://github.com/tyhuang9/note/releases/latest/download/Note.dmg) | Open it and drag Note into Applications. |
+| Debian/Ubuntu | [Note.deb](https://github.com/tyhuang9/note/releases/latest/download/Note.deb) | Open it with your package installer, or run `sudo apt install ./Note.deb`. |
+| Other Linux | [Release downloads](https://github.com/tyhuang9/note/releases/latest) | Use `Note.AppImage` when the release includes it. |
+
+Current packages are unsigned. Windows SmartScreen and macOS Gatekeeper can
+warn before opening them; verify that the download came from this repository.
+See the [installation guide](docs/INSTALLATION.md) for platform-specific help,
+updates, and source builds. The [documentation site](https://tyhuang9.github.io/note/)
+offers the same download and first-use guide in the browser.
+
+## Start using Note
+
+1. Launch Note and create or select a page from the sidebar.
+2. Click the canvas to add text; use the tools to draw, select, pan, and zoom.
+3. Search pages and content from the sidebar, and switch themes from the app.
+
+Your workspace is stored locally in Note's application-data directory. It is
+not synced to a cloud service, so keep your own backups before replacing a
+device or clearing application data.
+
+## Develop locally
 
 ```bash
-cd frontend
-npm install
-```
-
-Run the full desktop app from the repo root:
-
-```bash
+npm --prefix frontend ci
 npm run dev
 ```
 
-This starts the Tauri desktop shell. The Vite web server is started only as the
-frontend renderer for that desktop window.
+`npm run dev` opens the Tauri desktop app. For browser-only frontend work, use
+`npm run web:dev`. Build a production package with `npm run tauri:build`.
 
-Run the web frontend only in a browser:
+## Releases
 
-```bash
-npm run web:dev
-```
-
-Build the frontend:
-
-```bash
-npm run build
-```
-
-Check the Tauri backend:
-
-```bash
-cd backend/src-tauri
-cargo check
-```
-
-Build the Tauri app:
-
-```bash
-npm run tauri:build
-```
-
-## Building Installers
-
-Cross-platform installer builds are handled by the `Build Desktop Installers`
-GitHub Actions workflow. It builds Windows, macOS, and Linux packages on native
-GitHub-hosted runners and uploads the generated installers as workflow
-artifacts.
-
-See [docs/RELEASE.md](docs/RELEASE.md) for trigger instructions, artifact
-locations, supported package formats, and known platform-specific limitations.
-
-## Screenshots
-
-Screenshots are planned under `docs/screenshots/` once the app can be captured
-from a local desktop/browser session.
-
-Suggested captures:
-
-- Canvas editing with several textboxes
-- Sidebar folders, search, and open page tabs
-- Dark mode with the global text formatting toolbar
-
-## Features
-
-- Folder and page organization
-- Inline folder, page, and page-title renaming
-- Freeform canvas per page
-- Textbox creation from canvas insertion point
-- Rich text editing powered by TipTap
-- Header-level formatting toolbar for selected or newly-created textboxes
-- Textbox selection and multi-selection
-- Header-based textbox dragging
-- Right-edge textbox resizing
-- Autosizing textbox height with fixed-width behavior after manual resize
-- Canvas selection rectangle
-- Shift-drag canvas panning
-- Zoom controls with keyboard and mouse shortcuts
-- Text search with highlighted occurrences and Enter navigation
-- Paste support for text and images
-- Offscreen textbox indicators with click-to-pan navigation
-- Light/dark mode toggle with persisted preference
-- Local JSON autosave and restore
-
-## AI Direction
-
-Built-in AI model/provider management is intentionally deferred for now. The plan
-is to integrate with a separate service that manages local LLM runtimes and model
-performance, then connect Note to that service when the contract is ready.
-
-## Project Structure
-
-```text
-frontend/
-  src/
-    App.tsx
-    components/
-    appTypes.ts
-    constants.ts
-    editorUtils.ts
-    types.ts
-backend/
-  src-tauri/
-    src/lib.rs
-    tauri.conf.json
-```
-
-`frontend/src/App.tsx` owns application-level state and canvas orchestration. Textbox-specific direct manipulation behavior lives in `frontend/src/components/TextBlockView.tsx`.
+Pull requests and pushes to `main` validate native packages and keep the
+normalized installers as Actions artifacts. Pushing a matching semantic tag
+(for example `v0.1.0`) publishes those assets to GitHub Releases. Maintainers:
+see [the release guide](docs/RELEASE.md).

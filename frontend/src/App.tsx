@@ -9482,7 +9482,6 @@ function App() {
                 connectorEndpointHandles,
                 height: frameGeometry.height * zoomLevel + framePadding * 2,
                 isNativeTextFrame,
-                isShapeFrame: selected?.type === "shape",
                 moveLabel: selectionHasLockedElements ? "Move unlocked selected elements" : "Move selected elements",
                 onClick: selected?.type === "connector" && isArrowConnector(selected)
                   ? (event: ReactMouseEvent<HTMLButtonElement>) => {

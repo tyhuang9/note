@@ -3100,21 +3100,6 @@ h2 {
 .selection-frame-handle-s { right: 0; bottom: -10px; left: 0; height: 12px; }
 .selection-frame-handle-w { top: 0; bottom: 0; left: -10px; width: 12px; }
 
-/* Shape frames retain all eight resize hit zones, while only their corner
-   zones expose a compact, screen-space marker. */
-.selection-frame.is-shape-selection-frame .selection-frame-corner::after {
-  position: absolute;
-  top: 18px;
-  left: 18px;
-  width: 8px;
-  height: 8px;
-  box-sizing: border-box;
-  border: 1px solid var(--canvas-selection, var(--accent-purple));
-  border-radius: 2px;
-  background: var(--canvas-tool-bg, #fff);
-  content: "";
-}
-
 .selection-frame.is-native-text-frame .selection-frame-corner {
   width: 28px;
   height: 28px;

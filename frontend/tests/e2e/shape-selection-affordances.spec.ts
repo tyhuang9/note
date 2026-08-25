@@ -26,21 +26,21 @@ test("Select mode uses each shape's logical interior for hollow and filled shape
   await page.mouse.move(hollowCenter.x, hollowCenter.y);
   await expect(canvas).toHaveAttribute("data-select-hover-cursor", "grab");
   await selectScreenPoint(page, hollowCenter);
-  await expect(page.locator(".selection-frame.is-shape-selection-frame")).toHaveCount(1);
+  await expect(page.locator(".selection-frame:not(.is-native-text-frame)")).toHaveCount(1);
 
   await selectScreenPoint(page, { x: hollowCenter.x, y: hollowBounds.y });
-  await expect(page.locator(".selection-frame.is-shape-selection-frame")).toHaveCount(1);
+  await expect(page.locator(".selection-frame:not(.is-native-text-frame)")).toHaveCount(1);
 
   await selectScreenPoint(page, { x: filledBounds.x + 5, y: filledBounds.y + 5 });
   await expect(page.locator(".selection-frame")).toHaveCount(0);
   await selectScreenPoint(page, { x: filledBounds.x + filledBounds.width / 2, y: filledBounds.y + filledBounds.height / 2 });
-  await expect(page.locator(".selection-frame.is-shape-selection-frame")).toHaveCount(1);
+  await expect(page.locator(".selection-frame:not(.is-native-text-frame)")).toHaveCount(1);
   await selectScreenPoint(page, { x: filledBounds.x + filledBounds.width / 2, y: filledBounds.y });
-  await expect(page.locator(".selection-frame.is-shape-selection-frame")).toHaveCount(1);
+  await expect(page.locator(".selection-frame:not(.is-native-text-frame)")).toHaveCount(1);
 
   await diamond.focus();
   await page.keyboard.press("Enter");
-  await expect(page.locator(".selection-frame.is-shape-selection-frame")).toHaveCount(1);
+  await expect(page.locator(".selection-frame:not(.is-native-text-frame)")).toHaveCount(1);
   const editableBounds = await requiredBounds(editable, "editable shape");
   await page.mouse.dblclick(editableBounds.x + editableBounds.width / 2, editableBounds.y + editableBounds.height / 2);
   await expect(editable).toHaveClass(/is-editing/);
@@ -49,7 +49,7 @@ test("Select mode uses each shape's logical interior for hollow and filled shape
 });
 
 for (const zoom of [50, 100, 200]) {
-  test(`shape corner markers are compact at ${zoom}% while text remains markerless`, async ({ page }) => {
+  test(`shape resize hit zones are markerless and functional at ${zoom}% while text remains markerless`, async ({ page }) => {
     const canvas = page.getByRole("tabpanel");
     const hollowBounds = await requiredBounds(page.locator('[data-canvas-element-id="hollow-rounded"]'), "hollow rounded rectangle");
     const hollowCenter = { x: hollowBounds.x + hollowBounds.width / 2, y: hollowBounds.y + hollowBounds.height / 2 };
@@ -59,33 +59,52 @@ for (const zoom of [50, 100, 200]) {
     const scaledHollowBounds = await requiredBounds(page.locator('[data-canvas-element-id="hollow-rounded"]'), "scaled hollow rounded rectangle");
     const scaledCenter = { x: scaledHollowBounds.x + scaledHollowBounds.width / 2, y: scaledHollowBounds.y + scaledHollowBounds.height / 2 };
     await selectScreenPoint(page, scaledCenter);
-    await expect(page.locator(".selection-frame.is-shape-selection-frame")).toHaveCount(1);
+    await expect(page.locator(".selection-frame:not(.is-native-text-frame)")).toHaveCount(1);
     await selectScreenPoint(page, { x: scaledCenter.x, y: scaledHollowBounds.y });
-    await expect(page.locator(".selection-frame.is-shape-selection-frame")).toHaveCount(1);
+    await expect(page.locator(".selection-frame:not(.is-native-text-frame)")).toHaveCount(1);
 
-    const frame = page.locator(".selection-frame.is-shape-selection-frame");
+    const frame = page.locator(".selection-frame:not(.is-native-text-frame)");
     await expect(frame).toHaveCount(1);
     await expect(frame.locator(".selection-frame-handle")).toHaveCount(8);
-    for (const handle of ["nw", "ne", "se", "sw"] as const) {
-      const marker = frame.locator(`[data-selection-resize-handle="${handle}"]`);
-      expect(await marker.evaluate((element) => ({
-        content: getComputedStyle(element, "::after").content,
-        height: getComputedStyle(element, "::after").height,
-        width: getComputedStyle(element, "::after").width,
-      }))).toEqual({ content: '""', height: "8px", width: "8px" });
+    const expectedCursors = {
+      n: "ns-resize",
+      ne: "nesw-resize",
+      e: "ew-resize",
+      se: "nwse-resize",
+      s: "ns-resize",
+      sw: "nesw-resize",
+      w: "ew-resize",
+      nw: "nwse-resize",
+    } as const;
+    for (const [handle, cursor] of Object.entries(expectedCursors)) {
+      const control = frame.locator(`[data-selection-resize-handle="${handle}"]`);
+      await expect(control).toHaveCount(1);
+      await expect(control).toHaveCSS("cursor", cursor);
+      expect(await control.evaluate((element) => getComputedStyle(element, "::after").content)).toBe("none");
+      const controlBounds = await requiredBounds(control, `${handle} shape resize zone`);
+      expect(controlBounds.width).toBeGreaterThan(0);
+      expect(controlBounds.height).toBeGreaterThan(0);
     }
-    for (const handle of ["n", "e", "s", "w"] as const) {
-      await expect(frame.locator(`[data-selection-resize-handle="${handle}"]`)).toHaveCSS("cursor", /resize/);
-      expect(await frame.locator(`[data-selection-resize-handle="${handle}"]`).evaluate((element) =>
-        getComputedStyle(element, "::after").content)).toBe("none");
-    }
+
+    const shapeWidth = (shape: Locator) => shape.evaluate((element) => Number.parseFloat((element as HTMLElement).style.width));
+    const southeast = frame.locator('[data-selection-resize-handle="se"]');
+    const beforeCornerResize = await shapeWidth(page.locator('[data-canvas-element-id="hollow-rounded"]'));
+    await southeast.focus();
+    await southeast.press("Shift+ArrowRight");
+    await expect.poll(() => shapeWidth(page.locator('[data-canvas-element-id="hollow-rounded"]')))
+      .toBeGreaterThan(beforeCornerResize);
+    const east = frame.locator('[data-selection-resize-handle="e"]');
+    const beforeEdgeResize = await shapeWidth(page.locator('[data-canvas-element-id="hollow-rounded"]'));
+    await east.focus();
+    await east.press("Shift+ArrowRight");
+    await expect.poll(() => shapeWidth(page.locator('[data-canvas-element-id="hollow-rounded"]')))
+      .toBeGreaterThan(beforeEdgeResize);
 
     await setZoom(page, canvas, 100);
     const textTarget = page.locator('[data-canvas-element-id="text-target"]');
     await textTarget.click();
     const textFrame = page.locator(".selection-frame.is-native-text-frame");
     await expect(textFrame).toHaveCount(1);
-    await expect(textFrame).not.toHaveClass("is-shape-selection-frame");
     expect(await textFrame.locator('[data-selection-resize-handle="nw"]').evaluate((element) =>
       getComputedStyle(element, "::after").content)).toBe("none");
   });

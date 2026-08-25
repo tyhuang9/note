@@ -2,18 +2,9 @@ import type { Editor, Range } from "@tiptap/core";
 import { closeHistory } from "@tiptap/pm/history";
 import type { Mark, Node as ProseMirrorNode } from "@tiptap/pm/model";
 import { TextSelection } from "@tiptap/pm/state";
+import type { WorkbenchIconName } from "../components/workbench/icons";
 
 export type SlashCommandGroup = "Text" | "Lists" | "Blocks";
-export type SlashCommandIcon =
-  | "text"
-  | "heading1"
-  | "heading2"
-  | "heading3"
-  | "bulletList"
-  | "orderedList"
-  | "quote"
-  | "codeBlock"
-  | "minus";
 
 type SlashCommandKind =
   | "paragraph"
@@ -31,7 +22,7 @@ export type SlashCommandItem = {
   description: string;
   group: SlashCommandGroup;
   hint: string;
-  icon: SlashCommandIcon;
+  icon: WorkbenchIconName;
   id: SlashCommandKind;
   label: string;
 };
@@ -42,7 +33,7 @@ export const slashCommands: readonly SlashCommandItem[] = [
     description: "Continue with plain text",
     group: "Text",
     hint: "",
-    icon: "text",
+    icon: "document-text",
     id: "paragraph",
     label: "Text",
   },
@@ -51,7 +42,7 @@ export const slashCommands: readonly SlashCommandItem[] = [
     description: "Large section heading",
     group: "Text",
     hint: "#",
-    icon: "heading1",
+    icon: "heading-1",
     id: "heading1",
     label: "Heading 1",
   },
@@ -60,7 +51,7 @@ export const slashCommands: readonly SlashCommandItem[] = [
     description: "Medium section heading",
     group: "Text",
     hint: "##",
-    icon: "heading2",
+    icon: "heading-2",
     id: "heading2",
     label: "Heading 2",
   },
@@ -69,7 +60,7 @@ export const slashCommands: readonly SlashCommandItem[] = [
     description: "Small section heading",
     group: "Text",
     hint: "###",
-    icon: "heading3",
+    icon: "heading-3",
     id: "heading3",
     label: "Heading 3",
   },
@@ -78,7 +69,7 @@ export const slashCommands: readonly SlashCommandItem[] = [
     description: "Create a bulleted list",
     group: "Lists",
     hint: "-",
-    icon: "bulletList",
+    icon: "list-bullet",
     id: "bulletList",
     label: "Bulleted list",
   },
@@ -87,7 +78,7 @@ export const slashCommands: readonly SlashCommandItem[] = [
     description: "Create a numbered list",
     group: "Lists",
     hint: "1.",
-    icon: "orderedList",
+    icon: "numbered-list",
     id: "orderedList",
     label: "Numbered list",
   },
@@ -105,7 +96,7 @@ export const slashCommands: readonly SlashCommandItem[] = [
     description: "Insert a code block",
     group: "Blocks",
     hint: "```",
-    icon: "codeBlock",
+    icon: "code-bracket",
     id: "codeBlock",
     label: "Code block",
   },

@@ -67,9 +67,7 @@ const SLASH_COMMANDS: SlashCommandCase[] = [
 test("slash triggers only at supported boundaries", async ({ page }) => {
   await openInitialNote(page);
 
-  await clickCanvas(page, 280, 150);
-  await page.keyboard.type("/");
-  await expect(slashMenu(page)).toBeVisible();
+  await openSlashMenu(page, 280, 150);
   await expect(slashMenu(page).getByRole("option")).toHaveCount(9);
   await page.keyboard.press("Escape");
 
@@ -109,12 +107,7 @@ test("slash triggers only at supported boundaries", async ({ page }) => {
 test("canvas find does not steal focus from text editing or close slash commands", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openInitialNote(page);
-  await clickCanvas(page, 280, 150);
-  await page.keyboard.type("/");
-
-  const editor = page.locator(".text-block-editor-content").last();
-  await expect(editor).toBeFocused();
-  await expect(slashMenu(page)).toBeVisible();
+  const editor = await openSlashMenu(page, 280, 150);
   await page.keyboard.press("Control+f");
   await expect(editor).toBeFocused();
   await expect(slashMenu(page)).toBeVisible();
@@ -777,6 +770,8 @@ test("menu stays viewport-bound and screen-sized across canvas zoom", async ({
   const widthAt200 = (await popup.boundingBox())?.width ?? 0;
 
   expect(Math.abs(widthAt200 - widthAt100)).toBeLessThanOrEqual(1);
+  await expect.poll(() => getCaretPopupGap(page)).toBeGreaterThanOrEqual(7);
+  await expect.poll(() => getCaretPopupGap(page)).toBeLessThanOrEqual(9);
   await expect
     .poll(() => isContainedInViewport(popup, viewport))
     .toBe(true);
@@ -799,8 +794,7 @@ test("menu clamps to a phone-width viewport without clipping its footer", async 
   const viewport = { width: 320, height: 480 };
   await page.setViewportSize(viewport);
   await openInitialNote(page);
-  await clickCanvas(page, 150, 190);
-  await page.keyboard.type("/");
+  await openSlashMenu(page, 150, 190);
 
   const popup = page.locator(".slash-command-popup");
   const footer = popup.locator(".slash-command-footer");
@@ -830,8 +824,7 @@ test("menu copy reflows without truncation at 200% text size", async ({
       .slash-command-description { font-size: 24px !important; line-height: 34px !important; }
     `,
   });
-  await clickCanvas(page, 150, 190);
-  await page.keyboard.type("/");
+  await openSlashMenu(page, 150, 190);
 
   const popup = page.locator(".slash-command-popup");
   const firstOption = popup.getByRole("option").first();
@@ -922,7 +915,14 @@ async function createEditorAt(
   initialText: string,
 ) {
   await clickCanvas(page, x, y);
-  await page.keyboard.press("x");
+  const canvas = page.getByRole("tabpanel");
+  const bounds = await canvas.boundingBox();
+
+  if (!bounds) {
+    throw new Error("Canvas bounds were not available.");
+  }
+
+  await page.mouse.dblclick(bounds.x + x, bounds.y + y);
 
   const editor = page.locator(".text-block-editor-content").last();
   await expect(editor).toBeFocused();
@@ -943,6 +943,7 @@ async function openSlashMenu(
   y: number,
   query = "",
 ) {
+  await clickCanvas(page, x, y);
   const canvas = page.getByRole("tabpanel");
   const bounds = await canvas.boundingBox();
 

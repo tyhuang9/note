@@ -1,33 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import {
-  Code2,
-  FileText,
-  Heading1,
-  Heading2,
-  Heading3,
-  List,
-  ListOrdered,
-  Minus,
-  Quote,
-  type LucideIcon,
-} from "lucide-react";
-import type {
-  SlashCommandGroup,
-  SlashCommandIcon,
-  SlashCommandItem,
-} from "../editor/slashCommands";
-
-const slashIcons: Record<SlashCommandIcon, LucideIcon> = {
-  bulletList: List,
-  codeBlock: Code2,
-  heading1: Heading1,
-  heading2: Heading2,
-  heading3: Heading3,
-  minus: Minus,
-  orderedList: ListOrdered,
-  quote: Quote,
-  text: FileText,
-};
+import { HeroIcon } from "./workbench/HeroIcon";
+import type { SlashCommandGroup, SlashCommandItem } from "../editor/slashCommands";
 
 type SlashCommandMenuProps = {
   activeIndex: number;
@@ -137,10 +110,7 @@ export function SlashCommandMenu({
               <div className="slash-command-group-label" id={groupId}>
                 {group}
               </div>
-              {groupItems.map(({ index, item }) => {
-                const Icon = slashIcons[item.icon];
-
-                return (
+              {groupItems.map(({ index, item }) => (
                   <button
                     aria-selected={index === activeIndex}
                     className="slash-command-item"
@@ -158,7 +128,7 @@ export function SlashCommandMenu({
                     type="button"
                   >
                     <span className="slash-command-icon">
-                      <Icon aria-hidden="true" size={20} />
+                      <HeroIcon name={item.icon} />
                     </span>
                     <span className="slash-command-copy">
                       <span className="slash-command-label">{item.label}</span>
@@ -172,8 +142,7 @@ export function SlashCommandMenu({
                       </span>
                     ) : null}
                   </button>
-                );
-              })}
+              ))}
             </div>
           );
         })}

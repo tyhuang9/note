@@ -4379,6 +4379,104 @@ mod tests {
     }
 
     #[test]
+    fn legacy_import_normalizes_nullable_bookmarks_and_is_idempotent() {
+        let directory = root();
+        let legacy = json!({
+            "folders": [{"id": "f", "name": "F"}],
+            "pages": [
+                {"id": "missing", "folderId": "f", "title": "Missing"},
+                {"id": "null", "folderId": "f", "title": "Null", "isBookmarked": null},
+                {"id": "true", "folderId": "f", "title": "True", "isBookmarked": true}
+            ],
+            "blocks": []
+        });
+        let path = directory.path().join("note-data.json");
+        fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        let original = fs::read(&path).unwrap();
+
+        let first = initialize_storage_at(directory.path()).unwrap();
+
+        assert!(first.imported_legacy_data);
+        assert_eq!(fs::read(&path).unwrap(), original);
+        let backup_path = first
+            .backup_path
+            .as_ref()
+            .expect("successful import should report a backup path");
+        assert_eq!(fs::read(backup_path).unwrap(), original);
+        let pages = load_workspace_data_at(directory.path()).unwrap().pages;
+        assert_eq!(pages.len(), 3);
+        assert!(
+            !pages
+                .iter()
+                .find(|page| page.id == "missing")
+                .unwrap()
+                .is_bookmarked
+        );
+        assert!(
+            !pages
+                .iter()
+                .find(|page| page.id == "null")
+                .unwrap()
+                .is_bookmarked
+        );
+        assert!(
+            pages
+                .iter()
+                .find(|page| page.id == "true")
+                .unwrap()
+                .is_bookmarked
+        );
+
+        let second = initialize_storage_at(directory.path()).unwrap();
+        assert!(!second.imported_legacy_data);
+        assert_eq!(
+            load_workspace_data_at(directory.path())
+                .unwrap()
+                .pages
+                .len(),
+            3
+        );
+    }
+
+    #[test]
+    fn legacy_import_rejects_non_boolean_bookmarks_without_mutating_legacy_data() {
+        for invalid_bookmark in [json!("true"), json!(1)] {
+            let directory = root();
+            let legacy = json!({
+                "folders": [{"id": "f", "name": "F"}],
+                "pages": [{
+                    "id": "p",
+                    "folderId": "f",
+                    "title": "P",
+                    "isBookmarked": invalid_bookmark
+                }],
+                "blocks": []
+            });
+            let path = directory.path().join("note-data.json");
+            let original = serde_json::to_vec(&legacy).unwrap();
+            fs::write(&path, &original).unwrap();
+
+            let error = initialize_storage_at(directory.path()).unwrap_err();
+
+            assert!(error.contains("parse legacy data"));
+            assert_eq!(fs::read(path).unwrap(), original);
+            let connection = database::open(&directory.path().join("note.db")).unwrap();
+            let page_count: i64 = connection
+                .query_row("SELECT count(*) FROM pages", [], |row| row.get(0))
+                .unwrap();
+            let marker_count: i64 = connection
+                .query_row(
+                    "SELECT count(*) FROM metadata WHERE key='legacy_import_v1_completed'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(page_count, 0);
+            assert_eq!(marker_count, 0);
+        }
+    }
+
+    #[test]
     fn malformed_legacy_rolls_back_and_preserves_original() {
         let directory = root();
         let raw=br#"{"folders":[{"id":"f","name":"F"}],"pages":[{"id":"p","folderId":"missing","title":"P"}],"blocks":[]}"#;

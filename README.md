@@ -1,13 +1,14 @@
 # Note
 
-[![Build and release](https://github.com/tyhuang9/note/actions/workflows/release.yml/badge.svg)](https://github.com/tyhuang9/note/actions/workflows/release.yml)
-[![Documentation](https://github.com/tyhuang9/note/actions/workflows/pages.yml/badge.svg)](https://github.com/tyhuang9/note/actions/workflows/pages.yml)
+[![Download for Windows](https://img.shields.io/badge/Windows-Download-0078D4?logo=windows&logoColor=white)](https://github.com/tyhuang9/note/releases/latest/download/Note-Setup.exe)
+[![Download for macOS](https://img.shields.io/badge/macOS-Download-000000?logo=apple&logoColor=white)](https://github.com/tyhuang9/note/releases/latest/download/Note.dmg)
+[![Download for Debian and Ubuntu](https://img.shields.io/badge/Linux-Download-FCC624?logo=linux&logoColor=black)](https://github.com/tyhuang9/note/releases/latest/download/Note.deb)
 
 Note is a local-first desktop workspace for arranging ideas on a freeform canvas.
 Create pages, place text, images, and drawing elements, then keep working without
 leaving your device.
 
-![A short visual tour of the Note canvas](docs/assets/note-demo.gif)
+![A short walkthrough of creating a note page and connecting a simple diagram](docs/assets/note-demo.gif)
 
 ## Install
 

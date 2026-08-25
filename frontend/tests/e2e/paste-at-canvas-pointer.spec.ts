@@ -151,7 +151,7 @@ test("plain canvas text paste uses the current pointer without intercepting edit
 
   await editor.press("End");
   await dispatchPaste(page, " editor", ".text-block-editor-content");
-  await expect(editor).toContainText("Pointer text");
+  await expect(editor).toHaveText("Pointer text editor");
   await expect(page.locator('[data-canvas-element-type="text"]')).toHaveCount(1);
 });
 

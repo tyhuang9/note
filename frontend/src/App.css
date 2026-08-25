@@ -2501,8 +2501,7 @@ h2 {
 }
 
 .shape-element.is-editing {
-  outline: 3px solid var(--canvas-focus);
-  outline-offset: 3px;
+  outline: 0;
   pointer-events: auto;
 }
 
@@ -2558,28 +2557,26 @@ h2 {
 .shape-contained-text-editor-content {
   width: 100%;
   min-width: 0;
+}
+
+.shape-contained-text-editor-surface {
+  display: flex;
+  flex-direction: column;
+  justify-content: safe center;
   min-height: 100%;
 }
 
 .shape-contained-text-editor-content {
+  flex: 0 0 auto;
   box-sizing: border-box;
-  padding: 4px;
+  min-height: 0;
+  padding: 0;
   outline: none;
   cursor: text;
 }
 
 .shape-contained-text-editor-content:focus-visible {
   outline: none;
-}
-
-.shape-contained-text-editor.is-empty .shape-contained-text-editor-surface {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.shape-contained-text-editor.is-empty .shape-contained-text-editor-content {
-  min-height: 0;
 }
 
 .shape-contained-text-editor-hint { display: none; }
@@ -5538,6 +5535,36 @@ h2 {
 .app-shell.is-dark .text-block.is-transparent-background.is-dragging,
 .app-shell.is-dark .text-block.is-transparent-background.is-resizing {
   background: transparent;
+}
+
+/* Editing owns the visual focus state. The caret remains visible while
+   selection borders, shadows, and the drag header stay dormant. */
+.text-block.is-editing,
+.text-block.is-editing.is-selected,
+.text-block.is-editing.is-content-selected,
+.app-shell.is-dark .text-block.is-editing,
+.app-shell.is-dark .text-block.is-editing.is-selected,
+.app-shell.is-dark .text-block.is-editing.is-content-selected {
+  border-color: transparent;
+  outline: 0;
+  box-shadow: none;
+}
+
+.text-block.is-editing .text-block-header,
+.text-block.is-editing:hover .text-block-header,
+.text-block.is-editing:focus-within .text-block-header,
+.app-shell.is-dark .text-block.is-editing .text-block-header,
+.app-shell.is-dark .text-block.is-editing:hover .text-block-header,
+.app-shell.is-dark .text-block.is-editing:focus-within .text-block-header {
+  border-bottom-color: transparent;
+  background: transparent;
+  opacity: 0;
+}
+
+.text-block.is-editing .text-block-header::after,
+.text-block.is-editing:hover .text-block-header::after,
+.text-block.is-editing:focus-within .text-block-header::after {
+  opacity: 0;
 }
 
 .app-shell.is-dark .assistant-panel {

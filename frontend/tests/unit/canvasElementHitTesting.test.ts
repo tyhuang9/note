@@ -11,6 +11,8 @@ import {
   canvasElementContainsPoint,
   getEraserElementIds,
   getElementBounds,
+  getTopmostSelectableElementAtPoint,
+  selectionElementContainsPoint,
   shapeTextContainsPoint,
 } from "../../src/canvas/model/hitTesting";
 import { PEN_BRUSH } from "../../src/canvas/model/ink";
@@ -107,6 +109,46 @@ const ink: CanvasElement = {
 };
 
 describe("canvas element hit testing", () => {
+  it("selects complete logical shape interiors without changing hollow eraser hits", () => {
+    const roundedRectangle = { ...rectangle, style: { ...style, roundness: 1 } };
+    const filledEllipse = { ...ellipse, style: { ...style, fillColor: { kind: "fixed" as const, value: "#fff" } } };
+    const rotatedDiamond = { ...diamond, rotation: 31 };
+    const rotateLocalPoint = (element: ShapeElement, point: { x: number; y: number }) => {
+      const center = { x: element.x + element.width / 2, y: element.y + element.height / 2 };
+      const angle = (element.rotation * Math.PI) / 180;
+      const dx = point.x - center.x;
+      const dy = point.y - center.y;
+      return {
+        x: center.x + dx * Math.cos(angle) - dy * Math.sin(angle),
+        y: center.y + dx * Math.sin(angle) + dy * Math.cos(angle),
+      };
+    };
+
+    expect(selectionElementContainsPoint(roundedRectangle, { x: 70, y: 150 })).toBe(true);
+    expect(selectionElementContainsPoint(roundedRectangle, { x: 70, y: 100 })).toBe(true);
+    expect(selectionElementContainsPoint(roundedRectangle, { x: 10, y: 100 })).toBe(false);
+    expect(canvasElementContainsPoint(roundedRectangle, { x: 70, y: 150 })).toBe(false);
+
+    expect(selectionElementContainsPoint(filledEllipse, { x: 220, y: 150 })).toBe(true);
+    expect(selectionElementContainsPoint(filledEllipse, { x: 220, y: 100 })).toBe(true);
+    expect(selectionElementContainsPoint(filledEllipse, { x: 160, y: 100 })).toBe(false);
+
+    expect(selectionElementContainsPoint(rotatedDiamond, rotateLocalPoint(rotatedDiamond, { x: 370, y: 150 }))).toBe(true);
+    expect(selectionElementContainsPoint(rotatedDiamond, rotateLocalPoint(rotatedDiamond, { x: 370, y: 102 }))).toBe(true);
+    expect(selectionElementContainsPoint(rotatedDiamond, rotateLocalPoint(rotatedDiamond, { x: 315, y: 105 }))).toBe(false);
+  });
+
+  it("uses selection geometry to choose the topmost shape", () => {
+    const elements = {
+      rounded: { ...rectangle, id: "rounded", style: { ...style, roundness: 1 } },
+      "filled-ellipse": { ...ellipse, id: "filled-ellipse", style: { ...style, fillColor: { kind: "fixed" as const, value: "#fff" } } },
+    };
+
+    expect(getTopmostSelectableElementAtPoint(elements, ["rounded", "filled-ellipse"], { x: 220, y: 150 })?.id)
+      .toBe("filled-ellipse");
+    expect(getTopmostSelectableElementAtPoint(elements, ["rounded", "filled-ellipse"], { x: 160, y: 100 })).toBeUndefined();
+  });
+
   it("matches the rotated inset used by shape-owned text", () => {
     const labeled = { ...rectangle, rotation: 32, text: { content: "Editable" } };
     const center = { x: labeled.x + labeled.width / 2, y: labeled.y + labeled.height / 2 };

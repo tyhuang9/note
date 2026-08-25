@@ -1,95 +1,102 @@
-# Release Builds
+# Releasing Note
 
-This project builds installable desktop packages with GitHub Actions in
-`.github/workflows/release.yml`.
+The [Build and Release Desktop Installers](../.github/workflows/release.yml)
+workflow validates and packages Note on native GitHub-hosted runners.
 
-## Triggering the Workflow
+## What the workflow does
 
-The workflow runs in these cases:
+- Pull requests, pushes to `main`, and manual runs build and test Windows,
+  macOS, and Linux packages, then keep normalized outputs as Actions artifacts.
+- A pushed `v*` tag first checks that the semantic tag version matches
+  `backend/src-tauri/tauri.conf.json`, `backend/src-tauri/Cargo.toml`, and
+  `frontend/package.json`.
+- Only a successful, matching tag publishes a GitHub Release. The release job
+  downloads the completed build artifacts, verifies the required assets, adds
+  `SHA256SUMS`, and creates (or updates on a rerun) the release.
 
-- Manually from the GitHub Actions tab with `workflow_dispatch`.
-- On pull requests targeting `main`.
-- On pushes to `main`.
-- On version tag pushes that match `v*`, such as `v0.1.0`.
+Each build uses `npm ci` from `frontend/`, frontend unit tests, Rust tests, and
+the existing frontend/Tauri build commands.
 
-For feature-branch validation, open a pull request against `main` and use the
-workflow run attached to the PR.
+## Release assets
 
-## Build Steps
+Published filenames are deliberately version-independent:
 
-Each platform job uses the existing project commands:
+| Platform | Asset | Notes |
+| --- | --- | --- |
+| Windows | `Note-Setup.exe` | NSIS installer for the current user; no administrator installation is required. |
+| macOS | `Note.dmg` | Disk image from the macOS runner. |
+| Debian/Ubuntu | `Note.deb` | Required Linux release asset. |
+| Linux, when available | `Note.AppImage` | Optional: AppImage packaging can fail on hosted runners. |
+| All | `SHA256SUMS` | SHA-256 checksums for the assets in that release. |
+
+Windows, macOS, and Linux packages are currently unsigned. macOS builds are
+not notarized. Do not describe any release as signed or notarized until a
+signing and notarization process has been configured.
+
+## Prepare and publish a version
+
+1. Update the three manifest versions to the exact same semantic version:
+   `backend/src-tauri/tauri.conf.json`, `backend/src-tauri/Cargo.toml`, and
+   `frontend/package.json`.
+2. Update `frontend/package-lock.json` to match the frontend manifest.
+3. Merge the version change to `main` after the usual review and checks.
+4. From the current `main`, create and push the matching tag. For `0.2.0`:
+
+   ```bash
+   git checkout main
+   git pull --ff-only origin main
+   git tag v0.2.0
+   git push origin v0.2.0
+   ```
+
+5. Watch the tag workflow. When all platform jobs and **Publish GitHub Release**
+   succeed, verify the assets and checksums on the [release page](https://github.com/tyhuang9/note/releases).
+
+The workflow rejects tags such as `v0.2` and rejects version mismatches before
+any installer build starts.
+
+## GitHub Pages documentation
+
+The [documentation site](https://tyhuang9.github.io/note/) is published from
+`docs/` by `.github/workflows/pages.yml`. Pull requests validate its local HTML
+links but do not deploy it; pushes to `main` and manual runs deploy it.
+
+Before the first deployment, a repository administrator must enable GitHub
+Pages in **Settings → Pages** and select **GitHub Actions** as the source.
+
+## Linux fallback
+
+The Linux build attempts Tauri's normal bundle set with
+`APPIMAGE_EXTRACT_AND_RUN=1` and installs common WebKit/FUSE dependencies. If
+that fails, it retries a Debian-only bundle. The release always requires a
+successful `Note.deb`; it includes `Note.AppImage` only when AppImage packaging
+actually succeeds. No RPM asset is published by this workflow.
+
+## Local smoke test
 
 ```bash
-npm install
+npm --prefix frontend ci
 npm run build
 npm run tauri:build
 ```
 
-In CI, `npm install` runs from `frontend/` because the root package delegates
-frontend and Tauri commands to that package.
-
-## Produced Installers
-
-GitHub Actions uploads installers as workflow artifacts:
-
-- `note-windows-installers`: Windows `.msi` and `.exe` bundles when produced.
-- `note-macos-installers`: macOS `.dmg` bundles and `.app` bundles when produced.
-- `note-linux-installers`: Linux `.deb` bundles and AppImage bundles when produced.
-
-The Linux build uses the existing Tauri bundle target configuration. Because the
-current Tauri config uses `bundle.targets: "all"`, the Linux artifact may also
-include an `.rpm` bundle when Tauri produces one.
-
-Generated files are created under:
-
-```text
-backend/src-tauri/target/release/bundle/
-```
-
-Common subdirectories are `msi/`, `nsis/`, `dmg/`, `macos/`, `deb/`,
-`appimage/`, and `rpm/`.
-
-## Downloading Artifacts
-
-1. Open the repository on GitHub.
-2. Go to the Actions tab.
-3. Select the `Build Desktop Installers` workflow run.
-4. Download the artifact for the target operating system from the run summary.
-5. Extract the artifact archive locally before installing or testing the package.
-
-Artifacts are unsigned development builds unless signing secrets and notarization
-are added later.
-
-## Known Platform Issues
-
-- Windows installers are unsigned, so Windows SmartScreen may warn on first run.
-- MSI creation depends on the Windows runner support for MSI tooling and the
-  VBSCRIPT optional feature.
-- macOS builds are unsigned and not notarized. Gatekeeper may block or warn when
-  opening downloaded builds.
-- The architecture of macOS artifacts follows the `macos-latest` runner used by
-  GitHub Actions.
-- Linux AppImage packaging depends on `linuxdeploy` and FUSE/AppImage runtime
-  behavior. The workflow sets `APPIMAGE_EXTRACT_AND_RUN=1` and installs common
-  compatibility packages, but AppImage can still fail on hosted runners.
-- If Linux full bundling fails during AppImage creation, the workflow runs a
-  Debian-only fallback with `npm run tauri:build -- --bundles deb` so a `.deb`
-  artifact can still be uploaded.
-
-## Local Smoke Test
-
-From the repo root, run:
+To validate the Debian fallback specifically on Linux:
 
 ```bash
-cd frontend
-npm install
-cd ..
-npm run build
-npm run tauri:build
+APPIMAGE_EXTRACT_AND_RUN=1 npm run tauri:build -- --bundles deb
 ```
 
-On Linux, if AppImage packaging fails but `.deb` is enough for validation, run:
+Generated local bundles are under `backend/src-tauri/target/release/bundle/`.
+Do not commit them.
 
-```bash
-npm run tauri:build -- --bundles deb
-```
+## Common failures
+
+- **Version validation failed:** Make the tag without its `v` exactly equal to
+  all three manifest versions, then create a corrected tag.
+- **An expected asset is missing:** Inspect the platform job's Tauri output.
+  The workflow intentionally fails rather than publishing ambiguous or missing
+  Windows, macOS, or Debian assets.
+- **AppImage is absent:** This is an expected fallback outcome; publish and
+  document the successful Debian package instead.
+- **SmartScreen or Gatekeeper warning:** Expected until code signing and macOS
+  notarization are added. Verify the release source and checksum before use.

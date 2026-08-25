@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Platform-specific instructions for installing and updating Note."
+    />
+    <title>Install Note</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <a class="brand" href="index.html" aria-label="Note documentation home">Note</a>
+      <nav aria-label="Primary navigation">
+        <a href="index.html">Overview</a>
+        <a aria-current="page" href="install.html">Install guide</a>
+        <a href="https://github.com/tyhuang9/note/releases">All releases</a>
+      </nav>
+    </header>
+
+    <main id="main" class="guide">
+      <p class="eyebrow">Installation guide</p>
+      <h1>Install Note on your desktop.</h1>
+      <p class="lede">Choose the package for your platform from the official GitHub Release.</p>
+
+      <section aria-labelledby="windows-title">
+        <h2 id="windows-title">Windows</h2>
+        <ol>
+          <li><a href="https://github.com/tyhuang9/note/releases/latest/download/Note-Setup.exe">Download Note-Setup.exe</a>.</li>
+          <li>Run the installer. It installs Note for the current user and does not require administrator access.</li>
+          <li>Open Note from the Start menu.</li>
+        </ol>
+      </section>
+
+      <section aria-labelledby="macos-title">
+        <h2 id="macos-title">macOS</h2>
+        <ol>
+          <li><a href="https://github.com/tyhuang9/note/releases/latest/download/Note.dmg">Download Note.dmg</a>.</li>
+          <li>Open the disk image and drag Note to Applications.</li>
+          <li>Launch Note from Applications.</li>
+        </ol>
+      </section>
+
+      <section aria-labelledby="linux-title">
+        <h2 id="linux-title">Debian and Ubuntu</h2>
+        <p>
+          <a href="https://github.com/tyhuang9/note/releases/latest/download/Note.deb">Download Note.deb</a>,
+          open it in your package installer, or run:
+        </p>
+        <pre><code>sudo apt install ./Note.deb</code></pre>
+        <p>
+          When a release includes <code>Note.AppImage</code>, download it from
+          the <a href="https://github.com/tyhuang9/note/releases/latest">release page</a>,
+          make it executable with <code>chmod +x Note.AppImage</code>, and run it.
+        </p>
+      </section>
+
+      <aside class="warning" aria-label="Unsigned package notice">
+        <h2>Unsigned builds</h2>
+        <p>
+          Current Windows, macOS, and Linux packages are unsigned; macOS builds
+          are also not notarized. SmartScreen or Gatekeeper can warn before the
+          first launch. Verify that the file came from the official GitHub
+          release and compare it with <code>SHA256SUMS</code> when needed.
+        </p>
+      </aside>
+
+      <section aria-labelledby="updates-title">
+        <h2 id="updates-title">Data and updates</h2>
+        <p>
+          Note keeps pages, canvas elements, assets, and preferences locally in
+          its application-data directory. It has no cloud sync, automatic
+          backup, or built-in automatic updater today.
+        </p>
+        <p>
+          To update, install a newer package from GitHub Releases over the
+          existing app. Back up important local data before an update, device
+          move, or application-data cleanup.
+        </p>
+      </section>
+
+      <section aria-labelledby="source-title">
+        <h2 id="source-title">Build from source</h2>
+        <p>With Node.js, Rust stable, and the Tauri prerequisites installed:</p>
+        <pre><code>npm --prefix frontend ci
+npm run dev</code></pre>
+        <p><a href="https://github.com/tyhuang9/note/blob/main/docs/INSTALLATION.md">Read the complete source-build notes</a>.</p>
+      </section>
+    </main>
+
+    <footer>
+      <p><a href="index.html">Back to Note documentation</a></p>
+      <p><a href="https://github.com/tyhuang9/note/releases">All releases</a></p>
+    </footer>
+  </body>
+</html>

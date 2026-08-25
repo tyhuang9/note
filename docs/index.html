@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Download Note, a local-first desktop workspace for freeform thinking on a canvas."
+    />
+    <title>Note — freeform notes, kept local</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <a class="brand" href="index.html" aria-label="Note documentation home">Note</a>
+      <nav aria-label="Primary navigation">
+        <a href="install.html">Install guide</a>
+        <a href="https://github.com/tyhuang9/note/releases">All releases</a>
+        <a href="https://github.com/tyhuang9/note">Source</a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow">A local-first desktop workspace</p>
+          <h1 id="hero-title">Make room for ideas to take shape.</h1>
+          <p class="lede">
+            Note is a freeform canvas for pages, text, images, and drawing
+            elements—kept on your device, not behind a login.
+          </p>
+          <div class="actions">
+            <a class="button button-primary" href="https://github.com/tyhuang9/note/releases/latest">
+              Download Note
+            </a>
+            <a class="button button-secondary" href="install.html">Choose a platform</a>
+          </div>
+          <p class="fine-print">Current builds are unsigned. Verify the GitHub release before opening one.</p>
+        </div>
+        <figure class="demo">
+          <img
+            src="assets/note-demo.gif"
+            width="900"
+            height="454"
+            alt="A short visual tour of Note's canvas, selection controls, and dark theme"
+          />
+          <figcaption>Real interface captures: canvas tools, selection controls, and dark theme.</figcaption>
+        </figure>
+      </section>
+
+      <section class="section" aria-labelledby="download-title">
+        <div class="section-heading">
+          <p class="eyebrow">Get started</p>
+          <h2 id="download-title">Download for your desktop</h2>
+          <p>Every release includes checksums. Download only from the official GitHub release.</p>
+        </div>
+        <div class="download-grid">
+          <article class="download-card">
+            <h3>Windows</h3>
+            <p>Install Note for the current user with the NSIS installer.</p>
+            <a href="https://github.com/tyhuang9/note/releases/latest/download/Note-Setup.exe">Download Note-Setup.exe</a>
+          </article>
+          <article class="download-card">
+            <h3>macOS</h3>
+            <p>Open the disk image and move Note to Applications.</p>
+            <a href="https://github.com/tyhuang9/note/releases/latest/download/Note.dmg">Download Note.dmg</a>
+          </article>
+          <article class="download-card">
+            <h3>Debian / Ubuntu</h3>
+            <p>Install the Debian package with your package installer or apt.</p>
+            <a href="https://github.com/tyhuang9/note/releases/latest/download/Note.deb">Download Note.deb</a>
+          </article>
+        </div>
+        <p class="callout">
+          Some Linux releases also include an AppImage. It is optional because
+          AppImage packaging is not reliable on every hosted CI run. Check the
+          <a href="https://github.com/tyhuang9/note/releases/latest">latest release files</a>
+          for <code>Note.AppImage</code>.
+        </p>
+      </section>
+
+      <section class="section steps" aria-labelledby="first-use-title">
+        <div class="section-heading">
+          <p class="eyebrow">First use</p>
+          <h2 id="first-use-title">Start with a page, then make it yours.</h2>
+        </div>
+        <ol>
+          <li><strong>Create or select a page</strong> from the sidebar.</li>
+          <li><strong>Click the canvas</strong> to add text, then draw, select, pan, and zoom with the tools.</li>
+          <li><strong>Find what matters</strong> with search and choose a theme that fits your space.</li>
+        </ol>
+        <p>
+          Note stores workspace data locally in its application-data directory.
+          There is no cloud sync or automatic backup, so keep your own backup
+          before clearing app data or moving devices.
+        </p>
+      </section>
+    </main>
+
+    <footer>
+      <p>Note is local-first. <a href="install.html">Read the full installation guide</a>.</p>
+      <p><a href="https://github.com/tyhuang9/note">GitHub</a> · <a href="https://github.com/tyhuang9/note/releases">Releases</a></p>
+    </footer>
+  </body>
+</html>

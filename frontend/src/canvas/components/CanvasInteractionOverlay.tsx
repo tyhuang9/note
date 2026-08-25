@@ -16,6 +16,7 @@ type CanvasInteractionOverlayProps = {
       y: number;
     }[];
     height: number;
+    isShapeFrame: boolean;
     isNativeTextFrame: boolean;
     moveLabel: string;
     onClick?: MouseEventHandler<HTMLButtonElement>;
@@ -52,7 +53,7 @@ export function CanvasInteractionOverlay({
       <div className="selection-rectangle" ref={marqueeRef} />
       {selectionFrame ? (
         <div
-          className={`selection-frame ${selectionFrame.isNativeTextFrame ? "is-native-text-frame" : ""}`}
+          className={`selection-frame ${selectionFrame.isNativeTextFrame ? "is-native-text-frame" : ""} ${selectionFrame.isShapeFrame ? "is-shape-selection-frame" : ""}`}
           ref={selectionFrameRef}
           style={{
             height: selectionFrame.height,

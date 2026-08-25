@@ -8,7 +8,7 @@ import type {
 import { isArrowConnector, isBoxCanvasElement } from "./elements";
 import { resolveConnectorPoints } from "./connectorBinding";
 import { getConnectorArrowheadPaintPadding, getConnectorArrowheadPoints } from "./connectorArrowheads";
-import { containsPointInsideShapeBoundaryFast } from "./shapeBoundary";
+import { containsPointInsideShapeBoundaryFast, projectPointToShapeBoundary } from "./shapeBoundary";
 import type { CanvasPoint, CanvasRect } from "./geometry";
 
 export type Bounds = CanvasRect;
@@ -174,6 +174,60 @@ function shapeContainsPoint(element: ShapeElement, worldPoint: CanvasPoint, tole
   return (hasFill && pointInPolygon(point, vertices)) || distanceToPolygon(point, vertices) <= radius;
 }
 
+/**
+ * Select-mode shape hit testing follows the complete logical shape boundary,
+ * independent of whether its rendered style has a fill. Keep this separate
+ * from painted-path hit testing so eraser semantics remain unchanged.
+ */
+export function shapeSelectionContainsPoint(element: ShapeElement, worldPoint: CanvasPoint) {
+  const point = unrotatePoint(element, worldPoint);
+  const localX = point.x - element.x;
+  const localY = point.y - element.y;
+  if (localX < 0 || localY < 0 || localX > element.width || localY > element.height) return false;
+  return containsPointInsideShapeBoundaryFast(
+    element.shape,
+    element.width,
+    element.height,
+    element.style.roundness,
+    localX,
+    localY,
+  );
+}
+
+function shapeSelectionStrokeContainsPoint(element: ShapeElement, worldPoint: CanvasPoint, tolerance: number) {
+  const point = unrotatePoint(element, worldPoint);
+  const local = { x: point.x - element.x, y: point.y - element.y };
+  const radius = Math.max(0, tolerance) + element.style.strokeWidth / 2;
+  if (
+    local.x < -radius ||
+    local.y < -radius ||
+    local.x > element.width + radius ||
+    local.y > element.height + radius
+  ) return false;
+  const boundary = projectPointToShapeBoundary(
+    element.shape,
+    element.width,
+    element.height,
+    element.style.roundness,
+    local,
+  );
+  return Boolean(boundary && Math.hypot(local.x - boundary.x, local.y - boundary.y) <= radius);
+}
+
+/** Select-mode hit testing, intentionally distinct from the eraser's painted-path behavior. */
+export function selectionElementContainsPoint(
+  element: CanvasElement,
+  point: CanvasPoint,
+  tolerance = 0,
+  elementsById: Readonly<Record<ElementId, CanvasElement>> = {},
+): boolean {
+  if (element.type !== "shape") return canvasElementContainsPoint(element, point, tolerance, elementsById);
+  // The logical interior makes hollow shapes selectable throughout; preserve
+  // the previous painted-stroke tolerance against the same logical perimeter.
+  return shapeSelectionContainsPoint(element, point)
+    || shapeSelectionStrokeContainsPoint(element, point, tolerance);
+}
+
 /** Geometry-aware hit test shared by selection and the eraser. */
 export function canvasElementContainsPoint(
   element: CanvasElement,
@@ -309,6 +363,20 @@ export function getTopmostElementAtPoint(
   for (let index = orderedElementIds.length - 1; index >= 0; index -= 1) {
     const element = elementsById[orderedElementIds[index]];
     if (element && canvasElementContainsPoint(element, point, tolerance, elementsById)) return element;
+  }
+  return undefined;
+}
+
+/** Finds the topmost element using Select mode's semantic hit geometry. */
+export function getTopmostSelectableElementAtPoint(
+  elementsById: Readonly<Record<ElementId, CanvasElement>>,
+  orderedElementIds: readonly ElementId[],
+  point: CanvasPoint,
+  tolerance = 0,
+): CanvasElement | undefined {
+  for (let index = orderedElementIds.length - 1; index >= 0; index -= 1) {
+    const element = elementsById[orderedElementIds[index]];
+    if (element && selectionElementContainsPoint(element, point, tolerance, elementsById)) return element;
   }
   return undefined;
 }

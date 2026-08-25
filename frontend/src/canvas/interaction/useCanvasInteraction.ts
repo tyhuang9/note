@@ -30,7 +30,7 @@ import {
   canvasElementContainsPoint,
   getDirectBindableTargetAtPoint,
   getElementBounds,
-  getTopmostElementAtPoint,
+  getTopmostSelectableElementAtPoint,
   shapeTextEditingContainsPoint,
   shapeTextContainsPoint,
 } from "../model/hitTesting";
@@ -577,12 +577,12 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
       return;
     }
     const elementsById = Object.fromEntries(current.visibleElements.map((element) => [element.id, element]));
-    const hit = getTopmostElementAtPoint(
+    const hit = getTopmostSelectableElementAtPoint(
       elementsById,
       elementIdsBackToFront(current.visibleElements),
       point,
       screenToleranceToWorld(6, { zoom: Math.max(0.01, current.zoomLevelRef.current) }),
-    ) ?? getDirectBindableTargetAtPoint(current.visibleElements, point);
+    );
     setSelectHoverCursor(hit ? (hit.locked ? "pointer" : "grab") : null);
   }, [getCanvasPoint, setSelectHoverCursor]);
 
@@ -843,7 +843,7 @@ export function useCanvasInteraction(options: CanvasInteractionOptions) {
         const elementsById = Object.fromEntries(
           current.visibleElements.map((element) => [element.id, element]),
         );
-        const hitElement = getTopmostElementAtPoint(
+        const hitElement = getTopmostSelectableElementAtPoint(
           elementsById,
           elementIdsBackToFront(current.visibleElements),
           startPoint,

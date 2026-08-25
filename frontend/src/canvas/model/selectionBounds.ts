@@ -36,6 +36,11 @@ export type TextSelectionSize = Readonly<{
   width: number;
 }>;
 
+const MIN_NON_TEXT_BOX_SIZE = 8;
+const MIN_IMAGE_WIDTH = 80;
+const MIN_IMAGE_HEIGHT = 60;
+const MAX_IMAGE_WIDTH = 4_000;
+
 /**
  * The visual bounding box of an element in world coordinates. Unlike the DOM
  * box, this includes its rotation and connector endpoints.
@@ -263,19 +268,13 @@ export function resizeSelection(
       const height = changesY
         ? Math.max(contentHeight, requestedHeight)
         : Math.max(contentHeight, element.manualHeight ?? 0);
-      const originalOppositeLocal = {
-        x: transform.handle.includes("w") ? element.width : transform.handle.includes("e") ? 0 : element.width / 2,
-        y: transform.handle.includes("n") ? element.height : transform.handle.includes("s") ? 0 : element.height / 2,
-      };
+      const originalOppositeLocal = getResizeOppositeLocalPoint(element, transform.handle);
       const transformedOpposite = resizeWorldPoint(
         getRotatedLocalPoint(element, originalOppositeLocal),
         bounds,
         transform,
       );
-      const nextOppositeLocal = {
-        x: transform.handle.includes("w") ? width : transform.handle.includes("e") ? 0 : width / 2,
-        y: transform.handle.includes("n") ? height : transform.handle.includes("s") ? 0 : height / 2,
-      };
+      const nextOppositeLocal = getResizeOppositeLocalPoint({ width, height }, transform.handle);
       const next = {
         ...element,
         height,
@@ -295,19 +294,35 @@ export function resizeSelection(
       };
     }
 
-    const center = { x: element.x + element.width / 2, y: element.y + element.height / 2 };
-    const nextCenter = resizeWorldPoint(center, bounds, transform);
-    const width = Math.max(8, element.width * transform.scaleX);
-    const height = Math.max(8, element.height * transform.scaleY);
+    const originalOppositeLocal = getResizeOppositeLocalPoint(element, transform.handle);
+    const transformedOpposite = resizeWorldPoint(
+      getRotatedLocalPoint(element, originalOppositeLocal),
+      bounds,
+      transform,
+    );
+    const width = element.type === "image"
+      ? finiteBetween(element.width * transform.scaleX, MIN_IMAGE_WIDTH, MAX_IMAGE_WIDTH)
+      : finiteAtLeast(element.width * transform.scaleX, MIN_NON_TEXT_BOX_SIZE);
+    const height = element.type === "image"
+      ? finiteAtLeast(element.height * transform.scaleY, MIN_IMAGE_HEIGHT)
+      : finiteAtLeast(element.height * transform.scaleY, MIN_NON_TEXT_BOX_SIZE);
+    const nextOppositeLocal = getResizeOppositeLocalPoint({ width, height }, transform.handle);
+    const position = getBoxPositionForRotatedLocalPoint(
+      { width, height },
+      element.rotation,
+      nextOppositeLocal,
+      transformedOpposite,
+    );
     const next = {
       ...element,
       height,
       width,
-      x: nextCenter.x - width / 2,
-      y: nextCenter.y - height / 2,
+      ...position,
       updatedAt: Date.now(),
     };
-    return next.type === "ink" ? resizeInkGeometry(next, transform.scaleX, transform.scaleY) : next;
+    return next.type === "ink"
+      ? resizeInkGeometry(next, width / element.width, height / element.height)
+      : next;
   });
 }
 
@@ -404,6 +419,16 @@ function getBoxPositionForRotatedLocalPoint(
   return { x: center.x - size.width / 2, y: center.y - size.height / 2 };
 }
 
+function getResizeOppositeLocalPoint(
+  size: Pick<TextSelectionSize, "height" | "width">,
+  handle: SelectionResizeHandle,
+): CanvasPoint {
+  return {
+    x: handle.includes("w") ? size.width : handle.includes("e") ? 0 : size.width / 2,
+    y: handle.includes("n") ? size.height : handle.includes("s") ? 0 : size.height / 2,
+  };
+}
+
 function resizeWorldPoint(point: CanvasPoint, bounds: Bounds, transform: SelectionResizeTransform): CanvasPoint {
   const local = toLocalPoint(bounds, transform.rotation, point);
   const anchor = toLocalPoint(bounds, transform.rotation, transform.anchor);
@@ -433,6 +458,11 @@ function rotateLocalPoint(bounds: Bounds, rotation: number, point: CanvasPoint):
 
 function finiteAtLeast(value: number, minimum: number): number {
   return Number.isFinite(value) ? Math.max(minimum, value) : minimum;
+}
+
+function finiteBetween(value: number, minimum: number, maximum: number): number {
+  if (value === Number.POSITIVE_INFINITY) return maximum;
+  return Number.isFinite(value) ? Math.min(maximum, Math.max(minimum, value)) : minimum;
 }
 
 function getConnectorBounds(

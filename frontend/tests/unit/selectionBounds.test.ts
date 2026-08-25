@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { CanvasElement, ConnectorElement, InkElement, ShapeElement, TextElement } from "../../src/canvas/model/elements";
+import type { CanvasElement, ConnectorElement, ImageElement, InkElement, ShapeElement, TextElement } from "../../src/canvas/model/elements";
 import { PEN_BRUSH } from "../../src/canvas/model/ink";
 import {
   getProportionalScale,
@@ -11,6 +11,7 @@ import {
   resizeSelection,
   translateSelection,
 } from "../../src/canvas/model/selectionBounds";
+import type { SelectionResizeHandle, SelectionResizeTransform } from "../../src/canvas/model/selectionBounds";
 import { resolveConnectorPoints } from "../../src/canvas/model/connectorBinding";
 
 const text: TextElement = {
@@ -46,6 +47,37 @@ const ink: InkElement = {
   width: 40,
   x: 150,
   y: 50,
+  zIndex: 2,
+};
+
+const shape: ShapeElement = {
+  ...text,
+  height: 24,
+  id: "shape",
+  rotation: 33,
+  shape: "rectangle",
+  style: { fillColor: null, roughness: 1, roundness: 1, seed: 2, strokeColor: { kind: "fixed", value: "#000" }, strokeStyle: "solid", strokeWidth: 2 },
+  type: "shape",
+  width: 48,
+};
+
+const image: ImageElement = {
+  assetId: "asset",
+  createdAt: 1,
+  fit: "contain",
+  height: 120,
+  id: "image",
+  locked: false,
+  naturalHeight: 600,
+  naturalWidth: 800,
+  opacity: 1,
+  pageId: "page",
+  rotation: 33,
+  type: "image",
+  updatedAt: 1,
+  width: 160,
+  x: 30,
+  y: 40,
   zIndex: 2,
 };
 
@@ -396,6 +428,77 @@ describe("composite transforms", () => {
     expect(resized.brush.size).toBe(ink.brush.size);
   });
 
+  it.each([shape, { ...ink, rotation: 33 }] as const)(
+    "clamps every $type resize handle to 8 while retaining its rotated opposite edge or corner",
+    (element) => {
+      for (const handle of RESIZE_HANDLES) {
+        const transform = shrinkingTransform(element, handle);
+        const [resized] = resizeSelection(
+          [element],
+          new Set([element.id]),
+          { x: element.x, y: element.y, width: element.width, height: element.height, rotation: element.rotation },
+          transform,
+        );
+        if (resized.type === "connector") {
+          throw new Error(`Unexpected resized ${resized.type} element.`);
+        }
+        expect(resized.width).toBe(handle.includes("e") || handle.includes("w") ? 8 : element.width);
+        expect(resized.height).toBe(handle.includes("n") || handle.includes("s") ? 8 : element.height);
+        const actualOpposite = resizedHandleOppositeWorldPoint(resized, handle);
+        expect(actualOpposite.x).toBeCloseTo(transform.anchor.x);
+        expect(actualOpposite.y).toBeCloseTo(transform.anchor.y);
+      }
+    },
+  );
+
+  it("uses actual clamped ink factors so points remain inside the resized frame", () => {
+    const rotatedInk = { ...ink, rotation: 33 };
+    const transform = shrinkingTransform(rotatedInk, "nw");
+    const [resized] = resizeSelection(
+      [rotatedInk],
+      new Set([rotatedInk.id]),
+      { ...rotatedInk },
+      transform,
+    ) as InkElement[];
+    expect(resized).toMatchObject({ height: 8, width: 8 });
+    expect(resized.points).toEqual([[0, 0, 0.5], [8, 8, 0.7]]);
+  });
+
+  it("applies image minimums and maximum width before fixing every rotated opposite edge or corner", () => {
+    for (const handle of RESIZE_HANDLES) {
+      const transform = shrinkingTransform(image, handle);
+      const [resized] = resizeSelection(
+        [image],
+        new Set([image.id]),
+        { x: image.x, y: image.y, width: image.width, height: image.height, rotation: image.rotation },
+        transform,
+      ) as ImageElement[];
+      expect(resized.width).toBe(handle.includes("e") || handle.includes("w") ? 80 : image.width);
+      expect(resized.height).toBe(handle.includes("n") || handle.includes("s") ? 60 : image.height);
+      const actualOpposite = resizedHandleOppositeWorldPoint(resized, handle);
+      expect(actualOpposite.x).toBeCloseTo(transform.anchor.x);
+      expect(actualOpposite.y).toBeCloseTo(transform.anchor.y);
+    }
+
+    const transform: SelectionResizeTransform = {
+      anchor: resizedHandleOppositeWorldPoint(image, "e"),
+      handle: "e",
+      rotation: image.rotation,
+      scaleX: 100,
+      scaleY: 1,
+    };
+    const [resized] = resizeSelection(
+      [image],
+      new Set([image.id]),
+      { x: image.x, y: image.y, width: image.width, height: image.height, rotation: image.rotation },
+      transform,
+    ) as ImageElement[];
+    expect(resized).toMatchObject({ height: 120, width: 4_000 });
+    const actualOpposite = resizedHandleOppositeWorldPoint(resized, "e");
+    expect(actualOpposite.x).toBeCloseTo(transform.anchor.x);
+    expect(actualOpposite.y).toBeCloseTo(transform.anchor.y);
+  });
+
   it("calculates cardinal transforms in rotated local axes", () => {
     const frame = { x: 10, y: 20, width: 100, height: 40, rotation: 90 };
     const transform = getSelectionResizeTransform(frame, "e", { x: 60, y: 190 });
@@ -428,10 +531,25 @@ function oppositeLocalPoint(block: Pick<TextElement, "height" | "width">, corner
 
 function resizedHandleOppositeWorldPoint(
   block: Pick<TextElement, "height" | "rotation" | "width" | "x" | "y">,
-  handle: "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw",
+  handle: SelectionResizeHandle,
 ) {
   return rotatedLocalWorldPoint(block, {
     x: handle.includes("w") ? block.width : handle.includes("e") ? 0 : block.width / 2,
     y: handle.includes("n") ? block.height : handle.includes("s") ? 0 : block.height / 2,
   });
+}
+
+const RESIZE_HANDLES: readonly SelectionResizeHandle[] = ["n", "ne", "e", "se", "s", "sw", "w", "nw"];
+
+function shrinkingTransform(
+  element: Pick<TextElement, "height" | "rotation" | "width" | "x" | "y">,
+  handle: SelectionResizeHandle,
+): SelectionResizeTransform {
+  return {
+    anchor: resizedHandleOppositeWorldPoint(element, handle),
+    handle,
+    rotation: element.rotation,
+    scaleX: handle.includes("e") || handle.includes("w") ? 0.01 : 1,
+    scaleY: handle.includes("n") || handle.includes("s") ? 0.01 : 1,
+  };
 }

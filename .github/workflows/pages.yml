@@ -68,6 +68,9 @@ jobs:
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v6
+        with:
+          # Initializes the Pages site on its first workflow deployment.
+          enablement: true
 
       - name: Archive documentation site
         run: |

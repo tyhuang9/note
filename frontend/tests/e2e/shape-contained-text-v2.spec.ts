@@ -179,6 +179,79 @@ test("native canvas double-click edits locked and unlocked shapes but ignores cl
   await blankShape.locator('[role="textbox"]').press("Escape");
 });
 
+for (const scenario of [
+  { isDarkMode: false, zoomLevel: 0.5 },
+  { isDarkMode: true, zoomLevel: 1 },
+  { isDarkMode: false, zoomLevel: 2 },
+] as const) {
+  test(`locked short shape text stays centered without selection chrome at ${scenario.zoomLevel * 100}%`, async ({ page }) => {
+    await installShapeTextWorkspace(page, {
+      isDarkMode: scenario.isDarkMode,
+      preserveRichShapePosition: true,
+      rotation: 0,
+      shape: "rectangle",
+      zoomLevel: scenario.zoomLevel,
+    });
+    await page.goto("/");
+    const shape = page.locator('[data-canvas-element-id="shape"]');
+    const display = shape.locator(".shape-contained-text-display");
+    const displayContent = display.locator(".shape-contained-text-content");
+    expect(await verticalCenterDelta(display, displayContent)).toBeLessThanOrEqual(1);
+    const baselineWrites = await writeCount(page);
+
+    await dispatchCenterDoubleClick(shape);
+    const editor = shape.locator('.shape-contained-text-editor-content[role="textbox"]');
+    const editorContainer = shape.locator(".shape-contained-text-editor");
+    await expect(editor).toBeFocused();
+    await expect(page.locator(".selection-frame")).toHaveCount(0);
+    await expect(shape).toHaveCSS("outline-style", "none");
+    expect(await verticalCenterDelta(editorContainer, editor.locator("p"))).toBeLessThanOrEqual(2);
+    const caretOffset = await page.evaluate(() => window.getSelection()?.focusOffset ?? -1);
+    expect(caretOffset).toBeGreaterThan(0);
+    expect(caretOffset).toBeLessThan("Original label".length);
+    await editor.type("X");
+    expect(await verticalCenterDelta(editorContainer, editor.locator("p"))).toBeLessThanOrEqual(2);
+    await editor.press("Escape");
+    await expect(shape).toContainText("Original label");
+    await expect.poll(() => writeCount(page)).toBe(baselineWrites);
+    expect(await verticalCenterDelta(display, displayContent)).toBeLessThanOrEqual(1);
+  });
+}
+
+test("empty shape text centers initially and long multiline editing top-aligns without clipping", async ({ page }) => {
+  await installShapeTextWorkspace(page, { isDarkMode: true, rotation: 0, shape: "rectangle", zoomLevel: 1 });
+  await page.goto("/");
+  const shape = page.locator('[data-canvas-element-id="blank-shape"]');
+  await shape.focus();
+  await shape.press("F2");
+  const editor = shape.locator('.shape-contained-text-editor-content[role="textbox"]');
+  const container = shape.locator(".shape-contained-text-editor");
+  await expect(editor).toBeFocused();
+  expect(await verticalCenterDelta(container, editor.locator("p"))).toBeLessThanOrEqual(2);
+  await editor.type("A");
+  expect(await verticalCenterDelta(container, editor.locator("p"))).toBeLessThanOrEqual(2);
+
+  await editor.fill(Array.from({ length: 24 }, (_, index) => `Visible line ${index + 1}`).join("\n"));
+  const overflow = await container.evaluate((element) => {
+    element.scrollTop = 0;
+    const bounds = element.getBoundingClientRect();
+    const firstParagraph = element.querySelector("p")?.getBoundingClientRect();
+    return {
+      clientHeight: element.clientHeight,
+      firstTop: firstParagraph?.top ?? Number.NaN,
+      scrollHeight: element.scrollHeight,
+      top: bounds.top,
+    };
+  });
+  expect(overflow.scrollHeight).toBeGreaterThan(overflow.clientHeight);
+  expect(overflow.firstTop).toBeGreaterThanOrEqual(overflow.top - 1);
+  expect(overflow.firstTop).toBeLessThanOrEqual(overflow.top + 2);
+  await expect(page.locator(".selection-frame")).toHaveCount(0);
+  await expect(shape).toHaveCSS("outline-style", "none");
+  await editor.press("Escape");
+  expect(await shapeRecord(page, "blank-shape")).not.toHaveProperty("text");
+});
+
 test("shape toolbar Escape cancels and Control+Enter commits from native controls", async ({ page }) => {
   await installShapeTextWorkspace(page);
   await page.goto("/");
@@ -460,9 +533,40 @@ async function doubleClickCanvasElement(page: Page, element: ReturnType<Page["lo
   await page.mouse.dblclick(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
 }
 
+async function dispatchCenterDoubleClick(element: ReturnType<Page["locator"]>) {
+  await element.evaluate((target) => {
+    const bounds = target.getBoundingClientRect();
+    target.dispatchEvent(new MouseEvent("dblclick", {
+      bubbles: true,
+      button: 0,
+      clientX: bounds.x + bounds.width / 2,
+      clientY: bounds.y + bounds.height / 2,
+      detail: 2,
+    }));
+  });
+}
+
+async function verticalCenterDelta(container: ReturnType<Page["locator"]>, content: ReturnType<Page["locator"]>) {
+  const [containerBounds, contentBounds] = await Promise.all([
+    container.boundingBox(),
+    content.boundingBox(),
+  ]);
+  if (!containerBounds || !contentBounds) throw new Error("Shape text center geometry was unavailable");
+  return Math.abs(
+    contentBounds.y + contentBounds.height / 2
+      - (containerBounds.y + containerBounds.height / 2),
+  );
+}
+
 async function installShapeTextWorkspace(
   page: Page,
-  richShapeLayout: { isDarkMode: boolean; rotation: number; shape: "rectangle" | "ellipse" | "diamond"; zoomLevel?: number } | null = null,
+  richShapeLayout: {
+    isDarkMode: boolean;
+    preserveRichShapePosition?: boolean;
+    rotation: number;
+    shape: "rectangle" | "ellipse" | "diamond";
+    zoomLevel?: number;
+  } | null = null,
 ) {
   await page.addInitScript((layout) => {
     type ElementRecord = Record<string, unknown> & { id: string; pageId: string };
@@ -517,7 +621,7 @@ async function installShapeTextWorkspace(
         },
         {
           createdAt: 1,
-          height: layout ? 360 : 220,
+          height: layout && !layout.preserveRichShapePosition ? 360 : 220,
           id: "rich-shape",
           locked: false,
           opacity: 1,
@@ -539,9 +643,9 @@ async function installShapeTextWorkspace(
           },
           type: "shape",
           updatedAt: 1,
-          width: layout ? 420 : 320,
-          x: layout ? 420 : 520,
-          y: layout ? 280 : 520,
+          width: layout && !layout.preserveRichShapePosition ? 420 : 320,
+          x: layout && !layout.preserveRichShapePosition ? 420 : 520,
+          y: layout && !layout.preserveRichShapePosition ? 280 : 520,
           zIndex: 3,
         },
         {

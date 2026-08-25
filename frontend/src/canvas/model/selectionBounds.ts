@@ -1,0 +1,557 @@
+import type {
+  CanvasElement,
+  ConnectorElement,
+  ConnectorEndpoint,
+  ElementId,
+  InkElement,
+  TextElement,
+} from "./elements";
+import { isArrowConnector, isBoxCanvasElement } from "./elements";
+import { resolveConnectorPoints } from "./connectorBinding";
+import { getConnectorArrowheadPaintPadding } from "./connectorArrowheads";
+import type { CanvasPoint } from "./geometry";
+import type { Bounds } from "./hitTesting";
+import { normalizeBounds } from "./hitTesting";
+import { MIN_BLOCK_HEIGHT, MIN_BLOCK_WIDTH } from "../../constants";
+
+export type SelectionCorner = "nw" | "ne" | "se" | "sw";
+export type SelectionResizeHandle = SelectionCorner | "n" | "e" | "s" | "w";
+
+/** A selection frame in its own local coordinate system. Rotation is only
+ * non-zero for a single rotated box; mixed frames remain axis aligned. */
+export type SelectionFrameGeometry = Readonly<Bounds & { rotation: number }>;
+
+/** The canonical resize result shared by pointer previews and commits. */
+export type SelectionResizeTransform = Readonly<{
+  anchor: CanvasPoint;
+  handle: SelectionResizeHandle;
+  rotation: number;
+  scaleX: number;
+  scaleY: number;
+}>;
+
+/** Exact text box dimensions measured by the caller after rich-content reflow. */
+export type TextSelectionSize = Readonly<{
+  height: number;
+  width: number;
+}>;
+
+const MIN_NON_TEXT_BOX_SIZE = 8;
+const MIN_IMAGE_WIDTH = 80;
+const MIN_IMAGE_HEIGHT = 60;
+const MAX_IMAGE_WIDTH = 4_000;
+
+/**
+ * The visual bounding box of an element in world coordinates. Unlike the DOM
+ * box, this includes its rotation and connector endpoints.
+ */
+export function getSelectionElementBounds(
+  element: CanvasElement,
+  elementsById: Readonly<Record<ElementId, CanvasElement>> = {},
+): Bounds | null {
+  if (element.type === "connector") {
+    return getConnectorBounds(element, elementsById);
+  }
+
+  if (!isBoxCanvasElement(element)) return null;
+  return boundsFromPoints(rotatedBoxCorners(element));
+}
+
+/** Returns one union frame for all selected elements, skipping unknown ids. */
+export function getSelectionBounds(
+  elements: readonly CanvasElement[],
+  elementsById: Readonly<Record<ElementId, CanvasElement>> = {},
+): Bounds | null {
+  let result: Bounds | null = null;
+
+  for (const element of elements) {
+    const bounds = getSelectionElementBounds(element, elementsById);
+    if (!bounds) continue;
+    result = result ? unionBounds(result, bounds) : bounds;
+  }
+
+  return result;
+}
+
+export function rotatedBoxCorners(box: {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+}): CanvasPoint[] {
+  const normalized = normalizeBounds(box);
+  const center = {
+    x: normalized.x + normalized.width / 2,
+    y: normalized.y + normalized.height / 2,
+  };
+  const angle = (box.rotation * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+
+  return [
+    { x: normalized.x, y: normalized.y },
+    { x: normalized.x + normalized.width, y: normalized.y },
+    { x: normalized.x + normalized.width, y: normalized.y + normalized.height },
+    { x: normalized.x, y: normalized.y + normalized.height },
+  ].map((point) => ({
+    x: center.x + (point.x - center.x) * cos - (point.y - center.y) * sin,
+    y: center.y + (point.x - center.x) * sin + (point.y - center.y) * cos,
+  }));
+}
+
+export function unionBounds(first: Bounds, second: Bounds): Bounds {
+  const a = normalizeBounds(first);
+  const b = normalizeBounds(second);
+  const right = Math.max(a.x + a.width, b.x + b.width);
+  const bottom = Math.max(a.y + a.height, b.y + b.height);
+  return { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: right - Math.min(a.x, b.x), height: bottom - Math.min(a.y, b.y) };
+}
+
+export function getOppositeCorner(bounds: Bounds, corner: SelectionCorner): CanvasPoint {
+  const normalized = normalizeBounds(bounds);
+  switch (corner) {
+    case "nw": return { x: normalized.x + normalized.width, y: normalized.y + normalized.height };
+    case "ne": return { x: normalized.x, y: normalized.y + normalized.height };
+    case "se": return { x: normalized.x, y: normalized.y };
+    case "sw": return { x: normalized.x + normalized.width, y: normalized.y };
+  }
+}
+
+export function getOppositeResizeAnchor(
+  frame: SelectionFrameGeometry,
+  handle: SelectionResizeHandle,
+): CanvasPoint {
+  const bounds = normalizeBounds(frame);
+  const local = {
+    x: handle.includes("w") ? bounds.width : handle.includes("e") ? 0 : bounds.width / 2,
+    y: handle.includes("n") ? bounds.height : handle.includes("s") ? 0 : bounds.height / 2,
+  };
+  return rotateLocalPoint(bounds, frame.rotation, local);
+}
+
+/**
+ * Calculates independent local-axis factors while retaining the opposite edge
+ * (or corner) as the anchor. Pointer callers pass the dragged handle's world
+ * point, so the same math works at every zoom level.
+ */
+export function getSelectionResizeTransform(
+  frame: SelectionFrameGeometry,
+  handle: SelectionResizeHandle,
+  draggedHandle: CanvasPoint,
+  minimum = 0.01,
+): SelectionResizeTransform {
+  const bounds = normalizeBounds(frame);
+  const rotation = Number.isFinite(frame.rotation) ? frame.rotation : 0;
+  const anchor = getOppositeResizeAnchor({ ...bounds, rotation }, handle);
+  const localAnchor = toLocalPoint(bounds, rotation, anchor);
+  const localDragged = toLocalPoint(bounds, rotation, draggedHandle);
+  const changesX = handle.includes("e") || handle.includes("w");
+  const changesY = handle.includes("n") || handle.includes("s");
+  const scaleX = changesX && bounds.width > 0
+    ? finiteAtLeast(Math.abs(localDragged.x - localAnchor.x) / bounds.width, minimum)
+    : 1;
+  const scaleY = changesY && bounds.height > 0
+    ? finiteAtLeast(Math.abs(localDragged.y - localAnchor.y) / bounds.height, minimum)
+    : 1;
+  return { anchor, handle, rotation, scaleX, scaleY };
+}
+
+/**
+ * Computes a uniform scale from one frame corner while retaining the original
+ * aspect ratio. The dominant axis controls the scale so a diagonal drag never
+ * shears selected objects.
+ */
+export function getProportionalScale(
+  bounds: Bounds,
+  corner: SelectionCorner,
+  draggedCorner: CanvasPoint,
+  minimum = 0.01,
+): number {
+  const normalized = normalizeBounds(bounds);
+  const anchor = getOppositeCorner(normalized, corner);
+  const target = {
+    x: Math.abs(draggedCorner.x - anchor.x),
+    y: Math.abs(draggedCorner.y - anchor.y),
+  };
+  const ratios = [
+    normalized.width > 0 ? target.x / normalized.width : 0,
+    normalized.height > 0 ? target.y / normalized.height : 0,
+  ].filter((ratio) => Number.isFinite(ratio) && ratio > 0);
+  return Math.max(minimum, ratios.length > 0 ? Math.max(...ratios) : minimum);
+}
+
+/** Applies one committed translation, leaving locked selected elements intact. */
+export function translateSelection(
+  elements: readonly CanvasElement[],
+  selectedIds: ReadonlySet<ElementId>,
+  delta: CanvasPoint,
+): CanvasElement[] {
+  return elements.map((element) => {
+    if (!selectedIds.has(element.id) || element.locked) return element;
+    if (element.type === "connector") return translateConnector(element, delta);
+    return isBoxCanvasElement(element)
+      ? { ...element, x: element.x + delta.x, y: element.y + delta.y, updatedAt: Date.now() }
+      : element;
+  });
+}
+
+/**
+ * Uniformly scales a selection about its opposite frame corner. Callers may
+ * supply exact text measurements after reflow at the scaled width. Text keeps
+ * its content intact while its opposite local edge is transformed around the
+ * selection anchor for every corner direction. The local-edge calculation
+ * accounts for rotation, so changing reflow height cannot make rotated text
+ * jump between preview and commit.
+ */
+export function scaleSelection(
+  elements: readonly CanvasElement[],
+  selectedIds: ReadonlySet<ElementId>,
+  bounds: Bounds,
+  corner: SelectionCorner,
+  scale: number,
+  textSizes: ReadonlyMap<ElementId, TextSelectionSize> = new Map(),
+): CanvasElement[] {
+  const factor = finiteAtLeast(scale, 0.01);
+  const anchor = getOppositeCorner(bounds, corner);
+  return elements.map((element) => {
+    if (!selectedIds.has(element.id) || element.locked) return element;
+    if (element.type === "connector") return scaleConnector(element, anchor, factor);
+    if (!isBoxCanvasElement(element)) return element;
+
+    if (element.type === "text") {
+      const size = getScaledTextSize(element, factor, textSizes.get(element.id));
+      return {
+        ...element,
+        ...getTextPosition(element, anchor, factor, corner, size),
+        height: size.height,
+        isWidthManuallyResized: true,
+        width: size.width,
+        updatedAt: Date.now(),
+      };
+    }
+    const position = scalePoint({ x: element.x, y: element.y }, anchor, factor);
+    const box = {
+      ...element,
+      x: position.x,
+      y: position.y,
+      width: Math.max(0.01, element.width * factor),
+      height: Math.max(0.01, element.height * factor),
+      updatedAt: Date.now(),
+    };
+
+    if (box.type !== "ink") return box;
+    return scaleInkGeometry(box, factor);
+  });
+}
+
+/** Applies independent local-axis resize factors for both edge and corner handles. */
+export function resizeSelection(
+  elements: readonly CanvasElement[],
+  selectedIds: ReadonlySet<ElementId>,
+  frame: SelectionFrameGeometry,
+  transform: SelectionResizeTransform,
+  textSizes: ReadonlyMap<ElementId, TextSelectionSize> = new Map(),
+): CanvasElement[] {
+  const bounds = normalizeBounds(frame);
+  return elements.map((element) => {
+    if (!selectedIds.has(element.id) || element.locked) return element;
+    if (element.type === "connector") return resizeConnector(element, bounds, transform);
+    if (!isBoxCanvasElement(element)) return element;
+
+    if (element.type === "text") {
+      const measured = textSizes.get(element.id);
+      const width = finiteAtLeast(measured?.width ?? element.width * transform.scaleX, MIN_BLOCK_WIDTH);
+      const contentHeight = finiteAtLeast(measured?.height ?? element.height, MIN_BLOCK_HEIGHT);
+      const requestedHeight = finiteAtLeast(element.height * transform.scaleY, MIN_BLOCK_HEIGHT);
+      const changesY = transform.handle.includes("n") || transform.handle.includes("s");
+      const height = changesY
+        ? Math.max(contentHeight, requestedHeight)
+        : Math.max(contentHeight, element.manualHeight ?? 0);
+      const originalOppositeLocal = getResizeOppositeLocalPoint(element, transform.handle);
+      const transformedOpposite = resizeWorldPoint(
+        getRotatedLocalPoint(element, originalOppositeLocal),
+        bounds,
+        transform,
+      );
+      const nextOppositeLocal = getResizeOppositeLocalPoint({ width, height }, transform.handle);
+      const next = {
+        ...element,
+        height,
+        isWidthManuallyResized: transform.scaleX !== 1 ? true : element.isWidthManuallyResized,
+        ...(changesY ? { manualHeight: height } : {}),
+        width,
+        updatedAt: Date.now(),
+      };
+      return {
+        ...next,
+        ...getBoxPositionForRotatedLocalPoint(
+          { width, height },
+          next.rotation,
+          nextOppositeLocal,
+          transformedOpposite,
+        ),
+      };
+    }
+
+    const originalOppositeLocal = getResizeOppositeLocalPoint(element, transform.handle);
+    const transformedOpposite = resizeWorldPoint(
+      getRotatedLocalPoint(element, originalOppositeLocal),
+      bounds,
+      transform,
+    );
+    const width = element.type === "image"
+      ? finiteBetween(element.width * transform.scaleX, MIN_IMAGE_WIDTH, MAX_IMAGE_WIDTH)
+      : finiteAtLeast(element.width * transform.scaleX, MIN_NON_TEXT_BOX_SIZE);
+    const height = element.type === "image"
+      ? finiteAtLeast(element.height * transform.scaleY, MIN_IMAGE_HEIGHT)
+      : finiteAtLeast(element.height * transform.scaleY, MIN_NON_TEXT_BOX_SIZE);
+    const nextOppositeLocal = getResizeOppositeLocalPoint({ width, height }, transform.handle);
+    const position = getBoxPositionForRotatedLocalPoint(
+      { width, height },
+      element.rotation,
+      nextOppositeLocal,
+      transformedOpposite,
+    );
+    const next = {
+      ...element,
+      height,
+      width,
+      ...position,
+      updatedAt: Date.now(),
+    };
+    return next.type === "ink"
+      ? resizeInkGeometry(next, width / element.width, height / element.height)
+      : next;
+  });
+}
+
+/**
+ * Connector previews for a mixed resize are the union of selected unlocked
+ * connectors and connectors that visually follow a resized bound target.
+ */
+export function getSelectionResizePreviewConnectorIds(
+  elements: readonly CanvasElement[],
+  selectedIds: ReadonlySet<ElementId>,
+  resizedTargetIds: ReadonlySet<ElementId>,
+): Set<ElementId> {
+  const connectorIds = new Set<ElementId>();
+  for (const element of elements) {
+    if (element.type !== "connector") continue;
+    const followsResizedTarget = [element.start, element.end].some((endpoint) =>
+      endpoint.kind === "element" && resizedTargetIds.has(endpoint.targetElementId),
+    );
+    if (followsResizedTarget || selectedIds.has(element.id) && !element.locked) {
+      connectorIds.add(element.id);
+    }
+  }
+  return connectorIds;
+}
+
+function getScaledTextSize(
+  element: TextElement,
+  factor: number,
+  measured: TextSelectionSize | undefined,
+): TextSelectionSize {
+  return {
+    height: finiteAtLeast(measured?.height ?? element.height * factor, MIN_BLOCK_HEIGHT),
+    width: finiteAtLeast(measured?.width ?? element.width * factor, MIN_BLOCK_WIDTH),
+  };
+}
+
+function getTextPosition(
+  element: TextElement,
+  anchor: CanvasPoint,
+  factor: number,
+  corner: SelectionCorner,
+  size: TextSelectionSize,
+): CanvasPoint {
+  const oppositeLocalPoint = {
+    x: corner.includes("w") ? element.width : 0,
+    y: corner.includes("n") ? element.height : 0,
+  };
+  const targetWorldPoint = scalePoint(
+    getRotatedLocalPoint(element, oppositeLocalPoint),
+    anchor,
+    factor,
+  );
+  const nextOppositeLocalPoint = {
+    x: corner.includes("w") ? size.width : 0,
+    y: corner.includes("n") ? size.height : 0,
+  };
+  return getBoxPositionForRotatedLocalPoint(
+    size,
+    element.rotation,
+    nextOppositeLocalPoint,
+    targetWorldPoint,
+  );
+}
+
+function getRotatedLocalPoint(
+  box: Pick<TextElement, "height" | "rotation" | "width" | "x" | "y">,
+  point: CanvasPoint,
+): CanvasPoint {
+  const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  const angle = (box.rotation * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const delta = { x: point.x - box.width / 2, y: point.y - box.height / 2 };
+  return {
+    x: center.x + delta.x * cos - delta.y * sin,
+    y: center.y + delta.x * sin + delta.y * cos,
+  };
+}
+
+function getBoxPositionForRotatedLocalPoint(
+  size: TextSelectionSize,
+  rotation: number,
+  localPoint: CanvasPoint,
+  worldPoint: CanvasPoint,
+): CanvasPoint {
+  const angle = (rotation * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const delta = { x: localPoint.x - size.width / 2, y: localPoint.y - size.height / 2 };
+  const center = {
+    x: worldPoint.x - (delta.x * cos - delta.y * sin),
+    y: worldPoint.y - (delta.x * sin + delta.y * cos),
+  };
+  return { x: center.x - size.width / 2, y: center.y - size.height / 2 };
+}
+
+function getResizeOppositeLocalPoint(
+  size: Pick<TextSelectionSize, "height" | "width">,
+  handle: SelectionResizeHandle,
+): CanvasPoint {
+  return {
+    x: handle.includes("w") ? size.width : handle.includes("e") ? 0 : size.width / 2,
+    y: handle.includes("n") ? size.height : handle.includes("s") ? 0 : size.height / 2,
+  };
+}
+
+function resizeWorldPoint(point: CanvasPoint, bounds: Bounds, transform: SelectionResizeTransform): CanvasPoint {
+  const local = toLocalPoint(bounds, transform.rotation, point);
+  const anchor = toLocalPoint(bounds, transform.rotation, transform.anchor);
+  return rotateLocalPoint(bounds, transform.rotation, {
+    x: anchor.x + (local.x - anchor.x) * transform.scaleX,
+    y: anchor.y + (local.y - anchor.y) * transform.scaleY,
+  });
+}
+
+function toLocalPoint(bounds: Bounds, rotation: number, point: CanvasPoint): CanvasPoint {
+  const center = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+  const angle = (-rotation * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const delta = { x: point.x - center.x, y: point.y - center.y };
+  return { x: bounds.width / 2 + delta.x * cos - delta.y * sin, y: bounds.height / 2 + delta.x * sin + delta.y * cos };
+}
+
+function rotateLocalPoint(bounds: Bounds, rotation: number, point: CanvasPoint): CanvasPoint {
+  const center = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+  const angle = (rotation * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const delta = { x: point.x - bounds.width / 2, y: point.y - bounds.height / 2 };
+  return { x: center.x + delta.x * cos - delta.y * sin, y: center.y + delta.x * sin + delta.y * cos };
+}
+
+function finiteAtLeast(value: number, minimum: number): number {
+  return Number.isFinite(value) ? Math.max(minimum, value) : minimum;
+}
+
+function finiteBetween(value: number, minimum: number, maximum: number): number {
+  if (value === Number.POSITIVE_INFINITY) return maximum;
+  return Number.isFinite(value) ? Math.min(maximum, Math.max(minimum, value)) : minimum;
+}
+
+function getConnectorBounds(
+  connector: ConnectorElement,
+  elementsById: Readonly<Record<ElementId, CanvasElement>>,
+): Bounds | null {
+  const points = resolveConnectorPoints(connector, elementsById);
+  if (!points) return null;
+  const { start, end } = points;
+  const padding = isArrowConnector(connector)
+    ? getConnectorArrowheadPaintPadding(connector.style.strokeWidth, connector.style.roughness)
+    : Math.max(0, connector.style.strokeWidth / 2);
+  return {
+    x: Math.min(start.x, end.x) - padding,
+    y: Math.min(start.y, end.y) - padding,
+    width: Math.abs(start.x - end.x) + padding * 2,
+    height: Math.abs(start.y - end.y) + padding * 2,
+  };
+}
+
+function boundsFromPoints(points: readonly CanvasPoint[]): Bounds | null {
+  if (points.length === 0) return null;
+  let minX = points[0].x;
+  let minY = points[0].y;
+  let maxX = minX;
+  let maxY = minY;
+  for (const point of points.slice(1)) {
+    minX = Math.min(minX, point.x);
+    minY = Math.min(minY, point.y);
+    maxX = Math.max(maxX, point.x);
+    maxY = Math.max(maxY, point.y);
+  }
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
+
+function scalePoint(point: CanvasPoint, anchor: CanvasPoint, factor: number): CanvasPoint {
+  return { x: anchor.x + (point.x - anchor.x) * factor, y: anchor.y + (point.y - anchor.y) * factor };
+}
+
+function translateConnector(connector: ConnectorElement, delta: CanvasPoint): ConnectorElement {
+  return {
+    ...connector,
+    start: translateEndpoint(connector.start, delta),
+    end: translateEndpoint(connector.end, delta),
+    updatedAt: Date.now(),
+  };
+}
+
+function scaleConnector(connector: ConnectorElement, anchor: CanvasPoint, factor: number): ConnectorElement {
+  return {
+    ...connector,
+    start: scaleEndpoint(connector.start, anchor, factor),
+    end: scaleEndpoint(connector.end, anchor, factor),
+    updatedAt: Date.now(),
+  };
+}
+
+function resizeConnector(
+  connector: ConnectorElement,
+  bounds: Bounds,
+  transform: SelectionResizeTransform,
+): ConnectorElement {
+  const resizeEndpoint = (endpoint: ConnectorEndpoint) => endpoint.kind === "free"
+    ? { ...endpoint, ...resizeWorldPoint(endpoint, bounds, transform) }
+    : endpoint;
+  return { ...connector, start: resizeEndpoint(connector.start), end: resizeEndpoint(connector.end), updatedAt: Date.now() };
+}
+
+function translateEndpoint(endpoint: ConnectorEndpoint, delta: CanvasPoint): ConnectorEndpoint {
+  return endpoint.kind === "free" ? { ...endpoint, x: endpoint.x + delta.x, y: endpoint.y + delta.y } : endpoint;
+}
+
+function scaleEndpoint(endpoint: ConnectorEndpoint, anchor: CanvasPoint, factor: number): ConnectorEndpoint {
+  return endpoint.kind === "free" ? { ...endpoint, ...scalePoint(endpoint, anchor, factor) } : endpoint;
+}
+
+function scaleInkGeometry(element: InkElement, factor: number): InkElement {
+  return {
+    ...element,
+    points: element.points.map(([x, y, pressure]) => [x * factor, y * factor, pressure]),
+    brush: { ...element.brush, size: element.brush.size * factor },
+  };
+}
+
+function resizeInkGeometry(element: InkElement, scaleX: number, scaleY: number): InkElement {
+  return {
+    ...element,
+    points: element.points.map(([x, y, pressure]) => [x * scaleX, y * scaleY, pressure]),
+    // Brush thickness remains screen/world stable during one-axis transforms.
+    brush: { ...element.brush },
+  };
+}

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { DragEvent, KeyboardEvent } from "react";
+import type { DragEvent, KeyboardEvent, ReactNode } from "react";
 import { InlineRename } from "../InlineRename";
 import type { WorkbenchIconComponent } from "./icons";
 
@@ -32,6 +32,34 @@ export interface WorkspaceTabsProps {
   readonly onSetEditingActiveTab: (isEditing: boolean) => void;
   readonly selectedPageId: string;
   readonly tabs: readonly WorkspaceTab[];
+  readonly titleSearch?: Readonly<{
+    pageId: string;
+    ranges: readonly Readonly<{ end: number; isActive: boolean; start: number }>[];
+  }>;
+}
+
+function renderHighlightedTitle(
+  title: string,
+  ranges: readonly Readonly<{ end: number; isActive: boolean; start: number }>[],
+): ReactNode {
+  const content: ReactNode[] = [];
+  let cursor = 0;
+  ranges.forEach((range, index) => {
+    if (range.start > cursor) content.push(title.slice(cursor, range.start));
+    content.push(
+      <mark
+        className={`canvas-search-match page-title-search-match${range.isActive ? " is-active-search-match" : ""}`}
+        data-search-end={range.end}
+        data-search-start={range.start}
+        key={`title-search-${range.start}-${range.end}-${index}`}
+      >
+        {title.slice(range.start, range.end)}
+      </mark>,
+    );
+    cursor = range.end;
+  });
+  if (cursor < title.length) content.push(title.slice(cursor));
+  return content;
 }
 
 export function WorkspaceTabs({
@@ -45,6 +73,7 @@ export function WorkspaceTabs({
   onSetEditingActiveTab,
   selectedPageId,
   tabs,
+  titleSearch,
 }: Readonly<WorkspaceTabsProps>) {
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
   const [tabDropTarget, setTabDropTarget] = useState<{
@@ -239,7 +268,11 @@ export function WorkspaceTabs({
                 type="button"
               >
                 <Icon name="document-text" />
-                <span className="page-title">{page.title}</span>
+                <span className="page-title">
+                  {titleSearch?.pageId === page.id && titleSearch.ranges.length > 0
+                    ? renderHighlightedTitle(page.title, titleSearch.ranges)
+                    : page.title}
+                </span>
               </button>
             )}
             <button

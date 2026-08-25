@@ -1,4 +1,9 @@
-import type { JSONContent } from "@tiptap/core";
+import type { CanvasElement, TextElement } from "./canvas/model/elements";
+import type { DrawingPreferences } from "./canvas/model/drawingPreferences";
+import type { TextPreferences } from "./canvas/model/textPreferences";
+
+/** @deprecated Use TextElement. Kept only while legacy helper names are migrated. */
+export type TextBlock = TextElement;
 
 export type Folder = {
   id: string;
@@ -12,20 +17,6 @@ export type Page = {
   isBookmarked?: boolean;
 };
 
-export type TextBlock = {
-  id: string;
-  pageId: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  content: string;
-  richContent?: JSONContent;
-  isWidthManuallyResized?: boolean;
-  imageData?: string;
-  imageName?: string;
-};
-
 export type PersistedPageViewport = {
   panOffset: {
     x: number;
@@ -35,7 +26,10 @@ export type PersistedPageViewport = {
 };
 
 export type AppSessionState = {
+  drawingPreferences?: DrawingPreferences;
+  textPreferences?: TextPreferences;
   isAssistantOpen?: boolean;
+  isDrawingToolLocked?: boolean;
   isExplorerCollapsed?: boolean;
   selectedFolderId?: string;
   selectedPageId?: string;
@@ -44,9 +38,9 @@ export type AppSessionState = {
 };
 
 export type AppData = {
+  elements: CanvasElement[];
   folders: Folder[];
   pages: Page[];
-  blocks: TextBlock[];
   isDarkMode?: boolean;
   sessionState?: AppSessionState;
 };

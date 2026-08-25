@@ -75,6 +75,14 @@ jobs:
         working-directory: frontend
         run: npm install
 
+      - name: Run frontend unit tests
+        working-directory: frontend
+        run: npm run test:unit
+
+      - name: Run Rust tests
+        working-directory: backend/src-tauri
+        run: cargo test
+
       - name: Build frontend
         run: npm run build
 

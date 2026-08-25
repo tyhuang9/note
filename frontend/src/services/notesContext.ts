@@ -4,6 +4,7 @@ import type {
   NotesContextPage,
   NotesContextSnapshot,
 } from "../aiTypes";
+import { isTextElement } from "../canvas/model/elements";
 
 const ROOT_FOLDER_ID = "";
 const ROOT_FOLDER_NAME = "Root";
@@ -21,7 +22,7 @@ const MAX_METADATA_LABEL_LENGTH = 90;
 
 type Folder = NotesContextInput["data"]["folders"][number];
 type Page = NotesContextInput["data"]["pages"][number];
-type TextBlock = NotesContextInput["data"]["blocks"][number];
+type TextBlock = Extract<NotesContextInput["data"]["elements"][number], { type: "text" }>;
 
 export function buildNotesContext(
   input: NotesContextInput,
@@ -34,11 +35,13 @@ export function buildNotesContext(
     ? toContextPage(activePageData, folderNamesById)
     : undefined;
   const selectedBlockIdSet = new Set(selectedBlockIds);
-  const activePageBlocks = data.blocks
+  const activePageBlocks = data.elements
+    .filter(isTextElement)
     .filter((block) => block.pageId === selectedPageId)
     .sort(compareBlocksByPosition)
     .map(toContextBlock);
-  const selectedBlocks = data.blocks
+  const selectedBlocks = data.elements
+    .filter(isTextElement)
     .filter((block) => selectedBlockIdSet.has(block.id))
     .sort(compareBlocksByPosition)
     .map(toContextBlock);
@@ -131,7 +134,7 @@ function buildPromptSummary({
 }) {
   const lines: string[] = [
     "Notes context",
-    `Workspace: ${data.folders.length} folders, ${data.pages.length} pages, ${data.blocks.length} text blocks.`,
+    `Workspace: ${data.folders.length} folders, ${data.pages.length} pages, ${data.elements.filter(isTextElement).length} text blocks.`,
     activePage
       ? `Active page: ${formatMetadataLabel(activePage.title || UNTITLED_PAGE_TITLE)} in ${formatMetadataLabel(activePage.folderName)}.`
       : "Active page: none selected.",
@@ -235,7 +238,9 @@ function appendPageMetadata(
   folderNamesById: Map<string, string>,
 ) {
   const shownPages = data.pages.slice(0, MAX_PAGES_IN_PROMPT);
-  const blockCountsByPageId = buildBlockCountsByPageId(data.blocks);
+  const blockCountsByPageId = buildBlockCountsByPageId(
+    data.elements.filter(isTextElement),
+  );
 
   lines.push(`Page metadata: showing ${shownPages.length} of ${data.pages.length}.`);
 

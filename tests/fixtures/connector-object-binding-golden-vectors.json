@@ -1,0 +1,86 @@
+{
+  "vectors": [
+    {
+      "name": "facing-rectangles-visible-strokes-and-gaps",
+      "accepted": true,
+      "connectorStrokeWidth": 2,
+      "start": { "kind": "element", "targetElementId": "source", "gap": 3 },
+      "end": { "kind": "element", "targetElementId": "destination", "gap": 1 },
+      "targets": [
+        { "id": "source", "kind": "shape", "shape": "rectangle", "x": 0, "y": 20, "width": 100, "height": 60, "rotation": 0, "roundness": 0, "strokeWidth": 4 },
+        { "id": "destination", "kind": "shape", "shape": "rectangle", "x": 200, "y": 20, "width": 80, "height": 60, "rotation": 0, "roundness": 0, "strokeWidth": 2 }
+      ],
+      "expected": { "start": { "x": 106, "y": 50 }, "end": { "x": 197, "y": 50 } }
+    },
+    {
+      "name": "rotated-diamond-to-rotated-text",
+      "accepted": true,
+      "connectorStrokeWidth": 2,
+      "start": { "kind": "element", "targetElementId": "source", "gap": 0 },
+      "end": { "kind": "element", "targetElementId": "destination", "gap": 4 },
+      "targets": [
+        { "id": "source", "kind": "shape", "shape": "diamond", "x": 20, "y": 20, "width": 80, "height": 60, "rotation": 45, "roundness": 0, "strokeWidth": 3 },
+        { "id": "destination", "kind": "text", "shape": "rectangle", "x": 210, "y": 230, "width": 100, "height": 40, "rotation": 45, "roundness": 0, "strokeWidth": 0 }
+      ],
+      "expected": {
+        "start": { "x": 88.69439318055005, "y": 78.69439318055005 },
+        "end": { "x": 221.10912703473989, "y": 211.10912703473989 }
+      }
+    },
+    {
+      "name": "free-point-inside-target-is-suppressed",
+      "accepted": true,
+      "connectorStrokeWidth": 2,
+      "start": { "kind": "element", "targetElementId": "outer", "gap": 0 },
+      "end": { "kind": "free", "x": 110, "y": 100 },
+      "targets": [
+        { "id": "outer", "kind": "shape", "shape": "rectangle", "x": 0, "y": 0, "width": 200, "height": 200, "rotation": 0, "roundness": 0, "strokeWidth": 2 }
+      ],
+      "expected": null
+    },
+    {
+      "name": "canonical-same-target-is-rejected",
+      "accepted": false,
+      "connectorStrokeWidth": 2,
+      "start": { "kind": "element", "targetElementId": "same", "gap": 0 },
+      "end": { "kind": "element", "targetElementId": "same", "gap": 0 },
+      "targets": [
+        { "id": "same", "kind": "shape", "shape": "ellipse", "x": 0, "y": 0, "width": 100, "height": 60, "rotation": 0, "roundness": 0, "strokeWidth": 2 }
+      ],
+      "expected": null
+    },
+    {
+      "name": "legacy-same-target-keeps-old-visible-points",
+      "accepted": true,
+      "connectorStrokeWidth": 2,
+      "start": { "kind": "element", "targetElementId": "same", "anchor": { "t": 0.25 }, "gap": 2 },
+      "end": { "kind": "element", "targetElementId": "same", "anchor": { "t": 0.75 }, "gap": 2 },
+      "targets": [
+        { "id": "same", "kind": "shape", "shape": "ellipse", "x": 0, "y": 0, "width": 100, "height": 60, "rotation": 0, "roundness": 0, "strokeWidth": 2 }
+      ],
+      "expected": { "start": { "x": 102, "y": 30 }, "end": { "x": -2, "y": 30 } }
+    },
+    {
+      "name": "zero-width-target-is-rejected",
+      "accepted": false,
+      "connectorStrokeWidth": 2,
+      "start": { "kind": "element", "targetElementId": "zero", "gap": 0 },
+      "end": { "kind": "free", "x": 100, "y": 20 },
+      "targets": [
+        { "id": "zero", "kind": "shape", "shape": "rectangle", "x": 0, "y": 0, "width": 0, "height": 40, "rotation": 0, "roundness": 0, "strokeWidth": 2 }
+      ],
+      "expected": null
+    },
+    {
+      "name": "maximum-gap-post-clearance-overshoot-is-rejected",
+      "accepted": false,
+      "connectorStrokeWidth": 0,
+      "start": { "kind": "element", "targetElementId": "edge", "gap": 1000000 },
+      "end": { "kind": "free", "x": 999500, "y": 50 },
+      "targets": [
+        { "id": "edge", "kind": "shape", "shape": "rectangle", "x": 999000, "y": 0, "width": 100, "height": 100, "rotation": 0, "roundness": 0, "strokeWidth": 0 }
+      ],
+      "expected": null
+    }
+  ]
+}

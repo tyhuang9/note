@@ -3,6 +3,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -10,11 +11,13 @@ import {
 import type { Editor, JSONContent } from "@tiptap/core";
 import type {
   DragEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
   Ref,
 } from "react";
 import { useEditorState } from "@tiptap/react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import "./App.css";
 import {
   AIProvidersSettings,
@@ -23,15 +26,62 @@ import {
 import { AssistantPanel } from "./components/AssistantPanel";
 import { InlineRename } from "./components/InlineRename";
 import { TextBlockView } from "./components/TextBlockView";
+import { ImageElementView } from "./components/ImageElementView";
+import { CanvasElementRenderer } from "./canvas/components/CanvasElementRenderer";
+import { ConnectorEndpointChooser } from "./canvas/components/ConnectorEndpointChooser";
+import { CanvasInteractionOverlay } from "./canvas/components/CanvasInteractionOverlay";
+import { CanvasToolPalette } from "./canvas/components/CanvasToolPalette";
+import { DrawingPropertiesPanel } from "./canvas/components/DrawingPropertiesPanel";
+import { CanvasViewport } from "./canvas/components/CanvasViewport";
+import { CanvasWorldLayer } from "./canvas/components/CanvasWorldLayer";
+import { InkElementView } from "./canvas/components/InkElementView";
+import { ConnectorElementView, ShapeElementView, type ShapeTextEditSession } from "./canvas/components/PrimitiveElementView";
+import { ConnectorBindingTargetHighlight } from "./canvas/components/ConnectorBindingTargetHighlight";
+import {
+  getSuppressedConnectorControlPlacement,
+  isCanonicalConnectorRouteSuppressed,
+  SuppressedConnectorControl,
+} from "./canvas/components/SuppressedConnectorControl";
+import { useCanvasInteraction, type ArrowAuthoringVisual } from "./canvas/interaction/useCanvasInteraction";
+import { cleanupMarquee } from "./canvas/interaction/marqueeCleanup";
+import { createLatestFrameQueue, type LatestFrameQueue } from "./canvas/interaction/latestFrame";
+import {
+  forEachAffectedConnectorGeometry,
+  overlayTransformedElements,
+} from "./canvas/interaction/transformPreview";
+import { ConnectorPreviewCanvas } from "./canvas/rendering/connectorPreviewCanvas";
+import { compareConnectorPreviewStack, type ConnectorPreviewCommand } from "./canvas/rendering/connectorPreviewProtocol";
+import { resolveCanvasColor } from "./canvas/rendering/canvasColor";
+import {
+  deterministicSeed,
+  getDefaultKeyboardShapeGeometry,
+  isPersistableShapeRect,
+  type PrimitiveGeometry,
+  type PrimitiveTool,
+  type ShapeTool,
+} from "./canvas/interaction/primitiveGeometry";
+import {
+  canStartDirectTextEntry,
+  getDefaultKeyboardTextCaretPoint,
+  getDirectTextDraftRect,
+} from "./canvas/interaction/directTextEntry";
+import {
+  drawingToolAfterCreation,
+  drawingToolForShortcut,
+  useInkInteraction,
+  type DrawingTool,
+} from "./canvas/interaction/useInkInteraction";
 import { ActivityRail } from "./components/workbench/ActivityRail";
-import { HeroIcon } from "./components/workbench/HeroIcon";
 import { WorkbenchShell } from "./components/workbench/WorkbenchShell";
 import {
   getWorkspaceTabId,
   WORKSPACE_PAGE_PANEL_ID,
   WorkspaceTabs,
 } from "./components/workbench/WorkspaceTabs";
-import type { WorkbenchIconName } from "./components/workbench/icons";
+import type {
+  WorkbenchIconName,
+  WorkbenchIconProps,
+} from "./components/workbench/icons";
 import { useWorkbenchViewport } from "./components/workbench/useWorkbenchViewport";
 import {
   DEFAULT_BLOCK_HEIGHT,
@@ -39,13 +89,17 @@ import {
   DEFAULT_ZOOM,
   GRID_SIZE,
   MAX_ZOOM,
+  MIN_BLOCK_HEIGHT,
+  MIN_BLOCK_WIDTH,
   MIN_ZOOM,
   SAVE_DELAY_MS,
+  TEXT_BLOCK_HEIGHT_BUFFER,
   TEXT_BLOCK_HEADER_HEIGHT,
   ZOOM_STEP,
 } from "./constants";
 import type {
-  BlockUpdates,
+  TextElementUpdates,
+  ImageElementUpdates,
   CanvasPoint,
   CanvasSize,
   InsertionPoint,
@@ -53,10 +107,8 @@ import type {
   OffscreenGroup,
   PanOffset,
   PageViewport,
-  PanState,
   SearchMatch,
   SelectionRect,
-  SelectionState,
   ViewportRect,
 } from "./appTypes";
 import type {
@@ -73,10 +125,22 @@ import {
   createId,
   emptyData,
   getOffscreenDirection,
-  getSelectionRect,
+  hasCanvasToolShortcutContext,
   isTextEntryTarget,
-  rectsIntersect,
 } from "./editorUtils";
+import type { CaretPlacementRequest } from "./editor/caretPlacement";
+import {
+  cloneRichTextValue,
+  hasTipTapRenderableContent,
+  validateRichTextDocument,
+} from "./editor/richText";
+import {
+  createCanvasSearchTextIndex,
+  findCanvasTextSearchResult,
+  findTextSearchRanges,
+  getCanvasSearchRangesForElement,
+  MAX_CANVAS_SEARCH_MATCHES,
+} from "./canvas/search/searchModel";
 import {
   callOpenAICompatibleWhisperTranscription,
   DEFAULT_LOCAL_STT_CONFIG,
@@ -102,7 +166,104 @@ import {
   type LlamaHarnessSetupStatus,
   submitLlamaHarnessNoteToolResults,
 } from "./services/llamaHarnessAssistant";
-import type { AppData, AppSessionState, TextBlock } from "./types";
+import {
+  isArrowConnector,
+  isTextElement,
+  isBoxCanvasElement,
+  type ImageElement,
+  type BoxCanvasElement,
+  type CanvasElement,
+  type InkElement,
+  type RichTextValue,
+  type RoughStyle,
+  type ConnectorElement,
+  type ConnectorEndpoint,
+  type ShapeElement,
+  type TextElement,
+} from "./canvas/model/elements";
+import {
+  HIGHLIGHTER_BRUSH,
+  normalizeInkGeometry,
+  PEN_BRUSH,
+  scaleInkElement,
+  type RawInkPoint,
+} from "./canvas/model/ink";
+import {
+  applyDrawingPropertyUpdate,
+  createDefaultDrawingPreferences,
+  drawingPropertiesFromPreference,
+  drawingPropertiesFromTextPreferences,
+  isDrawingPreferenceTool,
+  isPropertySupportedByTool,
+  normalizeDrawingPreferences,
+  readDrawingProperties,
+  updateDrawingPreference,
+  type DrawingProperty,
+  type DrawingPropertyUpdate,
+  type DrawingPreferences,
+} from "./canvas/model/drawingPreferences";
+import {
+  DEFAULT_TEXT_PREFERENCES,
+  normalizeTextPreferences,
+} from "./canvas/model/textPreferences";
+import { connectorLabelFontPixels, getConnectorLabel, getConnectorLabelGapHalfLength, readableConnectorLabelAngle, resolveConnectorLabelStyle } from "./canvas/model/connectorLabel";
+import { reorderLayers, type LayerAction } from "./canvas/model/layerOrdering";
+import {
+  getSelectionElementBounds,
+  getSelectionBounds,
+  getSelectionResizePreviewConnectorIds,
+  getSelectionResizeTransform,
+  resizeSelection,
+  translateSelection,
+  type SelectionResizeHandle,
+  type SelectionFrameGeometry,
+  type SelectionResizeTransform,
+  type TextSelectionSize,
+} from "./canvas/model/selectionBounds";
+import { getDrawingToolLockPreference } from "./canvas/state/drawingToolLock";
+import { getDirectBindableTargetAtPoint } from "./canvas/model/hitTesting";
+import {
+  detachConnectorEndpointsForDeletedTargets,
+  getConnectorCandidateAnnouncement,
+  getConnectorCandidateAnnouncementKey,
+  getDefaultKeyboardArrowEndpoints,
+  getConnectorEndpointDetachPoint,
+  getConnectorAuthoringCandidate,
+  getNearestBindableBoundaryAnchor,
+  isBindableElement,
+  isConnectorBindingPersistable,
+  normalizeFreeConnectorEndpoint,
+  resolveConnectorPoints,
+  snapConnectorEndpoint,
+} from "./canvas/model/connectorBinding";
+import {
+  assetDataUrl,
+  assetRequestFromDataUrl,
+  createSceneRepository,
+  isAssetBlobWithinLimit,
+  MAX_ASSET_BYTES,
+  type SceneRepository,
+  type StoragePage,
+} from "./canvas/persistence/sceneRepository";
+import {
+  SceneChangeQueue,
+  type SaveState,
+} from "./canvas/persistence/sceneChangeQueue";
+import {
+  fromLegacyAppData,
+  type LegacyAppData,
+} from "./canvas/persistence/legacyAppData";
+import type { AppData, AppSessionState } from "./types";
+
+type BlockUpdates = TextElementUpdates;
+
+type DirectTextDraft = Readonly<{
+  block: TextElement;
+  previousSelection: readonly string[];
+  previousTool: DrawingTool;
+  returnFocus: HTMLElement | null;
+  source: "keyboard" | "pointer";
+}>;
 
 type SidebarProps = {
   bookmarkedPages: AppData["pages"];
@@ -152,18 +313,22 @@ type SidebarProps = {
 type PageHeaderProps = {
   activeTextEditor: Editor | null;
   assistantToggleButtonRef: Ref<HTMLButtonElement>;
+  canvasSearchButtonRef: Ref<HTMLButtonElement>;
   isAssistantOpen: boolean;
   isGridVisible: boolean;
   isDarkMode: boolean;
+  isCanvasSearchUnavailable: boolean;
+  isTextFormattingVisible: boolean;
   isEditingHeaderTitle: boolean;
   isSnapToGridEnabled: boolean;
   openPages: OpenPageTab[];
   selectedPageId: string;
   textFormatState: TextFormatState;
+  titleSearchHighlights: readonly Readonly<{ end: number; isActive: boolean; start: number }>[];
   zoomLevel: number;
   onClosePageTab: (pageId: string) => void;
   onCreatePage: () => void;
-  onFocusCanvasSearch: () => void;
+  onFocusCanvasSearch: (trigger?: HTMLElement | null) => void;
   onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
   onRenamePage: (pageId: string, title: string) => void;
   onReorderPageTab: (
@@ -214,7 +379,14 @@ type TextFormatState = Record<ToolbarActionId, boolean> & {
 };
 
 type CreateTextBlockOptions = {
+  fromTool?: boolean;
   placement?: "block-origin" | "text-caret";
+};
+
+type PendingImagePlacement = {
+  dataUrl: string;
+  fileName: string;
+  point: CanvasPoint | null;
 };
 
 type ClipboardImage =
@@ -234,31 +406,111 @@ type ClipboardReadItem = {
   types: string[];
 };
 
+type ConnectorPreviewRecord = Readonly<{
+  bounds: Readonly<{ height: number; left: number; top: number; width: number }>;
+  end: CanvasPoint;
+  start: CanvasPoint;
+}>;
+
+type ConnectorPreviewElement = HTMLCanvasElement & {
+  __connectorPreviewRecords?: ReadonlyMap<string, ConnectorPreviewRecord>;
+};
+
+type ConnectorPreviewLayer = {
+  labels: HTMLDivElement | null;
+  renderer: ConnectorPreviewCanvas | null;
+};
+
 type DragLayerSession = {
+  affectedConnectorIds: ReadonlySet<string>;
   autoPanRafId: number | null;
+  baseElementsById: Readonly<Record<string, CanvasElement>>;
   blockIds: string[];
   currentClientX: number;
   currentClientY: number;
   groupElement: HTMLDivElement;
-  modeRafId: number | null;
-  originId: string;
   overlayElement: HTMLDivElement;
   sourceElements: HTMLElement[];
+  connectorPreviewElements: ConnectorPreviewLayer;
+  connectorSourceElements: HTMLElement[];
+  selectedBlockIds: string[];
+  selectedElements: readonly CanvasElement[];
+  selectedIds: ReadonlySet<string>;
   startClientX: number;
   startClientY: number;
   startPanOffset: PanOffset;
   zoomLevel: number;
 };
 
-type CopiedBlock = Omit<TextBlock, "id" | "pageId" | "x" | "y"> & {
+type ResizeLayerSession = {
+  baseElementsById: Readonly<Record<string, CanvasElement>>;
+  connectorIds: ReadonlySet<string>;
+  items: {
+    cloneElement: HTMLElement;
+    element: CanvasElement & BoxCanvasElement;
+    wrapperElement: HTMLDivElement;
+  }[];
+  overlayElement: HTMLDivElement;
+  sourceElements: HTMLElement[];
+  connectorPreviewElements: ConnectorPreviewLayer;
+  connectorSourceElements: HTMLElement[];
+  selectedElements: readonly CanvasElement[];
+  selectedIds: ReadonlySet<string>;
+};
+
+type TextResizeSession = {
+  affectedConnectorIds: ReadonlySet<string>;
+  baseElementsById: Readonly<Record<string, CanvasElement>>;
+  block: TextElement;
+  connectorPreviewElements: ConnectorPreviewLayer;
+  connectorSourceElements: HTMLElement[];
+  handleElement: HTMLButtonElement | null;
+  originalHeight: string;
+  originalHandleLeft: string;
+  originalHandleTop: string;
+  originalLeft: string;
+  originalTop: string;
+  originalWidth: string;
+  sourceElement: HTMLElement;
+};
+
+type SelectionTransformSession = {
+  baseElementsById: Readonly<Record<string, CanvasElement>>;
+  captureTarget: HTMLElement;
+  corner: SelectionResizeHandle | null;
+  connectorEndpoint: "start" | "end" | null;
+  didMove: boolean;
+  pointerId: number;
+  previewFrame: LatestFrameQueue<Readonly<{ clientX: number; clientY: number }>>;
+  startBounds: SelectionFrameGeometry;
+  startClientX: number;
+  startClientY: number;
+  selectionResizeTransform: SelectionResizeTransform | null;
+  textResize: boolean;
+  textSizes: ReadonlyMap<string, TextSelectionSize> | null;
+};
+
+type ConnectorEndpointChooserState = {
+  endpoint: "start" | "end";
+  targetElementId: string | null;
+};
+
+type DrawingPropertyPreviewTransaction = {
+  baseline: CanvasElement[];
+  ownerKey: string;
+  selectedIds: string[];
+};
+
+type CopyableElement = TextElement | ImageElement | ShapeElement;
+type CopiedBlock = Omit<CopyableElement, "id" | "pageId" | "x" | "y"> & {
   offsetX: number;
   offsetY: number;
 };
 
-type CopiedPageBlock = Omit<TextBlock, "id" | "pageId">;
+type CopiedPageBlock = Omit<CopyableElement, "id" | "pageId">;
 
 type CopiedPage = Omit<AppData["pages"][number], "id" | "folderId"> & {
-  blocks: CopiedPageBlock[];
+  elements: CopiedPageBlock[];
   viewport?: PageViewport;
 };
 
@@ -272,11 +524,12 @@ type PageSearchResult = {
 };
 
 type CanvasSearchMatch =
-  | ({ kind: "block" } & SearchMatch)
+  | ({ kind: "element" } & SearchMatch)
   | { end: number; kind: "title"; start: number };
 
 const DRAG_AUTO_PAN_EDGE_PX = 56;
 const DRAG_AUTO_PAN_MAX_STEP_PX = 18;
+const SELECTION_FRAME_PADDING_PX = 4;
 const MAX_BLOCK_HISTORY_ENTRIES = 100;
 const PAGE_SEARCH_PREVIEW_CONTEXT = 44;
 const PAGE_TEMPLATE_FOLDER_ID = "__note_page_templates__";
@@ -288,6 +541,33 @@ const TEXT_BLOCK_CONTENT_PADDING_LEFT = 10;
 const TEXT_BLOCK_CONTENT_PADDING_TOP = 5;
 const LLAMA_HARNESS_SELECTED_AGENT_KEY = "note.llamaHarness.selectedAgentId.v1";
 const DEFAULT_PAN_OFFSET: PanOffset = { x: 0, y: 0 };
+const SEARCH_CONTROL_COMMAND_KEYS = new Set(["a", "f", "n", "o", "y", "z", "+", "=", "-", "0"]);
+
+function createConnectorPreviewLayer(): ConnectorPreviewLayer {
+  return { labels: null, renderer: null };
+}
+
+function cleanupConnectorPreviewLayer(layer: ConnectorPreviewLayer) {
+  layer.renderer?.dispose();
+  layer.renderer = null;
+  layer.labels?.remove();
+  layer.labels = null;
+}
+
+const lightPreviewColorCache = new WeakMap<ConnectorElement["style"]["strokeColor"], string>();
+const darkPreviewColorCache = new WeakMap<ConnectorElement["style"]["strokeColor"], string>();
+
+function resolvedPreviewColor(color: ConnectorElement["style"]["strokeColor"], darkMode: boolean) {
+  const cache = darkMode ? darkPreviewColorCache : lightPreviewColorCache;
+  const cached = cache.get(color);
+  if (cached) return cached;
+  const resolved = resolveCanvasColor(color, darkMode ? "dark" : "light");
+  const value = resolved
+    ? `rgba(${resolved.red}, ${resolved.green}, ${resolved.blue}, ${resolved.alpha})`
+    : "#000000";
+  cache.set(color, value);
+  return value;
+}
 type SidebarSortOrder =
   | "name-asc"
   | "name-desc"
@@ -296,8 +576,39 @@ type SidebarSortOrder =
   | "created-desc"
   | "created-asc";
 type SidebarTabId = "files" | "search" | "bookmarks" | "templates";
+type PersistenceStatus = SaveState;
+type PendingAssetUpload = { dataUrl: string; fileName: string };
 
 type HeroIconName = WorkbenchIconName;
+
+function isCanvasSearchPanelTarget(target: EventTarget | null): target is Element {
+  return target instanceof Element && target.closest(".search-panel") !== null;
+}
+
+function isCanvasPastePointerChromeTarget(target: EventTarget | null) {
+  return target instanceof Element && target.closest([
+    ".canvas-tool-palette",
+    ".drawing-properties-panel",
+    ".offscreen-indicators",
+    ".search-panel",
+    ".selection-frame",
+    ".connector-endpoint-chooser",
+    ".global-text-toolbar",
+    '[role="dialog"]',
+    '[aria-modal="true"]',
+  ].join(", ")) !== null;
+}
+
+function guardCanvasSearchPanelKeyboardEvent(event: KeyboardEvent): boolean {
+  if (!isCanvasSearchPanelTarget(event.target)) return false;
+  if (isTextEntryTarget(event.target)) return true;
+  const isAppCommand = (event.ctrlKey || event.metaKey)
+    && SEARCH_CONTROL_COMMAND_KEYS.has(event.key.toLowerCase());
+  const isCanvasDeletion = event.key === "Delete" || event.key === "Backspace";
+  const isToolCommand = drawingToolForShortcut(event, true) !== null;
+  if (isAppCommand || isCanvasDeletion || isToolCommand) event.preventDefault();
+  return true;
+}
 
 function readSelectedLlamaHarnessAgentId() {
   if (typeof window === "undefined") {
@@ -406,6 +717,193 @@ function getOffscreenDirectionLabel(
   return labels[direction];
 }
 
+function getOffscreenGroupItemLabel(group: OffscreenGroup): string {
+  const singular = group.itemKind === "textbox" ? "textbox" : "canvas item";
+  const plural = group.itemKind === "textbox" ? "textboxes" : "canvas items";
+  return `${group.count} ${group.count === 1 ? singular : plural}`;
+}
+
+function getOffscreenGroupStatusLabel(group: OffscreenGroup): string {
+  return `Navigated to ${getOffscreenGroupItemLabel(group)} offscreen ${getOffscreenDirectionLabel(group.direction)}.`;
+}
+
+function getOffscreenGroupsContainerLabel(groups: readonly OffscreenGroup[]): string {
+  return `Offscreen ${groups.every((group) => group.itemKind === "textbox") ? "textboxes" : "canvas items"}`;
+}
+
+function HeroIcon({ name }: Readonly<WorkbenchIconProps>) {
+  return (
+    <svg
+      aria-hidden="true"
+      className="hero-icon"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      viewBox="0 0 24 24"
+    >
+      {name === "adjustments-horizontal" ? (
+        <>
+          <path d="M4.5 7.5h6m3 0h6M4.5 16.5h9m3 0h3" />
+          <path d="M10.5 5.25v4.5M16.5 14.25v4.5" />
+        </>
+      ) : null}
+      {name === "archive-box" ? (
+        <>
+          <path d="M3.75 7.5h16.5" />
+          <path d="M5.25 7.5v10.125A2.625 2.625 0 0 0 7.875 20.25h8.25a2.625 2.625 0 0 0 2.625-2.625V7.5" />
+          <path d="M8.25 7.5V5.625A1.875 1.875 0 0 1 10.125 3.75h3.75A1.875 1.875 0 0 1 15.75 5.625V7.5" />
+        </>
+      ) : null}
+      {name === "arrows-up-down" ? (
+        <>
+          <path d="M8.25 6.75 12 3m0 0 3.75 3.75M12 3v18" />
+          <path d="M15.75 17.25 12 21m0 0-3.75-3.75" />
+        </>
+      ) : null}
+      {name === "bookmark" ? (
+        <path d="M17.25 21 12 17.25 6.75 21V5.25A2.25 2.25 0 0 1 9 3h6a2.25 2.25 0 0 1 2.25 2.25V21Z" />
+      ) : null}
+      {name === "bold" ? (
+        <>
+          <path d="M7.5 4.75h5.25a3.25 3.25 0 0 1 0 6.5H7.5z" />
+          <path d="M7.5 11.25h6.25a4 4 0 0 1 0 8H7.5z" />
+        </>
+      ) : null}
+      {name === "check" ? <path d="m4.5 12.75 6 6 9-13.5" /> : null}
+      {name === "chevron-down" ? <path d="m6 9 6 6 6-6" /> : null}
+      {name === "chevron-right" ? <path d="m9 6 6 6-6 6" /> : null}
+      {name === "chevron-up" ? <path d="m6 15 6-6 6 6" /> : null}
+      {name === "code-bracket" ? (
+        <>
+          <path d="m9 7.5-4.5 4.5L9 16.5" />
+          <path d="m15 7.5 4.5 4.5-4.5 4.5" />
+        </>
+      ) : null}
+      {name === "document-plus" ? (
+        <>
+          <path d="M14.25 3.75H7.5A2.25 2.25 0 0 0 5.25 6v12A2.25 2.25 0 0 0 7.5 20.25h9A2.25 2.25 0 0 0 18.75 18V8.25L14.25 3.75Z" />
+          <path d="M14.25 3.75v4.5h4.5M12 11.25v5.25m2.625-2.625h-5.25" />
+        </>
+      ) : null}
+      {name === "document-text" ? (
+        <>
+          <path d="M14.25 3.75H7.5A2.25 2.25 0 0 0 5.25 6v12A2.25 2.25 0 0 0 7.5 20.25h9A2.25 2.25 0 0 0 18.75 18V8.25L14.25 3.75Z" />
+          <path d="M14.25 3.75v4.5h4.5M8.25 13.5h7.5M8.25 16.5h4.5" />
+        </>
+      ) : null}
+      {name === "eye" ? (
+        <>
+          <path d="M2.25 12s3.75-6.75 9.75-6.75S21.75 12 21.75 12s-3.75 6.75-9.75 6.75S2.25 12 2.25 12Z" />
+          <path d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+        </>
+      ) : null}
+      {name === "eye-slash" ? (
+        <>
+          <path d="M3 3 21 21" />
+          <path d="M10.5 5.4c.48-.1.98-.15 1.5-.15 6 0 9.75 6.75 9.75 6.75a18.2 18.2 0 0 1-2.76 3.48" />
+          <path d="M6.38 6.9C3.74 8.76 2.25 12 2.25 12s3.75 6.75 9.75 6.75c1.86 0 3.5-.65 4.9-1.54" />
+          <path d="M9.88 9.88a3 3 0 0 0 4.24 4.24" />
+        </>
+      ) : null}
+      {name === "folder" ? (
+        <path d="M3.75 6.75A2.25 2.25 0 0 1 6 4.5h4.125l2.25 2.25H18A2.25 2.25 0 0 1 20.25 9v7.5A2.25 2.25 0 0 1 18 18.75H6a2.25 2.25 0 0 1-2.25-2.25V6.75Z" />
+      ) : null}
+      {name === "folder-plus" ? (
+        <>
+          <path d="M3.75 6.75A2.25 2.25 0 0 1 6 4.5h4.125l2.25 2.25H18A2.25 2.25 0 0 1 20.25 9v7.5A2.25 2.25 0 0 1 18 18.75H6a2.25 2.25 0 0 1-2.25-2.25V6.75Z" />
+          <path d="M12 10.5v5.25m2.625-2.625h-5.25" />
+        </>
+      ) : null}
+      {name === "italic" ? <path d="M10.5 5.25h6M7.5 18.75h6M14.25 5.25l-4.5 13.5" /> : null}
+      {name === "list-bullet" ? (
+        <>
+          <path d="M8.25 6.75h11.25M8.25 12h11.25M8.25 17.25h11.25" />
+          <path d="M4.5 6.75h.01M4.5 12h.01M4.5 17.25h.01" />
+        </>
+      ) : null}
+      {name === "magnifying-glass" ? (
+        <path d="m21 21-4.35-4.35m1.35-5.4a6.75 6.75 0 1 1-13.5 0 6.75 6.75 0 0 1 13.5 0Z" />
+      ) : null}
+      {name === "moon" ? (
+        <path d="M21 14.25A8.25 8.25 0 0 1 9.75 3a7.5 7.5 0 1 0 11.25 11.25Z" />
+      ) : null}
+      {name === "numbered-list" ? (
+        <>
+          <path d="M9 6.75h10.5M9 12h10.5M9 17.25h10.5" />
+          <path d="M4.5 5.25h1.5v3M4.5 8.25h3" />
+          <path d="M4.5 11.25h2.25L4.5 14.25h2.25" />
+          <path d="M4.5 16.5h2.25a.75.75 0 0 1 0 1.5H5.25m1.5 0a.75.75 0 0 1 0 1.5H4.5" />
+        </>
+      ) : null}
+      {name === "panel" ? (
+        <>
+          <path d="M4.5 5.25A1.5 1.5 0 0 1 6 3.75h12a1.5 1.5 0 0 1 1.5 1.5v13.5a1.5 1.5 0 0 1-1.5 1.5H6a1.5 1.5 0 0 1-1.5-1.5V5.25Z" />
+          <path d="M9 3.75v16.5" />
+        </>
+      ) : null}
+      {name === "pencil-square" ? (
+        <>
+          <path d="M16.86 4.49 19.5 7.13m-11.25 8.62 2.72-.54a2.25 2.25 0 0 0 1.19-.63l7.08-7.08a1.87 1.87 0 0 0-2.64-2.64l-7.08 7.08a2.25 2.25 0 0 0-.63 1.19l-.54 2.72Z" />
+          <path d="M18.75 13.5v4.125a2.625 2.625 0 0 1-2.625 2.625h-9.75A2.625 2.625 0 0 1 3.75 17.625v-9.75A2.625 2.625 0 0 1 6.375 5.25H10.5" />
+        </>
+      ) : null}
+      {name === "plus" ? <path d="M12 5.25v13.5M5.25 12h13.5" /> : null}
+      {name === "quote" ? (
+        <>
+          <path d="M8.75 7.5H6.5A2.5 2.5 0 0 0 4 10v1.75h4.75v4.75H4" />
+          <path d="M18.5 7.5h-2.25a2.5 2.5 0 0 0-2.5 2.5v1.75h4.75v4.75h-4.75" />
+        </>
+      ) : null}
+      {name === "rectangle-stack" ? (
+        <>
+          <path d="M6.75 7.5h10.5M6.75 12h10.5M6.75 16.5h10.5" />
+          <path d="M3.75 5.25A1.5 1.5 0 0 1 5.25 3.75h13.5a1.5 1.5 0 0 1 1.5 1.5v13.5a1.5 1.5 0 0 1-1.5 1.5H5.25a1.5 1.5 0 0 1-1.5-1.5V5.25Z" />
+        </>
+      ) : null}
+      {name === "sparkles" ? (
+        <>
+          <path d="m12 3 1.38 4.12L17.5 8.5l-4.12 1.38L12 14l-1.38-4.12L6.5 8.5l4.12-1.38L12 3Z" />
+          <path d="m18.5 13 .78 2.22L21.5 16l-2.22.78L18.5 19l-.78-2.22L15.5 16l2.22-.78L18.5 13ZM5.5 14l.58 1.42L7.5 16l-1.42.58L5.5 18l-.58-1.42L3.5 16l1.42-.58L5.5 14Z" />
+        </>
+      ) : null}
+      {name === "squares-2x2" ? (
+        <>
+          <path d="M4.5 4.5h6v6h-6zM13.5 4.5h6v6h-6zM4.5 13.5h6v6h-6zM13.5 13.5h6v6h-6z" />
+        </>
+      ) : null}
+      {name === "star" ? (
+        <path d="m12 3.75 2.53 5.13 5.66.82-4.1 4 1 5.64L12 16.68l-5.09 2.66 1-5.64-4.1-4 5.66-.82L12 3.75Z" />
+      ) : null}
+      {name === "strikethrough" ? (
+        <>
+          <path d="M5.25 12h13.5" />
+          <path d="M16.5 6.75A4.5 4.5 0 0 0 12.75 5.25h-1a3.25 3.25 0 0 0-1.5 6.13l3.5 1.5a3.25 3.25 0 0 1-1.5 6.12h-1a4.5 4.5 0 0 1-3.75-1.5" />
+        </>
+      ) : null}
+      {name === "sun" ? (
+        <>
+          <path d="M12 4.5V3M12 21v-1.5M4.5 12H3M21 12h-1.5M6.34 6.34 5.28 5.28M18.72 18.72l-1.06-1.06M17.66 6.34l1.06-1.06M5.28 18.72l1.06-1.06" />
+          <path d="M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z" />
+        </>
+      ) : null}
+      {name === "trash" ? (
+        <>
+          <path d="M4.5 6.75h15M9.75 6.75V5.25A1.5 1.5 0 0 1 11.25 3.75h1.5a1.5 1.5 0 0 1 1.5 1.5v1.5" />
+          <path d="m9 10.5.45 7.5m5.55-7.5-.45 7.5M6.75 6.75l.75 12A1.5 1.5 0 0 0 9 20.25h6a1.5 1.5 0 0 0 1.5-1.5l.75-12" />
+        </>
+      ) : null}
+      {name === "underline" ? (
+        <>
+          <path d="M7.5 5.25v6a4.5 4.5 0 0 0 9 0v-6" />
+          <path d="M6 20.25h12" />
+        </>
+      ) : null}
+      {name === "x-mark" ? <path d="M6 6l12 12M18 6 6 18" /> : null}
+    </svg>
+  );
+}
 
 function formatPageSearchSummary(result: PageSearchResult) {
   const summaryParts: string[] = [];
@@ -430,6 +928,32 @@ function areIdSelectionsEqual(firstIds: string[], secondIds: string[]) {
     firstIds.length === secondIds.length &&
     firstIds.every((blockId, index) => blockId === secondIds[index])
   );
+}
+
+function hasShapeContainedText(
+  element: CanvasElement,
+): element is ShapeElement & Required<Pick<ShapeElement, "text">> {
+  return element.type === "shape" && element.text !== undefined;
+}
+
+function createOffscreenGroup(
+  direction: OffscreenGroup["direction"],
+  elements: readonly CanvasElement[],
+): OffscreenGroup {
+  return {
+    count: elements.length,
+    direction,
+    itemKind: elements.every(isTextElement)
+      ? "textbox"
+      : "canvas-item",
+  };
+}
+
+function hasShapeContainedTextDifference(first: CanvasElement[], second: CanvasElement[]) {
+  const firstText = new Map(first.filter(hasShapeContainedText).map((element) => [element.id, JSON.stringify(element.text)]));
+  const secondText = new Map(second.filter(hasShapeContainedText).map((element) => [element.id, JSON.stringify(element.text)]));
+  return firstText.size !== secondText.size
+    || [...firstText].some(([elementId, text]) => secondText.get(elementId) !== text);
 }
 
 function markToolbarInteraction() {
@@ -696,7 +1220,7 @@ function plainTextToRichContent(text: string): JSONContent {
   };
 }
 
-function getBlockRichContent(block: TextBlock) {
+function getBlockRichContent(block: TextElement) {
   return block.richContent ?? plainTextToRichContent(block.content);
 }
 
@@ -765,9 +1289,9 @@ function applyTextStyleToRichContent(
 }
 
 function applyTextStyleStateToBlock(
-  block: TextBlock,
+  block: TextElement,
   formatState: TextFormatState,
-): TextBlock {
+): TextElement {
   return {
     ...block,
     richContent: applyTextStyleToRichContent(
@@ -778,10 +1302,10 @@ function applyTextStyleStateToBlock(
 }
 
 function applyFormatStateToBlock(
-  block: TextBlock,
+  block: TextElement,
   formatId: ToolbarActionId,
   formatState: TextFormatState,
-): TextBlock {
+): TextElement {
   const inlineMark = inlineFormatMarks[formatId];
 
   if (inlineMark) {
@@ -804,13 +1328,24 @@ function applyFormatStateToBlock(
 function App() {
   const [data, setData] = useState<AppData>(emptyData);
   const [selectedFolderId, setSelectedFolderId] = useState("");
-  const [selectedPageId, setSelectedPageId] = useState("");
+  const [selectedPageId, setSelectedPageIdState] = useState("");
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
   const [editingPageId, setEditingPageId] = useState<string | null>(null);
   const [isEditingHeaderTitle, setIsEditingHeaderTitle] = useState(false);
   const [selectedBlockIds, setSelectedBlockIds] = useState<string[]>([]);
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
   const [activeMode, setActiveMode] = useState<InteractionMode>("canvas");
+  const [activeTool, setActiveTool] = useState<DrawingTool>("select");
+  const [isToolLocked, setIsToolLocked] = useState(false);
+  const [drawingPreferences, setDrawingPreferences] = useState<DrawingPreferences>(
+    createDefaultDrawingPreferences,
+  );
+  const [textPreferences, setTextPreferences] = useState(DEFAULT_TEXT_PREFERENCES);
+  const [isPropertiesPanelOpen, setIsPropertiesPanelOpen] = useState(false);
+  const [isDrawingPropertyPreviewing, setIsDrawingPropertyPreviewing] = useState(false);
+  const [pendingImagePlacement, setPendingImagePlacement] =
+    useState<PendingImagePlacement | null>(null);
+  const [imageImportError, setImageImportError] = useState<string | null>(null);
   const [panOffset, setPanOffset] = useState<PanOffset>({ x: 0, y: 0 });
   const [livePanOffset, setLivePanOffset] = useState<PanOffset>(panOffset);
   const [insertionPoint, setInsertionPoint] = useState<InsertionPoint | null>(null);
@@ -824,6 +1359,15 @@ function App() {
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
   const [openPageTabIds, setOpenPageTabIds] = useState<string[]>([]);
   const [focusEndBlockId, setFocusEndBlockId] = useState<string | null>(null);
+  const [directTextDraft, setDirectTextDraft] = useState<DirectTextDraft | null>(null);
+  const [shapeCaretPlacement, setShapeCaretPlacement] = useState<Readonly<{
+    elementId: string;
+    request: CaretPlacementRequest;
+  }> | null>(null);
+  const [connectorLabelEditRequest, setConnectorLabelEditRequest] = useState<Readonly<{
+    elementId: string;
+    request: number;
+  }> | null>(null);
   const [isCanvasKeyboardActive, setIsCanvasKeyboardActive] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [isAssistantOpen, setIsAssistantOpen] = useState(false);
@@ -832,7 +1376,13 @@ function App() {
     useState<WorkbenchOverlay | null>(null);
   const [isGridVisible, setIsGridVisible] = useState(false);
   const [isSnapToGridEnabled, setIsSnapToGridEnabled] = useState(false);
-  const [dragSourceBlockIds, setDragSourceBlockIds] = useState<string[]>([]);
+  const [selectionFramePreview, setSelectionFramePreview] = useState<SelectionRect | null>(null);
+  const [connectorEndpointPreview, setConnectorEndpointPreview] = useState<ConnectorElement | null>(null);
+  const [isConnectorEndpointRetargeting, setIsConnectorEndpointRetargeting] = useState(false);
+  const [connectorEndpointRetargetVisual, setConnectorEndpointRetargetVisual] = useState<ArrowAuthoringVisual | null>(null);
+  const [connectorEndpointChooser, setConnectorEndpointChooser] = useState<ConnectorEndpointChooserState | null>(null);
+  const [connectorBindingAnnouncement, setConnectorBindingAnnouncement] = useState("");
+  const [keyboardArrowEndpointAccessId, setKeyboardArrowEndpointAccessId] = useState<string | null>(null);
   const [selectedSidebarPageIds, setSelectedSidebarPageIds] = useState<string[]>([]);
   const [draggedPageIds, setDraggedPageIds] = useState<string[]>([]);
   const [pageDropTargetFolderId, setPageDropTargetFolderId] = useState<string | null>(null);
@@ -869,11 +1419,27 @@ function App() {
   >({});
   const [isLoaded, setIsLoaded] = useState(false);
   const [persistenceAvailable, setPersistenceAvailable] = useState(false);
+  const [persistenceStatus, setPersistenceStatus] =
+    useState<PersistenceStatus>({ kind: "saved" });
   const dataRef = useRef<AppData>(data);
   const canvasRef = useRef<HTMLElement | null>(null);
   const canvasContentRef = useRef<HTMLDivElement | null>(null);
+  const liveDraftLayerRef = useRef<SVGSVGElement | null>(null);
+  const imagePickerInputRef = useRef<HTMLInputElement | null>(null);
   const selectionRectRef = useRef<HTMLDivElement | null>(null);
+  const selectionFrameRef = useRef<HTMLDivElement | null>(null);
+  const selectionFrameVisualBoundsRef = useRef<SelectionFrameGeometry | null>(null);
+  const selectionTransformRef = useRef<SelectionTransformSession | null>(null);
+  const resizeLayerSessionRef = useRef<ResizeLayerSession | null>(null);
+  const textResizeHandleRef = useRef<HTMLButtonElement | null>(null);
+  const textResizeSessionRef = useRef<TextResizeSession | null>(null);
+  const cancelCanvasSelectionRef = useRef<() => void>(() => undefined);
+  const cancelVisualDragRef = useRef<(updateState?: boolean) => void>(() => undefined);
+  const cancelCapturedCanvasInteractionsRef = useRef<() => void>(() => undefined);
+  const cancelCanvasInteractionTransitionRef = useRef<() => void>(() => undefined);
+  const canvasSearchButtonRef = useRef<HTMLButtonElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const searchReturnFocusRef = useRef<HTMLElement | null>(null);
   const explorerPanelRef = useRef<HTMLDivElement | null>(null);
   const explorerToggleButtonRef = useRef<HTMLButtonElement | null>(null);
   const assistantPanelRef = useRef<HTMLElement | null>(null);
@@ -883,18 +1449,23 @@ function App() {
   const overlayReturnFocusRequestRef = useRef(false);
   const wasNarrowWorkbenchRef = useRef(false);
   const canvasViewportRef = useRef<ViewportRect | null>(null);
-  const panState = useRef<PanState | null>(null);
   const panOffsetRef = useRef<PanOffset>(panOffset);
   const panRafId = useRef<number | null>(null);
-  const selectionState = useRef<SelectionState | null>(null);
   const selectionRafId = useRef<number | null>(null);
   const pendingSelectionRect = useRef<SelectionRect | null>(null);
-  const searchCache = useRef<Map<string, SearchMatch[]>>(new Map());
   const copiedBlocksRef = useRef<CopiedBlock[]>([]);
   const copiedPagesRef = useRef<CopiedPage[]>([]);
   const copiedContentKindRef = useRef<"blocks" | "pages" | null>(null);
-  const undoBlockHistoryRef = useRef<TextBlock[][]>([]);
-  const redoBlockHistoryRef = useRef<TextBlock[][]>([]);
+  const lastCanvasPointerClientRef = useRef<CanvasPoint | null>(null);
+  // In-memory assets may outlive their elements during this migration; reclamation is deferred.
+  const imageSourcesByAssetIdRef = useRef<Map<string, string>>(new Map());
+  const pendingAssetUploadsRef = useRef<Map<string, PendingAssetUpload>>(new Map());
+  const repositoryRef = useRef<SceneRepository | null>(null);
+  const sceneChangeQueueRef = useRef<SceneChangeQueue | null>(null);
+  const pageRevisionsRef = useRef<Map<string, number>>(new Map());
+  const persistenceChainRef = useRef<Promise<void>>(Promise.resolve());
+  const undoBlockHistoryRef = useRef<CanvasElement[][]>([]);
+  const redoBlockHistoryRef = useRef<CanvasElement[][]>([]);
   const blockElementsRef = useRef<Map<string, HTMLElement>>(new Map());
   const dragLayerSessionRef = useRef<DragLayerSession | null>(null);
   const assistantMediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -904,6 +1475,8 @@ function App() {
   const pageViewportsRef = useRef<Map<string, PageViewport>>(new Map());
   const isSnapToGridEnabledRef = useRef(isSnapToGridEnabled);
   const editingBlockIdRef = useRef<string | null>(editingBlockId);
+  const directTextDraftRef = useRef<DirectTextDraft | null>(directTextDraft);
+  const shapeTextEditSessionRef = useRef<{ elementId: string; session: ShapeTextEditSession } | null>(null);
   const selectedBlockIdsRef = useRef<string[]>(selectedBlockIds);
   const selectedFolderIdRef = useRef(selectedFolderId);
   const selectedPageIdRef = useRef(selectedPageId);
@@ -912,8 +1485,62 @@ function App() {
   const draggedPageIdsRef = useRef<string[]>([]);
   const draggedPrimaryPageIdRef = useRef<string | null>(null);
   const zoomLevelRef = useRef(zoomLevel);
+  const activeToolRef = useRef<DrawingTool>(activeTool);
+  const isToolLockedRef = useRef(isToolLocked);
+  const isCanvasKeyboardActiveRef = useRef(isCanvasKeyboardActive);
+  const drawingPreferencesRef = useRef(drawingPreferences);
+  const textPreferencesRef = useRef(textPreferences);
+  const isTemporaryHandActiveRef = useRef(false);
+  const pendingImagePlacementRef = useRef<PendingImagePlacement | null>(null);
+  const imagePickerRequestRef = useRef(0);
+  const drawingPropertyPreviewRef = useRef<DrawingPropertyPreviewTransaction | null>(null);
+  const authoringFocusReturnRafRef = useRef<number | null>(null);
+  const directTextFocusReturnRafRef = useRef<number | null>(null);
+  const offscreenNavigationFocusRafRef = useRef<number | null>(null);
+  const previousCanvasAuthoringAvailableRef = useRef(false);
+  const isCanvasAuthoringAvailableRef = useRef(false);
+  const isWorkbenchOverlayOpenRef = useRef(false);
+  const connectorEndpointChooserRef = useRef<ConnectorEndpointChooserState | null>(null);
+  const connectorEndpointRetargetAnnouncementRef = useRef<string | null>(null);
+  const connectorEndpointOriginFocusRef = useRef<HTMLButtonElement | null>(null);
+  const connectorEndpointFocusReturnRafRef = useRef<number | null>(null);
+  const suppressedConnectorStatusRef = useRef<Readonly<{
+    pageId: string | null;
+    states: ReadonlyMap<string, string>;
+  }> | null>(null);
+  const keyboardArrowCreationRef = useRef<() => boolean>(() => false);
+  const keyboardShapeCreationRef = useRef<(tool: ShapeTool) => boolean>(() => false);
+  const keyboardTextCreationRef = useRef<() => boolean>(() => false);
+  const keyboardShapeAnnouncementSequenceRef = useRef(0);
+  const pointerShapeAnnouncementSequenceRef = useRef(0);
+  const directTextAnnouncementSequenceRef = useRef(0);
+  const keyboardArrowEndpointFocusRafRef = useRef<number | null>(null);
+
+  const setSelectedPageId = useCallback((nextPageId: string) => {
+    cancelCanvasInteractionTransitionRef.current();
+    setSelectedPageIdState(nextPageId);
+  }, []);
+
+  useEffect(() => {
+    lastCanvasPointerClientRef.current = null;
+    return () => {
+      lastCanvasPointerClientRef.current = null;
+    };
+  }, [selectedPageId]);
+
+  useLayoutEffect(() => {
+    const bounds = selectionFrameVisualBoundsRef.current;
+    if (bounds) applySelectionFrameVisualBounds(bounds);
+  });
 
   dataRef.current = data;
+  activeToolRef.current = activeTool;
+  isToolLockedRef.current = isToolLocked;
+  isCanvasKeyboardActiveRef.current = isCanvasKeyboardActive;
+  drawingPreferencesRef.current = drawingPreferences;
+  textPreferencesRef.current = textPreferences;
+  pendingImagePlacementRef.current = pendingImagePlacement;
+  directTextDraftRef.current = directTextDraft;
   isSnapToGridEnabledRef.current = isGridVisible && isSnapToGridEnabled;
   editingBlockIdRef.current = editingBlockId;
   openPageTabIdsRef.current = openPageTabIds;
@@ -923,6 +1550,7 @@ function App() {
   selectedSidebarPageIdsRef.current = selectedSidebarPageIds;
   textFormatStateRef.current = textFormatState;
   zoomLevelRef.current = zoomLevel;
+  connectorEndpointChooserRef.current = connectorEndpointChooser;
 
   const isExplorerOverlayOpen =
     isNarrowWorkbench && activeNarrowOverlay === "explorer";
@@ -952,11 +1580,11 @@ function App() {
       return null;
     }
 
-    const selectedBlock = data.blocks.find(
+    const selectedBlock = data.elements.find(
       (block) => block.id === selectedBlockIds[0],
     );
 
-    if (!selectedBlock || selectedBlock.imageData) {
+    if (!selectedBlock || !isTextElement(selectedBlock)) {
       return null;
     }
 
@@ -965,7 +1593,7 @@ function App() {
     return normalizedContent
       ? `${normalizedContent.slice(0, 88)}${normalizedContent.length > 88 ? "…" : ""}`
       : "Empty text block";
-  }, [data.blocks, selectedBlockIds]);
+  }, [data.elements, selectedBlockIds]);
   const isWorkspaceEmpty =
     isLoaded && data.folders.length === 0 && data.pages.length === 0;
   const pageTemplates = useMemo(
@@ -981,8 +1609,87 @@ function App() {
     [data.pages],
   );
   const visibleBlocks = useMemo(
-    () => data.blocks.filter((block) => block.pageId === selectedPageId),
-    [data.blocks, selectedPageId],
+    () => data.elements.filter((block): block is CanvasElement & BoxCanvasElement => block.pageId === selectedPageId && isBoxCanvasElement(block)),
+    [data.elements, selectedPageId],
+  );
+  const visibleCanvasElements = useMemo(
+    () => data.elements.filter((element) => element.pageId === selectedPageId),
+    [data.elements, selectedPageId],
+  );
+  const visibleCanvasElementsById = useMemo(
+    () => Object.fromEntries(visibleCanvasElements.map((element) => [element.id, element])),
+    [visibleCanvasElements],
+  );
+  const selectionWorldBounds = useMemo(() => {
+    const selectedIds = new Set(selectedBlockIds);
+    return getSelectionBounds(
+      visibleCanvasElements.filter((element) => selectedIds.has(element.id)),
+      visibleCanvasElementsById,
+    );
+  }, [selectedBlockIds, visibleCanvasElements, visibleCanvasElementsById]);
+  const selectedDrawingElements = useMemo(() => {
+    const selectedIds = new Set(selectedBlockIds);
+    return data.elements.filter((element) => element.pageId === selectedPageId && selectedIds.has(element.id));
+  }, [data.elements, selectedBlockIds, selectedPageId]);
+  const drawingPropertiesContext = useMemo(() => {
+    if (selectedDrawingElements.length > 0) {
+      const values = readDrawingProperties(selectedDrawingElements);
+      const selectedInkKinds = new Set(selectedDrawingElements.flatMap((element) =>
+        element.type === "ink" ? [element.brush.kind] : [],
+      ));
+      return {
+        contextLabel: selectedDrawingElements.length === 1 ? selectedDrawingElements[0].type : `${selectedDrawingElements.length} selected`,
+        isSelection: true,
+        strokeWidthPresets: selectedInkKinds.has("highlighter")
+          ? [8, 18, 32] as const
+          : selectedInkKinds.has("pen")
+            ? [2, 4, 8] as const
+            : [1, 2, 4] as const,
+        isBackgroundModeDisabled: !selectedDrawingElements.some(
+          (element) => isTextElement(element) && !element.locked,
+        ),
+        supports: (property: DrawingProperty) => values[property].kind !== "unavailable",
+        values,
+      };
+    }
+    if (activeTool === "text") {
+      return {
+        contextLabel: "text defaults",
+        isBackgroundModeDisabled: false,
+        isSelection: false,
+        strokeWidthPresets: [] as const,
+        supports: (property: DrawingProperty) => property === "backgroundMode",
+        values: drawingPropertiesFromTextPreferences(textPreferences),
+      };
+    }
+    if (!isDrawingPreferenceTool(activeTool)) return null;
+    const preference = drawingPreferences[activeTool];
+    return {
+      contextLabel: `${activeTool} defaults`,
+      isSelection: false,
+      strokeWidthPresets: activeTool === "highlighter"
+        ? [8, 18, 32] as const
+        : activeTool === "pen"
+            ? [2, 4, 8] as const
+            : [1, 2, 4] as const,
+        isBackgroundModeDisabled: true,
+        supports: (property: DrawingProperty) => isPropertySupportedByTool(activeTool, property),
+        values: drawingPropertiesFromPreference(preference),
+      };
+  }, [activeTool, drawingPreferences, selectedDrawingElements, textPreferences]);
+  const isTextFormattingVisible = Boolean(
+    activeTextEditor && !activeTextEditor.isDestroyed
+  ) || selectedDrawingElements.some((element) => element.type === "text");
+  const isShapeTextEditing = Boolean(
+    editingBlockId && data.elements.some((element) => element.id === editingBlockId && element.type === "shape"),
+  );
+  const selectionHasLockedElements = useMemo(
+    () => selectedBlockIds.some((id) => data.elements.some((element) => element.id === id && element.locked)),
+    [data.elements, selectedBlockIds],
+  );
+  const selectionHasUnlockedElements = useMemo(
+    () => selectedBlockIds.some((id) => data.elements.some((element) => element.id === id && !element.locked)),
+    [data.elements, selectedBlockIds],
   );
   const openPages = useMemo<OpenPageTab[]>(() => {
     const pagesById = new Map(
@@ -990,7 +1697,7 @@ function App() {
         .filter((page) => !isTemplatePage(page))
         .map((page) => [page.id, page]),
     );
-    const pageIdsWithBlocks = new Set(data.blocks.map((block) => block.pageId));
+    const pageIdsWithBlocks = new Set(data.elements.map((block) => block.pageId));
 
     return openPageTabIds.flatMap((pageId) => {
       const page = pagesById.get(pageId);
@@ -1005,7 +1712,7 @@ function App() {
           ]
         : [];
     });
-  }, [data.blocks, data.pages, openPageTabIds]);
+  }, [data.elements, data.pages, openPageTabIds]);
   const shouldShowStarterShortcuts =
     !isStarterDismissed && (isWorkspaceEmpty || openPages.length === 0);
   const folderNamesById = useMemo(() => {
@@ -1018,9 +1725,12 @@ function App() {
     return folderNames;
   }, [data.folders]);
   const blocksByPageId = useMemo(() => {
-    const pageBlocks = new Map<string, TextBlock[]>();
+    const pageBlocks = new Map<string, TextElement[]>();
 
-    for (const block of data.blocks) {
+    for (const block of data.elements) {
+      if (!isTextElement(block)) {
+        continue;
+      }
       const currentBlocks = pageBlocks.get(block.pageId);
 
       if (currentBlocks) {
@@ -1031,7 +1741,7 @@ function App() {
     }
 
     return pageBlocks;
-  }, [data.blocks]);
+  }, [data.elements]);
   const pageSearchResults = useMemo<PageSearchResult[]>(() => {
     const normalizedQuery = pageSearchQuery.trim().toLowerCase();
 
@@ -1085,101 +1795,61 @@ function App() {
       ];
     });
   }, [blocksByPageId, data.pages, folderNamesById, pageSearchQuery]);
-  const blockSearchMatches = useMemo<SearchMatch[]>(() => {
-    const nextQuery = searchQuery.trim().toLowerCase();
-
-    if (!nextQuery) {
-      return [];
+  const isCanvasElementSearchActive = isSearchOpen && Boolean(searchQuery.trim());
+  const canvasSearchTextIndex = useMemo(
+    () => createCanvasSearchTextIndex(visibleBlocks, isCanvasElementSearchActive),
+    [isCanvasElementSearchActive, visibleBlocks],
+  );
+  const elementSearchResult = useMemo(
+    () => isCanvasElementSearchActive
+      ? findCanvasTextSearchResult(visibleBlocks, searchQuery, canvasSearchTextIndex)
+      : { matches: [], isTruncated: false },
+    [canvasSearchTextIndex, isCanvasElementSearchActive, searchQuery, visibleBlocks],
+  );
+  const titleSearchResult = useMemo(() => {
+    if (!searchQuery.trim() || !selectedPage) {
+      return { matches: [] as CanvasSearchMatch[], isTruncated: false };
     }
-
-    const cacheKey = `${selectedPageId}:${nextQuery}:${visibleBlocks
-      .map((block) => `${block.id}:${block.x}:${block.y}:${block.content}`)
-      .join("|")}`;
-    const cachedMatches = searchCache.current.get(cacheKey);
-
-    if (cachedMatches) {
-      return cachedMatches;
-    }
-
-    const nextMatches = visibleBlocks
-      .flatMap((block) => {
-        const matches: SearchMatch[] = [];
-        const content = block.content.toLowerCase();
-        let start = content.indexOf(nextQuery);
-
-        while (start !== -1) {
-          matches.push({
-            blockId: block.id,
-            start,
-            end: start + nextQuery.length,
-          });
-          start = content.indexOf(nextQuery, start + nextQuery.length);
-        }
-
-        return matches;
-      })
-      .sort((firstMatch, secondMatch) => {
-        const firstBlock = visibleBlocks.find((block) => block.id === firstMatch.blockId);
-        const secondBlock = visibleBlocks.find((block) => block.id === secondMatch.blockId);
-
-        if (!firstBlock || !secondBlock) {
-          return 0;
-        }
-
-        return (
-          firstBlock.y - secondBlock.y ||
-          firstBlock.x - secondBlock.x ||
-          firstMatch.start - secondMatch.start
-        );
-      });
-
-    searchCache.current.set(cacheKey, nextMatches);
-
-    if (searchCache.current.size > 20) {
-      const oldestKey = searchCache.current.keys().next().value;
-
-      if (oldestKey) {
-        searchCache.current.delete(oldestKey);
-      }
-    }
-
-    return nextMatches;
-  }, [searchQuery, selectedPageId, visibleBlocks]);
-  const titleSearchMatches = useMemo<CanvasSearchMatch[]>(() => {
-    const nextQuery = searchQuery.trim().toLowerCase();
-
-    if (!nextQuery || !selectedPage) {
-      return [];
-    }
-
-    const title = selectedPage.title.toLowerCase();
-    const matches: CanvasSearchMatch[] = [];
-    let start = title.indexOf(nextQuery);
-
-    while (start !== -1) {
-      matches.push({
-        end: start + nextQuery.length,
-        kind: "title",
-        start,
-      });
-      start = title.indexOf(nextQuery, start + nextQuery.length);
-    }
-
-    return matches;
+    const result = findTextSearchRanges(selectedPage.title, searchQuery, MAX_CANVAS_SEARCH_MATCHES);
+    return {
+      matches: result.ranges.map((range) => ({ ...range, kind: "title" as const })),
+      isTruncated: result.isTruncated,
+    };
   }, [searchQuery, selectedPage]);
   const searchMatches = useMemo<CanvasSearchMatch[]>(
     () => [
-      ...titleSearchMatches,
-      ...blockSearchMatches.map((match) => ({
+      ...titleSearchResult.matches,
+      ...elementSearchResult.matches.map((match) => ({
         ...match,
-        kind: "block" as const,
+        kind: "element" as const,
       })),
-    ],
-    [blockSearchMatches, titleSearchMatches],
+    ].slice(0, MAX_CANVAS_SEARCH_MATCHES),
+    [elementSearchResult.matches, titleSearchResult.matches],
   );
+  const isSearchTruncated = titleSearchResult.isTruncated
+    || elementSearchResult.isTruncated
+    || titleSearchResult.matches.length + elementSearchResult.matches.length > MAX_CANVAS_SEARCH_MATCHES;
   const activeCanvasSearchMatch = searchMatches[activeSearchIndex] ?? null;
   const activeSearchMatch =
-    activeCanvasSearchMatch?.kind === "block" ? activeCanvasSearchMatch : null;
+    activeCanvasSearchMatch?.kind === "element" ? activeCanvasSearchMatch : null;
+  const titleSearchHighlights = useMemo(
+    () => searchMatches.flatMap((match, index) => match.kind === "title" ? [{
+      end: match.end,
+      isActive: index === activeSearchIndex,
+      start: match.start,
+    }] : []),
+    [activeSearchIndex, searchMatches],
+  );
+  const searchMatchesByElementId = useMemo(() => {
+    const matchesByElementId = new Map<string, SearchMatch[]>();
+    for (const match of searchMatches) {
+      if (match.kind !== "element") continue;
+      const matches = matchesByElementId.get(match.elementId);
+      if (matches) matches.push(match);
+      else matchesByElementId.set(match.elementId, [match]);
+    }
+    return matchesByElementId;
+  }, [searchMatches]);
   const canvasViewport = useMemo<ViewportRect | null>(() => {
     if (canvasSize.width === 0 || canvasSize.height === 0) {
       return null;
@@ -1198,13 +1868,140 @@ function App() {
     livePanOffset.y,
     zoomLevel,
   ]);
+  const isCanvasAuthoringAvailable = Boolean(
+    selectedPage && !isTemplatePage(selectedPage) && canvasViewport,
+  );
+  const activeKeyboardShapeLabel = !isCanvasAuthoringAvailable
+    ? null
+    : activeTool === "rectangle"
+    ? "Rectangle"
+    : activeTool === "ellipse"
+      ? "Ellipse"
+      : activeTool === "diamond"
+        ? "Diamond"
+        : null;
+  const isKeyboardTextCreationAvailable = canStartDirectTextEntry({
+    activeTool,
+    hasConnectorChooser: connectorEndpointChooser !== null,
+    hasDirectDraft: directTextDraft !== null,
+    hasPendingImage: pendingImagePlacement !== null,
+    isCanvasAuthoringAvailable,
+    isEditingText: editingBlockId !== null,
+    isModalOrOverlayOpen: Boolean(activeWorkbenchOverlay || isAIProvidersOpen),
+    source: "keyboard",
+  });
+  const availableDrawingPropertiesContext = isCanvasAuthoringAvailable
+    ? drawingPropertiesContext
+    : null;
+  isCanvasAuthoringAvailableRef.current = isCanvasAuthoringAvailable;
+  isWorkbenchOverlayOpenRef.current =
+    isAssistantOverlayOpen || isExplorerOverlayOpen;
+  useEffect(() => {
+    if (!drawingPropertiesContext) setIsPropertiesPanelOpen(false);
+  }, [drawingPropertiesContext]);
+  useEffect(() => {
+    const wasCanvasAuthoringAvailable = previousCanvasAuthoringAvailableRef.current;
+    previousCanvasAuthoringAvailableRef.current = isCanvasAuthoringAvailable;
+    if (authoringFocusReturnRafRef.current !== null) {
+      window.cancelAnimationFrame(authoringFocusReturnRafRef.current);
+      authoringFocusReturnRafRef.current = null;
+    }
+    if (!isCanvasAuthoringAvailable) setIsPropertiesPanelOpen(false);
+    if (
+      !wasCanvasAuthoringAvailable ||
+      isCanvasAuthoringAvailable ||
+      isAssistantOverlayOpen ||
+      isExplorerOverlayOpen
+    ) return;
+
+    authoringFocusReturnRafRef.current = window.requestAnimationFrame(() => {
+      authoringFocusReturnRafRef.current = null;
+      if (
+        isCanvasAuthoringAvailableRef.current ||
+        isWorkbenchOverlayOpenRef.current
+      ) return;
+      if (document.activeElement !== null && document.activeElement !== document.body) return;
+      canvasRef.current?.focus({ preventScroll: true });
+    });
+
+    return () => {
+      if (authoringFocusReturnRafRef.current === null) return;
+      window.cancelAnimationFrame(authoringFocusReturnRafRef.current);
+      authoringFocusReturnRafRef.current = null;
+    };
+  }, [isAssistantOverlayOpen, isCanvasAuthoringAvailable, isExplorerOverlayOpen]);
+  useEffect(() => setConnectorEndpointRetargetVisual(null), [activeTool, selectedPageId]);
   canvasViewportRef.current = canvasViewport;
+  const renderedCanvasElements = useMemo(() => {
+    const withConnectorPreview = connectorEndpointPreview
+      ? visibleCanvasElements.map((element) => element.id === connectorEndpointPreview.id ? connectorEndpointPreview : element)
+      : visibleCanvasElements;
+    if (!canvasViewport) return withConnectorPreview;
+    const overscan = 160 / Math.max(zoomLevel, 0.01);
+    const selectedIds = new Set(selectedBlockIds);
+    return withConnectorPreview.filter((element) =>
+      element.type !== "ink" ||
+      selectedIds.has(element.id) ||
+      (
+        element.x + element.width >= canvasViewport.x - overscan &&
+        element.x <= canvasViewport.x + canvasViewport.width + overscan &&
+        element.y + element.height >= canvasViewport.y - overscan &&
+        element.y <= canvasViewport.y + canvasViewport.height + overscan
+      ),
+    );
+  }, [canvasViewport, connectorEndpointPreview, selectedBlockIds, visibleCanvasElements, zoomLevel]);
+  const renderedCanvasElementsById = useMemo(
+    () => Object.fromEntries(renderedCanvasElements.map((element) => [element.id, element])),
+    [renderedCanvasElements],
+  );
+  const displayedCanvasElements = useMemo(
+    () => directTextDraft?.block.pageId === selectedPageId
+      ? [...renderedCanvasElements, directTextDraft.block]
+      : renderedCanvasElements,
+    [directTextDraft, renderedCanvasElements, selectedPageId],
+  );
+  const suppressedConnectorCandidates = useMemo(() => {
+    let arrowOrdinal = 0;
+    let lineOrdinal = 0;
+    return visibleCanvasElements.flatMap((element) => {
+      if (element.type !== "connector") return [];
+      const isArrow = isArrowConnector(element);
+      const ordinal = isArrow ? ++arrowOrdinal : ++lineOrdinal;
+      if (!isCanonicalConnectorRouteSuppressed(element, visibleCanvasElementsById)) return [];
+      const semanticLabel = element.semantic?.label?.trim();
+      return [{
+        connector: element,
+        label: semanticLabel || `${isArrow ? "Arrow" : "Line"} connector ${ordinal}`,
+      }];
+    });
+  }, [visibleCanvasElements, visibleCanvasElementsById]);
+  const suppressedConnectorControls = useMemo(() => (
+    suppressedConnectorCandidates.flatMap(({ connector, label }) => {
+      const placement = getSuppressedConnectorControlPlacement(
+        connector,
+        visibleCanvasElementsById,
+        canvasSize,
+        livePanOffset,
+        zoomLevel,
+        isSearchOpen,
+      );
+      if (!placement) return [];
+      return [{ connector, label, placement }];
+    })
+  ), [
+    canvasSize,
+    isSearchOpen,
+    livePanOffset,
+    suppressedConnectorCandidates,
+    visibleCanvasElementsById,
+    zoomLevel,
+  ]);
   const offscreenGroups = useMemo<OffscreenGroup[]>(() => {
     if (!canvasViewport || visibleBlocks.length === 0) {
       return [];
     }
 
-    const counts = new Map<OffscreenGroup["direction"], number>();
+    const elementsByDirection = new Map<OffscreenGroup["direction"], CanvasElement[]>();
 
     for (const block of visibleBlocks) {
       const direction = getOffscreenDirection(block, canvasViewport);
@@ -1213,14 +2010,43 @@ function App() {
         continue;
       }
 
-      counts.set(direction, (counts.get(direction) ?? 0) + 1);
+      const elements = elementsByDirection.get(direction);
+      if (elements) elements.push(block);
+      else elementsByDirection.set(direction, [block]);
     }
 
-    return Array.from(counts.entries()).map(([direction, count]) => ({
-      direction,
-      count,
-    }));
+    return Array.from(elementsByDirection.entries()).map(([direction, elements]) =>
+      createOffscreenGroup(direction, elements),
+    );
   }, [canvasViewport, visibleBlocks]);
+  useEffect(() => {
+    const currentStates = new Map(
+      suppressedConnectorCandidates.map(({ connector, label }) => [connector.id, label]),
+    );
+    const previous = suppressedConnectorStatusRef.current;
+    const currentElementIds = new Set(visibleCanvasElements.map((element) => element.id));
+    const announcements: string[] = [];
+
+    if (!previous || previous.pageId !== selectedPageId) {
+      for (const label of currentStates.values()) {
+        announcements.push(`${label} hidden because its bound objects overlap. Use its visible marker to manage endpoints.`);
+      }
+    } else {
+      for (const [connectorId, label] of currentStates) {
+        if (!previous.states.has(connectorId)) {
+          announcements.push(`${label} hidden because its bound objects overlap. Use its visible marker to manage endpoints.`);
+        }
+      }
+      for (const [connectorId, label] of previous.states) {
+        if (!currentStates.has(connectorId) && currentElementIds.has(connectorId)) {
+          announcements.push(`${label} restored. Its route is visible again.`);
+        }
+      }
+    }
+
+    suppressedConnectorStatusRef.current = { pageId: selectedPageId, states: currentStates };
+    if (announcements.length > 0) setConnectorBindingAnnouncement(announcements.join(" "));
+  }, [selectedPageId, suppressedConnectorCandidates, visibleCanvasElements]);
   const activeLlamaHarnessAgents = useMemo(
     () => llamaHarnessCapabilities?.allowedAgents ?? llamaHarnessAgents,
     [llamaHarnessAgents, llamaHarnessCapabilities],
@@ -1372,15 +2198,23 @@ function App() {
       if (panRafId.current !== null) {
         window.cancelAnimationFrame(panRafId.current);
       }
-
-      if (selectionRafId.current !== null) {
-        window.cancelAnimationFrame(selectionRafId.current);
+      if (connectorEndpointFocusReturnRafRef.current !== null) {
+        window.cancelAnimationFrame(connectorEndpointFocusReturnRafRef.current);
+      }
+      if (keyboardArrowEndpointFocusRafRef.current !== null) {
+        window.cancelAnimationFrame(keyboardArrowEndpointFocusRafRef.current);
+      }
+      if (directTextFocusReturnRafRef.current !== null) {
+        window.cancelAnimationFrame(directTextFocusReturnRafRef.current);
+      }
+      if (offscreenNavigationFocusRafRef.current !== null) {
+        window.cancelAnimationFrame(offscreenNavigationFocusRafRef.current);
+        offscreenNavigationFocusRafRef.current = null;
       }
 
-      if (dragLayerSessionRef.current) {
-        cleanupDragLayerSession(dragLayerSessionRef.current);
-        dragLayerSessionRef.current = null;
-      }
+      cancelCanvasSelectionSession();
+      cancelSelectionFrameInteraction(false);
+      cancelVisualDragRef.current(false);
 
       stopAssistantRecordingStream();
     };
@@ -1388,13 +2222,7 @@ function App() {
 
   useEffect(() => {
     function handleWindowBlur() {
-      if (!dragLayerSessionRef.current) {
-        return;
-      }
-
-      cleanupDragLayerSession(dragLayerSessionRef.current);
-      dragLayerSessionRef.current = null;
-      setActiveMode("selected");
+      cancelCapturedCanvasInteractionsRef.current();
     }
 
     window.addEventListener("blur", handleWindowBlur);
@@ -1403,11 +2231,44 @@ function App() {
   }, []);
 
   useEffect(() => {
+    cancelCanvasInteractionTransitionRef.current();
+  }, [activeTool, selectedPageId]);
+
+  useEffect(() => {
     let isMounted = true;
 
     async function loadData() {
       try {
-        const savedData = await invoke<AppData>("load_app_data");
+        const repository = createSceneRepository();
+        const diagnostics = await repository.initializeStorage();
+        const workspace = await repository.loadWorkspace();
+        const savedData: AppData = {
+          elements: workspace.elements,
+          folders: workspace.folders,
+          isDarkMode: workspace.isDarkMode,
+          pages: workspace.pages.map(({ revision: _revision, ...page }) => page),
+          sessionState: workspace.sessionState,
+        };
+        const imageSourcesByAssetId = new Map<string, string>();
+        const imageElements = workspace.elements.filter(
+          (element): element is ImageElement => element.type === "image",
+        );
+        const imageResults = await Promise.allSettled(
+          imageElements.map(async (element) => ({
+            assetId: element.assetId,
+            source: assetDataUrl(await repository.loadAsset(element.assetId)),
+          })),
+        );
+        for (const result of imageResults) {
+          if (result.status === "fulfilled") {
+            imageSourcesByAssetId.set(result.value.assetId, result.value.source);
+          } else {
+            console.warn("Could not load a managed canvas image.", result.reason);
+          }
+        }
+        for (const warning of [...diagnostics.warnings, ...workspace.warnings]) {
+          console.warn(warning);
+        }
 
         if (!isMounted) {
           return;
@@ -1462,10 +2323,34 @@ function App() {
             ? savedFolderId
             : savedData.folders[0]?.id ?? ROOT_FOLDER_ID);
 
+        repositoryRef.current = repository;
+        imageSourcesByAssetIdRef.current = imageSourcesByAssetId;
+        pageRevisionsRef.current = new Map(
+          workspace.pages.map((page: StoragePage) => [page.id, page.revision]),
+        );
+        const queue = new SceneChangeQueue(
+          (batch) => repository.applySceneChanges(batch),
+          (_pageId, state) => {
+            if (isMounted) {
+              setPersistenceStatus(state);
+            }
+          },
+        );
+        for (const page of workspace.pages) {
+          queue.seed(
+            page.id,
+            page.revision,
+            workspace.elements.filter((element) => element.pageId === page.id),
+          );
+        }
+        sceneChangeQueueRef.current = queue;
         setData(savedData);
         setIsDarkMode(savedData.isDarkMode ?? true);
         setIsSidebarCollapsed(savedSessionState?.isExplorerCollapsed ?? false);
         setIsAssistantOpen(savedSessionState?.isAssistantOpen ?? false);
+        setIsToolLocked(getDrawingToolLockPreference(savedSessionState));
+        setDrawingPreferences(normalizeDrawingPreferences(savedSessionState?.drawingPreferences));
+        setTextPreferences(normalizeTextPreferences(savedSessionState?.textPreferences));
         pageViewportsRef.current = normalizePageViewports(
           savedSessionState?.pageViewports,
           validPageIds,
@@ -1481,8 +2366,56 @@ function App() {
         setInsertionPoint(null);
         setIsEditingHeaderTitle(false);
         setPersistenceAvailable(true);
+        setPersistenceStatus({ kind: "saved" });
       } catch (error) {
-        console.warn("Could not load local note data.", error);
+        // Vite/Playwright runs without a Tauri command bridge. Keep that path
+        // usable in-memory. A desktop storage failure must never look like a
+        // successful empty workspace, so show read-only legacy data if it is
+        // still available and leave persistence disabled.
+        console.warn("SQLite note storage is unavailable; using this session only.", error);
+        repositoryRef.current = null;
+        sceneChangeQueueRef.current = null;
+        setPersistenceAvailable(false);
+        if (!isTauri() || !isMounted) {
+          return;
+        }
+        const storageError = error instanceof Error ? error : new Error(String(error));
+        setPersistenceStatus({ kind: "failed", error: storageError });
+        try {
+          const legacy = fromLegacyAppData(
+            await invoke<LegacyAppData>("load_app_data"),
+            new Date(),
+          );
+          if (!isMounted) {
+            return;
+          }
+          imageSourcesByAssetIdRef.current = legacy.imageSourcesByAssetId;
+          setData(legacy.data);
+          setIsDarkMode(legacy.data.isDarkMode ?? true);
+          setIsToolLocked(getDrawingToolLockPreference(legacy.data.sessionState));
+          setDrawingPreferences(normalizeDrawingPreferences(legacy.data.sessionState?.drawingPreferences));
+          setTextPreferences(normalizeTextPreferences(legacy.data.sessionState?.textPreferences));
+          const legacyPageIds = new Set(
+            legacy.data.pages
+              .filter((page) => !isTemplatePage(page))
+              .map((page) => page.id),
+          );
+          const recoveredPageId = legacy.data.sessionState?.selectedPageId &&
+            legacyPageIds.has(legacy.data.sessionState.selectedPageId)
+            ? legacy.data.sessionState.selectedPageId
+            : legacy.data.pages.find((page) => !isTemplatePage(page))?.id ?? "";
+          const recoveredPage = legacy.data.pages.find((page) => page.id === recoveredPageId);
+          pageViewportsRef.current = normalizePageViewports(
+            legacy.data.sessionState?.pageViewports,
+            legacyPageIds,
+          );
+          setSelectedFolderId(recoveredPage?.folderId ?? ROOT_FOLDER_ID);
+          setSelectedPageId(recoveredPageId);
+          setOpenPageTabIds(recoveredPageId ? [recoveredPageId] : []);
+          restorePageViewport(recoveredPageId);
+        } catch (legacyError) {
+          console.error("Could not recover legacy note data after SQLite failed.", legacyError);
+        }
       } finally {
         if (isMounted) {
           setIsLoaded(true);
@@ -1656,29 +2589,55 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!isLoaded || !persistenceAvailable) {
+    if (!isLoaded || !persistenceAvailable || isDrawingPropertyPreviewing) {
       return;
     }
 
     const saveTimer = window.setTimeout(() => {
-      invoke("save_app_data", {
-        data: {
-          ...data,
-          isDarkMode,
-          sessionState: getSessionState(),
-        },
-      }).catch((error) => {
-        console.warn("Could not save local note data.", error);
+      queueWorkspacePersistence({
+        ...data,
+        isDarkMode,
+        sessionState: getSessionState(),
       });
     }, SAVE_DELAY_MS);
 
     return () => window.clearTimeout(saveTimer);
   }, [
     data,
+    drawingPreferences,
+    textPreferences,
     isAssistantOpen,
     isDarkMode,
+    isDrawingPropertyPreviewing,
     isLoaded,
+    isToolLocked,
     isSidebarCollapsed,
+    openPageTabIds,
+    panOffset.x,
+    panOffset.y,
+    persistenceAvailable,
+    selectedFolderId,
+    selectedPageId,
+    zoomLevel,
+  ]);
+
+  useEffect(() => {
+    if (!persistenceAvailable) {
+      return;
+    }
+    const flushBeforeClose = () => {
+      // Browsers do not guarantee async completion during unload, but this is
+      // still useful for Tauri lifecycle paths that permit the promise to run.
+      void flushPendingPersistence();
+    };
+    window.addEventListener("beforeunload", flushBeforeClose);
+    return () => window.removeEventListener("beforeunload", flushBeforeClose);
+  }, [
+    isAssistantOpen,
+    drawingPreferences,
+    isDarkMode,
+    isSidebarCollapsed,
+    isToolLocked,
     openPageTabIds,
     panOffset.x,
     panOffset.y,
@@ -1714,20 +2673,31 @@ function App() {
     return () => document.body.classList.remove("is-interacting");
   }, [activeMode]);
 
-  function cloneBlocks(blocks: TextBlock[]) {
-    return blocks.map((block) => ({ ...block }));
+  function cloneBlocks(blocks: CanvasElement[]) {
+    return blocks.map((block) => ({
+      ...block,
+      ...(isTextElement(block)
+        ? { richContent: cloneRichContent(block.richContent) }
+        : block.type === "shape" && block.text
+          ? { text: cloneRichTextValue(block.text) }
+          : {}),
+    }));
   }
 
-  function cloneRichContent(richContent: TextBlock["richContent"]) {
+  function cloneRichContent(richContent: TextElement["richContent"]) {
     return richContent ? structuredClone(richContent) : undefined;
   }
 
-  function cloneCopiedPageBlock(block: TextBlock): CopiedPageBlock {
-    const { id: _id, pageId: _pageId, richContent, ...blockFields } = block;
+  function cloneCopiedPageBlock(block: CopyableElement): CopiedPageBlock {
+    const { id: _id, pageId: _pageId, ...blockFields } = block;
 
     return {
       ...blockFields,
-      ...(richContent ? { richContent: cloneRichContent(richContent) } : {}),
+      ...(isTextElement(block) && block.richContent
+        ? { richContent: cloneRichContent(block.richContent) }
+        : block.type === "shape" && block.text
+          ? { text: cloneRichTextValue(block.text) }
+        : {}),
     };
   }
 
@@ -1772,7 +2742,10 @@ function App() {
     }
 
     return {
+      drawingPreferences: drawingPreferencesRef.current,
+      textPreferences: textPreferencesRef.current,
       isAssistantOpen,
+      isDrawingToolLocked: isToolLockedRef.current,
       isExplorerCollapsed: isSidebarCollapsed,
       selectedFolderId: selectedFolderIdRef.current || undefined,
       selectedPageId: selectedPageIdRef.current || undefined,
@@ -1784,12 +2757,152 @@ function App() {
     };
   }
 
-  function cloneBlocksForPage(blocks: TextBlock[], pageId: string) {
+  function queueWorkspacePersistence(snapshot: AppData): Promise<void> {
+    const next = persistenceChainRef.current
+      .catch(() => undefined)
+      .then(() => persistWorkspaceSnapshot(snapshot));
+    persistenceChainRef.current = next;
+    // Effects intentionally do not await this promise. Keep the rejection
+    // handled here while still returning it to explicit flush/retry callers.
+    void next.catch(() => undefined);
+    return next;
+  }
+
+  async function uploadPendingAssets(
+    repository: SceneRepository,
+    snapshot: AppData,
+  ): Promise<AppData> {
+    const replacements = new Map<string, { assetId: string; source: string; naturalHeight: number; naturalWidth: number }>();
+    for (const image of snapshot.elements.filter(
+      (element): element is ImageElement => element.type === "image",
+    )) {
+      const pending = pendingAssetUploadsRef.current.get(image.assetId);
+      if (!pending) {
+        continue;
+      }
+      const saved = await repository.saveAsset(
+        assetRequestFromDataUrl(
+          await managedImageDataUrl(pending.dataUrl),
+          { fileName: pending.fileName },
+        ),
+      );
+      replacements.set(image.assetId, {
+        assetId: saved.id,
+        naturalHeight: saved.naturalHeight ?? image.naturalHeight,
+        naturalWidth: saved.naturalWidth ?? image.naturalWidth,
+        source: pending.dataUrl,
+      });
+    }
+    if (replacements.size === 0) {
+      return snapshot;
+    }
+    const uploadTimestamp = Date.now();
+    const replaceElements = (elements: CanvasElement[]) => elements.map((element) => {
+      if (element.type !== "image") {
+        return element;
+      }
+      const replacement = replacements.get(element.assetId);
+      return replacement
+        ? {
+            ...element,
+            assetId: replacement.assetId,
+            naturalHeight: replacement.naturalHeight,
+            naturalWidth: replacement.naturalWidth,
+            updatedAt: uploadTimestamp,
+          }
+        : element;
+    });
+    for (const [oldAssetId, replacement] of replacements) {
+      pendingAssetUploadsRef.current.delete(oldAssetId);
+      imageSourcesByAssetIdRef.current.delete(oldAssetId);
+      imageSourcesByAssetIdRef.current.set(replacement.assetId, replacement.source);
+    }
+    const uploadedSnapshot = {
+      ...snapshot,
+      elements: replaceElements(snapshot.elements),
+    };
+    const currentData = dataRef.current;
+    const nextData = {
+      ...currentData,
+      elements: replaceElements(currentData.elements),
+    };
+    dataRef.current = nextData;
+    setData(nextData);
+    return uploadedSnapshot;
+  }
+
+  async function persistWorkspaceSnapshot(snapshot: AppData): Promise<void> {
+    const repository = repositoryRef.current;
+    const queue = sceneChangeQueueRef.current;
+    if (!repository || !queue) {
+      return;
+    }
+
+    setPersistenceStatus({ kind: "saving" });
+    try {
+      const persistableSnapshot = await uploadPendingAssets(repository, snapshot);
+      // Do not delete a page or folder while an older element batch is still
+      // queued. The structure transaction can then safely cascade deletions.
+      await queue.flush();
+      const structure = await repository.reconcileWorkspaceStructure({
+        folders: persistableSnapshot.folders,
+        isDarkMode: persistableSnapshot.isDarkMode,
+        pages: persistableSnapshot.pages,
+      });
+      const currentPageIds = new Set(persistableSnapshot.pages.map((page) => page.id));
+      for (const pageId of pageRevisionsRef.current.keys()) {
+        if (!currentPageIds.has(pageId)) {
+          queue.forgetPage(pageId);
+        }
+      }
+      pageRevisionsRef.current = new Map(
+        structure.pages.map((page) => [page.id, page.revision]),
+      );
+      for (const page of structure.pages) {
+        queue.setRevision(page.id, page.revision);
+      }
+      await Promise.all(
+        structure.pages.map((page) =>
+          queue.replacePage(
+            page.id,
+            persistableSnapshot.elements.filter((element) => element.pageId === page.id),
+          ),
+        ),
+      );
+      await repository.saveSessionState(persistableSnapshot.sessionState ?? {});
+      setPersistenceStatus({ kind: "saved" });
+    } catch (reason) {
+      const error = reason instanceof Error ? reason : new Error(String(reason));
+      setPersistenceStatus({ kind: "failed", error });
+      throw error;
+    }
+  }
+
+  async function flushPendingPersistence(): Promise<void> {
+    if (!persistenceAvailable) {
+      return;
+    }
+    await queueWorkspacePersistence({
+      ...dataRef.current,
+      isDarkMode,
+      sessionState: getSessionState(),
+    });
+  }
+
+  function retryPersistence() {
+    void flushPendingPersistence();
+  }
+
+  function cloneBlocksForPage(blocks: CanvasElement[], pageId: string) {
     return blocks.map((block) => ({
       ...block,
       id: createId("block"),
       pageId,
-      richContent: cloneRichContent(block.richContent),
+      ...(isTextElement(block)
+        ? { richContent: cloneRichContent(block.richContent) }
+        : block.type === "shape" && block.text
+          ? { text: cloneRichTextValue(block.text) }
+        : {}),
     }));
   }
 
@@ -1855,7 +2968,7 @@ function App() {
     };
   }
 
-  function snapBlockPosition<T extends Pick<TextBlock, "x" | "y">>(block: T): T {
+  function snapBlockPosition<T extends BoxCanvasElement>(block: T): T {
     if (!isSnapToGridEnabledRef.current) {
       return block;
     }
@@ -1891,33 +3004,15 @@ function App() {
     return snappedUpdates;
   }
 
-  function areBlocksEqual(firstBlocks: TextBlock[], secondBlocks: TextBlock[]) {
+  function areBlocksEqual(firstBlocks: CanvasElement[], secondBlocks: CanvasElement[]) {
     if (firstBlocks.length !== secondBlocks.length) {
       return false;
     }
 
-    return firstBlocks.every((firstBlock, index) => {
-      const secondBlock = secondBlocks[index];
-
-      return (
-        firstBlock.id === secondBlock.id &&
-        firstBlock.pageId === secondBlock.pageId &&
-        firstBlock.x === secondBlock.x &&
-        firstBlock.y === secondBlock.y &&
-        firstBlock.width === secondBlock.width &&
-        firstBlock.height === secondBlock.height &&
-        firstBlock.content === secondBlock.content &&
-        JSON.stringify(firstBlock.richContent) ===
-          JSON.stringify(secondBlock.richContent) &&
-        firstBlock.isWidthManuallyResized ===
-          secondBlock.isWidthManuallyResized &&
-        firstBlock.imageData === secondBlock.imageData &&
-        firstBlock.imageName === secondBlock.imageName
-      );
-    });
+    return firstBlocks.every((firstBlock, index) => JSON.stringify(firstBlock) === JSON.stringify(secondBlocks[index]));
   }
 
-  function pushBlockUndoSnapshot(blocks: TextBlock[]) {
+  function pushBlockUndoSnapshot(blocks: CanvasElement[]) {
     undoBlockHistoryRef.current = [
       ...undoBlockHistoryRef.current.slice(-(MAX_BLOCK_HISTORY_ENTRIES - 1)),
       cloneBlocks(blocks),
@@ -1926,24 +3021,132 @@ function App() {
   }
 
   function setBlocksWithHistory(
-    getNextBlocks: (currentBlocks: TextBlock[]) => TextBlock[],
+    getNextBlocks: (currentBlocks: CanvasElement[]) => CanvasElement[],
   ) {
     const currentData = dataRef.current;
-    const nextBlocks = getNextBlocks(currentData.blocks);
+    const nextBlocks = getNextBlocks(currentData.elements);
 
-    if (areBlocksEqual(currentData.blocks, nextBlocks)) {
+    if (areBlocksEqual(currentData.elements, nextBlocks)) {
       return;
     }
 
-    pushBlockUndoSnapshot(currentData.blocks);
+    pushBlockUndoSnapshot(currentData.elements);
 
     const nextData = {
       ...currentData,
-      blocks: nextBlocks,
+      elements: nextBlocks,
     };
 
     dataRef.current = nextData;
     setData(nextData);
+  }
+
+  function isLiveConnectorBindingPersistable(
+    candidate: ConnectorElement,
+    currentElements: readonly CanvasElement[] = dataRef.current.elements,
+  ) {
+    return isConnectorBindingPersistable(candidate, indexCanvasElements(currentElements));
+  }
+
+  function drawingPropertyPreviewOwnerKey() {
+    return `${selectedPageIdRef.current}\u0000${[...selectedBlockIdsRef.current].sort().join("\u0000")}`;
+  }
+
+  const cancelDrawingPropertyPreview = useCallback(() => {
+    const transaction = drawingPropertyPreviewRef.current;
+    if (!transaction) return;
+    drawingPropertyPreviewRef.current = null;
+    const nextData = { ...dataRef.current, elements: transaction.baseline };
+    dataRef.current = nextData;
+    setData(nextData);
+    setIsDrawingPropertyPreviewing(false);
+  }, []);
+
+  function previewDrawingProperty(update: DrawingPropertyUpdate) {
+    const selectedIds = new Set(selectedBlockIdsRef.current);
+    if (selectedIds.size === 0) return;
+    const ownerKey = drawingPropertyPreviewOwnerKey();
+    let transaction = drawingPropertyPreviewRef.current;
+    if (transaction && transaction.ownerKey !== ownerKey) {
+      cancelDrawingPropertyPreview();
+      transaction = null;
+    }
+    if (!transaction) {
+      transaction = {
+        baseline: dataRef.current.elements,
+        ownerKey,
+        selectedIds: [...selectedIds],
+      };
+      drawingPropertyPreviewRef.current = transaction;
+      setIsDrawingPropertyPreviewing(true);
+    }
+    const nextElements = applyDrawingPropertyUpdate(transaction.baseline, new Set(transaction.selectedIds), update);
+    const nextData = { ...dataRef.current, elements: nextElements };
+    dataRef.current = nextData;
+    setData(nextData);
+  }
+
+  function updateDrawingProperty(update: DrawingPropertyUpdate) {
+    const selectedIds = new Set(selectedBlockIdsRef.current);
+    if (update.property === "backgroundMode") {
+      const hasUnlockedSelectedText = [...selectedIds].some((id) =>
+        dataRef.current.elements.some(
+          (element) => element.id === id && isTextElement(element) && !element.locked,
+        ),
+      );
+      if (hasUnlockedSelectedText) {
+        setTextPreferences({ backgroundMode: update.value });
+      }
+    }
+    if (selectedIds.size > 0) {
+      const transaction = drawingPropertyPreviewRef.current;
+      if (transaction) {
+        if (transaction.ownerKey !== drawingPropertyPreviewOwnerKey()) {
+          cancelDrawingPropertyPreview();
+          return;
+        }
+        const ownedIds = new Set(transaction.selectedIds);
+        const nextElements = applyDrawingPropertyUpdate(transaction.baseline, ownedIds, update);
+        drawingPropertyPreviewRef.current = null;
+        setIsDrawingPropertyPreviewing(false);
+        if (!areBlocksEqual(transaction.baseline, nextElements)) pushBlockUndoSnapshot(transaction.baseline);
+        const nextData = { ...dataRef.current, elements: nextElements };
+        dataRef.current = nextData;
+        setData(nextData);
+        return;
+      }
+      setBlocksWithHistory((elements) => applyDrawingPropertyUpdate(elements, selectedIds, update));
+      return;
+    }
+    const tool = activeToolRef.current;
+    if (tool === "text" && update.property === "backgroundMode") {
+      setTextPreferences({ backgroundMode: update.value });
+      return;
+    }
+    if (!isDrawingPreferenceTool(tool)) return;
+    setDrawingPreferences((current) => updateDrawingPreference(current, tool, update));
+  }
+
+  const drawingPropertyPreviewOwner = `${selectedPageId}\u0000${[...selectedBlockIds].sort().join("\u0000")}`;
+  useEffect(() => {
+    const transaction = drawingPropertyPreviewRef.current;
+    if (transaction && transaction.ownerKey !== drawingPropertyPreviewOwner) {
+      cancelDrawingPropertyPreview();
+    }
+  }, [cancelDrawingPropertyPreview, drawingPropertyPreviewOwner]);
+
+  useEffect(() => {
+    window.addEventListener("blur", cancelDrawingPropertyPreview);
+    return () => {
+      window.removeEventListener("blur", cancelDrawingPropertyPreview);
+      cancelDrawingPropertyPreview();
+    };
+  }, [cancelDrawingPropertyPreview]);
+
+  function updateSelectedLayer(action: LayerAction) {
+    const selectedIds = new Set(selectedBlockIdsRef.current);
+    if (selectedIds.size === 0) return;
+    setBlocksWithHistory((elements) => reorderLayers(elements, selectedIds, action));
   }
 
   function restoreBlockHistory(direction: "undo" | "redo") {
@@ -1964,7 +3167,8 @@ function App() {
     }
 
     const currentData = dataRef.current;
-    const currentSnapshot = cloneBlocks(currentData.blocks);
+    const currentSnapshot = cloneBlocks(currentData.elements);
+    const changedShapeContainedText = hasShapeContainedTextDifference(currentData.elements, snapshot);
 
     if (direction === "undo") {
       redoBlockHistoryRef.current = [
@@ -1984,7 +3188,7 @@ function App() {
 
     const nextData = {
       ...currentData,
-      blocks: cloneBlocks(snapshot),
+      elements: cloneBlocks(snapshot),
     };
 
     dataRef.current = nextData;
@@ -2000,6 +3204,9 @@ function App() {
     setActiveMode(
       retainedSelectedBlockIds.length > 0 ? "selected" : "canvas",
     );
+    if (changedShapeContainedText) {
+      setConnectorBindingAnnouncement(`${direction === "undo" ? "Undid" : "Redid"} a shape-contained text change.`);
+    }
   }
 
   function copySelectedBlocks() {
@@ -2015,15 +3222,26 @@ function App() {
     const minX = Math.min(...blocksToCopy.map((block) => block.x));
     const minY = Math.min(...blocksToCopy.map((block) => block.y));
 
-    copiedBlocksRef.current = blocksToCopy.map(
-      ({ id: _id, pageId: _pageId, x, y, richContent, ...block }) => ({
-        ...block,
-        ...(richContent ? { richContent: cloneRichContent(richContent) } : {}),
-        offsetX: x - minX,
-        offsetY: y - minY,
-      }),
-    );
+    copiedBlocksRef.current = blocksToCopy
+      .filter((block): block is CopyableElement => block.type === "text" || block.type === "image" || block.type === "shape")
+      .map((block) => {
+        const { id: _id, pageId: _pageId, x, y, ...blockFields } = block;
+        return {
+          ...blockFields,
+          ...(isTextElement(block) && block.richContent
+            ? { richContent: cloneRichContent(block.richContent) }
+            : block.type === "shape" && block.text
+              ? { text: cloneRichTextValue(block.text) }
+            : {}),
+          offsetX: x - minX,
+          offsetY: y - minY,
+        } as CopiedBlock;
+      });
     copiedContentKindRef.current = "blocks";
+    const copiedShapeTextCount = blocksToCopy.filter(hasShapeContainedText).length;
+    if (copiedShapeTextCount > 0) {
+      setConnectorBindingAnnouncement(`Copied ${copiedShapeTextCount === 1 ? "one shape" : `${copiedShapeTextCount} shapes`} with contained text.`);
+    }
 
     return true;
   }
@@ -2044,8 +3262,10 @@ function App() {
 
       return {
         ...pageFields,
-        blocks: currentData.blocks
-          .filter((block) => block.pageId === page.id)
+        elements: currentData.elements
+          .filter((block): block is CopyableElement =>
+            block.pageId === page.id && (block.type === "text" || block.type === "image" || block.type === "shape"),
+          )
           .map(cloneCopiedPageBlock),
         viewport: clonePageViewport(page.id),
       };
@@ -2055,34 +3275,80 @@ function App() {
     return true;
   }
 
-  function getPasteOrigin() {
+  function getCanvasPointerPasteOrigin() {
+    const pointer = lastCanvasPointerClientRef.current;
+    const canvas = canvasRef.current;
+    if (!pointer || !canvas) return null;
+
+    const bounds = canvas.getBoundingClientRect();
+    if (
+      pointer.x < bounds.left
+      || pointer.x > bounds.right
+      || pointer.y < bounds.top
+      || pointer.y > bounds.bottom
+    ) return null;
+
+    return {
+      x: (pointer.x - bounds.left - panOffsetRef.current.x) / zoomLevelRef.current,
+      y: (pointer.y - bounds.top - panOffsetRef.current.y) / zoomLevelRef.current,
+    };
+  }
+
+  function rememberCanvasPastePointer(event: ReactPointerEvent<HTMLElement>) {
+    if (isCanvasPastePointerChromeTarget(event.target)) {
+      lastCanvasPointerClientRef.current = null;
+      return;
+    }
+    lastCanvasPointerClientRef.current = {
+      x: event.clientX,
+      y: event.clientY,
+    };
+  }
+
+  function getPastePlacement() {
+    const pointerOrigin = getCanvasPointerPasteOrigin();
+    if (pointerOrigin) return { centerGroup: true, point: pointerOrigin };
+
     if (insertionPoint) {
-      return insertionPoint;
+      return { centerGroup: false, point: insertionPoint };
     }
 
     const currentCanvasViewport = canvasViewportRef.current;
 
     if (currentCanvasViewport) {
       return {
-        x: currentCanvasViewport.x + currentCanvasViewport.width / 2,
-        y: currentCanvasViewport.y + currentCanvasViewport.height / 2,
+        centerGroup: true,
+        point: {
+          x: currentCanvasViewport.x + currentCanvasViewport.width / 2,
+          y: currentCanvasViewport.y + currentCanvasViewport.height / 2,
+        },
       };
     }
 
-    return { x: PASTED_BLOCK_OFFSET, y: PASTED_BLOCK_OFFSET };
+    return {
+      centerGroup: false,
+      point: { x: PASTED_BLOCK_OFFSET, y: PASTED_BLOCK_OFFSET },
+    };
+  }
+
+  function getPasteOrigin() {
+    return getPastePlacement().point;
   }
 
   function getImagePasteOrigin() {
+    const pointerOrigin = getCanvasPointerPasteOrigin();
+    if (pointerOrigin) return pointerOrigin;
+
     if (insertionPoint) {
       return insertionPoint;
     }
 
     const currentEditingBlockId = editingBlockIdRef.current;
     const currentEditingBlock = currentEditingBlockId
-      ? dataRef.current.blocks.find((block) => block.id === currentEditingBlockId)
+      ? dataRef.current.elements.find((block) => block.id === currentEditingBlockId)
       : null;
 
-    if (currentEditingBlock) {
+    if (currentEditingBlock && isBoxCanvasElement(currentEditingBlock)) {
       return snapPoint({
         x: currentEditingBlock.x,
         y: currentEditingBlock.y + currentEditingBlock.height + PASTED_BLOCK_OFFSET,
@@ -2188,6 +3454,7 @@ function App() {
     imageBlob: Blob,
     imageName: string,
   ) {
+    if (rejectOversizedImageBlob(imageBlob)) return;
     const reader = new FileReader();
 
     reader.onload = () => {
@@ -2195,7 +3462,7 @@ function App() {
         return;
       }
 
-      createImageBlock(
+      void createImageBlock(
         pasteOrigin.x,
         pasteOrigin.y,
         reader.result,
@@ -2258,7 +3525,7 @@ function App() {
     const pasteOrigin = getImagePasteOrigin();
 
     if (clipboardImage.kind === "source") {
-      createImageBlock(
+      void createImageBlock(
         pasteOrigin.x,
         pasteOrigin.y,
         clipboardImage.source,
@@ -2280,9 +3547,8 @@ function App() {
       return false;
     }
 
-    const pasteOrigin = snapPoint(getPasteOrigin());
-    const isViewportCenteredPaste =
-      !insertionPoint && Boolean(canvasViewportRef.current);
+    const pastePlacement = getPastePlacement();
+    const pasteOrigin = snapPoint(pastePlacement.point);
     const pastedGroupSize = copiedBlocksRef.current.reduce(
       (currentSize, block) => ({
         width: Math.max(currentSize.width, block.offsetX + block.width),
@@ -2290,29 +3556,25 @@ function App() {
       }),
       { width: 0, height: 0 },
     );
-    const pastedGroupOrigin = isViewportCenteredPaste
+    const pastedGroupOrigin = pastePlacement.centerGroup
       ? {
           x: pasteOrigin.x - pastedGroupSize.width / 2,
           y: pasteOrigin.y - pastedGroupSize.height / 2,
         }
       : pasteOrigin;
-    const pastedBlocks = copiedBlocksRef.current.map((block) => ({
-      id: createId("block"),
-      pageId: selectedPageId,
-      x: pastedGroupOrigin.x + block.offsetX,
-      y: pastedGroupOrigin.y + block.offsetY,
-      width: block.width,
-      height: block.height,
-      content: block.content,
-      richContent: cloneRichContent(block.richContent),
-      isWidthManuallyResized: block.isWidthManuallyResized,
-      imageData: block.imageData,
-      imageName: block.imageName,
-    }));
+    const pastedBlocks: CopyableElement[] = copiedBlocksRef.current.map(
+      ({ offsetX, offsetY, ...block }) => ({
+        ...block,
+        id: createId("block"),
+        pageId: selectedPageId,
+        x: pastedGroupOrigin.x + offsetX,
+        y: pastedGroupOrigin.y + offsetY,
+      } as CopyableElement),
+    );
 
     setBlocksWithHistory((currentBlocks) => [
       ...currentBlocks,
-      ...pastedBlocks.map(snapBlockPosition),
+      ...pastedBlocks,
     ]);
     setSelectedBlockIds(pastedBlocks.map((block) => block.id));
     setEditingBlockId(null);
@@ -2335,10 +3597,10 @@ function App() {
     const folderId = selectedFolderIdRef.current || ROOT_FOLDER_ID;
 
     const pastedPages: AppData["pages"] = [];
-    const pastedBlocks: TextBlock[] = [];
+    const pastedBlocks: CanvasElement[] = [];
 
     for (const copiedPage of copiedPagesRef.current) {
-      const { blocks, viewport, ...pageFields } = copiedPage;
+      const { elements, viewport, ...pageFields } = copiedPage;
       const pageId = createId("page");
 
       pastedPages.push({
@@ -2347,12 +3609,11 @@ function App() {
         folderId,
       });
       pastedBlocks.push(
-        ...blocks.map((block) => ({
+        ...elements.map((block) => ({
           ...block,
           id: createId("block"),
           pageId,
-          richContent: cloneRichContent(block.richContent),
-        })),
+        } as CanvasElement)),
       );
 
       if (viewport) {
@@ -2374,7 +3635,7 @@ function App() {
         folderId,
         pastedPages,
       ),
-      blocks: [...currentData.blocks, ...pastedBlocks],
+      elements: [...currentData.elements, ...pastedBlocks],
     };
     const firstPastedPageId = pastedPages[0].id;
 
@@ -2400,13 +3661,26 @@ function App() {
   }
 
   const deleteBlocks = useCallback((blockIds: string[]) => {
-    const blockIdsToDelete = new Set(blockIds);
-
-    setBlocksWithHistory((currentBlocks) =>
-      currentBlocks.filter(
-        (block) => !blockIdsToDelete.has(block.id),
-      ),
+    const requestedIds = new Set(blockIds);
+    const blockIdsToDelete = new Set(
+      dataRef.current.elements
+        .filter((block) => requestedIds.has(block.id) && !block.locked)
+        .map((block) => block.id),
     );
+    if (blockIdsToDelete.size === 0) return false;
+    const deletedShapeTextCount = dataRef.current.elements.filter(
+      (element) => blockIdsToDelete.has(element.id) && hasShapeContainedText(element),
+    ).length;
+    const detachedBlocks = detachConnectorEndpointsForDeletedTargets(
+      dataRef.current.elements,
+      blockIdsToDelete,
+    );
+    if (!detachedBlocks) {
+      setConnectorBindingAnnouncement("Could not delete because a connector endpoint has no safe in-canvas detach position.");
+      return false;
+    }
+
+    setBlocksWithHistory(() => detachedBlocks.filter((block) => !blockIdsToDelete.has(block.id)));
     setSelectedBlockIds((currentBlockIds) =>
       currentBlockIds.filter((blockId) => !blockIdsToDelete.has(blockId)),
     );
@@ -2415,11 +3689,15 @@ function App() {
         ? null
         : currentBlockId,
     );
+    if (deletedShapeTextCount > 0) {
+      setConnectorBindingAnnouncement(`Deleted ${deletedShapeTextCount === 1 ? "one shape" : `${deletedShapeTextCount} shapes`} with contained text. Undo is available.`);
+    }
+    return true;
   }, []);
 
   const selectAllVisibleBlocks = useCallback(() => {
     const currentPageId = selectedPageIdRef.current;
-    const visibleBlockIds = dataRef.current.blocks
+    const visibleBlockIds = dataRef.current.elements
       .filter((block) => block.pageId === currentPageId)
       .map((block) => block.id);
 
@@ -2443,11 +3721,69 @@ function App() {
 
   useEffect(() => {
     function handleKeyboard(event: KeyboardEvent) {
+      if (guardCanvasSearchPanelKeyboardEvent(event)) return;
+      // Arrow-label inputs are lightweight canvas overlays rather than a
+      // Tiptap session. They must still own every printable key (including
+      // Space) before canvas hand/shortcut handling sees it.
+      if (isTextEntryTarget(event.target)) return;
+      // Opening the endpoint chooser is a React state transition, so the portal
+      // and its focus target may not exist for the next key in the same input
+      // burst. The ref is set synchronously by the opener and remains the
+      // authoritative modal state until close, rather than relying on the
+      // current active element to suppress canvas shortcuts.
+      if (connectorEndpointChooserRef.current !== null) {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          closeConnectorEndpointChooser();
+        }
+        return;
+      }
+      if (event.target instanceof Element && event.target.closest(".connector-endpoint-chooser")) {
+        return;
+      }
       if (activeWorkbenchOverlay) {
         return;
       }
 
+      const shapeTextSession = shapeTextEditSessionRef.current;
+      const isShapeTextToolbarTarget = event.target instanceof Element
+        && event.target.closest(".global-text-toolbar") !== null;
+      if (shapeTextSession && isShapeTextToolbarTarget) {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          shapeTextEditSessionRef.current = null;
+          shapeTextSession.session.cancel();
+          return;
+        }
+        if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+          event.preventDefault();
+          event.stopPropagation();
+          shapeTextEditSessionRef.current = null;
+          shapeTextSession.session.commit();
+          return;
+        }
+      }
+
+      if (event.key === "Escape") {
+        cancelCapturedCanvasInteractionsRef.current();
+        clearPendingImagePlacement();
+      }
+
       const currentEditingBlockId = editingBlockIdRef.current;
+
+      if (
+        event.code === "Space" &&
+        !currentEditingBlockId &&
+        !isTextEntryTarget(event.target) &&
+        isCanvasKeyboardActive
+      ) {
+        event.preventDefault();
+        isTemporaryHandActiveRef.current = true;
+        canvasRef.current?.setAttribute("data-temporary-hand", "true");
+        return;
+      }
 
       if (
         (event.metaKey || event.ctrlKey) &&
@@ -2477,9 +3813,21 @@ function App() {
         return;
       }
 
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.key.toLowerCase() === "f" &&
+        !isCanvasSearchInteractionBlocked() &&
+        !isTextEntryTarget(event.target) &&
+        !isTextEntryTarget(document.activeElement)
+      ) {
         event.preventDefault();
-        focusCanvasSearch();
+        focusCanvasSearch(
+          document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : event.target instanceof HTMLElement
+              ? event.target
+              : null,
+        );
         return;
       }
 
@@ -2539,6 +3887,87 @@ function App() {
       }
 
       if (
+        event.key === "Enter"
+        && event.target === canvasRef.current
+        && document.activeElement === canvasRef.current
+        && (
+          activeToolRef.current === "rectangle"
+          || activeToolRef.current === "ellipse"
+          || activeToolRef.current === "diamond"
+        )
+        && isCanvasAuthoringAvailableRef.current
+        && connectorEndpointChooserRef.current === null
+        && !currentEditingBlockId
+        && !event.isComposing
+        && !event.repeat
+        && !event.altKey
+        && !event.ctrlKey
+        && !event.metaKey
+        && !event.shiftKey
+      ) {
+        event.preventDefault();
+        keyboardShapeCreationRef.current(activeToolRef.current);
+        return;
+      }
+
+      if (
+        event.key === "Enter"
+        && event.target === canvasRef.current
+        && document.activeElement === canvasRef.current
+        && isKeyboardTextCreationAvailable
+        && !event.isComposing
+        && !event.repeat
+        && !event.altKey
+        && !event.ctrlKey
+        && !event.metaKey
+        && !event.shiftKey
+      ) {
+        event.preventDefault();
+        keyboardTextCreationRef.current();
+        return;
+      }
+
+      if (
+        event.key === "Enter"
+        && event.target === canvasRef.current
+        && document.activeElement === canvasRef.current
+        && activeToolRef.current === "arrow"
+        && isCanvasAuthoringAvailableRef.current
+        && connectorEndpointChooserRef.current === null
+        && !currentEditingBlockId
+        && !event.isComposing
+        && !event.repeat
+        && !event.altKey
+        && !event.ctrlKey
+        && !event.metaKey
+        && !event.shiftKey
+      ) {
+        event.preventDefault();
+        keyboardArrowCreationRef.current();
+        return;
+      }
+
+      const hasToolShortcutContext = hasCanvasToolShortcutContext(event, {
+        activeElement: document.activeElement,
+        canvasElement: canvasRef.current,
+        hasCanvasKeyboardOwnership: isCanvasKeyboardActiveRef.current,
+        isCanvasAuthoringAvailable: isCanvasAuthoringAvailableRef.current,
+        isModalOrOverlayOpen: Boolean(activeWorkbenchOverlay),
+        isTextEditing: Boolean(currentEditingBlockId),
+        target: event.target,
+      });
+      const shortcutTool = drawingToolForShortcut(event, hasToolShortcutContext);
+      if (
+        shortcutTool
+      ) {
+        event.preventDefault();
+        isCanvasKeyboardActiveRef.current = true;
+        setIsCanvasKeyboardActive(true);
+        selectDrawingTool(shortcutTool);
+        return;
+      }
+
+      if (
         !currentEditingBlockId &&
         insertionPoint &&
         selectedPageId &&
@@ -2583,20 +4012,56 @@ function App() {
         selectedBlockIds.length > 0
       ) {
         event.preventDefault();
-        deleteBlocks(selectedBlockIds);
-        setActiveMode("canvas");
+        const lockedIds = new Set(
+          dataRef.current.elements
+            .filter((element) => element.locked && selectedBlockIds.includes(element.id))
+            .map((element) => element.id),
+        );
+        if (deleteBlocks(selectedBlockIds)) {
+          setActiveMode(lockedIds.size > 0 ? "selected" : "canvas");
+        }
         return;
       }
     }
 
-    document.addEventListener("keydown", handleKeyboard);
+    function handleKeyUp(event: KeyboardEvent) {
+      if (event.code === "Space") {
+        isTemporaryHandActiveRef.current = false;
+        canvasRef.current?.removeAttribute("data-temporary-hand");
+        return;
+      }
+      if (isCanvasSearchPanelTarget(event.target)) return;
+    }
 
-    return () => document.removeEventListener("keydown", handleKeyboard);
+    function clearTemporaryHandForWindowBlur() {
+      isTemporaryHandActiveRef.current = false;
+      canvasRef.current?.removeAttribute("data-temporary-hand");
+    }
+
+    document.addEventListener("keydown", handleKeyboard);
+    document.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", clearTemporaryHandForWindowBlur);
+
+    return () => {
+      document.removeEventListener("keydown", handleKeyboard);
+      document.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", clearTemporaryHandForWindowBlur);
+      isTemporaryHandActiveRef.current = false;
+      canvasRef.current?.removeAttribute("data-temporary-hand");
+    };
   }, [
+    activeNarrowOverlay,
+    activeTextEditor,
     activeWorkbenchOverlay,
+    connectorEndpointChooser,
     deleteBlocks,
+    editingFolderId,
+    editingPageId,
     insertionPoint,
     isCanvasKeyboardActive,
+    isEditingHeaderTitle,
+    isAIProvidersOpen,
+    isKeyboardTextCreationAvailable,
     isStarterDismissed,
     isWorkspaceEmpty,
     selectAllVisibleBlocks,
@@ -2607,6 +4072,7 @@ function App() {
 
   useEffect(() => {
     function handlePaste(event: ClipboardEvent) {
+      if (isCanvasSearchPanelTarget(event.target)) return;
       if (activeWorkbenchOverlay) {
         return;
       }
@@ -2637,9 +4103,10 @@ function App() {
 
       const pastedText = event.clipboardData?.getData("text/plain");
 
-      if (pastedText && insertionPoint) {
+      if (pastedText) {
+        const pasteOrigin = getPasteOrigin();
         event.preventDefault();
-        createTextBlock(insertionPoint.x, insertionPoint.y, pastedText, {
+        createTextBlock(pasteOrigin.x, pasteOrigin.y, pastedText, {
           placement: "text-caret",
         });
       }
@@ -2657,7 +4124,7 @@ function App() {
       return;
     }
 
-    canvasContentElement.style.transform = `translate3d(${nextPanOffset.x}px, ${nextPanOffset.y}px, 0) scale(${zoomLevel})`;
+    canvasContentElement.style.transform = `translate3d(${nextPanOffset.x}px, ${nextPanOffset.y}px, 0) scale(${zoomLevelRef.current})`;
   }
 
   function scheduleCanvasContentTransform(nextPanOffset: PanOffset) {
@@ -2674,14 +4141,13 @@ function App() {
     });
   }
 
-  function hideSelectionRectangle() {
-    const selectionElement = selectionRectRef.current;
+  function clearMarquee() {
+    cleanupMarquee(selectionRafId, pendingSelectionRect, selectionRectRef);
+  }
 
-    if (!selectionElement) {
-      return;
-    }
-
-    selectionElement.style.display = "none";
+  function cancelCanvasSelectionSession() {
+    cancelCanvasSelectionRef.current();
+    clearMarquee();
   }
 
   function scheduleSelectionRectangle(rect: SelectionRect) {
@@ -2696,47 +4162,18 @@ function App() {
       const selectionElement = selectionRectRef.current;
 
       if (nextRect && selectionElement) {
+        const zoom = zoomLevelRef.current;
+        const pan = panOffsetRef.current;
         selectionElement.style.display = "block";
-        selectionElement.style.left = `${nextRect.x}px`;
-        selectionElement.style.top = `${nextRect.y}px`;
-        selectionElement.style.width = `${nextRect.width}px`;
-        selectionElement.style.height = `${nextRect.height}px`;
+        selectionElement.style.left = `${pan.x + nextRect.x * zoom}px`;
+        selectionElement.style.top = `${pan.y + nextRect.y * zoom}px`;
+        selectionElement.style.width = `${nextRect.width * zoom}px`;
+        selectionElement.style.height = `${nextRect.height * zoom}px`;
       }
 
       selectionRafId.current = null;
+      pendingSelectionRect.current = null;
     });
-  }
-
-  function getCanvasPoint(clientX: number, clientY: number): CanvasPoint | null {
-    const canvasContentElement = canvasContentRef.current;
-
-    if (!canvasContentElement) {
-      return null;
-    }
-
-    const canvasContentRect = canvasContentElement.getBoundingClientRect();
-    const scaleX =
-      canvasContentElement.offsetWidth > 0
-        ? canvasContentRect.width / canvasContentElement.offsetWidth
-        : 0;
-    const scaleY =
-      canvasContentElement.offsetHeight > 0
-        ? canvasContentRect.height / canvasContentElement.offsetHeight
-        : 0;
-
-    if (
-      !Number.isFinite(scaleX) ||
-      !Number.isFinite(scaleY) ||
-      scaleX <= 0 ||
-      scaleY <= 0
-    ) {
-      return null;
-    }
-
-    return {
-      x: (clientX - canvasContentRect.left) / scaleX,
-      y: (clientY - canvasContentRect.top) / scaleY,
-    };
   }
 
   function updateZoom(delta: number) {
@@ -2778,6 +4215,7 @@ function App() {
       return;
     }
 
+    void flushPendingPersistence();
     rememberPageViewport(selectedPageId);
     selectedPageIdRef.current = nextPageId;
     setSelectedPageId(nextPageId);
@@ -2868,7 +4306,7 @@ function App() {
       return {
         folders: nextFolders,
         pages: nextPages,
-        blocks: currentData.blocks.filter(
+        elements: currentData.elements.filter(
           (block) => !deletedPageIds.has(block.pageId),
         ),
       };
@@ -3040,11 +4478,52 @@ function App() {
     setPageSearchFocusRequest((currentRequest) => currentRequest + 1);
   }
 
-  function focusCanvasSearch() {
-    setIsSearchOpen(true);
+  function isCanvasSearchInteractionBlocked() {
+    return Boolean(
+      editingBlockIdRef.current
+      || shapeTextEditSessionRef.current
+      || isEditingHeaderTitle
+      || editingFolderId
+      || editingPageId
+      || connectorEndpointChooser
+      || activeNarrowOverlay
+      || isAIProvidersOpen
+      || document.querySelector(
+        '.slash-command-popup, .connector-endpoint-chooser, [role="dialog"], [aria-modal="true"]',
+      )
+    );
+  }
+
+  function focusCanvasSearch(trigger?: HTMLElement | null) {
+    if (isCanvasSearchInteractionBlocked()) return;
+    if (!isSearchOpen) {
+      searchReturnFocusRef.current = trigger?.isConnected && trigger !== document.body
+        ? trigger
+        : canvasRef.current;
+      setIsSearchOpen(true);
+    }
     window.requestAnimationFrame(() => {
       searchInputRef.current?.focus();
       searchInputRef.current?.select();
+    });
+  }
+
+  function closeCanvasSearch({ restoreFocus = true }: { restoreFocus?: boolean } = {}) {
+    const returnFocusTarget = searchReturnFocusRef.current;
+    searchReturnFocusRef.current = null;
+    setIsSearchOpen(false);
+    setSearchQuery("");
+    if (!restoreFocus) return;
+    window.requestAnimationFrame(() => {
+      const fallbackTarget = canvasSearchButtonRef.current?.isConnected
+        && !canvasSearchButtonRef.current.disabled
+        ? canvasSearchButtonRef.current
+        : canvasRef.current;
+      const focusTarget = returnFocusTarget?.isConnected
+        && !(returnFocusTarget instanceof HTMLButtonElement && returnFocusTarget.disabled)
+        ? returnFocusTarget
+        : fallbackTarget;
+      focusTarget?.focus({ preventScroll: true });
     });
   }
 
@@ -3160,8 +4639,10 @@ function App() {
       page,
       ...(includeBlocks
         ? {
-            blocks: dataRef.current.blocks
-              .filter((block) => block.pageId === page.id)
+            blocks: dataRef.current.elements
+              .filter((block): block is TextElement =>
+                block.pageId === page.id && isTextElement(block),
+              )
               .sort(compareToolBlocksByPosition)
               .map(toToolBlock),
           }
@@ -3172,8 +4653,10 @@ function App() {
   function getSelectedTextBlocks() {
     const selectedIds = new Set(selectedBlockIdsRef.current);
 
-    return dataRef.current.blocks
-      .filter((block) => selectedIds.has(block.id))
+    return dataRef.current.elements
+      .filter((block): block is TextElement =>
+        selectedIds.has(block.id) && isTextElement(block),
+      )
       .sort(compareToolBlocksByPosition);
   }
 
@@ -3185,9 +4668,10 @@ function App() {
 
     const pages = dataRef.current.pages
       .map((page) => {
-        const matchedBlocks = dataRef.current.blocks.filter(
-          (block) =>
+        const matchedBlocks = dataRef.current.elements.filter(
+          (block): block is TextElement =>
             block.pageId === page.id &&
+            isTextElement(block) &&
             block.content.toLocaleLowerCase().includes(normalizedQuery),
         );
         const titleMatches = page.title.toLocaleLowerCase().includes(normalizedQuery);
@@ -3229,7 +4713,10 @@ function App() {
       content,
       textFormatStateRef.current,
     );
-    const block: TextBlock = {
+    const timestamp = Date.now();
+    const block: TextElement = {
+      backgroundMode: textPreferencesRef.current.backgroundMode,
+      createdAt: timestamp,
       id: blockId,
       pageId: page.id,
       x: blockPosition.x,
@@ -3237,6 +4724,12 @@ function App() {
       width: DEFAULT_BLOCK_WIDTH,
       height: DEFAULT_BLOCK_HEIGHT,
       content,
+      locked: false,
+      opacity: 1,
+      rotation: 0,
+      type: "text",
+      updatedAt: timestamp,
+      zIndex: dataRef.current.elements.length,
       ...(formattedRichContent ? { richContent: formattedRichContent } : {}),
       isWidthManuallyResized: false,
     };
@@ -3271,7 +4764,7 @@ function App() {
       throw new Error("At least one block field is required.");
     }
 
-    const nextBlock: TextBlock = {
+    const nextBlock: TextElement = {
       ...block,
       ...(content !== undefined ? { content, richContent: undefined } : {}),
       ...(x !== undefined ? { x } : {}),
@@ -3308,7 +4801,9 @@ function App() {
       throw new Error("User denied approval for note.deleteBlock.");
     }
 
-    deleteBlocks([blockId]);
+    if (!deleteBlocks([blockId])) {
+      throw new Error("Block could not be deleted because a connector endpoint has no safe in-canvas detach position.");
+    }
 
     return { deletedBlockId: blockId };
   }
@@ -3438,7 +4933,7 @@ function App() {
 
   function getActivePageBlockForTool(blockId: string) {
     const page = getActivePageForTool();
-    const block = dataRef.current.blocks.find((currentBlock) => currentBlock.id === blockId);
+    const block = dataRef.current.elements.find((currentBlock) => currentBlock.id === blockId);
 
     if (!block) {
       throw new Error("blockId does not exist.");
@@ -3446,14 +4941,14 @@ function App() {
     if (block.pageId !== page.id) {
       throw new Error("Mutating Note tools are scoped to the active page.");
     }
-    if (block.imageData) {
+    if (!isTextElement(block)) {
       throw new Error("Only text blocks are supported by Note tools.");
     }
 
     return block;
   }
 
-  function toToolBlock(block: TextBlock) {
+  function toToolBlock(block: TextElement) {
     return {
       content: block.content,
       height: block.height,
@@ -3465,7 +4960,7 @@ function App() {
     };
   }
 
-  function compareToolBlocksByPosition(firstBlock: TextBlock, secondBlock: TextBlock) {
+  function compareToolBlocksByPosition(firstBlock: TextElement, secondBlock: TextElement) {
     return (
       firstBlock.y - secondBlock.y ||
       firstBlock.x - secondBlock.x ||
@@ -3882,7 +5377,7 @@ function App() {
       return false;
     }
 
-    const selectedBlock = dataRef.current.blocks.find(
+    const selectedBlock = dataRef.current.elements.find(
       (block) => block.id === selectedBlockId,
     );
 
@@ -3892,7 +5387,7 @@ function App() {
       return false;
     }
 
-    if (selectedBlock.imageData) {
+    if (!isTextElement(selectedBlock)) {
       setAssistantError("Select one text block before using this assistant action.");
       setAssistantStatus(null);
       return false;
@@ -3945,6 +5440,7 @@ function App() {
       return;
     }
 
+    void flushPendingPersistence();
     const closedTabIndex = currentTabIds.indexOf(pageId);
     const nextTabIds = currentTabIds.filter((currentPageId) => currentPageId !== pageId);
 
@@ -4061,7 +5557,7 @@ function App() {
 
     const templatePageId = createId("template-page");
     const templateBlocks = cloneBlocksForPage(
-      currentData.blocks.filter((block) => block.pageId === sourcePageId),
+      currentData.elements.filter((block) => block.pageId === sourcePageId),
       templatePageId,
     );
     const nextData = {
@@ -4074,7 +5570,7 @@ function App() {
           title: sourcePage.title,
         },
       ],
-      blocks: [...currentData.blocks, ...templateBlocks],
+      elements: [...currentData.elements, ...templateBlocks],
     };
 
     dataRef.current = nextData;
@@ -4099,10 +5595,10 @@ function App() {
         ...currentData.pages,
         { id: pageId, folderId, title: templatePage.title },
       ],
-      blocks: [
-        ...currentData.blocks,
+      elements: [
+        ...currentData.elements,
         ...cloneBlocksForPage(
-          currentData.blocks.filter((block) => block.pageId === templatePageId),
+          currentData.elements.filter((block) => block.pageId === templatePageId),
           pageId,
         ),
       ],
@@ -4139,7 +5635,7 @@ function App() {
     const nextData = {
       ...currentData,
       pages: currentData.pages.filter((page) => page.id !== templatePageId),
-      blocks: currentData.blocks.filter(
+      elements: currentData.elements.filter(
         (block) => block.pageId !== templatePageId,
       ),
     };
@@ -4301,7 +5797,7 @@ function App() {
       return {
         ...currentData,
         pages: nextPages,
-        blocks: currentData.blocks.filter((block) => block.pageId !== pageId),
+        elements: currentData.elements.filter((block) => block.pageId !== pageId),
       };
     });
   }
@@ -4317,6 +5813,7 @@ function App() {
     if (!nextPage) {
       return;
     }
+    finishActiveShapeTextEdit();
 
     if (isMultiSelect) {
       toggleSidebarPageSelection(pageId);
@@ -4363,6 +5860,40 @@ function App() {
     return snapPoint(point);
   }
 
+  function buildTextElement(
+    blockId: string,
+    blockPosition: CanvasPoint,
+    content: string,
+    pageId: string,
+    zIndex: number,
+    timestamp = Date.now(),
+  ): TextElement {
+    const formattedRichContent = createFormattedRichContent(
+      content,
+      textFormatStateRef.current,
+    );
+
+    return {
+      backgroundMode: textPreferencesRef.current.backgroundMode,
+      createdAt: timestamp,
+      id: blockId,
+      locked: false,
+      opacity: 1,
+      pageId,
+      rotation: 0,
+      type: "text",
+      updatedAt: timestamp,
+      x: blockPosition.x,
+      y: blockPosition.y,
+      width: DEFAULT_BLOCK_WIDTH,
+      height: DEFAULT_BLOCK_HEIGHT,
+      content,
+      ...(formattedRichContent ? { richContent: formattedRichContent } : {}),
+      isWidthManuallyResized: false,
+      zIndex,
+    };
+  }
+
   function createTextBlock(
     x: number,
     y: number,
@@ -4375,24 +5906,18 @@ function App() {
 
     const blockId = createId("block");
     const blockPosition = getTextBlockPositionForCreation({ x, y }, options);
-    const formattedRichContent = createFormattedRichContent(
-      content,
-      textFormatStateRef.current,
-    );
+    const timestamp = Date.now();
 
     setBlocksWithHistory((currentBlocks) => [
       ...currentBlocks,
-      {
-        id: blockId,
-        pageId: selectedPageId,
-        x: blockPosition.x,
-        y: blockPosition.y,
-        width: DEFAULT_BLOCK_WIDTH,
-        height: DEFAULT_BLOCK_HEIGHT,
+      buildTextElement(
+        blockId,
+        blockPosition,
         content,
-        ...(formattedRichContent ? { richContent: formattedRichContent } : {}),
-        isWidthManuallyResized: false,
-      },
+        selectedPageId,
+        currentBlocks.length,
+        timestamp,
+      ),
     ]);
     editingBlockIdRef.current = blockId;
     setSelectedBlockIds([blockId]);
@@ -4401,36 +5926,326 @@ function App() {
     setIsCanvasKeyboardActive(true);
     setActiveMode("editing");
     setInsertionPoint(null);
+    if (options.fromTool) {
+      const nextTool = drawingToolAfterCreation("text", isToolLockedRef.current);
+      if (nextTool !== "text") {
+        activeToolRef.current = nextTool;
+        setActiveTool(nextTool);
+      }
+    }
   }
 
-  function createImageBlock(
+  function announceDirectText(message: string) {
+    directTextAnnouncementSequenceRef.current += 1;
+    setConnectorBindingAnnouncement(
+      `Text entry ${directTextAnnouncementSequenceRef.current}. ${message}`,
+    );
+  }
+
+  function startDirectTextDraft(
+    point: CanvasPoint,
+    source: DirectTextDraft["source"],
+    returnFocus: HTMLElement | null = canvasRef.current,
+    previousSelection: readonly string[] = selectedBlockIdsRef.current,
+  ) {
+    const pageId = selectedPageIdRef.current;
+    const activeTool = activeToolRef.current;
+    if (!pageId || !canStartDirectTextEntry({
+      activeTool,
+      hasConnectorChooser: connectorEndpointChooserRef.current !== null,
+      hasDirectDraft: directTextDraftRef.current !== null,
+      hasPendingImage: pendingImagePlacementRef.current !== null,
+      isCanvasAuthoringAvailable: isCanvasAuthoringAvailableRef.current,
+      isEditingText: editingBlockIdRef.current !== null,
+      isModalOrOverlayOpen: isWorkbenchOverlayOpenRef.current || isAIProvidersOpen,
+      source,
+    })) {
+      return false;
+    }
+
+    const rect = getDirectTextDraftRect(point);
+    if (!rect) {
+      announceDirectText("Text was not created because the requested position exceeds the safe canvas boundary.");
+      return false;
+    }
+
+    const blockId = createId("block");
+    const draft: DirectTextDraft = {
+      block: buildTextElement(
+        blockId,
+        { x: rect.x, y: rect.y },
+        "",
+        pageId,
+        dataRef.current.elements.length,
+      ),
+      previousSelection: [...previousSelection],
+      previousTool: activeTool,
+      returnFocus,
+      source,
+    };
+
+    directTextDraftRef.current = draft;
+    setDirectTextDraft(draft);
+    selectedBlockIdsRef.current = [blockId];
+    setSelectedBlockIds([blockId]);
+    editingBlockIdRef.current = blockId;
+    setEditingBlockId(blockId);
+    setFocusEndBlockId(blockId);
+    setInsertionPoint(null);
+    setIsCanvasKeyboardActive(true);
+    setActiveMode("editing");
+    announceDirectText("Editing a new text block. Escape cancels; Control+Enter saves.");
+    return true;
+  }
+
+  function restoreDirectTextDraftContext(draft: DirectTextDraft) {
+    const retainedSelection = draft.previousSelection.filter((id) =>
+      dataRef.current.elements.some((element) => element.id === id),
+    );
+    selectedBlockIdsRef.current = retainedSelection;
+    setSelectedBlockIds(retainedSelection);
+    activeToolRef.current = draft.previousTool;
+    setActiveTool(draft.previousTool);
+    setIsCanvasKeyboardActive(true);
+    setActiveMode(retainedSelection.length > 0 ? "selected" : "canvas");
+
+    if (directTextFocusReturnRafRef.current !== null) {
+      window.cancelAnimationFrame(directTextFocusReturnRafRef.current);
+    }
+    directTextFocusReturnRafRef.current = window.requestAnimationFrame(() => {
+      directTextFocusReturnRafRef.current = null;
+      const activeElement = document.activeElement;
+      if (activeElement && activeElement !== document.body) return;
+      (draft.returnFocus?.isConnected ? draft.returnFocus : canvasRef.current)
+        ?.focus({ preventScroll: true });
+    });
+  }
+
+  function cancelDirectTextDraft(blockId: string) {
+    const draft = directTextDraftRef.current;
+    if (!draft || draft.block.id !== blockId) return false;
+
+    directTextDraftRef.current = null;
+    setDirectTextDraft(null);
+    editingBlockIdRef.current = null;
+    setEditingBlockId(null);
+    setActiveTextEditor(null);
+    setFocusEndBlockId(null);
+    restoreDirectTextDraftContext(draft);
+    announceDirectText("Empty text creation canceled. Nothing was saved.");
+    return true;
+  }
+
+  function commitDirectTextDraft(blockId: string, updates: BlockUpdates) {
+    const draft = directTextDraftRef.current;
+    if (!draft || draft.block.id !== blockId) return false;
+    const nextUpdates = snapManualResizeUpdates(updates);
+    const candidate: TextElement = {
+      ...draft.block,
+      ...nextUpdates,
+      updatedAt: Date.now(),
+    };
+    const hasContent = candidate.content.trim().length > 0 || Boolean(
+      candidate.richContent && hasTipTapRenderableContent(candidate.richContent),
+    );
+    if (!hasContent) return cancelDirectTextDraft(blockId);
+    if (
+      !isPersistableShapeRect(candidate) ||
+      candidate.richContent && validateRichTextDocument(candidate.richContent) !== null
+    ) {
+      cancelDirectTextDraft(blockId);
+      announceDirectText("Text was not created because its content or geometry is not persistence-safe.");
+      return false;
+    }
+
+    directTextDraftRef.current = null;
+    setDirectTextDraft(null);
+    setBlocksWithHistory((currentBlocks) =>
+      currentBlocks.some((element) => element.id === blockId)
+        ? currentBlocks
+        : [...currentBlocks, { ...candidate, zIndex: currentBlocks.length }],
+    );
+    if (draft.previousTool === "text") {
+      const nextTool = drawingToolAfterCreation("text", isToolLockedRef.current);
+      activeToolRef.current = nextTool;
+      setActiveTool(nextTool);
+    }
+    announceDirectText("Text block created.");
+    return true;
+  }
+
+  function readBlobAsDataUrl(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error ?? new Error("Could not read image data."));
+      reader.onload = () =>
+        typeof reader.result === "string"
+          ? resolve(reader.result)
+          : reject(new Error("Could not read image data."));
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  function clearPendingImagePlacement() {
+    imagePickerRequestRef.current += 1;
+    pendingImagePlacementRef.current = null;
+    setPendingImagePlacement(null);
+  }
+
+  function requestImagePicker() {
+    setImageImportError(null);
+    activeToolRef.current = "image";
+    setActiveTool("image");
+    const input = imagePickerInputRef.current;
+    if (input) {
+      input.value = "";
+      input.click();
+    }
+  }
+
+  function selectDrawingTool(tool: DrawingTool) {
+    cancelCanvasInteractionTransitionRef.current();
+    finishActiveShapeTextEdit();
+    isCanvasKeyboardActiveRef.current = true;
+    setIsCanvasKeyboardActive(true);
+    if (tool === "image") {
+      requestImagePicker();
+      return;
+    }
+    clearPendingImagePlacement();
+    activeToolRef.current = tool;
+    setActiveTool(tool);
+    setInsertionPoint(null);
+  }
+
+  async function handleImageFileSelected(file: File | undefined) {
+    if (!file || !file.type.startsWith("image/")) return;
+    if (rejectOversizedImageBlob(file)) return;
+    setImageImportError(null);
+    const requestId = imagePickerRequestRef.current + 1;
+    imagePickerRequestRef.current = requestId;
+    let dataUrl: string;
+    try {
+      dataUrl = await readBlobAsDataUrl(file);
+    } catch {
+      return;
+    }
+    if (imagePickerRequestRef.current !== requestId) return;
+    const pending = {
+      dataUrl,
+      fileName: file.name || "Canvas image",
+      point: null,
+    };
+    pendingImagePlacementRef.current = pending;
+    setPendingImagePlacement(pending);
+  }
+
+  function placePendingImage(point: CanvasPoint) {
+    const pending = pendingImagePlacementRef.current;
+    if (!pending) {
+      requestImagePicker();
+      return;
+    }
+    void createImageBlock(point.x, point.y, pending.dataUrl, pending.fileName);
+    const nextTool = drawingToolAfterCreation("image", isToolLockedRef.current);
+    if (nextTool !== "image") {
+      clearPendingImagePlacement();
+      activeToolRef.current = nextTool;
+      setActiveTool(nextTool);
+    }
+  }
+
+  async function managedImageDataUrl(source: string): Promise<string> {
+    if (source.startsWith("data:image/")) {
+      return source;
+    }
+    const response = await fetch(source);
+    if (!response.ok) {
+      throw new Error(`Could not download pasted image (${response.status}).`);
+    }
+    const blob = await response.blob();
+    if (!isAssetBlobWithinLimit(blob)) {
+      throw new Error(`Image exceeds the ${MAX_ASSET_BYTES / (1024 * 1024)} MiB size limit.`);
+    }
+    return readBlobAsDataUrl(blob);
+  }
+
+  function rejectOversizedImageBlob(blob: Pick<Blob, "size">): boolean {
+    if (isAssetBlobWithinLimit(blob)) return false;
+    const message = `Image exceeds the ${MAX_ASSET_BYTES / (1024 * 1024)} MiB size limit.`;
+    setImageImportError(message);
+    setPersistenceStatus({
+      kind: "failed",
+      error: new Error(message),
+    });
+    return true;
+  }
+
+  async function createImageBlock(
     x: number,
     y: number,
     imageData: string,
     imageName: string,
   ) {
-    if (!selectedPageId) {
+    const pageId = selectedPageIdRef.current;
+    if (!pageId) {
       return;
     }
 
     const blockId = createId("block");
+    let assetId = createId("image-asset");
+    let sourceForDisplay = imageData;
+    let naturalWidth = 320;
+    let naturalHeight = 220;
+    const repository = repositoryRef.current;
+    if (repository) {
+      try {
+        const managedDataUrl = await managedImageDataUrl(imageData);
+        const asset = await repository.saveAsset(
+          assetRequestFromDataUrl(managedDataUrl, { fileName: imageName }),
+        );
+        assetId = asset.id;
+        sourceForDisplay = managedDataUrl;
+        naturalWidth = asset.naturalWidth ?? naturalWidth;
+        naturalHeight = asset.naturalHeight ?? naturalHeight;
+      } catch (reason) {
+        const error = reason instanceof Error ? reason : new Error(String(reason));
+        // Keep the user-visible image in memory and let the normal retry path
+        // upload it before the scene batch is ever sent.
+        pendingAssetUploadsRef.current.set(assetId, {
+          dataUrl: imageData,
+          fileName: imageName,
+        });
+        setPersistenceStatus({ kind: "failed", error });
+      }
+    }
     const blockPosition = snapPoint({ x, y });
+    const timestamp = Date.now();
 
     setBlocksWithHistory((currentBlocks) => [
       ...currentBlocks,
       {
+        assetId,
+        createdAt: timestamp,
+        fileName: imageName,
+        fit: "contain",
         id: blockId,
-        pageId: selectedPageId,
+        locked: false,
+        naturalHeight,
+        naturalWidth,
+        opacity: 1,
+        pageId,
+        rotation: 0,
+        type: "image",
+        updatedAt: timestamp,
         x: blockPosition.x,
         y: blockPosition.y,
-        width: 320,
-        height: 220,
-        content: imageName,
-        isWidthManuallyResized: true,
-        imageData,
-        imageName,
+        width: naturalWidth,
+        height: naturalHeight,
+        zIndex: currentBlocks.length,
       },
     ]);
+    imageSourcesByAssetIdRef.current.set(assetId, sourceForDisplay);
     setSelectedBlockIds([blockId]);
     setEditingBlockId(null);
     setIsCanvasKeyboardActive(true);
@@ -4443,7 +6258,7 @@ function App() {
 
     setData((currentData) => {
       let didChange = false;
-      const nextBlocks = currentData.blocks.map((block) => {
+      const nextBlocks = currentData.elements.map((block) => {
         if (block.id !== blockId) {
           return block;
         }
@@ -4457,11 +6272,106 @@ function App() {
         }
 
         didChange = true;
-        return { ...block, ...nextUpdates };
+        return { ...block, ...nextUpdates, updatedAt: Date.now() };
       });
 
-      return didChange ? { ...currentData, blocks: nextBlocks } : currentData;
+      return didChange ? { ...currentData, elements: nextBlocks } : currentData;
     });
+  }, []);
+
+  const updateShapeText = useCallback((elementId: string, text: RichTextValue | undefined) => {
+    setBlocksWithHistory((elements) => elements.map((element) => {
+      if (element.id !== elementId || element.type !== "shape") return element;
+      if (JSON.stringify(element.text) === JSON.stringify(text)) return element;
+      if (!text) {
+        const { text: _text, ...shapeWithoutText } = element;
+        return { ...shapeWithoutText, updatedAt: Date.now() };
+      }
+      return { ...element, text: cloneRichTextValue(text), updatedAt: Date.now() };
+    }));
+  }, []);
+
+  const updateConnectorLabel = useCallback((elementId: string, label: string | undefined) => {
+    setBlocksWithHistory((elements) => elements.map((element) => {
+      if (element.id !== elementId || element.type !== "connector" || !isArrowConnector(element)) return element;
+      const previousLabel = element.semantic?.label;
+      if (previousLabel === label) return element;
+      const semantic = label
+        ? { ...element.semantic, label }
+        : (() => {
+            const { label: _label, ...rest } = element.semantic ?? {};
+            return Object.keys(rest).length > 0 ? rest : undefined;
+          })();
+      return { ...element, ...(semantic ? { semantic } : { semantic: undefined }), updatedAt: Date.now() };
+    }));
+  }, []);
+
+  const updateImageElement = useCallback((elementId: string, updates: ImageElementUpdates) => {
+    setData((currentData) => {
+      let didChange = false;
+      const elements = currentData.elements.map((element) => {
+        if (element.id !== elementId || element.type !== "image") return element;
+        const hasChanges = Object.entries(updates).some(
+          ([key, value]) => element[key as keyof ImageElement] !== value,
+        );
+        if (!hasChanges) return element;
+        didChange = true;
+        return { ...element, ...updates, updatedAt: Date.now() };
+      });
+      return didChange ? { ...currentData, elements } : currentData;
+    });
+  }, []);
+
+  const updateInkElement = useCallback((elementId: string, updates: { x?: number; y?: number }) => {
+    setBlocksWithHistory((currentElements) => currentElements.map((element) =>
+      element.id === elementId && element.type === "ink" && !element.locked
+        ? { ...element, ...updates, updatedAt: Date.now() }
+        : element,
+    ));
+  }, []);
+
+  const resizeInkElement = useCallback((elementId: string, ratio: number) => {
+    setBlocksWithHistory((currentElements) => currentElements.map((element) =>
+      element.id === elementId && element.type === "ink" && !element.locked
+        ? { ...scaleInkElement(element, ratio), updatedAt: Date.now() }
+        : element,
+    ));
+  }, []);
+
+  const moveCanvasElementByKeyboard = useCallback((elementId: string, delta: Readonly<{ x: number; y: number }>) => {
+    const currentSelectedIds = selectedBlockIdsRef.current;
+    const selectedElements = currentSelectedIds
+      .map((selectedId) => dataRef.current.elements.find((element) => element.id === selectedId))
+      .filter((element): element is CanvasElement => Boolean(element));
+    const shouldMoveAllSelectedText =
+      currentSelectedIds.includes(elementId) &&
+      selectedElements.length > 1 &&
+      selectedElements.length === currentSelectedIds.length &&
+      selectedElements.every((element) => element.type === "text");
+    const elementIds = new Set(shouldMoveAllSelectedText ? currentSelectedIds : [elementId]);
+    setBlocksWithHistory((currentElements) =>
+      translateSelection(currentElements, elementIds, delta),
+    );
+    setActiveMode("selected");
+  }, []);
+
+  const eraseCanvasElements = useCallback((elementIds: readonly string[]) => {
+    const ids = new Set(elementIds);
+    if (ids.size === 0) return;
+    const detachedElements = detachConnectorEndpointsForDeletedTargets(dataRef.current.elements, ids);
+    if (!detachedElements) {
+      setConnectorBindingAnnouncement("Could not erase because a connector endpoint has no safe in-canvas detach position.");
+      return;
+    }
+    setBlocksWithHistory(() =>
+      detachedElements.filter((element) => element.locked || !ids.has(element.id)),
+    );
+    const nextSelection = selectedBlockIdsRef.current.filter((id) => !ids.has(id));
+    selectedBlockIdsRef.current = nextSelection;
+    setSelectedBlockIds(nextSelection);
+    setEditingBlockId(null);
+    setInsertionPoint(null);
+    setActiveMode(nextSelection.length > 0 ? "selected" : "canvas");
   }, []);
 
   const registerBlockElement = useCallback(
@@ -4470,15 +6380,23 @@ function App() {
         blockElementsRef.current.set(blockId, element);
 
         const dragSession = dragLayerSessionRef.current;
+        const resizeSession = resizeLayerSessionRef.current;
 
-        if (dragSession?.blockIds.includes(blockId)) {
+        const isResizeSource = resizeSession?.items.some((item) => item.element.id === blockId);
+        if (dragSession?.blockIds.includes(blockId) || isResizeSource) {
           element.classList.add("is-drag-source-hidden");
 
-          if (!dragSession.sourceElements.includes(element)) {
+          if (dragSession && !dragSession.sourceElements.includes(element)) {
             dragSession.sourceElements = [
               ...dragSession.sourceElements.filter(
                 (sourceElement) => sourceElement.isConnected,
               ),
+              element,
+            ];
+          }
+          if (resizeSession && !resizeSession.sourceElements.includes(element)) {
+            resizeSession.sourceElements = [
+              ...resizeSession.sourceElements.filter((sourceElement) => sourceElement.isConnected),
               element,
             ];
           }
@@ -4493,11 +6411,6 @@ function App() {
   );
 
   function cleanupDragLayerSession(session: DragLayerSession) {
-    if (session.modeRafId !== null) {
-      window.cancelAnimationFrame(session.modeRafId);
-      session.modeRafId = null;
-    }
-
     if (session.autoPanRafId !== null) {
       window.cancelAnimationFrame(session.autoPanRafId);
       session.autoPanRafId = null;
@@ -4506,8 +6419,149 @@ function App() {
     for (const sourceElement of session.sourceElements) {
       sourceElement.classList.remove("is-drag-source-hidden");
     }
+    for (const sourceElement of session.connectorSourceElements) {
+      sourceElement.classList.remove("is-drag-source-hidden");
+    }
+    cleanupConnectorPreviewLayer(session.connectorPreviewElements);
 
     session.overlayElement.remove();
+    document.body.classList.remove("is-interacting");
+  }
+
+  function getBoundConnectorIdsForTargets(
+    elements: readonly CanvasElement[],
+    targetIds: ReadonlySet<string>,
+  ) {
+    return new Set(elements.flatMap((element) => {
+      if (element.type !== "connector") return [];
+      return [element.start, element.end].some((endpoint) =>
+        endpoint.kind === "element" && targetIds.has(endpoint.targetElementId),
+      ) ? [element.id] : [];
+    }));
+  }
+
+  function indexCanvasElements(elements: readonly CanvasElement[]) {
+    return Object.fromEntries(elements.map((element) => [element.id, element]));
+  }
+
+  function renderTransientConnectorPreviews(
+    elementsById: Readonly<Record<string, CanvasElement>>,
+    connectorIds: ReadonlySet<string>,
+    previewLayer: ConnectorPreviewLayer,
+  ) {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const zoom = zoomLevelRef.current;
+    const pan = panOffsetRef.current;
+    const canvasBounds = canvas.getBoundingClientRect();
+    const records = connectorIds.size <= 32 ? new Map<string, ConnectorPreviewRecord>() : null;
+    const commands: ConnectorPreviewCommand[] = [];
+    const labels: Array<{ angle: number; color: string; fontFamily: string; fontSize: string; label: string; x: number; y: number; zIndex: number }> = [];
+    let sceneIndex = 0;
+    forEachAffectedConnectorGeometry(elementsById, connectorIds, ({ connector, points }) => {
+      if (!points) return;
+      const start = { x: pan.x + points.start.x * zoom, y: pan.y + points.start.y * zoom };
+      const end = { x: pan.x + points.end.x * zoom, y: pan.y + points.end.y * zoom };
+      if (records) {
+        const padding = Math.max(8, connector.style.strokeWidth * 2) * zoom;
+        records.set(connector.id, {
+          bounds: {
+            height: Math.max(1, Math.abs(end.y - start.y) + padding * 2),
+            left: Math.min(start.x, end.x) - padding,
+            top: Math.min(start.y, end.y) - padding,
+            width: Math.max(1, Math.abs(end.x - start.x) + padding * 2),
+          },
+          end: points.end,
+          start: points.start,
+        });
+      }
+      commands.push({
+        end,
+        endArrowhead: connector.style.endArrowhead,
+        ...(getConnectorLabel(connector) ? { labelGapHalfLength: getConnectorLabelGapHalfLength(
+          getConnectorLabel(connector)!,
+          resolveConnectorLabelStyle(connector.labelStyle),
+          0,
+          points.start,
+          points.end,
+        ) * zoom } : {}),
+        opacity: connector.opacity,
+        roughness: connector.style.roughness * zoom,
+        sceneIndex: sceneIndex++,
+        seed: connector.style.seed,
+        start,
+        startArrowhead: connector.style.startArrowhead,
+        stroke: resolvedPreviewColor(connector.style.strokeColor, isDarkMode),
+        strokeStyle: connector.style.strokeStyle,
+        strokeWidth: connector.style.strokeWidth * zoom,
+        visualScale: zoom,
+        zIndex: connector.zIndex,
+      });
+      const label = getConnectorLabel(connector);
+      if (label) {
+        const labelStyle = resolveConnectorLabelStyle(connector.labelStyle);
+        labels.push({
+          angle: readableConnectorLabelAngle(start, end, labelStyle.orientation),
+          color: resolvedPreviewColor(labelStyle.color, isDarkMode),
+          fontFamily: labelStyle.fontFamily,
+          fontSize: `${connectorLabelFontPixels(labelStyle.fontSize) * zoom}px`,
+          label,
+          x: (start.x + end.x) / 2,
+          y: (start.y + end.y) / 2,
+          zIndex: connector.zIndex,
+        });
+      }
+    });
+    if (commands.length === 0) {
+      cleanupConnectorPreviewLayer(previewLayer);
+      return;
+    }
+    if (!previewLayer.renderer) {
+      const preview = document.createElement("canvas") as ConnectorPreviewElement;
+      preview.className = "connector-transform-preview connector-transform-preview-layer";
+      preview.setAttribute("aria-hidden", "true");
+      preview.style.height = "100%";
+      preview.style.inset = "0";
+      preview.style.pointerEvents = "none";
+      preview.style.position = "absolute";
+      preview.style.width = "100%";
+      preview.style.zIndex = "18";
+      canvas.append(preview);
+      previewLayer.renderer = new ConnectorPreviewCanvas(preview);
+    }
+    if (!previewLayer.labels) {
+      const labelLayer = document.createElement("div");
+      labelLayer.className = "connector-transform-preview-labels";
+      labelLayer.setAttribute("aria-hidden", "true");
+      labelLayer.style.inset = "0";
+      labelLayer.style.pointerEvents = "none";
+      labelLayer.style.position = "absolute";
+      labelLayer.style.zIndex = "19";
+      canvas.append(labelLayer);
+      previewLayer.labels = labelLayer;
+    }
+    previewLayer.labels.replaceChildren(...labels.map((entry) => {
+      const label = document.createElement("span");
+      label.className = "connector-label";
+      label.textContent = entry.label;
+      label.style.color = entry.color;
+      label.style.fontFamily = entry.fontFamily;
+      label.style.fontSize = entry.fontSize;
+      label.style.left = `${entry.x}px`;
+      label.style.top = `${entry.y}px`;
+      label.style.transform = `translate(-50%, -50%) rotate(${entry.angle}deg)`;
+      label.style.zIndex = `${entry.zIndex}`;
+      return label;
+    }));
+    const preview = previewLayer.renderer.element as ConnectorPreviewElement;
+    preview.__connectorPreviewRecords = records ?? undefined;
+    preview.dataset.connectorCount = `${commands.length}`;
+    previewLayer.renderer.render({
+      commands: commands.sort(compareConnectorPreviewStack),
+      devicePixelRatio: Math.max(1, window.devicePixelRatio || 1),
+      height: canvasBounds.height,
+      width: canvasBounds.width,
+    });
   }
 
   function selectDraggedBlocks(blockIds: string[]) {
@@ -4568,6 +6622,23 @@ function App() {
     }px, ${
       session.currentClientY - session.startClientY
     }px, 0)`;
+    const previewElements = translateSelection(
+      session.selectedElements,
+      session.selectedIds,
+      getDragCommitOffset(session),
+    );
+    const previewElementsById = overlayTransformedElements(session.baseElementsById, previewElements);
+    renderTransientConnectorPreviews(
+      previewElementsById,
+      session.affectedConnectorIds,
+      session.connectorPreviewElements,
+    );
+    const previewBounds = getPreviewSelectionFrameGeometry(
+      previewElements,
+      session.selectedIds,
+      previewElementsById,
+    );
+    if (previewBounds) previewSelectionFrameVisualBounds(previewBounds);
   }
 
   function getDragCommitOffset(session: DragLayerSession): PanOffset {
@@ -4585,7 +6656,7 @@ function App() {
     };
   }
 
-  function scheduleDragAutoPan(session: DragLayerSession) {
+  function scheduleDragFrame(session: DragLayerSession) {
     if (session.autoPanRafId !== null) {
       return;
     }
@@ -4602,17 +6673,23 @@ function App() {
         session.currentClientY,
       );
 
-      if (panDelta.x === 0 && panDelta.y === 0) {
-        return;
+      if (panDelta.x !== 0 || panDelta.y !== 0) {
+        scheduleCanvasContentTransform({
+          x: panOffsetRef.current.x + panDelta.x,
+          y: panOffsetRef.current.y + panDelta.y,
+        });
       }
-
-      scheduleCanvasContentTransform({
-        x: panOffsetRef.current.x + panDelta.x,
-        y: panOffsetRef.current.y + panDelta.y,
-      });
       updateDragLayerVisual(session);
-      scheduleDragAutoPan(session);
+      if (panDelta.x !== 0 || panDelta.y !== 0) scheduleDragFrame(session);
     });
+  }
+
+  function flushDragFrame(session: DragLayerSession) {
+    if (session.autoPanRafId !== null) {
+      window.cancelAnimationFrame(session.autoPanRafId);
+      session.autoPanRafId = null;
+    }
+    updateDragLayerVisual(session);
   }
 
   const startVisualDrag = useCallback(
@@ -4626,7 +6703,22 @@ function App() {
       const isGroupDrag =
         currentSelectedBlockIds.includes(originId) &&
         currentSelectedBlockIds.length > 1;
-      const requestedBlockIds = isGroupDrag ? currentSelectedBlockIds : [originId];
+      const selectedBlockIds = isGroupDrag ? [...currentSelectedBlockIds] : [originId];
+      const requestedBlockIds = selectedBlockIds
+        .filter((blockId) => {
+          const block = dataRef.current.elements.find((element) => element.id === blockId);
+          return Boolean(block && !block.locked);
+        });
+      const affectedConnectorIds = getBoundConnectorIdsForTargets(
+        dataRef.current.elements,
+        new Set(requestedBlockIds),
+      );
+      const baseElementsById = indexCanvasElements(dataRef.current.elements);
+      const selectedIds = new Set(selectedBlockIds);
+      const selectedElements = selectedBlockIds.flatMap((id) => {
+        const element = baseElementsById[id];
+        return element ? [element] : [];
+      });
       const sourceEntries = requestedBlockIds
         .map((blockId) => ({
           blockId,
@@ -4656,7 +6748,8 @@ function App() {
       groupElement.className = "drag-layer-group";
       overlayElement.append(groupElement);
 
-      for (const { element } of sourceEntries) {
+      for (const { blockId, element } of sourceEntries) {
+        if (affectedConnectorIds.has(blockId)) continue;
         const elementRect = element.getBoundingClientRect();
         const cloneElement = element.cloneNode(true) as HTMLElement;
 
@@ -4688,15 +6781,23 @@ function App() {
       canvasElement.append(overlayElement);
 
       const dragSession: DragLayerSession = {
+        affectedConnectorIds,
         autoPanRafId: null,
+        baseElementsById,
         blockIds: sourceEntries.map((entry) => entry.blockId),
         currentClientX: clientX,
         currentClientY: clientY,
         groupElement,
-        modeRafId: null,
-        originId,
         overlayElement,
         sourceElements: sourceEntries.map((entry) => entry.element),
+        connectorPreviewElements: createConnectorPreviewLayer(),
+        connectorSourceElements: Array.from(affectedConnectorIds).flatMap((id) => {
+          const element = blockElementsRef.current.get(id);
+          return element ? [element] : [];
+        }),
+        selectedBlockIds,
+        selectedElements,
+        selectedIds,
         startClientX: clientX,
         startClientY: clientY,
         startPanOffset: { ...panOffsetRef.current },
@@ -4704,20 +6805,19 @@ function App() {
       };
 
       dragLayerSessionRef.current = dragSession;
-      setDragSourceBlockIds(dragSession.blockIds);
+      document.body.classList.add("is-interacting");
 
       for (const sourceElement of dragSession.sourceElements) {
         sourceElement.classList.add("is-drag-source-hidden");
       }
-
-      dragSession.modeRafId = window.requestAnimationFrame(() => {
-        if (dragLayerSessionRef.current !== dragSession) {
-          return;
-        }
-
-        dragSession.modeRafId = null;
-        setActiveMode("dragging");
-      });
+      for (const sourceElement of dragSession.connectorSourceElements) {
+        sourceElement.classList.add("is-drag-source-hidden");
+      }
+      renderTransientConnectorPreviews(
+        dragSession.baseElementsById,
+        affectedConnectorIds,
+        dragSession.connectorPreviewElements,
+      );
 
       return true;
     },
@@ -4733,8 +6833,7 @@ function App() {
 
     dragSession.currentClientX = clientX;
     dragSession.currentClientY = clientY;
-    updateDragLayerVisual(dragSession);
-    scheduleDragAutoPan(dragSession);
+    scheduleDragFrame(dragSession);
   }, []);
 
   const endVisualDrag = useCallback((clientX: number, clientY: number) => {
@@ -4746,6 +6845,7 @@ function App() {
 
     dragSession.currentClientX = clientX;
     dragSession.currentClientY = clientY;
+    flushDragFrame(dragSession);
 
     const offset = getDragCommitOffset(dragSession);
     const movedEnough = Math.abs(offset.x) > 0.01 || Math.abs(offset.y) > 0.01;
@@ -4753,44 +6853,1255 @@ function App() {
 
     cleanupDragLayerSession(dragSession);
     dragLayerSessionRef.current = null;
-    setDragSourceBlockIds([]);
     setPanOffset(panOffsetRef.current);
+    clearSelectionFrameVisualBounds();
 
     if (movedEnough) {
-      setBlocksWithHistory((currentBlocks) =>
-        currentBlocks.map((block) =>
-          blockIdsToMove.has(block.id)
-            ? snapBlockPosition({
-                ...block,
-                x: block.x + offset.x,
-                y: block.y + offset.y,
-              })
-            : block,
-        ),
-      );
+      setBlocksWithHistory((currentBlocks) => {
+        const translated = translateSelection(currentBlocks, blockIdsToMove, offset);
+        if (!isSnapToGridEnabledRef.current) return translated;
+        return translated.map((block) =>
+          blockIdsToMove.has(block.id) && isBoxCanvasElement(block) ? snapBlockPosition(block) : block,
+        );
+      });
     }
 
-    selectDraggedBlocks(dragSession.blockIds);
+    selectDraggedBlocks(dragSession.selectedBlockIds);
     setEditingBlockId(null);
     setInsertionPoint(null);
     setIsCanvasKeyboardActive(true);
     setActiveMode("selected");
   }, []);
 
-  const cancelVisualDrag = useCallback(() => {
+  const cancelVisualDrag = useCallback((updateState = true) => {
     const dragSession = dragLayerSessionRef.current;
 
     if (!dragSession) {
+      const selectedIds = new Set(selectedBlockIdsRef.current);
+      const restoredBounds = getPreviewSelectionFrameGeometry(dataRef.current.elements, selectedIds);
+      clearSelectionFrameVisualBounds(restoredBounds ?? undefined);
       return;
     }
 
     cleanupDragLayerSession(dragSession);
     dragLayerSessionRef.current = null;
-    setDragSourceBlockIds([]);
-    setActiveMode("selected");
+    if (updateState) {
+      scheduleCanvasContentTransform({ ...dragSession.startPanOffset });
+    }
+    const selectedIds = new Set(dragSession.selectedBlockIds);
+    const restoredBounds = getPreviewSelectionFrameGeometry(dataRef.current.elements, selectedIds);
+    clearSelectionFrameVisualBounds(restoredBounds ?? undefined);
+    if (updateState) {
+      setActiveMode("selected");
+    }
   }, []);
+  cancelVisualDragRef.current = cancelVisualDrag;
+
+  function cleanupResizeLayerSession(session: ResizeLayerSession) {
+    for (const sourceElement of session.sourceElements) {
+      sourceElement.classList.remove("is-drag-source-hidden");
+    }
+    for (const sourceElement of session.connectorSourceElements) {
+      sourceElement.classList.remove("is-drag-source-hidden");
+    }
+    cleanupConnectorPreviewLayer(session.connectorPreviewElements);
+    session.overlayElement.remove();
+    document.body.classList.remove("is-interacting");
+  }
+
+  function resolveTextResizeWidth(width: number) {
+    const finiteWidth = Number.isFinite(width) ? width : MIN_BLOCK_WIDTH;
+    const resolvedWidth = Math.max(MIN_BLOCK_WIDTH, finiteWidth);
+    return isSnapToGridEnabledRef.current
+      ? Math.max(MIN_BLOCK_WIDTH, snapValue(resolvedWidth))
+      : resolvedWidth;
+  }
+
+  function measureTextReflowSize(
+    block: TextElement,
+    requestedWidth: number,
+    sourceElement = blockElementsRef.current.get(block.id),
+  ): TextSelectionSize {
+    const width = resolveTextResizeWidth(requestedWidth);
+    if (!sourceElement) {
+      return { height: Math.max(MIN_BLOCK_HEIGHT, block.height), width };
+    }
+
+    const clone = sourceElement.cloneNode(true) as HTMLElement;
+    clone.removeAttribute("data-block-id");
+    clone.setAttribute("aria-hidden", "true");
+    clone.style.height = "";
+    clone.style.left = "-100000px";
+    clone.style.pointerEvents = "none";
+    clone.style.position = "fixed";
+    clone.style.top = "0";
+    clone.style.transform = "none";
+    clone.style.visibility = "hidden";
+    clone.style.width = `${width}px`;
+    const heightMeasurer = clone.querySelector<HTMLElement>(".text-block-height-measurer");
+    if (heightMeasurer) heightMeasurer.style.width = `${width}px`;
+    document.body.append(clone);
+    const measuredHeight = heightMeasurer?.scrollHeight ?? clone.scrollHeight;
+    clone.remove();
+    return {
+      height: Number.isFinite(measuredHeight)
+        ? Math.max(MIN_BLOCK_HEIGHT, measuredHeight + TEXT_BLOCK_HEADER_HEIGHT + TEXT_BLOCK_HEIGHT_BUFFER)
+        : Math.max(MIN_BLOCK_HEIGHT, block.height),
+      width,
+    };
+  }
+
+  function getTextSelectionSizes(
+    elements: readonly CanvasElement[],
+    selectedIds: ReadonlySet<string>,
+    scaleX: number,
+    sourceElementsById: ReadonlyMap<string, HTMLElement> = new Map(),
+  ) {
+    const sizes = new Map<string, TextSelectionSize>();
+    const factor = Number.isFinite(scaleX) ? Math.max(0.01, scaleX) : 0.01;
+    for (const element of elements) {
+      if (!selectedIds.has(element.id) || element.locked || element.type !== "text") continue;
+      const previewClone = sourceElementsById.get(element.id);
+      if (previewClone) previewClone.style.height = "";
+      const sourceElement = previewClone ?? blockElementsRef.current.get(element.id);
+      sizes.set(
+        element.id,
+        measureTextReflowSize(element, element.width * factor, sourceElement),
+      );
+    }
+    return sizes;
+  }
+
+  function getEastResizedTextPreview(block: TextElement, size: TextSelectionSize): TextElement {
+    const angle = (block.rotation * Math.PI) / 180;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const originalCenter = { x: block.x + block.width / 2, y: block.y + block.height / 2 };
+    const fixedWestMidpoint = {
+      x: originalCenter.x - block.width / 2 * cos,
+      y: originalCenter.y - block.width / 2 * sin,
+    };
+    const nextCenter = {
+      x: fixedWestMidpoint.x + size.width / 2 * cos,
+      y: fixedWestMidpoint.y + size.width / 2 * sin,
+    };
+    return {
+      ...block,
+      height: size.height,
+      isWidthManuallyResized: true,
+      width: size.width,
+      x: nextCenter.x - size.width / 2,
+      y: nextCenter.y - size.height / 2,
+    };
+  }
+
+  function getTextEastResizeHandlePoint(block: TextElement) {
+    const angle = (block.rotation * Math.PI) / 180;
+    return {
+      x: block.x + block.width / 2 + block.width / 2 * Math.cos(angle),
+      y: block.y + block.height / 2 + block.width / 2 * Math.sin(angle),
+    };
+  }
+
+  function positionTextResizeHandle(handleElement: HTMLButtonElement | null, block: TextElement) {
+    if (!handleElement) return;
+    const point = getTextEastResizeHandlePoint(block);
+    const zoom = zoomLevelRef.current;
+    const pan = panOffsetRef.current;
+    handleElement.style.left = `${pan.x + point.x * zoom - 22}px`;
+    handleElement.style.top = `${pan.y + point.y * zoom - 22}px`;
+  }
+
+  function getRenderedTextResizeBlock(block: TextElement, sourceElement: HTMLElement): TextElement {
+    const fromStyle = (property: "height" | "left" | "top" | "width", fallback: number) => {
+      const value = Number.parseFloat(sourceElement.style[property]);
+      return Number.isFinite(value) ? value : fallback;
+    };
+    return {
+      ...block,
+      height: fromStyle("height", block.height),
+      width: fromStyle("width", block.width),
+      x: fromStyle("left", block.x),
+      y: fromStyle("top", block.y),
+    };
+  }
+
+  function startTextResizePreview(block: TextElement): boolean {
+    if (textResizeSessionRef.current) return textResizeSessionRef.current.block.id === block.id;
+    const sourceElement = blockElementsRef.current.get(block.id);
+    if (!sourceElement) return false;
+    const affectedConnectorIds = getBoundConnectorIdsForTargets(
+      dataRef.current.elements,
+      new Set([block.id]),
+    );
+    const baseElementsById = indexCanvasElements(dataRef.current.elements);
+    const handleElement = textResizeHandleRef.current;
+    const session: TextResizeSession = {
+      affectedConnectorIds,
+      baseElementsById,
+      block: getRenderedTextResizeBlock(block, sourceElement),
+      connectorPreviewElements: createConnectorPreviewLayer(),
+      connectorSourceElements: Array.from(affectedConnectorIds).flatMap((id) => {
+        const element = blockElementsRef.current.get(id);
+        return element ? [element] : [];
+      }),
+      handleElement,
+      originalHeight: sourceElement.style.height,
+      originalHandleLeft: handleElement?.style.left ?? "",
+      originalHandleTop: handleElement?.style.top ?? "",
+      originalLeft: sourceElement.style.left,
+      originalTop: sourceElement.style.top,
+      originalWidth: sourceElement.style.width,
+      sourceElement,
+    };
+    textResizeSessionRef.current = session;
+    sourceElement.classList.add("is-resizing");
+    for (const connectorElement of session.connectorSourceElements) {
+      connectorElement.classList.add("is-drag-source-hidden");
+    }
+    document.body.classList.add("is-interacting");
+    renderTransientConnectorPreviews(baseElementsById, affectedConnectorIds, session.connectorPreviewElements);
+    return true;
+  }
+
+  function updateTextResizePreview(
+    session: TextResizeSession,
+    startClientX: number,
+    startClientY: number,
+    clientX: number,
+    clientY: number,
+  ) {
+    const angle = (session.block.rotation * Math.PI) / 180;
+    const projectedDelta = (
+      (clientX - startClientX) * Math.cos(angle) +
+      (clientY - startClientY) * Math.sin(angle)
+    ) / zoomLevelRef.current;
+    const size = measureTextReflowSize(
+      session.block,
+      session.block.width + projectedDelta,
+      session.sourceElement,
+    );
+    const preview = getEastResizedTextPreview(session.block, size);
+    session.sourceElement.style.left = `${preview.x}px`;
+    session.sourceElement.style.top = `${preview.y}px`;
+    session.sourceElement.style.width = `${preview.width}px`;
+    session.sourceElement.style.height = `${preview.height}px`;
+    positionTextResizeHandle(session.handleElement, preview);
+    const previewElementsById = overlayTransformedElements(session.baseElementsById, [preview]);
+    renderTransientConnectorPreviews(
+      previewElementsById,
+      session.affectedConnectorIds,
+      session.connectorPreviewElements,
+    );
+    return preview;
+  }
+
+  function cleanupTextResizePreview(session: TextResizeSession, handleBlock = session.block) {
+    session.sourceElement.classList.remove("is-resizing");
+    session.sourceElement.style.width = session.originalWidth;
+    session.sourceElement.style.height = session.originalHeight;
+    session.sourceElement.style.left = session.originalLeft;
+    session.sourceElement.style.top = session.originalTop;
+    if (handleBlock === session.block) {
+      session.handleElement?.style.setProperty("left", session.originalHandleLeft);
+      session.handleElement?.style.setProperty("top", session.originalHandleTop);
+    } else {
+      positionTextResizeHandle(session.handleElement, handleBlock);
+    }
+    for (const connectorElement of session.connectorSourceElements) {
+      connectorElement.classList.remove("is-drag-source-hidden");
+    }
+    cleanupConnectorPreviewLayer(session.connectorPreviewElements);
+    document.body.classList.remove("is-interacting");
+  }
+
+  function finishTextResizePreview(handleBlock?: TextElement) {
+    const session = textResizeSessionRef.current;
+    if (!session) return null;
+    textResizeSessionRef.current = null;
+    cleanupTextResizePreview(session, handleBlock);
+    return session;
+  }
+
+  function commitTextResize(block: TextElement) {
+    setBlocksWithHistory((currentBlocks) => currentBlocks.map((element) =>
+      element.id === block.id && element.type === "text" && !element.locked
+        ? {
+            ...element,
+            height: block.height,
+            isWidthManuallyResized: true,
+            width: block.width,
+            x: block.x,
+            y: block.y,
+            updatedAt: Date.now(),
+          }
+        : element,
+    ));
+  }
+
+  function startSelectionResizePreview() {
+    if (resizeLayerSessionRef.current) return true;
+    const canvasElement = canvasRef.current;
+    if (!canvasElement) return false;
+
+    const sourceEntries = selectedBlockIdsRef.current
+      .map((blockId) => ({
+        blockId,
+        element: blockElementsRef.current.get(blockId) ?? null,
+        model: dataRef.current.elements.find((candidate) => candidate.id === blockId),
+      }))
+      .filter(
+        (entry): entry is {
+          blockId: string;
+          element: HTMLElement;
+          model: CanvasElement & BoxCanvasElement;
+        } =>
+          Boolean(entry.element && entry.model && !entry.model.locked && isBoxCanvasElement(entry.model)),
+      );
+    if (sourceEntries.length === 0) return false;
+    const connectorIds = getSelectionResizePreviewConnectorIds(
+      dataRef.current.elements,
+      new Set(selectedBlockIdsRef.current),
+      new Set(sourceEntries.map((entry) => entry.blockId)),
+    );
+    const baseElementsById = indexCanvasElements(dataRef.current.elements);
+    const selectedIds = new Set(selectedBlockIdsRef.current);
+    const selectedElements = selectedBlockIdsRef.current.flatMap((id) => {
+      const element = baseElementsById[id];
+      return element ? [element] : [];
+    });
+
+    const overlayElement = document.createElement("div");
+    const groupElement = document.createElement("div");
+    overlayElement.className = "drag-layer resize-layer";
+    groupElement.className = "drag-layer-group resize-layer-group";
+    overlayElement.append(groupElement);
+
+    const items = sourceEntries.map(({ element, model }) => {
+      const wrapperElement = document.createElement("div");
+      const cloneElement = element.cloneNode(true) as HTMLElement;
+      cloneElement.removeAttribute("data-block-id");
+      cloneElement.setAttribute("aria-hidden", "true");
+      cloneElement.classList.remove("is-content-selected", "is-drag-source-hidden", "is-editing");
+      cloneElement.classList.add("is-canvas-mode", "is-selected", "drag-layer-clone", "resize-layer-clone");
+      cloneElement.style.position = "absolute";
+      cloneElement.style.left = "0";
+      cloneElement.style.top = "0";
+      cloneElement.style.width = `${model.width}px`;
+      cloneElement.style.height = `${model.height}px`;
+      cloneElement.style.margin = "0";
+      cloneElement.style.pointerEvents = "none";
+      wrapperElement.style.position = "absolute";
+      wrapperElement.style.left = "0";
+      wrapperElement.style.top = "0";
+      wrapperElement.style.transformOrigin = "0 0";
+      wrapperElement.append(cloneElement);
+      groupElement.append(wrapperElement);
+      return { cloneElement, element: model, wrapperElement };
+    });
+
+    canvasElement.append(overlayElement);
+    const session = {
+      baseElementsById,
+      connectorIds,
+      items,
+      overlayElement,
+      sourceElements: sourceEntries.map((entry) => entry.element),
+      connectorPreviewElements: createConnectorPreviewLayer(),
+      connectorSourceElements: Array.from(connectorIds).flatMap((id) => {
+        const element = blockElementsRef.current.get(id);
+        return element ? [element] : [];
+      }),
+      selectedElements,
+      selectedIds,
+    };
+    resizeLayerSessionRef.current = session;
+    document.body.classList.add("is-interacting");
+    for (const sourceElement of session.sourceElements) {
+      sourceElement.classList.add("is-drag-source-hidden");
+    }
+    for (const sourceElement of session.connectorSourceElements) {
+      sourceElement.classList.add("is-drag-source-hidden");
+    }
+    renderTransientConnectorPreviews(baseElementsById, connectorIds, session.connectorPreviewElements);
+    return true;
+  }
+
+  function updateSelectionResizePreview(
+    scaleX: number,
+    scaleY: number,
+    previewElements: readonly CanvasElement[],
+    previewElementsById: Readonly<Record<string, CanvasElement>>,
+  ) {
+    const session = resizeLayerSessionRef.current;
+    if (!session) return;
+    const zoom = zoomLevelRef.current;
+    const pan = panOffsetRef.current;
+    const previewById = new Map(previewElements.map((element) => [element.id, element]));
+    for (const item of session.items) {
+      const preview = previewById.get(item.element.id);
+      if (!preview || !isBoxCanvasElement(preview)) continue;
+      if (preview.type === "text") {
+        item.cloneElement.style.width = `${preview.width}px`;
+        item.cloneElement.style.height = `${preview.height}px`;
+      }
+      const visualScaleX = zoom * (item.element.type === "text" ? 1 : scaleX);
+      const visualScaleY = zoom * (item.element.type === "text" ? 1 : scaleY);
+      item.wrapperElement.style.transform = `translate3d(${pan.x + preview.x * zoom}px, ${pan.y + preview.y * zoom}px, 0) scale(${visualScaleX}, ${visualScaleY})`;
+    }
+    renderTransientConnectorPreviews(
+      previewElementsById,
+      session.connectorIds,
+      session.connectorPreviewElements,
+    );
+  }
+
+  function finishSelectionResizePreview() {
+    const session = resizeLayerSessionRef.current;
+    if (!session) return;
+    cleanupResizeLayerSession(session);
+    resizeLayerSessionRef.current = null;
+  }
+
+  function applySelectionFrameVisualBounds(bounds: SelectionFrameGeometry) {
+    const frame = selectionFrameRef.current;
+    if (!frame) return;
+    const zoom = zoomLevelRef.current;
+    const pan = panOffsetRef.current;
+    const selectedId = selectedBlockIdsRef.current.length === 1 ? selectedBlockIdsRef.current[0] : null;
+    const isNativeTextFrame = Boolean(selectedId && dataRef.current.elements.some(
+      (element) => element.id === selectedId && element.type === "text",
+    ));
+    const padding = isNativeTextFrame ? 0 : SELECTION_FRAME_PADDING_PX;
+    frame.style.left = `${pan.x + bounds.x * zoom - padding}px`;
+    frame.style.top = `${pan.y + bounds.y * zoom - padding}px`;
+    frame.style.width = `${bounds.width * zoom + padding * 2}px`;
+    frame.style.height = `${bounds.height * zoom + padding * 2}px`;
+    frame.style.transform = `rotate(${bounds.rotation}deg)`;
+  }
+
+  function previewSelectionFrameVisualBounds(bounds: SelectionFrameGeometry) {
+    selectionFrameVisualBoundsRef.current = bounds;
+    applySelectionFrameVisualBounds(bounds);
+  }
+
+  function clearSelectionFrameVisualBounds(restoredBounds?: SelectionFrameGeometry) {
+    selectionFrameVisualBoundsRef.current = null;
+    if (restoredBounds) applySelectionFrameVisualBounds(restoredBounds);
+  }
+
+  function releaseSelectionPointerCapture(session: SelectionTransformSession) {
+    if (session.captureTarget.hasPointerCapture(session.pointerId)) {
+      session.captureTarget.releasePointerCapture(session.pointerId);
+    }
+  }
+
+  function getPreviewSelectionFrameGeometry(
+    elements: readonly CanvasElement[],
+    selectedIds: ReadonlySet<string>,
+    elementsById = indexCanvasElements(elements),
+  ): SelectionFrameGeometry | null {
+    const selected = elements.filter((element) => selectedIds.has(element.id));
+    if (selected.length === 1 && isBoxCanvasElement(selected[0])) {
+      const element = selected[0];
+      return {
+        height: element.height,
+        rotation: element.rotation,
+        width: element.width,
+        x: element.x,
+        y: element.y,
+      };
+    }
+    const bounds = getSelectionBounds(selected, elementsById);
+    return bounds ? { ...bounds, rotation: 0 } : null;
+  }
+
+  function cancelSelectionFrameInteraction(updateMode = true) {
+    const session = selectionTransformRef.current;
+    session?.previewFrame.cancel();
+    selectionTransformRef.current = null;
+    if (session) releaseSelectionPointerCapture(session);
+    if (session?.textResize) {
+      finishTextResizePreview();
+    } else if (session?.corner) {
+      finishSelectionResizePreview();
+      clearSelectionFrameVisualBounds(session.startBounds);
+    } else if (session) {
+      cancelVisualDrag(updateMode);
+    }
+    if (updateMode) {
+      setConnectorEndpointPreview(null);
+      setSelectionFramePreview(null);
+      setConnectorEndpointChooser(null);
+    }
+    if (session?.connectorEndpoint) {
+      cancelConnectorEndpointRetargetAnnouncement();
+    }
+    setIsConnectorEndpointRetargeting(false);
+    if (updateMode && session) setActiveMode(selectedBlockIdsRef.current.length > 0 ? "selected" : "canvas");
+  }
+
+  function selectionResizePreview(
+    bounds: SelectionFrameGeometry,
+    corner: SelectionResizeHandle,
+    clientX: number,
+    clientY: number,
+    session: SelectionTransformSession,
+  ) {
+    const initialHandle = getSelectionResizeHandlePoint(bounds, corner);
+    const draggedHandle = {
+      x: initialHandle.x + (clientX - session.startClientX) / zoomLevelRef.current,
+      y: initialHandle.y + (clientY - session.startClientY) / zoomLevelRef.current,
+    };
+    const transform = getSelectionResizeTransform(
+      bounds,
+      corner,
+      draggedHandle,
+    );
+    const resizeSession = resizeLayerSessionRef.current;
+    if (!resizeSession) return null;
+    const textSources = new Map(
+      resizeSession?.items
+        .filter((item) => item.element.type === "text")
+        .map((item) => [item.element.id, item.cloneElement]) ?? [],
+    );
+    const textSizes = getTextSelectionSizes(
+      resizeSession.selectedElements,
+      resizeSession.selectedIds,
+      transform.scaleX,
+      textSources,
+    );
+    const previewElements = resizeSelection(
+      resizeSession.selectedElements,
+      resizeSession.selectedIds,
+      bounds,
+      transform,
+      textSizes,
+    );
+    const previewElementsById = overlayTransformedElements(
+      resizeSession.baseElementsById,
+      previewElements,
+    );
+    return {
+      transform,
+      textSizes,
+      elements: previewElements,
+      elementsById: previewElementsById,
+      bounds: getPreviewSelectionFrameGeometry(
+        previewElements,
+        resizeSession.selectedIds,
+        previewElementsById,
+      ) ?? bounds,
+    };
+  }
+
+  function getSelectionResizeHandlePoint(
+    frame: SelectionFrameGeometry,
+    handle: SelectionResizeHandle,
+  ) {
+    const local = {
+      x: handle.includes("e") ? frame.width : handle.includes("w") ? 0 : frame.width / 2,
+      y: handle.includes("s") ? frame.height : handle.includes("n") ? 0 : frame.height / 2,
+    };
+    const center = { x: frame.x + frame.width / 2, y: frame.y + frame.height / 2 };
+    const angle = frame.rotation * Math.PI / 180;
+    const dx = local.x - frame.width / 2;
+    const dy = local.y - frame.height / 2;
+    return {
+      x: center.x + dx * Math.cos(angle) - dy * Math.sin(angle),
+      y: center.y + dx * Math.sin(angle) + dy * Math.cos(angle),
+    };
+  }
+
+  function startSelectionFrameInteraction(
+    event: ReactPointerEvent<HTMLElement>,
+    corner: SelectionResizeHandle | null,
+    connectorEndpoint: "start" | "end" | null = null,
+  ) {
+    const bounds = getPreviewSelectionFrameGeometry(
+      dataRef.current.elements,
+      new Set(selectedBlockIdsRef.current),
+    );
+    if (event.button !== 0 || !bounds) return;
+    if (connectorEndpoint) {
+      connectorEndpointRetargetAnnouncementRef.current = null;
+      setConnectorBindingAnnouncement("");
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    let session: SelectionTransformSession;
+    session = {
+      baseElementsById: indexCanvasElements(dataRef.current.elements),
+      captureTarget: event.currentTarget,
+      corner,
+      connectorEndpoint,
+      didMove: false,
+      pointerId: event.pointerId,
+      previewFrame: createLatestFrameQueue(({ clientX, clientY }) => {
+        applySelectionFrameInteractionMove(session, clientX, clientY);
+      }),
+      startBounds: bounds,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      selectionResizeTransform: null,
+      textResize: false,
+      textSizes: null,
+    };
+    selectionTransformRef.current = session;
+    const selectedConnector = connectorEndpoint
+      ? dataRef.current.elements.find((element): element is ConnectorElement =>
+        element.id === selectedBlockIdsRef.current[0] && element.type === "connector",
+      )
+      : null;
+    setIsConnectorEndpointRetargeting(Boolean(selectedConnector && isArrowConnector(selectedConnector)));
+  }
+
+  function startTextResizeInteraction(event: ReactPointerEvent<HTMLButtonElement>) {
+    const selectedId = selectedBlockIdsRef.current.length === 1
+      ? selectedBlockIdsRef.current[0]
+      : null;
+    const block = selectedId
+      ? dataRef.current.elements.find((element): element is TextElement =>
+        element.id === selectedId && element.type === "text" && !element.locked,
+      )
+      : null;
+    if (event.button !== 0 || !block || editingBlockIdRef.current) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!startTextResizePreview(block)) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    let session: SelectionTransformSession;
+    session = {
+      baseElementsById: indexCanvasElements(dataRef.current.elements),
+      captureTarget: event.currentTarget,
+      connectorEndpoint: null,
+      corner: null,
+      didMove: false,
+      pointerId: event.pointerId,
+      previewFrame: createLatestFrameQueue(({ clientX, clientY }) => {
+        applySelectionFrameInteractionMove(session, clientX, clientY);
+      }),
+      startBounds: {
+        height: block.height,
+        rotation: block.rotation,
+        width: block.width,
+        x: block.x,
+        y: block.y,
+      },
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      selectionResizeTransform: null,
+      textResize: true,
+      textSizes: null,
+    };
+    selectionTransformRef.current = session;
+    setActiveMode("resizing");
+  }
+  // Retained for cancellation compatibility with existing text-resize sessions;
+  // visual authoring now uses the shared cardinal selection frame.
+  void startTextResizeInteraction;
+
+  function announceConnectorEndpointRetargetCandidate(
+    candidate: ReturnType<typeof getConnectorAuthoringCandidate>,
+  ) {
+    const nextKey = getConnectorCandidateAnnouncementKey(candidate);
+    const previousKey = connectorEndpointRetargetAnnouncementRef.current;
+    if (nextKey === previousKey) return;
+    connectorEndpointRetargetAnnouncementRef.current = nextKey;
+    if (candidate) {
+      setConnectorBindingAnnouncement(getConnectorCandidateAnnouncement(candidate, getBindableTargetLabel(candidate.target)));
+    } else if (previousKey !== null) {
+      setConnectorBindingAnnouncement(getConnectorCandidateAnnouncement(null));
+    }
+  }
+
+  function cancelConnectorEndpointRetargetAnnouncement() {
+    connectorEndpointRetargetAnnouncementRef.current = null;
+    setConnectorBindingAnnouncement("Endpoint retargeting canceled. Existing binding remains unchanged.");
+  }
+
+  function announceConnectorBindingRefusal(
+    endpoint: "start" | "end",
+    reason: "same-target" | "safe-boundary",
+  ) {
+    const refusalKey = `refusal:${endpoint}:${reason}`;
+    if (connectorEndpointRetargetAnnouncementRef.current === refusalKey) return;
+    connectorEndpointRetargetAnnouncementRef.current = refusalKey;
+    setConnectorBindingAnnouncement(reason === "same-target"
+      ? `Could not bind ${endpoint} endpoint. Choose a different target for each connector endpoint.`
+      : `Could not bind ${endpoint} endpoint because the connector's visible stroke would exceed the safe canvas boundary.`);
+  }
+
+  function getConnectorEndpointPreview(
+    endpoint: "start" | "end",
+    clientX: number,
+    clientY: number,
+  ): ConnectorElement | null {
+    const selectedId = selectedBlockIdsRef.current.length === 1 ? selectedBlockIdsRef.current[0] : null;
+    const connector = selectedId
+      ? dataRef.current.elements.find((element): element is ConnectorElement => element.id === selectedId && element.type === "connector")
+      : null;
+    const canvas = canvasRef.current;
+    if (!connector || !canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const point = {
+      x: (clientX - rect.left - panOffsetRef.current.x) / zoomLevelRef.current,
+      y: (clientY - rect.top - panOffsetRef.current.y) / zoomLevelRef.current,
+    };
+    const targets = dataRef.current.elements.filter((element) => element.pageId === connector.pageId);
+    const opposite = connector[endpoint === "start" ? "end" : "start"];
+    const oppositeTargetId = opposite.kind === "element" ? opposite.targetElementId : null;
+    const directTargetId = getDirectBindableTargetAtPoint(targets, point)?.id;
+    const unfilteredCandidate = isArrowConnector(connector)
+      ? getConnectorAuthoringCandidate(point, targets, zoomLevelRef.current, directTargetId)
+      : null;
+    if (oppositeTargetId && unfilteredCandidate?.target.id === oppositeTargetId) {
+      announceConnectorBindingRefusal(endpoint, "same-target");
+      setConnectorEndpointRetargetVisual(null);
+      return null;
+    }
+    const eligibleTargets = oppositeTargetId
+      ? targets.filter((target) => target.id !== oppositeTargetId)
+      : targets;
+    const candidate = isArrowConnector(connector)
+      ? getConnectorAuthoringCandidate(point, eligibleTargets, zoomLevelRef.current, directTargetId)
+      : null;
+    announceConnectorEndpointRetargetCandidate(candidate);
+    setConnectorEndpointRetargetVisual(candidate ? {
+      anchor: getNearestBindableBoundaryAnchor(candidate.target, point)?.point ?? null,
+      isSnapped: candidate.endpoint.kind === "element",
+      target: candidate.target,
+    } : null);
+    const nextEndpoint = candidate?.endpoint ?? snapConnectorEndpoint(
+      point, eligibleTargets, zoomLevelRef.current, isArrowConnector(connector),
+    );
+    const preview = endpoint === "start"
+      ? { ...connector, start: nextEndpoint }
+      : { ...connector, end: nextEndpoint };
+    if (!isLiveConnectorBindingPersistable(preview)) {
+      announceConnectorBindingRefusal(endpoint, "safe-boundary");
+      setConnectorEndpointRetargetVisual(null);
+      return null;
+    }
+    return preview;
+  }
+
+  function applySelectionFrameInteractionMove(
+    session: SelectionTransformSession,
+    clientX: number,
+    clientY: number,
+  ) {
+    if (selectionTransformRef.current !== session) return;
+    session.didMove = true;
+
+    if (session.textResize) {
+      const textResize = textResizeSessionRef.current;
+      if (!textResize) return;
+      const preview = updateTextResizePreview(
+        textResize,
+        session.startClientX,
+        session.startClientY,
+        clientX,
+        clientY,
+      );
+      session.didMove = Math.abs(preview.width - textResize.block.width) > 0.01 ||
+        Math.abs(preview.height - textResize.block.height) > 0.01 ||
+        Math.abs(preview.x - textResize.block.x) > 0.01 ||
+        Math.abs(preview.y - textResize.block.y) > 0.01;
+      return;
+    }
+
+    if (session.connectorEndpoint) {
+      const preview = getConnectorEndpointPreview(session.connectorEndpoint, clientX, clientY);
+      if (!preview) {
+        setConnectorEndpointPreview(null);
+        setSelectionFramePreview(null);
+        return;
+      }
+      setConnectorEndpointPreview(preview);
+      const previewElementsById = overlayTransformedElements(session.baseElementsById, [preview]);
+      setSelectionFramePreview(getSelectionElementBounds(preview, previewElementsById));
+      return;
+    }
+
+    if (session.corner) {
+      if (!startSelectionResizePreview()) return;
+      const preview = selectionResizePreview(session.startBounds, session.corner, clientX, clientY, session);
+      if (!preview) return;
+      session.selectionResizeTransform = preview.transform;
+      session.textSizes = preview.textSizes;
+      updateSelectionResizePreview(
+        preview.transform.scaleX,
+        preview.transform.scaleY,
+        preview.elements,
+        preview.elementsById,
+      );
+      previewSelectionFrameVisualBounds(preview.bounds);
+    }
+  }
+
+  function moveSelectionFrameInteraction(event: ReactPointerEvent<HTMLElement>) {
+    const session = selectionTransformRef.current;
+    if (!session || session.pointerId !== event.pointerId) return;
+    const movedEnough = Math.hypot(event.clientX - session.startClientX, event.clientY - session.startClientY) >= 3;
+    if (!movedEnough) return;
+    event.preventDefault();
+    if (session.textResize || session.connectorEndpoint || session.corner) {
+      session.previewFrame.schedule({ clientX: event.clientX, clientY: event.clientY });
+      return;
+    }
+    session.didMove = true;
+    if (!dragLayerSessionRef.current) {
+      const movableId = selectedBlockIdsRef.current.find((id) => {
+        const element = dataRef.current.elements.find((candidate) => candidate.id === id);
+        return Boolean(element && !element.locked);
+      });
+      if (!movableId || !startVisualDrag(movableId, session.startClientX, session.startClientY)) return;
+    }
+    moveVisualDrag(event.clientX, event.clientY);
+  }
+
+  function finishSelectionFrameInteraction(event: ReactPointerEvent<HTMLElement>, cancelled = false) {
+    const session = selectionTransformRef.current;
+    if (!session || session.pointerId !== event.pointerId) return;
+    const usesQueuedPreview = Boolean(session.textResize || session.connectorEndpoint || session.corner);
+    const movedEnough = Math.hypot(
+      event.clientX - session.startClientX,
+      event.clientY - session.startClientY,
+    ) >= 3;
+    if (!cancelled && usesQueuedPreview && movedEnough) {
+      session.previewFrame.flush({ clientX: event.clientX, clientY: event.clientY });
+    } else {
+      session.previewFrame.cancel();
+    }
+    selectionTransformRef.current = null;
+    releaseSelectionPointerCapture(session);
+
+    if (cancelled) {
+      if (session.textResize) {
+        finishTextResizePreview();
+      } else if (session.corner) {
+        finishSelectionResizePreview();
+        clearSelectionFrameVisualBounds(session.startBounds);
+      } else if (!session.connectorEndpoint) {
+        cancelVisualDrag();
+      }
+      setConnectorEndpointPreview(null);
+      setConnectorEndpointRetargetVisual(null);
+      setSelectionFramePreview(null);
+      setConnectorEndpointChooser(null);
+      if (session.connectorEndpoint) cancelConnectorEndpointRetargetAnnouncement();
+      setIsConnectorEndpointRetargeting(false);
+      setIsCanvasKeyboardActive(true);
+      setActiveMode(selectedBlockIdsRef.current.length > 0 ? "selected" : "canvas");
+      return;
+    }
+
+    if (session.connectorEndpoint && session.didMove) {
+      const connectorEndpoint = session.connectorEndpoint;
+      const preview = getConnectorEndpointPreview(connectorEndpoint, event.clientX, event.clientY);
+      if (preview) {
+        if (!isLiveConnectorBindingPersistable(preview)) {
+          announceConnectorBindingRefusal(connectorEndpoint, "safe-boundary");
+        } else {
+          setBlocksWithHistory((currentBlocks) => {
+            const liveConnector = currentBlocks.find((element): element is ConnectorElement =>
+              element.id === preview.id && element.type === "connector",
+            );
+            if (!liveConnector || !isArrowConnector(liveConnector)) return currentBlocks;
+            const proposedEndpoint = preview[connectorEndpoint];
+            const oppositeEndpoint = liveConnector[connectorEndpoint === "start" ? "end" : "start"];
+            if (
+              proposedEndpoint.kind === "element"
+              && oppositeEndpoint.kind === "element"
+              && proposedEndpoint.targetElementId === oppositeEndpoint.targetElementId
+            ) return currentBlocks;
+            const candidate = connectorEndpoint === "start"
+              ? { ...liveConnector, start: proposedEndpoint }
+              : { ...liveConnector, end: proposedEndpoint };
+            if (!isLiveConnectorBindingPersistable(candidate, currentBlocks)) {
+              announceConnectorBindingRefusal(connectorEndpoint, "safe-boundary");
+              return currentBlocks;
+            }
+            return currentBlocks.map((element) => element.id === candidate.id
+              ? { ...candidate, updatedAt: Date.now() }
+              : element);
+          });
+        }
+      }
+    } else if (session.textResize) {
+      const textResize = textResizeSessionRef.current;
+      if (textResize && session.didMove) {
+        const preview = updateTextResizePreview(
+          textResize,
+          session.startClientX,
+          session.startClientY,
+          event.clientX,
+          event.clientY,
+        );
+        const didResize = Math.abs(preview.width - textResize.block.width) > 0.01 ||
+          Math.abs(preview.height - textResize.block.height) > 0.01 ||
+          Math.abs(preview.x - textResize.block.x) > 0.01 ||
+          Math.abs(preview.y - textResize.block.y) > 0.01;
+        finishTextResizePreview(preview);
+        if (didResize) commitTextResize(preview);
+      } else if (textResize) {
+        finishTextResizePreview();
+      }
+    } else if (session.corner && session.didMove) {
+      const selectedIds = new Set(selectedBlockIdsRef.current);
+      const initialHandle = getSelectionResizeHandlePoint(session.startBounds, session.corner);
+      const transform = session.selectionResizeTransform ?? getSelectionResizeTransform(
+        session.startBounds,
+        session.corner,
+        {
+          x: initialHandle.x + (event.clientX - session.startClientX) / zoomLevelRef.current,
+          y: initialHandle.y + (event.clientY - session.startClientY) / zoomLevelRef.current,
+        },
+      );
+      finishSelectionResizePreview();
+      clearSelectionFrameVisualBounds();
+      setBlocksWithHistory((currentBlocks) => resizeSelection(
+        currentBlocks,
+        selectedIds,
+        session.startBounds,
+        transform,
+        session.textSizes ?? new Map(),
+      ));
+    } else if (!session.corner && session.didMove) {
+      endVisualDrag(event.clientX, event.clientY);
+    }
+
+    setConnectorEndpointPreview(null);
+    setConnectorEndpointRetargetVisual(null);
+    connectorEndpointRetargetAnnouncementRef.current = null;
+    setSelectionFramePreview(null);
+    setConnectorEndpointChooser(null);
+    setIsConnectorEndpointRetargeting(false);
+    setEditingBlockId(null);
+    setInsertionPoint(null);
+    setIsCanvasKeyboardActive(true);
+    setActiveMode("selected");
+  }
+
+  function moveSelectionByKeyboard(event: ReactKeyboardEvent<HTMLButtonElement>) {
+    if (event.key === "F2" && selectedBlockIdsRef.current.length === 1) {
+      const selected = dataRef.current.elements.find(
+        (element) => element.id === selectedBlockIdsRef.current[0],
+      );
+      if (selected?.type === "text" || selected?.type === "shape") {
+        event.preventDefault();
+        event.stopPropagation();
+        editBlock(selected.id);
+      } else if (selected?.type === "connector" && isArrowConnector(selected)) {
+        event.preventDefault();
+        event.stopPropagation();
+        setConnectorLabelEditRequest((current) => ({
+          elementId: selected.id,
+          request: (current?.request ?? 0) + 1,
+        }));
+      }
+      return;
+    }
+    const step = (event.shiftKey ? 10 : 1) / zoomLevelRef.current;
+    const delta = event.key === "ArrowLeft"
+      ? { x: -step, y: 0 }
+      : event.key === "ArrowRight"
+        ? { x: step, y: 0 }
+        : event.key === "ArrowUp"
+          ? { x: 0, y: -step }
+          : event.key === "ArrowDown"
+            ? { x: 0, y: step }
+            : null;
+    if (!delta) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const selectedIds = new Set(selectedBlockIdsRef.current);
+    setBlocksWithHistory((currentBlocks) => translateSelection(currentBlocks, selectedIds, delta));
+    setActiveMode("selected");
+  }
+
+  function resizeSelectionByKeyboard(corner: SelectionResizeHandle) {
+    return (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+      const selectedIds = new Set(selectedBlockIdsRef.current);
+      const bounds = getPreviewSelectionFrameGeometry(dataRef.current.elements, selectedIds);
+      if (!bounds || !event.key.startsWith("Arrow")) return;
+      const step = (event.shiftKey ? 10 : 1) / zoomLevelRef.current;
+      const draggedCorner = getSelectionResizeHandlePoint(bounds, corner);
+      if (event.key === "ArrowLeft") draggedCorner.x -= step;
+      if (event.key === "ArrowRight") draggedCorner.x += step;
+      if (event.key === "ArrowUp") draggedCorner.y -= step;
+      if (event.key === "ArrowDown") draggedCorner.y += step;
+      event.preventDefault();
+      event.stopPropagation();
+      const transform = getSelectionResizeTransform(bounds, corner, draggedCorner);
+      const textSizes = getTextSelectionSizes(dataRef.current.elements, selectedIds, transform.scaleX);
+      setBlocksWithHistory((currentBlocks) => resizeSelection(
+        currentBlocks,
+        selectedIds,
+        bounds,
+        transform,
+        textSizes,
+      ));
+      setActiveMode("selected");
+    };
+  }
+
+  function resizeTextWidthByKeyboard(
+    blockId: string,
+    direction: -1 | 1,
+    zoom: number,
+  ) {
+    const block = dataRef.current.elements.find((element): element is TextElement =>
+      element.id === blockId && element.type === "text" && !element.locked,
+    );
+    if (!block) return;
+    const size = measureTextReflowSize(block, block.width + direction * 10 / zoom);
+    commitTextResize(getEastResizedTextPreview(block, size));
+    setActiveMode("selected");
+  }
+
+  function moveConnectorEndpointByKeyboard(endpoint: "start" | "end") {
+    return (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+      if (!event.key.startsWith("Arrow") || connectorEndpointChooserRef.current !== null) return;
+      const step = (event.shiftKey ? 10 : 1) / zoomLevelRef.current;
+      const delta = event.key === "ArrowLeft"
+        ? { x: -step, y: 0 }
+        : event.key === "ArrowRight"
+          ? { x: step, y: 0 }
+          : event.key === "ArrowUp"
+            ? { x: 0, y: -step }
+            : { x: 0, y: step };
+      event.preventDefault();
+      event.stopPropagation();
+      const selectedId = selectedBlockIdsRef.current.length === 1 ? selectedBlockIdsRef.current[0] : null;
+      if (!selectedId) return;
+      setBlocksWithHistory((currentBlocks) => {
+        const elementsById = Object.fromEntries(currentBlocks.map((element) => [element.id, element]));
+        return currentBlocks.map((element) => {
+          if (element.id !== selectedId || element.type !== "connector" || element.locked) return element;
+          const currentEndpoint = element[endpoint];
+          const points = resolveConnectorPoints(element, elementsById);
+          const resolved = points?.[endpoint]
+            ?? (currentEndpoint.kind === "free" ? currentEndpoint : null)
+            ?? getConnectorEndpointDetachPoint(element, endpoint, elementsById);
+          if (!resolved) {
+            if (currentEndpoint.kind === "element") {
+              setConnectorBindingAnnouncement(`Could not detach ${endpoint} endpoint because no safe in-canvas position is available.`);
+            }
+            return element;
+          }
+          let moved = normalizeFreeConnectorEndpoint({ x: resolved.x + delta.x, y: resolved.y + delta.y });
+          if (!moved) return element;
+          let candidate = endpoint === "start"
+            ? { ...element, start: moved, updatedAt: Date.now() }
+            : { ...element, end: moved, updatedAt: Date.now() };
+          if (currentEndpoint.kind === "element" && !resolveConnectorPoints(candidate, elementsById)) {
+            moved = { kind: "free", ...resolved };
+            candidate = endpoint === "start"
+              ? { ...element, start: moved, updatedAt: Date.now() }
+              : { ...element, end: moved, updatedAt: Date.now() };
+            if (!resolveConnectorPoints(candidate, elementsById)) {
+              setConnectorBindingAnnouncement(`Could not detach ${endpoint} endpoint because no safe in-canvas position is available.`);
+              return element;
+            }
+          }
+          if (currentEndpoint.kind === "element") {
+            setConnectorBindingAnnouncement(`Detached and moved ${endpoint} endpoint. It is now free.`);
+          }
+          return candidate;
+        });
+      });
+      setActiveMode("selected");
+    };
+  }
+
+  function getSelectedArrowConnector(): ConnectorElement | null {
+    const selectedId = selectedBlockIdsRef.current.length === 1 ? selectedBlockIdsRef.current[0] : null;
+    const connector = selectedId
+      ? dataRef.current.elements.find((element): element is ConnectorElement =>
+        element.id === selectedId && element.type === "connector",
+      )
+      : null;
+    return connector && isArrowConnector(connector) ? connector : null;
+  }
+
+  function getConnectorBindingTargets(pageId: string): readonly Readonly<{ element: ShapeElement | TextElement; label: string }>[] {
+    const shapeOrdinals = new Map<ShapeElement["shape"], number>();
+    let textOrdinal = 0;
+    return dataRef.current.elements
+      .filter((element): element is ShapeElement | TextElement => element.pageId === pageId && isBindableElement(element))
+      .map((element) => {
+        if (element.type === "text") {
+          textOrdinal += 1;
+          const centerX = Math.round(element.x + element.width / 2);
+          const centerY = Math.round(element.y + element.height / 2);
+          const excerpt = element.content.trim().replace(/\s+/g, " ").slice(0, 32);
+          return { element, label: `Text ${textOrdinal}${excerpt ? ` (${excerpt})` : ""} (center ${centerX}, ${centerY})` };
+        }
+        const ordinal = (shapeOrdinals.get(element.shape) ?? 0) + 1;
+        shapeOrdinals.set(element.shape, ordinal);
+        const centerX = Math.round(element.x + element.width / 2);
+        const centerY = Math.round(element.y + element.height / 2);
+        return {
+          element,
+          label: `${element.shape[0].toUpperCase()}${element.shape.slice(1)} ${ordinal} (center ${centerX}, ${centerY})`,
+        };
+      });
+  }
+
+  function getBindableTargetLabel(target: ShapeElement | TextElement): string {
+    return getConnectorBindingTargets(target.pageId).find(({ element }) => element.id === target.id)?.label
+      ?? `${target.type === "text" ? "Text" : `${target.shape[0].toUpperCase()}${target.shape.slice(1)}`} (center ${Math.round(target.x + target.width / 2)}, ${Math.round(target.y + target.height / 2)})`;
+  }
+
+  function getConnectorBindingTargetsForEndpoint(
+    connector: ConnectorElement,
+    endpoint: "start" | "end",
+  ) {
+    const opposite = connector[endpoint === "start" ? "end" : "start"];
+    return getConnectorBindingTargets(connector.pageId).filter(({ element }) => (
+      opposite.kind !== "element" || element.id !== opposite.targetElementId
+    ));
+  }
+
+  function getConnectorEndpointDescription(
+    connector: ConnectorElement,
+    endpoint: "start" | "end",
+  ): string {
+    const current = connector[endpoint];
+    if (!isArrowConnector(connector)) {
+      return `Currently free. This line endpoint cannot bind to elements. Arrow keys move it.`;
+    }
+    if (current.kind !== "element") {
+      return `Currently free. Press Enter to choose a target shape or text block. Arrow keys move the endpoint.`;
+    }
+    const target = dataRef.current.elements.find((element): element is ShapeElement | TextElement =>
+      element.id === current.targetElementId && element.pageId === connector.pageId && isBindableElement(element),
+    );
+    const targetLabel = target ? getBindableTargetLabel(target) : "an unavailable target";
+    return `Currently bound to ${targetLabel}. The endpoint follows the nearest facing visible boundary automatically. Press Enter to rebind or detach. Arrow keys detach and move the endpoint.`;
+  }
+
+  function openConnectorEndpointChooser(endpoint: "start" | "end", origin: HTMLButtonElement) {
+    const connector = getSelectedArrowConnector();
+    if (!connector || connector.locked) return;
+    const targets = getConnectorBindingTargetsForEndpoint(connector, endpoint);
+    const current = connector[endpoint];
+    if (targets.length === 0 && current.kind !== "element") {
+      setConnectorBindingAnnouncement(`No compatible shapes or text blocks are available to bind the ${endpoint} endpoint.`);
+      return;
+    }
+    setConnectorBindingAnnouncement("");
+    const currentTargetId = current.kind === "element" && targets.some(({ element }) => element.id === current.targetElementId)
+      ? current.targetElementId
+      : targets[0]?.element.id ?? null;
+    connectorEndpointOriginFocusRef.current = origin;
+    if (connectorEndpointFocusReturnRafRef.current !== null) {
+      window.cancelAnimationFrame(connectorEndpointFocusReturnRafRef.current);
+      connectorEndpointFocusReturnRafRef.current = null;
+    }
+    const chooser = {
+      endpoint,
+      targetElementId: currentTargetId,
+    };
+    connectorEndpointChooserRef.current = chooser;
+    setConnectorEndpointChooser(chooser);
+  }
+
+  function closeConnectorEndpointChooser() {
+    const endpoint = connectorEndpointChooserRef.current?.endpoint ?? connectorEndpointChooser?.endpoint;
+    const origin = connectorEndpointOriginFocusRef.current;
+    connectorEndpointOriginFocusRef.current = null;
+    connectorEndpointChooserRef.current = null;
+    setConnectorEndpointChooser(null);
+    if (!endpoint) return;
+    if (connectorEndpointFocusReturnRafRef.current !== null) {
+      window.cancelAnimationFrame(connectorEndpointFocusReturnRafRef.current);
+    }
+    connectorEndpointFocusReturnRafRef.current = window.requestAnimationFrame(() => {
+      connectorEndpointFocusReturnRafRef.current = null;
+      if (connectorEndpointChooserRef.current !== null) return;
+      if (document.activeElement !== null && document.activeElement !== document.body) return;
+      const fallback = document.querySelector<HTMLButtonElement>(`[data-connector-endpoint-handle="${endpoint}"]`);
+      (origin?.isConnected ? origin : fallback)?.focus({ preventScroll: true });
+    });
+  }
+
+  function bindSelectedConnectorEndpoint() {
+    const chooser = connectorEndpointChooser;
+    const connector = getSelectedArrowConnector();
+    if (!chooser || !connector || !chooser.targetElementId) return;
+    const target = dataRef.current.elements.find((element): element is ShapeElement | TextElement =>
+      element.id === chooser.targetElementId
+        && element.pageId === connector.pageId
+        && isBindableElement(element),
+    );
+    if (!target) return;
+    const opposite = connector[chooser.endpoint === "start" ? "end" : "start"];
+    if (opposite.kind === "element" && opposite.targetElementId === target.id) {
+      setConnectorBindingAnnouncement("Choose a different target for each connector endpoint.");
+      return;
+    }
+    const previous = connector[chooser.endpoint];
+    const next = {
+      kind: "element" as const,
+      targetElementId: target.id,
+      gap: 0,
+    };
+    const candidate = chooser.endpoint === "start"
+      ? { ...connector, start: next }
+      : { ...connector, end: next };
+    if (!isLiveConnectorBindingPersistable(candidate)) {
+      setConnectorBindingAnnouncement(
+        `Could not bind ${chooser.endpoint} endpoint because the connector's visible stroke would exceed the safe canvas boundary.`,
+      );
+      return;
+    }
+    setBlocksWithHistory((currentBlocks) => currentBlocks.map((element) => {
+      if (element.id !== connector.id || element.type !== "connector") return element;
+      return { ...candidate, updatedAt: Date.now() };
+    }));
+    setConnectorBindingAnnouncement(
+      `${previous.kind === "element" ? "Rebound" : "Bound"} ${chooser.endpoint} endpoint to ${getBindableTargetLabel(target)}. The connector will follow the nearest facing visible boundaries automatically.`,
+    );
+    closeConnectorEndpointChooser();
+  }
+
+  function detachSelectedConnectorEndpoint() {
+    const chooser = connectorEndpointChooser;
+    const connector = getSelectedArrowConnector();
+    if (!chooser || !connector) return;
+    const current = connector[chooser.endpoint];
+    if (current.kind !== "element") {
+      setConnectorBindingAnnouncement(`${chooser.endpoint} endpoint is already free.`);
+      closeConnectorEndpointChooser();
+      return;
+    }
+    const elementsById = Object.fromEntries(dataRef.current.elements.map((element) => [element.id, element]));
+    const resolved = getConnectorEndpointDetachPoint(connector, chooser.endpoint, elementsById);
+    if (!resolved) {
+      setConnectorBindingAnnouncement(`Could not detach ${chooser.endpoint} endpoint because no safe in-canvas position is available.`);
+      return;
+    }
+    const next = normalizeFreeConnectorEndpoint(resolved);
+    if (!next) {
+      setConnectorBindingAnnouncement(`Could not detach ${chooser.endpoint} endpoint because its position is unavailable.`);
+      return;
+    }
+    setBlocksWithHistory((currentBlocks) => currentBlocks.map((element) => {
+      if (element.id !== connector.id || element.type !== "connector") return element;
+      return chooser.endpoint === "start"
+        ? { ...element, start: next, updatedAt: Date.now() }
+        : { ...element, end: next, updatedAt: Date.now() };
+    }));
+    setConnectorBindingAnnouncement(`Detached ${chooser.endpoint} endpoint. It is now free.`);
+    closeConnectorEndpointChooser();
+  }
 
   const selectBlock = useCallback((blockId: string, additive = false) => {
+    finishActiveShapeTextEdit();
     const isDeselectingOnlyBlock =
       additive &&
       selectedBlockIdsRef.current.length === 1 &&
@@ -4819,11 +8130,20 @@ function App() {
     });
     setEditingBlockId(null);
     setInsertionPoint(null);
+    setConnectorEndpointChooser(null);
     setIsCanvasKeyboardActive(true);
     setActiveMode(isDeselectingOnlyBlock ? "canvas" : "selected");
   }, []);
 
-  const editBlock = useCallback((blockId: string) => {
+  const editBlock = useCallback((blockId: string, caretPlacement?: CaretPlacementRequest) => {
+    const shape = dataRef.current.elements.find(
+      (element): element is ShapeElement => element.id === blockId && element.type === "shape",
+    );
+    setShapeCaretPlacement(
+      shape && caretPlacement
+        ? { elementId: blockId, request: caretPlacement }
+        : null,
+    );
     editingBlockIdRef.current = blockId;
     setSelectedBlockIds((currentBlockIds) =>
       currentBlockIds.length === 1 && currentBlockIds[0] === blockId
@@ -4834,19 +8154,52 @@ function App() {
     setInsertionPoint(null);
     setIsCanvasKeyboardActive(true);
     setActiveMode("editing");
+    if (shape) {
+      setConnectorBindingAnnouncement(`Editing text inside ${shape.shape} shape. Escape cancels; Control+Enter saves.`);
+    }
   }, []);
 
-  const endBlockEdit = useCallback((blockId: string) => {
+  const endBlockEdit = useCallback((blockId: string, outcome?: "canceled" | "committed" | "unchanged", restoreFocus = true) => {
     if (editingBlockIdRef.current !== blockId) {
       return;
     }
 
     editingBlockIdRef.current = null;
     setEditingBlockId(null);
+    setShapeCaretPlacement(null);
     setActiveMode((currentMode) =>
       currentMode === "editing" ? "selected" : currentMode,
     );
+    const shape = dataRef.current.elements.find((element) => element.id === blockId && element.type === "shape");
+    if (shape && outcome) {
+      setConnectorBindingAnnouncement(outcome === "committed"
+        ? "Shape text saved."
+        : outcome === "unchanged"
+          ? "Shape text unchanged."
+          : "Shape text editing canceled.");
+    }
+    if (shape && restoreFocus) {
+      window.requestAnimationFrame(() => {
+        blockElementsRef.current.get(blockId)?.focus({ preventScroll: true });
+      });
+    }
   }, []);
+
+  const registerShapeTextEditSession = useCallback((elementId: string, session: ShapeTextEditSession | null) => {
+    if (session) {
+      shapeTextEditSessionRef.current = { elementId, session };
+    } else if (shapeTextEditSessionRef.current?.elementId === elementId) {
+      shapeTextEditSessionRef.current = null;
+    }
+  }, []);
+
+  function finishActiveShapeTextEdit() {
+    const session = shapeTextEditSessionRef.current;
+    if (!session) return false;
+    shapeTextEditSessionRef.current = null;
+    session.session.commit();
+    return true;
+  }
 
   const handleFocusEndHandled = useCallback(() => {
     setFocusEndBlockId(null);
@@ -4859,7 +8212,7 @@ function App() {
   }
 
   function applyFormattingToSelectedBlocks(
-    updateBlockFormat: (block: TextBlock) => TextBlock,
+    updateBlockFormat: (block: TextElement) => TextElement,
   ) {
     const selectedIds = new Set(selectedBlockIdsRef.current);
 
@@ -4869,7 +8222,7 @@ function App() {
 
     setBlocksWithHistory((currentBlocks) =>
       currentBlocks.map((block) =>
-        selectedIds.has(block.id) && !block.imageData
+        selectedIds.has(block.id) && isTextElement(block)
           ? updateBlockFormat(block)
           : block,
       ),
@@ -4877,10 +8230,22 @@ function App() {
   }
 
   function leaveTextEditing() {
+    const directDraft = directTextDraftRef.current;
+    if (directDraft) {
+      blurActiveTextEntry();
+      window.getSelection()?.removeAllRanges();
+      if (directTextDraftRef.current === directDraft) {
+        cancelDirectTextDraft(directDraft.block.id);
+      }
+      return;
+    }
+    const finishedShapeSession = finishActiveShapeTextEdit();
     blurActiveTextEntry();
     window.getSelection()?.removeAllRanges();
-    setActiveTextEditor(null);
-    setEditingBlockId(null);
+    if (!finishedShapeSession) {
+      setActiveTextEditor(null);
+      setEditingBlockId(null);
+    }
   }
 
   function setTextFontFamily(fontFamily: TextFontFamily) {
@@ -4975,30 +8340,6 @@ function App() {
     );
   }
 
-  function selectCanvas() {
-    leaveTextEditing();
-    setSelectedBlockIds([]);
-    hideSelectionRectangle();
-    setIsCanvasKeyboardActive(true);
-    setActiveMode("canvas");
-  }
-
-  function isCanvasBackgroundTarget(target: EventTarget | null) {
-    if (!(target instanceof HTMLElement)) {
-      return false;
-    }
-
-    if (
-      target.closest(
-        ".text-block, .offscreen-indicators, .search-panel, .canvas-starter",
-      )
-    ) {
-      return false;
-    }
-
-    return target.closest(".canvas, .canvas-content, .canvas-grid") !== null;
-  }
-
   function handleChromePointerDown(event: ReactPointerEvent<HTMLElement>) {
     if (!isTextEntryTarget(event.target)) {
       leaveTextEditing();
@@ -5010,206 +8351,387 @@ function App() {
     setIsCanvasKeyboardActive(false);
   }
 
-  function startCanvasPan(event: React.PointerEvent<HTMLElement>) {
-    event.preventDefault();
-    event.stopPropagation();
-    leaveTextEditing();
-    panState.current = {
-      startClientX: event.clientX,
-      startClientY: event.clientY,
-      startPanX: panOffsetRef.current.x,
-      startPanY: panOffsetRef.current.y,
-      currentPanX: panOffsetRef.current.x,
-      currentPanY: panOffsetRef.current.y,
+  const getPrimitiveAppearance = useCallback((tool: PrimitiveTool, elementId: string) => {
+    const preference = drawingPreferencesRef.current[tool];
+    return {
+      opacity: preference.opacity,
+      style: {
+        fillColor: tool === "line" ? null : preference.backgroundColor,
+        roughness: preference.roughness,
+        roundness: tool === "rectangle" ? preference.roundness : 0,
+        seed: deterministicSeed(elementId),
+        strokeColor: preference.strokeColor,
+        strokeStyle: preference.strokeStyle,
+        strokeWidth: preference.strokeWidth,
+      },
     };
+  }, []);
+
+  const completePrimitiveCreation = useCallback(
+    (elementId: string, tool: PrimitiveTool, geometry: PrimitiveGeometry, appearance: Readonly<{ opacity: number; style: RoughStyle }>) => {
+      const pageId = selectedPageIdRef.current;
+      if (!pageId) return false;
+      if (geometry.kind === "shape" && !isPersistableShapeRect(geometry.rect)) return false;
+      const timestamp = Date.now();
+      const { opacity, style } = appearance;
+
+      setBlocksWithHistory((currentElements) => {
+        if (geometry.kind === "connector") {
+          const connector: ConnectorElement = {
+            createdAt: timestamp,
+            end: { kind: "free", ...geometry.end },
+            id: elementId,
+            locked: false,
+            opacity,
+            pageId,
+            routing: "straight",
+            start: { kind: "free", ...geometry.start },
+            style: {
+              ...style,
+              endArrowhead: "none",
+              startArrowhead: "none",
+            },
+            type: "connector",
+            updatedAt: timestamp,
+            zIndex: currentElements.length,
+          };
+          return [...currentElements, connector];
+        }
+
+        const shape: ShapeElement = {
+          ...geometry.rect,
+          createdAt: timestamp,
+          id: elementId,
+          locked: false,
+          opacity,
+          pageId,
+          rotation: 0,
+          shape: tool as ShapeElement["shape"],
+          style,
+          type: "shape",
+          updatedAt: timestamp,
+          zIndex: currentElements.length,
+        };
+        return [...currentElements, shape];
+      });
+      selectedBlockIdsRef.current = [elementId];
+      setSelectedBlockIds([elementId]);
+      editingBlockIdRef.current = null;
+      setEditingBlockId(null);
+      setInsertionPoint(null);
+      setIsCanvasKeyboardActive(true);
+      setActiveMode("selected");
+      const nextTool = drawingToolAfterCreation(tool, isToolLockedRef.current);
+      if (nextTool !== tool) {
+        activeToolRef.current = nextTool;
+        setActiveTool(nextTool);
+      }
+      return true;
+    },
+    [],
+  );
+
+  const completeArrowCreation = useCallback((elementId: string, start: ConnectorEndpoint, end: ConnectorEndpoint) => {
+    const pageId = selectedPageIdRef.current;
+    if (!pageId) return false;
+    const elementsById = Object.fromEntries(dataRef.current.elements.map((element) => [element.id, element]));
+    const isValidEndpoint = (endpoint: ConnectorEndpoint) => {
+      if (endpoint.kind === "free") return normalizeFreeConnectorEndpoint(endpoint) !== null;
+      if (endpoint.kind !== "element") return false;
+      const target = elementsById[endpoint.targetElementId];
+      return isBindableElement(target) && target.pageId === pageId;
+    };
+    if (!isValidEndpoint(start) || !isValidEndpoint(end) || (
+      start.kind === "element"
+      && end.kind === "element"
+      && start.targetElementId === end.targetElementId
+    )) {
+      return false;
+    }
+    const timestamp = Date.now();
+    const preference = drawingPreferencesRef.current.arrow;
+    const connector: ConnectorElement = {
+      createdAt: timestamp,
+      end,
+      id: elementId,
+      locked: false,
+      opacity: preference.opacity,
+      pageId,
+      routing: "straight",
+      start,
+      style: {
+        endArrowhead: preference.endArrowhead,
+        fillColor: null,
+        roughness: preference.roughness,
+        roundness: 0,
+        seed: deterministicSeed(elementId),
+        startArrowhead: preference.startArrowhead,
+        strokeColor: preference.strokeColor,
+        strokeStyle: preference.strokeStyle,
+        strokeWidth: preference.strokeWidth,
+      },
+      type: "connector",
+      updatedAt: timestamp,
+      zIndex: dataRef.current.elements.length,
+    };
+    if (!isLiveConnectorBindingPersistable(connector)) return false;
+    setBlocksWithHistory((currentElements) => [...currentElements, {
+      ...connector,
+      zIndex: currentElements.length,
+    }]);
+    selectedBlockIdsRef.current = [elementId];
+    setSelectedBlockIds([elementId]);
+    editingBlockIdRef.current = null;
+    setEditingBlockId(null);
     setInsertionPoint(null);
     setIsCanvasKeyboardActive(true);
-    setActiveMode("panning");
-    event.currentTarget.setPointerCapture(event.pointerId);
-  }
-
-  function startCanvasInteraction(event: React.PointerEvent<HTMLElement>) {
-    if (!isCanvasBackgroundTarget(event.target)) {
-      return;
+    setActiveMode("selected");
+    const nextTool = drawingToolAfterCreation("arrow", isToolLockedRef.current);
+    if (nextTool !== "arrow") {
+      activeToolRef.current = nextTool;
+      setActiveTool(nextTool);
     }
+    return true;
+  }, []);
 
-    selectCanvas();
-    event.preventDefault();
-
-    if (event.button === 2) {
-      startCanvasPan(event);
-    } else {
-      const startPoint = getCanvasPoint(event.clientX, event.clientY);
-
-      if (!startPoint) {
-        return;
-      }
-
-      selectionState.current = {
-        startX: startPoint.x,
-        startY: startPoint.y,
-        currentX: startPoint.x,
-        currentY: startPoint.y,
-        didMove: false,
+  const canvasInteraction = useCanvasInteraction({
+    activeToolRef,
+    canvasContentRef,
+    canvasRef,
+    cleanupMarquee: clearMarquee,
+    createArrowId: () => createId("connector"),
+    createPrimitiveId: (tool) => createId(tool === "line" ? "connector" : "shape"),
+    getArrowCreatedStatus: () => isToolLockedRef.current
+      ? "Arrow created. Tool lock kept Arrow active. Use the endpoint handles to bind or move it."
+      : "Arrow created. Switched to Select. Use the endpoint handles to bind or move it.",
+    getArrowPreviewStyle: (elementId) => {
+      const preference = drawingPreferencesRef.current.arrow;
+      return {
+        endArrowhead: preference.endArrowhead,
+        fillColor: null,
+        roughness: preference.roughness,
+        roundness: 0,
+        seed: deterministicSeed(elementId),
+        startArrowhead: preference.startArrowhead,
+        strokeColor: preference.strokeColor,
+        strokeStyle: preference.strokeStyle,
+        strokeWidth: preference.strokeWidth,
       };
-      setInsertionPoint(startPoint);
-      hideSelectionRectangle();
-    }
-
-    event.currentTarget.setPointerCapture(event.pointerId);
-  }
-
-  function updateCanvasInteraction(event: React.PointerEvent<HTMLElement>) {
-    const currentPan = panState.current;
-    const currentSelection = selectionState.current;
-
-    if (!currentPan && !currentSelection) {
-      return;
-    }
-
-    if (currentPan) {
-      const deltaX = event.clientX - currentPan.startClientX;
-      const deltaY = event.clientY - currentPan.startClientY;
-      const nextPanOffset = {
-        x: currentPan.startPanX + deltaX,
-        y: currentPan.startPanY + deltaY,
-      };
-
-      currentPan.currentPanX = nextPanOffset.x;
-      currentPan.currentPanY = nextPanOffset.y;
-      scheduleCanvasContentTransform(nextPanOffset);
-      return;
-    }
-
-    const canvasElement = canvasRef.current;
-
-    if (!currentSelection || !canvasElement) {
-      return;
-    }
-
-    const currentPoint = getCanvasPoint(event.clientX, event.clientY);
-
-    if (!currentPoint) {
-      return;
-    }
-
-    currentSelection.currentX = currentPoint.x;
-    currentSelection.currentY = currentPoint.y;
-
-    if (
-      Math.abs(currentSelection.currentX - currentSelection.startX) > 2 ||
-      Math.abs(currentSelection.currentY - currentSelection.startY) > 2
-    ) {
-      if (!currentSelection.didMove) {
-        currentSelection.didMove = true;
-        setActiveMode("selecting");
-        setInsertionPoint(null);
-      }
-
-      scheduleSelectionRectangle(getSelectionRect(currentSelection));
-    }
-  }
-
-  function endCanvasInteraction(event: React.PointerEvent<HTMLElement>) {
-    const currentPan = panState.current;
-    const currentSelection = selectionState.current;
-
-    if (!currentPan && !currentSelection) {
-      return;
-    }
-
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-
-    if (currentPan) {
-      const nextPanOffset = {
-        x: currentPan.currentPanX,
-        y: currentPan.currentPanY,
-      };
-
-      panOffsetRef.current = nextPanOffset;
-      setPanOffset(nextPanOffset);
-      setActiveMode("canvas");
-    }
-
-    if (currentSelection?.didMove) {
-      const nextSelectionRect = getSelectionRect(currentSelection);
-      const nextSelectedBlockIds = visibleBlocks
-        .filter((block) =>
-          rectsIntersect(nextSelectionRect, {
-            x: block.x,
-            y: block.y,
-            width: block.width,
-            height: block.height,
-          }),
-        )
-        .map((block) => block.id);
-
-      setSelectedBlockIds(nextSelectedBlockIds);
-      setActiveMode(nextSelectedBlockIds.length > 0 ? "selected" : "canvas");
-    } else {
-      setActiveMode("canvas");
-    }
-
-    panState.current = null;
-    selectionState.current = null;
-    pendingSelectionRect.current = null;
-    hideSelectionRectangle();
-  }
-
-  function handleCanvasWheel(event: React.WheelEvent<HTMLElement>) {
-    event.preventDefault();
-
-    if (event.metaKey || event.ctrlKey) {
-      const currentZoom = zoomLevelRef.current;
-      const nextZoom = Math.min(
-        MAX_ZOOM,
-        Math.max(
-          MIN_ZOOM,
-          currentZoom + (event.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP),
-        ),
+    },
+    getArrowTargetLabel: getBindableTargetLabel,
+    getPrimitivePreviewAppearance: getPrimitiveAppearance,
+    hasPendingImage: () => pendingImagePlacementRef.current !== null,
+    interactionCancellationKey: `${activeTool}:${selectedPageId ?? ""}`,
+    isDirectTextDraftActive: () => directTextDraftRef.current !== null,
+    isTemporaryHandActiveRef,
+    isTextEditing: () =>
+      editingBlockIdRef.current !== null || directTextDraftRef.current !== null,
+    leaveTextEditing,
+    liveDraftLayerRef,
+    maxZoom: MAX_ZOOM,
+    minZoom: MIN_ZOOM,
+    onArrowStatusChange: setConnectorBindingAnnouncement,
+    onCreateArrow: completeArrowCreation,
+    onCreateDirectText: (point, previousSelection) =>
+      startDirectTextDraft(point, "pointer", canvasRef.current, previousSelection),
+    onCreatePrimitive: completePrimitiveCreation,
+    onPrimitiveStatusChange: (tool) => {
+      pointerShapeAnnouncementSequenceRef.current += 1;
+      const label = tool === "rectangle" ? "Rectangle" : tool === "ellipse" ? "Ellipse" : "Diamond";
+      setConnectorBindingAnnouncement(
+        `Shape gesture ${pointerShapeAnnouncementSequenceRef.current} was not created. ${label} needs horizontal and vertical size within the available canvas area.`,
       );
-
-      if (nextZoom === currentZoom) {
-        return;
-      }
-
-      const canvasRect = event.currentTarget.getBoundingClientRect();
-      const pointerX = event.clientX - canvasRect.left;
-      const pointerY = event.clientY - canvasRect.top;
-      const canvasPointX =
-        (pointerX - panOffsetRef.current.x) / currentZoom;
-      const canvasPointY =
-        (pointerY - panOffsetRef.current.y) / currentZoom;
-      const nextPanOffset = {
-        x: pointerX - canvasPointX * nextZoom,
-        y: pointerY - canvasPointY * nextZoom,
-      };
-
-      zoomLevelRef.current = nextZoom;
-      panOffsetRef.current = nextPanOffset;
-      setZoomLevel(nextZoom);
-      setPanOffset(nextPanOffset);
-      setLivePanOffset(nextPanOffset);
-      return;
+    },
+    onEditBindableText: editBlock,
+    onEditConnectorLabel: (elementId) => {
+      setConnectorLabelEditRequest((current) => ({
+        elementId,
+        request: (current?.request ?? 0) + 1,
+      }));
+    },
+    onImagePreviewPointChange: (point) => {
+      const current = pendingImagePlacementRef.current;
+      if (!current) return;
+      const next = { ...current, point };
+      pendingImagePlacementRef.current = next;
+      setPendingImagePlacement(next);
+    },
+    onPlaceImage: placePendingImage,
+    onRequestImagePicker: requestImagePicker,
+    onVisualDragCancel: cancelVisualDrag,
+    onVisualDragEnd: endVisualDrag,
+    onVisualDragMove: moveVisualDrag,
+    onVisualDragStart: startVisualDrag,
+    panOffsetRef,
+    scheduleCanvasContentTransform,
+    scheduleSelectionRectangle,
+    setActiveMode,
+    setInsertionPoint,
+    setIsCanvasKeyboardActive,
+    setLivePanOffset,
+    setPanOffset,
+    selectedElementIdsRef: selectedBlockIdsRef,
+    setSelectedElementIds: setSelectedBlockIds,
+    setZoomLevel,
+    visibleElements: visibleCanvasElements,
+    zoomLevelRef,
+    zoomStep: ZOOM_STEP,
+  });
+  cancelCanvasSelectionRef.current = canvasInteraction.cancelCapturedPointerInteraction;
+  keyboardTextCreationRef.current = () => {
+    canvasInteraction.cancelArrowAuthoring();
+    canvasInteraction.cancelCapturedPointerInteraction();
+    const point = canvasViewportRef.current
+      ? getDefaultKeyboardTextCaretPoint(canvasViewportRef.current)
+      : null;
+    if (!point) {
+      announceDirectText("Text was not created because the current viewport has no safe insertion point.");
+      return false;
     }
+    return startDirectTextDraft(point, "keyboard", canvasRef.current);
+  };
+  keyboardShapeCreationRef.current = (tool) => {
+    canvasInteraction.cancelArrowAuthoring();
+    canvasInteraction.cancelCapturedPointerInteraction();
+    const geometry = canvasViewportRef.current
+      ? getDefaultKeyboardShapeGeometry(tool, canvasViewportRef.current)
+      : null;
+    const label = tool === "rectangle" ? "Rectangle" : tool === "ellipse" ? "Ellipse" : "Diamond";
+    keyboardShapeAnnouncementSequenceRef.current += 1;
+    const sequence = keyboardShapeAnnouncementSequenceRef.current;
+    if (!geometry) {
+      setConnectorBindingAnnouncement(`Keyboard shape ${sequence} was not created. ${label} is unavailable at the current canvas position.`);
+      return false;
+    }
+    const elementId = createId("shape");
+    const keepsToolActive = isToolLockedRef.current;
+    if (!completePrimitiveCreation(elementId, tool, geometry, getPrimitiveAppearance(tool, elementId))) {
+      setConnectorBindingAnnouncement(`Keyboard shape ${sequence} was not created. ${label} is unavailable at the current canvas position.`);
+      return false;
+    }
+    setConnectorBindingAnnouncement(keepsToolActive
+      ? `Keyboard shape ${sequence} created. ${label} was placed in the current viewport. Tool lock kept ${label} active.`
+      : `Keyboard shape ${sequence} created. ${label} was placed in the current viewport. Switched to Select.`);
+    canvasRef.current?.focus({ preventScroll: true });
+    return true;
+  };
+  keyboardArrowCreationRef.current = () => {
+    canvasInteraction.cancelArrowAuthoring();
+    const endpoints = canvasViewportRef.current
+      ? getDefaultKeyboardArrowEndpoints(canvasViewportRef.current)
+      : null;
+    if (!endpoints) {
+      setConnectorBindingAnnouncement("Arrow is unavailable at the current canvas position.");
+      return false;
+    }
+    const elementId = createId("connector");
+    const keepsArrowActive = isToolLockedRef.current;
+    if (!completeArrowCreation(elementId, endpoints.start, endpoints.end)) {
+      setConnectorBindingAnnouncement("Arrow is unavailable at the current canvas position.");
+      return false;
+    }
+    setKeyboardArrowEndpointAccessId(elementId);
+    setConnectorBindingAnnouncement(keepsArrowActive
+      ? "Arrow created. Tool lock kept Arrow active. Use the endpoint handles to bind or move it."
+      : "Arrow created. Switched to Select. Use the endpoint handles to bind or move it.");
+    if (keyboardArrowEndpointFocusRafRef.current !== null) {
+      window.cancelAnimationFrame(keyboardArrowEndpointFocusRafRef.current);
+    }
+    keyboardArrowEndpointFocusRafRef.current = window.requestAnimationFrame(() => {
+      keyboardArrowEndpointFocusRafRef.current = null;
+      document.querySelector<HTMLButtonElement>('[data-connector-endpoint-handle="start"]')
+        ?.focus({ preventScroll: true });
+    });
+    return true;
+  };
 
-    const shiftScrollDelta =
-      Math.abs(event.deltaX) > Math.abs(event.deltaY)
-        ? event.deltaX
-        : event.deltaY;
-    const nextPanOffset = {
-      x:
-        panOffsetRef.current.x -
-        (event.shiftKey ? shiftScrollDelta : event.deltaX),
-      y: panOffsetRef.current.y - (event.shiftKey ? 0 : event.deltaY),
-    };
+  const completeInkStroke = useCallback(
+    (tool: "pen" | "highlighter", points: readonly RawInkPoint[]) => {
+      const pageId = selectedPageIdRef.current;
+      if (!pageId) return;
 
-    panOffsetRef.current = nextPanOffset;
-    setLivePanOffset(nextPanOffset);
-    setPanOffset(nextPanOffset);
-  }
+      const preference = drawingPreferencesRef.current[tool];
+      const brush = {
+        ...(tool === "pen" ? PEN_BRUSH : HIGHLIGHTER_BRUSH),
+        color: preference.strokeColor,
+        opacity: preference.opacity,
+        size: preference.strokeWidth,
+      };
+      const geometry = normalizeInkGeometry(
+        points,
+        brush.size,
+        brush.simulatePressure,
+      );
+      const elementId = createId("ink");
+      const timestamp = Date.now();
+
+      setBlocksWithHistory((currentElements) => {
+        const element: InkElement = {
+          ...geometry,
+          brush: {
+            ...brush,
+            color: { ...brush.color },
+          },
+          createdAt: timestamp,
+          id: elementId,
+          locked: false,
+          opacity: brush.opacity,
+          pageId,
+          rotation: 0,
+          type: "ink",
+          updatedAt: timestamp,
+          zIndex: currentElements.length,
+        };
+        return [...currentElements, element];
+      });
+      selectedBlockIdsRef.current = [elementId];
+      setSelectedBlockIds([elementId]);
+      setEditingBlockId(null);
+      setInsertionPoint(null);
+      setIsCanvasKeyboardActive(true);
+      setActiveMode("selected");
+      const nextTool = drawingToolAfterCreation(tool, isToolLockedRef.current);
+      if (nextTool !== tool) {
+        activeToolRef.current = nextTool;
+        setActiveTool(nextTool);
+      }
+    },
+    [],
+  );
+
+  const inkInteraction = useInkInteraction({
+    activeToolRef,
+    canvasContentRef,
+    getBrush: (tool) => {
+      const preference = drawingPreferencesRef.current[tool];
+      return {
+        ...(tool === "pen" ? PEN_BRUSH : HIGHLIGHTER_BRUSH),
+        color: preference.strokeColor,
+        opacity: preference.opacity,
+        size: preference.strokeWidth,
+      };
+    },
+    liveDraftLayerRef,
+    onCompleteStroke: completeInkStroke,
+    onEraseElements: eraseCanvasElements,
+    visibleElements: () => dataRef.current.elements.filter(
+      (element) => element.pageId === selectedPageIdRef.current,
+    ),
+    zoomLevelRef,
+  });
+  cancelCapturedCanvasInteractionsRef.current = () => {
+    canvasInteraction.cancelCapturedPointerInteraction();
+    inkInteraction.cancelCapturedPointerInteraction();
+    cancelSelectionFrameInteraction();
+    cancelVisualDragRef.current();
+    isTemporaryHandActiveRef.current = false;
+    canvasRef.current?.removeAttribute("data-temporary-hand");
+    document.body.classList.remove("is-interacting");
+  };
+  cancelCanvasInteractionTransitionRef.current = () => {
+    cancelCapturedCanvasInteractionsRef.current();
+    canvasInteraction.cancelArrowAuthoring();
+  };
 
   function focusSearchMatch(matchIndex: number) {
     if (searchMatches.length === 0) {
@@ -5221,22 +8743,15 @@ function App() {
       searchMatches.length;
     const match = searchMatches[normalizedIndex];
 
-    blurActiveTextEntry();
     setActiveSearchIndex(normalizedIndex);
-    setSelectedBlockIds([]);
-    setEditingBlockId(null);
-    setInsertionPoint(null);
-    setIsCanvasKeyboardActive(true);
-    setActiveMode("canvas");
 
     if (match.kind === "title") {
-      window.requestAnimationFrame(() => searchInputRef.current?.focus());
       return;
     }
 
-    const block = visibleBlocks.find((currentBlock) => currentBlock.id === match.blockId);
+    const block = visibleBlocks.find((currentBlock) => currentBlock.id === match.elementId);
 
-    if (!block) {
+    if (!block || !isBoxCanvasElement(block)) {
       return;
     }
 
@@ -5244,10 +8759,13 @@ function App() {
       x: canvasSize.width / 2 - (block.x + block.width / 2) * zoomLevel,
       y: canvasSize.height / 2 - (block.y + block.height / 2) * zoomLevel,
     });
-    window.requestAnimationFrame(() => searchInputRef.current?.focus());
   }
 
   function panToOffscreenGroup(direction: OffscreenGroup["direction"]) {
+    if (offscreenNavigationFocusRafRef.current !== null) {
+      window.cancelAnimationFrame(offscreenNavigationFocusRafRef.current);
+      offscreenNavigationFocusRafRef.current = null;
+    }
     if (!canvasViewport) {
       return;
     }
@@ -5259,6 +8777,8 @@ function App() {
     if (targetBlocks.length === 0) {
       return;
     }
+    const group = offscreenGroups.find((candidate) => candidate.direction === direction)
+      ?? createOffscreenGroup(direction, targetBlocks);
 
     const bounds = targetBlocks.reduce(
       (currentBounds, block) => ({
@@ -5278,15 +8798,49 @@ function App() {
       x: (bounds.minX + bounds.maxX) / 2,
       y: (bounds.minY + bounds.maxY) / 2,
     };
+    const navigationPageId = selectedPageIdRef.current;
+    const navigationFocusOrigin = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
 
     blurActiveTextEntry();
     setSelectedBlockIds(targetBlocks.map((block) => block.id));
     setEditingBlockId(null);
     setInsertionPoint(null);
     setActiveMode("selected");
+    setConnectorBindingAnnouncement(getOffscreenGroupStatusLabel(group));
     setPanOffset({
       x: canvasSize.width / 2 - targetCenter.x * zoomLevel,
       y: canvasSize.height / 2 - targetCenter.y * zoomLevel,
+    });
+    const targetBlockId = targetBlocks[0]?.id;
+    offscreenNavigationFocusRafRef.current = window.requestAnimationFrame(() => {
+      offscreenNavigationFocusRafRef.current = window.requestAnimationFrame(() => {
+        offscreenNavigationFocusRafRef.current = null;
+        const activeElement = document.activeElement;
+        const hasDifferentMeaningfulFocus = activeElement instanceof HTMLElement
+          && activeElement !== document.body
+          && activeElement !== document.documentElement
+          && activeElement !== navigationFocusOrigin
+          && activeElement.isConnected;
+        if (selectedPageIdRef.current !== navigationPageId || hasDifferentMeaningfulFocus) {
+          return;
+        }
+        const targetElement = targetBlockId
+          ? document.querySelector<HTMLElement>(
+            `[data-canvas-element-id="${CSS.escape(targetBlockId)}"]`,
+          )
+          : null;
+        const focusableSelector = ".text-block-header, [role=button], button, [tabindex]:not([tabindex='-1'])";
+        const focusTarget = targetElement?.matches(focusableSelector)
+          ? targetElement
+          : targetElement?.querySelector<HTMLElement>(focusableSelector);
+        if (focusTarget?.isConnected) {
+          focusTarget.focus({ preventScroll: true });
+          return;
+        }
+        canvasRef.current?.focus({ preventScroll: true });
+      });
     });
   }
 
@@ -5297,10 +8851,28 @@ function App() {
       : 0;
   const canvasSearchResultLabel =
     hasCanvasSearchQuery && searchMatches.length > 0
-      ? `${activeSearchDisplayIndex} / ${searchMatches.length}`
+      ? `${activeSearchDisplayIndex} / ${searchMatches.length}${isSearchTruncated ? "+" : ""}`
       : "0 / 0";
   const canvasSearchSourceLabel =
-    activeCanvasSearchMatch?.kind === "title" ? "Title" : "Text";
+    activeCanvasSearchMatch?.kind === "title"
+      ? "Page title"
+      : activeCanvasSearchMatch?.source === "shape-text"
+        ? "Shape text"
+        : "Text";
+  const canvasSearchStatusLabel = !hasCanvasSearchQuery
+    ? "Enter a search query."
+    : searchMatches.length === 0
+      ? "No results."
+      : `Result ${activeSearchDisplayIndex} of ${searchMatches.length}${isSearchTruncated ? " or more" : ""}, ${canvasSearchSourceLabel}`;
+  const isCanvasSearchUnavailable = Boolean(
+    editingBlockId
+    || isEditingHeaderTitle
+    || editingFolderId
+    || editingPageId
+    || connectorEndpointChooser
+    || activeNarrowOverlay
+    || isAIProvidersOpen
+  );
 
   return (
     <WorkbenchShell
@@ -5369,22 +8941,28 @@ function App() {
       />
 
       <section
-        className="workspace"
+        className={`workspace ${isTextFormattingVisible ? "has-text-formatting" : ""} ${isShapeTextEditing ? "is-shape-text-editing" : ""} ${isPropertiesPanelOpen && availableDrawingPropertiesContext ? "has-compact-properties" : ""}`}
         inert={
-          isAssistantOverlayOpen || isExplorerOverlayOpen ? true : undefined
+          isAssistantOverlayOpen || isExplorerOverlayOpen || isAIProvidersOpen
+            ? true
+            : undefined
         }
       >
         <PageHeader
           activeTextEditor={activeTextEditor}
           assistantToggleButtonRef={assistantToggleButtonRef}
+          canvasSearchButtonRef={canvasSearchButtonRef}
           isAssistantOpen={shouldRenderAssistantPanel}
+          isCanvasSearchUnavailable={isCanvasSearchUnavailable}
           isGridVisible={isGridVisible}
           isDarkMode={isDarkMode}
           isEditingHeaderTitle={isEditingHeaderTitle}
           isSnapToGridEnabled={isSnapToGridEnabled}
+          isTextFormattingVisible={isTextFormattingVisible}
           openPages={openPages}
           selectedPageId={selectedPageId}
           textFormatState={textFormatState}
+          titleSearchHighlights={titleSearchHighlights}
           zoomLevel={zoomLevel}
           onClosePageTab={closePageTab}
           onCreatePage={createPage}
@@ -5417,37 +8995,131 @@ function App() {
           onToggleTextFormat={toggleTextFormat}
         />
 
-        <section
-          aria-labelledby={
+        {persistenceAvailable || persistenceStatus.kind === "failed" ? (
+          <div
+            aria-live="polite"
+            className={`persistence-status persistence-status-${persistenceStatus.kind}`}
+            role="status"
+          >
+            {persistenceStatus.kind === "saving" ? "Saving" : null}
+            {persistenceStatus.kind === "saved" ? "Saved" : null}
+            {persistenceStatus.kind === "failed" ? (
+              <>
+                <span>Save failed: {persistenceStatus.error.message}</span>
+                <button onClick={retryPersistence} type="button">Retry save</button>
+              </>
+            ) : null}
+          </div>
+        ) : null}
+
+        {activeKeyboardShapeLabel ? (
+          <span className="canvas-accessibility-status" id="canvas-shape-authoring-instruction">
+            {`${activeKeyboardShapeLabel} tool selected. Drag to draw, or press Enter to add a default ${activeKeyboardShapeLabel.toLowerCase()} in the current viewport.`}
+          </span>
+        ) : null}
+        {isKeyboardTextCreationAvailable ? (
+          <span className="canvas-accessibility-status" id="canvas-text-authoring-instruction">
+            Text tool selected. Double-click to add text, or press Enter to start an editable text block in the current viewport.
+          </span>
+        ) : null}
+        <CanvasViewport
+          describedBy={activeKeyboardShapeLabel
+            ? "canvas-shape-authoring-instruction"
+            : isKeyboardTextCreationAvailable
+              ? "canvas-text-authoring-instruction"
+              : undefined}
+          labelledBy={
             selectedPageId ? getWorkspaceTabId(selectedPageId) : undefined
           }
-          className={`canvas ${activeMode === "canvas" ? "is-canvas-selected" : ""} ${
-            activeMode === "panning" ? "is-panning" : ""
-          } ${activeMode === "selecting" ? "is-selecting" : ""
-          }`}
-          aria-label="Freeform note canvas"
+          activeMode={activeMode}
+          activeTool={activeTool}
           id={WORKSPACE_PAGE_PANEL_ID}
-          onPointerCancel={endCanvasInteraction}
-          onContextMenu={(event) => event.preventDefault()}
-          onPointerDown={startCanvasInteraction}
-          onPointerMove={updateCanvasInteraction}
-          onPointerUp={endCanvasInteraction}
-          onWheel={handleCanvasWheel}
+          isKeyboardShapeCreationAvailable={activeKeyboardShapeLabel !== null}
+          isKeyboardTextCreationAvailable={isKeyboardTextCreationAvailable}
+          onDoubleClick={canvasInteraction.handleDoubleClick}
+          onDoubleClickCapture={canvasInteraction.handleDoubleClickCapture}
+          onLostPointerCapture={(event) => {
+            inkInteraction.handlePointerCancelCapture(event);
+            canvasInteraction.handlePointerCancel(event);
+          }}
+          onPointerCancel={canvasInteraction.handlePointerCancel}
+          onPointerCancelCapture={inkInteraction.handlePointerCancelCapture}
+          onPointerDown={canvasInteraction.handlePointerDown}
+          onPointerDownCapture={(event) => {
+            rememberCanvasPastePointer(event);
+            if (isCanvasPastePointerChromeTarget(event.target)) return;
+            canvasInteraction.handlePointerDownCapture(event);
+            if (!event.defaultPrevented) inkInteraction.handlePointerDownCapture(event);
+          }}
+          onPointerLeave={() => {
+            lastCanvasPointerClientRef.current = null;
+          }}
+          onPointerMove={canvasInteraction.handlePointerMove}
+          onPointerMoveCapture={(event) => {
+            rememberCanvasPastePointer(event);
+            if (isCanvasPastePointerChromeTarget(event.target)) return;
+            canvasInteraction.handlePointerMoveCapture(event);
+            inkInteraction.handlePointerMoveCapture(event);
+          }}
+          onPointerUp={canvasInteraction.handlePointerEnd}
+          onPointerUpCapture={inkInteraction.handlePointerUpCapture}
+          onWheel={canvasInteraction.handleWheel}
           ref={canvasRef}
-          role="tabpanel"
         >
+          {isCanvasAuthoringAvailable ? <>
+            <div
+              className="canvas-authoring-controls"
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              <CanvasToolPalette
+                activeTool={activeTool}
+                isPropertiesPanelAvailable={Boolean(availableDrawingPropertiesContext)}
+                isPropertiesPanelOpen={isPropertiesPanelOpen}
+                isToolLocked={isToolLocked}
+                onPropertiesPanelToggle={() => setIsPropertiesPanelOpen((open) => !open)}
+                onToolLockChange={setIsToolLocked}
+                onToolSelect={selectDrawingTool}
+              />
+              <input
+                accept="image/*"
+                aria-hidden="true"
+                hidden
+                onChange={(event) => {
+                  const file = event.currentTarget.files?.[0];
+                  event.currentTarget.value = "";
+                  void handleImageFileSelected(file);
+                }}
+                ref={imagePickerInputRef}
+                tabIndex={-1}
+                type="file"
+              />
+            </div>
+            {imageImportError ? <div className="canvas-image-import-error" role="alert">{imageImportError}</div> : null}
+            {availableDrawingPropertiesContext ? (
+              <DrawingPropertiesPanel
+                contextLabel={availableDrawingPropertiesContext.contextLabel}
+                isBackgroundModeDisabled={availableDrawingPropertiesContext.isBackgroundModeDisabled}
+                isCompactOpen={isPropertiesPanelOpen}
+                isSelection={availableDrawingPropertiesContext.isSelection}
+                onCancelPreview={cancelDrawingPropertyPreview}
+                onLayerAction={updateSelectedLayer}
+                onPreview={previewDrawingProperty}
+                onUpdate={updateDrawingProperty}
+                strokeWidthPresets={availableDrawingPropertiesContext.strokeWidthPresets}
+                supports={availableDrawingPropertiesContext.supports}
+                values={availableDrawingPropertiesContext.values}
+              />
+            ) : null}
+          </> : null}
           {offscreenGroups.length > 0 ? (
             <div
-              className={`offscreen-indicators ${
-                isSearchOpen ? "has-search-panel" : ""
-              }`}
-              aria-label="Offscreen textboxes"
+              className="offscreen-indicators"
+              aria-label={getOffscreenGroupsContainerLabel(offscreenGroups)}
+              role="group"
             >
               {offscreenGroups.map((group) => (
                 <button
-                  aria-label={`${group.count} ${
-                    group.count === 1 ? "textbox" : "textboxes"
-                  } offscreen ${getOffscreenDirectionLabel(group.direction)}`}
+                  aria-label={`${getOffscreenGroupItemLabel(group)} offscreen ${getOffscreenDirectionLabel(group.direction)}`}
                   className={`offscreen-arrow offscreen-${group.direction}`}
                   key={group.direction}
                   onClick={(event) => {
@@ -5464,107 +9136,264 @@ function App() {
             </div>
           ) : null}
           {isSearchOpen ? (
-            <div className="search-panel" onPointerDown={(event) => event.stopPropagation()}>
-              <HeroIcon name="magnifying-glass" />
-              <input
-                aria-label="Find in canvas"
-                onChange={(event) => setSearchQuery(event.currentTarget.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    focusSearchMatch(
-                      activeSearchIndex + (event.shiftKey ? -1 : 1),
-                    );
-                  }
+            <div
+              className="search-panel"
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  closeCanvasSearch();
+                }
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              <div className="search-panel-query">
+                <HeroIcon name="magnifying-glass" />
+                <input
+                  aria-describedby="canvas-search-status"
+                  aria-label="Find in canvas"
+                  onChange={(event) => {
+                    if (document.activeElement === event.currentTarget) {
+                      setSearchQuery(event.currentTarget.value);
+                    }
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      focusSearchMatch(
+                        activeSearchIndex + (event.shiftKey ? -1 : 1),
+                      );
+                    }
 
-                  if (event.key === "Escape") {
-                    setIsSearchOpen(false);
-                    setSearchQuery("");
-                  }
-                }}
-                placeholder="Find in canvas"
-                ref={searchInputRef}
-                value={searchQuery}
-              />
-              <span className="search-panel-count">
-                {canvasSearchResultLabel}
-                {hasCanvasSearchQuery && searchMatches.length > 0 ? (
-                  <small>{canvasSearchSourceLabel}</small>
-                ) : null}
+                  }}
+                  placeholder="Find in canvas"
+                  ref={searchInputRef}
+                  value={searchQuery}
+                />
+              </div>
+              <span
+                aria-atomic="true"
+                aria-live="polite"
+                className="search-panel-count"
+                id="canvas-search-status"
+                role="status"
+              >
+                <span aria-hidden="true">
+                  {canvasSearchResultLabel}
+                  {hasCanvasSearchQuery && searchMatches.length > 0 ? (
+                    <small>{canvasSearchSourceLabel}</small>
+                  ) : null}
+                </span>
+                <span className="search-status-announcement">{canvasSearchStatusLabel}</span>
               </span>
-              <button
-                aria-label="Previous match"
-                disabled={searchMatches.length === 0}
-                onClick={() => focusSearchMatch(activeSearchIndex - 1)}
-                title="Previous match"
-                type="button"
-              >
-                <HeroIcon name="chevron-up" />
-              </button>
-              <button
-                aria-label="Next match"
-                disabled={searchMatches.length === 0}
-                onClick={() => focusSearchMatch(activeSearchIndex + 1)}
-                title="Next match"
-                type="button"
-              >
-                <HeroIcon name="chevron-down" />
-              </button>
-              <button
-                aria-label="Close search"
-                onClick={() => {
-                  setIsSearchOpen(false);
-                  setSearchQuery("");
-                }}
-                title="Close search"
-                type="button"
-              >
-                <HeroIcon name="x-mark" />
-              </button>
+              <div className="search-panel-actions">
+                <button
+                  aria-label="Previous match"
+                  disabled={searchMatches.length === 0}
+                  onClick={() => focusSearchMatch(activeSearchIndex - 1)}
+                  title="Previous match"
+                  type="button"
+                >
+                  <HeroIcon name="chevron-up" />
+                </button>
+                <button
+                  aria-label="Next match"
+                  disabled={searchMatches.length === 0}
+                  onClick={() => focusSearchMatch(activeSearchIndex + 1)}
+                  title="Next match"
+                  type="button"
+                >
+                  <HeroIcon name="chevron-down" />
+                </button>
+                <button
+                  aria-label="Close search"
+                  onClick={() => {
+                    closeCanvasSearch();
+                  }}
+                  title="Close search"
+                  type="button"
+                >
+                  <HeroIcon name="x-mark" />
+                </button>
+              </div>
             </div>
           ) : null}
-          <div
-            className="canvas-content"
+          <CanvasWorldLayer
+            isGridVisible={isGridVisible}
+            liveDraftLayerRef={liveDraftLayerRef}
+            panOffset={panOffset}
             ref={canvasContentRef}
-            style={{
-              transform: `translate3d(${panOffset.x}px, ${panOffset.y}px, 0) scale(${zoomLevel})`,
-            }}
+            zoomLevel={zoomLevel}
           >
-            {isGridVisible ? <div className="canvas-grid" /> : null}
-            {visibleBlocks.map((block) => (
-              <TextBlockView
-                block={block}
-                activeSearchRange={
-                  activeSearchMatch?.blockId === block.id ? activeSearchMatch : null
-                }
-                isEditing={block.id === editingBlockId}
-                isDragSourceHidden={dragSourceBlockIds.includes(block.id)}
-                isMultiSelected={selectedBlockIds.length > 1}
-                isSelected={selectedBlockIds.includes(block.id)}
-                key={block.id}
-                onDelete={deleteBlock}
-                onEdit={editBlock}
-                onEditEnd={endBlockEdit}
-                onSelectAllBlocks={selectAllVisibleBlocks}
-                onCanvasPanEnd={endCanvasInteraction}
-                onCanvasPanMove={updateCanvasInteraction}
-                onCanvasPanStart={startCanvasPan}
-                onFocusEndHandled={handleFocusEndHandled}
-                onActiveEditorChange={setActiveTextEditor}
-                onInteractionModeChange={setActiveMode}
-                onBlockElementChange={registerBlockElement}
-                onSelect={selectBlock}
-                onUpdate={updateBlock}
-                onVisualDragCancel={cancelVisualDrag}
-                onVisualDragEnd={endVisualDrag}
-                onVisualDragMove={moveVisualDrag}
-                onVisualDragStart={startVisualDrag}
-                searchQuery={searchQuery}
-                shouldFocusEnd={focusEndBlockId === block.id}
-                zoomLevel={zoomLevel}
+            {displayedCanvasElements.map((element) => (
+              <CanvasElementRenderer
+                element={element}
+                key={element.id}
+                renderConnector={(connector) => (
+                  <ConnectorElementView
+                    activeSearchRange={
+                      activeSearchMatch?.elementId === connector.id ? activeSearchMatch : null
+                    }
+                    element={connector}
+                    elementsById={renderedCanvasElementsById}
+                    isSelected={selectedBlockIds.includes(connector.id)}
+                    labelEditRequest={
+                      connectorLabelEditRequest?.elementId === connector.id
+                        ? connectorLabelEditRequest.request
+                        : undefined
+                    }
+                    onElementChange={registerBlockElement}
+                    onKeyboardMove={moveCanvasElementByKeyboard}
+                    onLabelCommit={updateConnectorLabel}
+                    onSelect={selectBlock}
+                    searchRanges={getCanvasSearchRangesForElement(searchMatchesByElementId, connector.id)}
+                  />
+                )}
+                renderInk={(inkElement) => (
+                  <InkElementView
+                    element={inkElement}
+                    isDragSourceHidden={false}
+                    isMultiSelected={selectedBlockIds.length > 1}
+                    isSelected={selectedBlockIds.includes(inkElement.id)}
+                    onCanvasPanStart={canvasInteraction.startPan}
+                    onElementChange={registerBlockElement}
+                    onInteractionModeChange={setActiveMode}
+                    onResize={resizeInkElement}
+                    onSelect={selectBlock}
+                    onUpdate={updateInkElement}
+                    onVisualDragCancel={cancelVisualDrag}
+                    onVisualDragEnd={endVisualDrag}
+                    onVisualDragMove={moveVisualDrag}
+                    onVisualDragStart={startVisualDrag}
+                    zoomLevel={zoomLevel}
+                  />
+                )}
+                renderShape={(shape) => (
+                  <ShapeElementView
+                    activeSearchRange={
+                      activeSearchMatch?.elementId === shape.id ? activeSearchMatch : null
+                    }
+                    canvasTheme={isDarkMode ? "dark" : "light"}
+                    caretPlacementRequest={
+                      shapeCaretPlacement?.elementId === shape.id
+                        ? shapeCaretPlacement.request
+                        : null
+                    }
+                    element={shape}
+                    isEditing={shape.id === editingBlockId}
+                    isSelected={selectedBlockIds.includes(shape.id)}
+                    onActiveEditorChange={setActiveTextEditor}
+                    onEdit={editBlock}
+                    onEditEnd={endBlockEdit}
+                    onEditSessionChange={registerShapeTextEditSession}
+                    onElementChange={registerBlockElement}
+                    onKeyboardMove={moveCanvasElementByKeyboard}
+                    onSelect={selectBlock}
+                    onTextCommit={updateShapeText}
+                    searchRanges={getCanvasSearchRangesForElement(searchMatchesByElementId, shape.id)}
+                    searchableText={canvasSearchTextIndex.get(shape.id) ?? ""}
+                  />
+                )}
+                renderText={(block) => {
+                  const isDirectTextDraft = directTextDraft?.block.id === block.id;
+                  return (
+                    <TextBlockView
+                      block={block}
+                      activeSearchRange={
+                        activeSearchMatch?.elementId === block.id ? activeSearchMatch : null
+                      }
+                      isEditing={block.id === editingBlockId}
+                      isDragSourceHidden={false}
+                      interactionCancellationKey={`${activeTool}:${selectedPageId ?? ""}`}
+                      isMultiSelected={selectedBlockIds.length > 1}
+                      isSelected={selectedBlockIds.includes(block.id)}
+                      isTransientDraft={isDirectTextDraft}
+                      key={block.id}
+                      onCancelDraft={cancelDirectTextDraft}
+                      onDelete={(blockId) => {
+                        if (!cancelDirectTextDraft(blockId)) deleteBlock(blockId);
+                      }}
+                      onEdit={editBlock}
+                      onEditEnd={(blockId) => {
+                        if (!cancelDirectTextDraft(blockId)) endBlockEdit(blockId);
+                      }}
+                      onSelectAllBlocks={selectAllVisibleBlocks}
+                      onCanvasPanEnd={canvasInteraction.handlePointerEnd}
+                      onCanvasPanMove={canvasInteraction.handlePointerMove}
+                      onCanvasPanStart={canvasInteraction.startPan}
+                      onFocusEndHandled={handleFocusEndHandled}
+                      onActiveEditorChange={setActiveTextEditor}
+                      onBlockElementChange={registerBlockElement}
+                      onKeyboardMove={moveCanvasElementByKeyboard}
+                      onKeyboardResize={resizeTextWidthByKeyboard}
+                      onSelect={selectBlock}
+                      onUpdate={(blockId, updates) => {
+                        if (directTextDraftRef.current?.block.id === blockId) {
+                          commitDirectTextDraft(blockId, updates);
+                          return;
+                        }
+                        updateBlock(blockId, updates);
+                      }}
+                      onVisualDragCancel={cancelVisualDrag}
+                      onVisualDragEnd={endVisualDrag}
+                      onVisualDragMove={moveVisualDrag}
+                      onVisualDragStart={startVisualDrag}
+                      searchRanges={getCanvasSearchRangesForElement(searchMatchesByElementId, block.id)}
+                      searchableText={canvasSearchTextIndex.get(block.id) ?? ""}
+                      shouldFocusEnd={focusEndBlockId === block.id}
+                      zoomLevel={zoomLevel}
+                    />
+                  );
+                }}
+                renderImage={(block) => (
+                  <ImageElementView
+                  element={block}
+                  imageSource={imageSourcesByAssetIdRef.current.get(block.assetId)}
+                  isDragSourceHidden={false}
+                  isMultiSelected={selectedBlockIds.length > 1}
+                  isSelected={selectedBlockIds.includes(block.id)}
+                  key={block.id}
+                  onBlockElementChange={registerBlockElement}
+                  onCanvasPanStart={canvasInteraction.startPan}
+                  onInteractionModeChange={setActiveMode}
+                  onSelect={selectBlock}
+                  onUpdate={updateImageElement}
+                  onVisualDragCancel={cancelVisualDrag}
+                  onVisualDragEnd={endVisualDrag}
+                  onVisualDragMove={moveVisualDrag}
+                  onVisualDragStart={startVisualDrag}
+                  zoomLevel={zoomLevel}
+                  />
+                )}
               />
             ))}
-            <div className="selection-rectangle" ref={selectionRectRef} />
+            {canvasInteraction.arrowAuthoringVisual ? (
+              <ConnectorBindingTargetHighlight
+                anchor={canvasInteraction.arrowAuthoringVisual.anchor}
+                isSnapped={canvasInteraction.arrowAuthoringVisual.isSnapped}
+                target={canvasInteraction.arrowAuthoringVisual.target}
+                zoom={zoomLevel}
+              />
+            ) : isConnectorEndpointRetargeting && connectorEndpointRetargetVisual ? (
+              <ConnectorBindingTargetHighlight
+                anchor={connectorEndpointRetargetVisual.anchor}
+                isSnapped={connectorEndpointRetargetVisual.isSnapped}
+                target={connectorEndpointRetargetVisual.target}
+                zoom={zoomLevel}
+              />
+            ) : null}
+            {pendingImagePlacement?.point ? (
+              <img
+                alt=""
+                aria-hidden="true"
+                className="canvas-image-placement-preview"
+                src={pendingImagePlacement.dataUrl}
+                style={{
+                  left: pendingImagePlacement.point.x,
+                  top: pendingImagePlacement.point.y,
+                }}
+              />
+            ) : null}
             {insertionPoint ? (
               <div
                 className="canvas-caret"
@@ -5574,6 +9403,196 @@ function App() {
                 }}
               />
             ) : null}
+          </CanvasWorldLayer>
+          <CanvasInteractionOverlay
+            marqueeRef={selectionRectRef}
+            selectionFrameRef={selectionFrameRef}
+            selectionFrame={(() => {
+              const isKeyboardArrowEndpointAccess = activeTool === "arrow"
+                && selectedBlockIds.length === 1
+                && selectedBlockIds[0] === keyboardArrowEndpointAccessId;
+              const selected = selectedBlockIds.length === 1
+                ? connectorEndpointPreview?.id === selectedBlockIds[0]
+                  ? connectorEndpointPreview
+                  : visibleCanvasElements.find((block) => block.id === selectedBlockIds[0])
+                : undefined;
+              const frameGeometry: SelectionFrameGeometry | null = selectionFramePreview
+                ? { ...selectionFramePreview, rotation: 0 }
+                : selected && isBoxCanvasElement(selected)
+                  ? {
+                      height: selected.height,
+                      rotation: selected.rotation,
+                      width: selected.width,
+                      x: selected.x,
+                      y: selected.y,
+                    }
+                  : selectionWorldBounds
+                    ? { ...selectionWorldBounds, rotation: 0 }
+                    : null;
+              if (
+                (activeTool !== "select" && !isKeyboardArrowEndpointAccess)
+                || !frameGeometry
+                || selectedBlockIds.length === 0
+                || editingBlockId
+              ) return undefined;
+              const isNativeTextFrame = selected?.type === "text";
+              const usesNativeSingleElementInteraction = Boolean(
+                selected && (selected.type === "image" || selected.type === "text"),
+              );
+              const framePadding = isNativeTextFrame ? 0 : SELECTION_FRAME_PADDING_PX;
+              const mixedHasRotatedBox = selectedBlockIds.length > 1 && visibleCanvasElements.some((element) =>
+                selectedBlockIds.includes(element.id) && isBoxCanvasElement(element) && Math.abs(element.rotation % 360) > 0.001,
+              );
+              const resizeHandles: readonly SelectionResizeHandle[] = !selectionHasUnlockedElements
+                ? []
+                : selectedBlockIds.length > 1
+                  ? mixedHasRotatedBox ? ["nw", "ne", "se", "sw"] : ["n", "ne", "e", "se", "s", "sw", "w", "nw"]
+                  : selected?.type === "shape"
+                    ? ["n", "ne", "e", "se", "s", "sw", "w", "nw"]
+                    : selected?.type === "text"
+                      ? ["n", "ne", "e", "se", "s", "sw", "w", "nw"]
+                      : selected?.type === "image" || selected?.type === "ink"
+                        ? ["n", "e", "se", "s", "w"]
+                    : [];
+              const connectorEndpointPoints = selected?.type === "connector"
+                ? resolveConnectorPoints(selected, renderedCanvasElementsById)
+                : null;
+              const connectorEndpointHandles = selected?.type === "connector" && !selected.locked && connectorEndpointPoints?.start && connectorEndpointPoints.end
+                ? ([
+                  { endpoint: "start" as const, point: connectorEndpointPoints.start },
+                  { endpoint: "end" as const, point: connectorEndpointPoints.end },
+                ]).map(({ endpoint, point }) => ({
+                    description: getConnectorEndpointDescription(selected, endpoint),
+                    endpoint,
+                    onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        openConnectorEndpointChooser(endpoint, event.currentTarget);
+                        return;
+                      }
+                      moveConnectorEndpointByKeyboard(endpoint)(event);
+                    },
+                    onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => startSelectionFrameInteraction(event, null, endpoint),
+                    x: (point.x - frameGeometry.x) * zoomLevel + framePadding,
+                    y: (point.y - frameGeometry.y) * zoomLevel + framePadding,
+                  }))
+                : undefined;
+              return {
+                connectorEndpointHandles,
+                height: frameGeometry.height * zoomLevel + framePadding * 2,
+                isNativeTextFrame,
+                moveLabel: selectionHasLockedElements ? "Move unlocked selected elements" : "Move selected elements",
+                onClick: selected?.type === "connector" && isArrowConnector(selected)
+                  ? (event: ReactMouseEvent<HTMLButtonElement>) => {
+                      if (event.detail < 2) return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setConnectorLabelEditRequest((current) => ({
+                        elementId: selected.id,
+                        request: (current?.request ?? 0) + 1,
+                      }));
+                    }
+                  : undefined,
+                onMoveKeyDown: moveSelectionByKeyboard,
+                onDoubleClick: selected?.type === "shape" || selected?.type === "text"
+                    ? (event: ReactMouseEvent<HTMLButtonElement>) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        editBlock(selected.id, {
+                          clientX: event.clientX,
+                          clientY: event.clientY,
+                          textOffset: null,
+                        });
+                      }
+                    : undefined,
+                onPointerCancel: (event: ReactPointerEvent<HTMLButtonElement>) => finishSelectionFrameInteraction(event, true),
+                onLostPointerCapture: (event: ReactPointerEvent<HTMLButtonElement>) => finishSelectionFrameInteraction(event, true),
+                onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => {
+                  if (
+                    selected?.type === "connector"
+                    && isArrowConnector(selected)
+                    && canvasInteraction.consumeRecentConnectorClick(
+                      selected.id,
+                      event.clientX,
+                      event.clientY,
+                    )
+                  ) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setConnectorLabelEditRequest((current) => ({
+                      elementId: selected.id,
+                      request: (current?.request ?? 0) + 1,
+                    }));
+                    return;
+                  }
+                  startSelectionFrameInteraction(event, null);
+                },
+                onPointerMove: moveSelectionFrameInteraction,
+                onPointerUp: finishSelectionFrameInteraction,
+                onResizeKeyDown: resizeSelectionByKeyboard,
+                onResizePointerDown: (corner: SelectionResizeHandle) => (event: ReactPointerEvent<HTMLButtonElement>) => startSelectionFrameInteraction(event, corner),
+                preserveNativeSoutheastHandle: selected?.type === "ink",
+                resizeLabel: (corner: SelectionResizeHandle) => selectionHasLockedElements
+                  ? `Resize unlocked selected elements from ${corner}`
+                  : `Resize selected elements from ${corner}`,
+                resizeHandles,
+                rotation: frameGeometry.rotation,
+                showMoveSurface: activeTool === "select" && selectionHasUnlockedElements && !usesNativeSingleElementInteraction,
+                width: frameGeometry.width * zoomLevel + framePadding * 2,
+                x: panOffset.x + frameGeometry.x * zoomLevel - framePadding,
+                y: panOffset.y + frameGeometry.y * zoomLevel - framePadding,
+              };
+            })()}
+          >
+            {suppressedConnectorControls.map(({ connector, label, placement }) => (
+              <SuppressedConnectorControl
+                connectorId={connector.id}
+                isLocked={connector.locked}
+                isSelected={selectedBlockIds.length === 1 && selectedBlockIds[0] === connector.id}
+                key={connector.id}
+                label={label}
+                left={placement.left}
+                onDelete={() => {
+                  if (!deleteBlocks([connector.id])) return;
+                  setConnectorBindingAnnouncement(`Deleted ${label}. Undo is available.`);
+                  setActiveMode("canvas");
+                  window.requestAnimationFrame(() => canvasRef.current?.focus({ preventScroll: true }));
+                }}
+                onManageEndpoint={(endpoint, origin) => openConnectorEndpointChooser(endpoint, origin)}
+                onSelect={() => selectBlock(connector.id)}
+                side={placement.side}
+                top={placement.top}
+              />
+            ))}
+          </CanvasInteractionOverlay>
+          {connectorEndpointChooser && (() => {
+            const connector = visibleCanvasElements.find((element): element is ConnectorElement =>
+              element.id === selectedBlockIds[0] && element.type === "connector" && isArrowConnector(element),
+            );
+            if (!connector) return null;
+            const chooserEndpoint = connector[connectorEndpointChooser.endpoint];
+            const targets = getConnectorBindingTargetsForEndpoint(connector, connectorEndpointChooser.endpoint)
+              .map(({ element, label }) => ({ id: element.id, label }));
+            return (
+              <ConnectorEndpointChooser
+                endpoint={connectorEndpointChooser.endpoint}
+                isBound={chooserEndpoint.kind === "element"}
+                isDarkMode={isDarkMode}
+                onBind={bindSelectedConnectorEndpoint}
+                onClose={closeConnectorEndpointChooser}
+                onDetach={detachSelectedConnectorEndpoint}
+                onSelectTarget={(targetElementId) => setConnectorEndpointChooser((current) =>
+                  current ? { ...current, targetElementId } : current,
+                )}
+                statusMessage={connectorBindingAnnouncement}
+                targets={targets}
+                targetElementId={connectorEndpointChooser.targetElementId}
+              />
+            );
+          })()}
+          <div aria-atomic="true" aria-live="polite" className="canvas-accessibility-status" role="status">
+            {connectorBindingAnnouncement}
           </div>
           {shouldShowStarterShortcuts ? (
             <div
@@ -5604,7 +9623,7 @@ function App() {
               <p>Select or create a page</p>
             </div>
           ) : null}
-        </section>
+        </CanvasViewport>
       </section>
       {isAIProvidersOpen ? (
         <AIProvidersSettings
@@ -6577,14 +10596,18 @@ function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps) {
 const PageHeader = memo(function PageHeader({
   activeTextEditor,
   assistantToggleButtonRef,
+  canvasSearchButtonRef,
   isAssistantOpen,
   isGridVisible,
   isDarkMode,
+  isCanvasSearchUnavailable,
   isEditingHeaderTitle,
   isSnapToGridEnabled,
+  isTextFormattingVisible,
   openPages,
   selectedPageId,
   textFormatState,
+  titleSearchHighlights,
   zoomLevel,
   onClosePageTab,
   onCreatePage,
@@ -6628,15 +10651,18 @@ const PageHeader = memo(function PageHeader({
         onSetEditingActiveTab={onSetEditingHeaderTitle}
         selectedPageId={selectedPageId}
         tabs={openPages}
+        titleSearch={{ pageId: selectedPageId, ranges: titleSearchHighlights }}
       />
       <div className="page-header-actions">
-        <GlobalTextToolbar
-          editor={activeTextEditor && !activeTextEditor.isDestroyed ? activeTextEditor : null}
-          formatState={textFormatState}
-          onSetFontFamily={onSetTextFontFamily}
-          onSetFontSize={onSetTextFontSize}
-          onToggleFormat={onToggleTextFormat}
-        />
+        {isTextFormattingVisible ? (
+          <GlobalTextToolbar
+            editor={activeTextEditor && !activeTextEditor.isDestroyed ? activeTextEditor : null}
+            formatState={textFormatState}
+            onSetFontFamily={onSetTextFontFamily}
+            onSetFontSize={onSetTextFontSize}
+            onToggleFormat={onToggleTextFormat}
+          />
+        ) : null}
         <div
           aria-label="Canvas controls"
           className="canvas-controls"
@@ -6646,7 +10672,23 @@ const PageHeader = memo(function PageHeader({
             aria-label="Find in canvas"
             className="header-toggle icon-button"
             data-tooltip="Find in canvas (Ctrl+F)"
-            onClick={onFocusCanvasSearch}
+            disabled={isCanvasSearchUnavailable}
+            onClick={(event) => {
+              if (isCanvasSearchUnavailable) {
+                event.preventDefault();
+                event.stopPropagation();
+                return;
+              }
+
+              onFocusCanvasSearch(event.currentTarget);
+            }}
+            onPointerDown={(event) => {
+              if (isCanvasSearchUnavailable) {
+                event.preventDefault();
+                event.stopPropagation();
+              }
+            }}
+            ref={canvasSearchButtonRef}
             type="button"
           >
             <HeroIcon name="magnifying-glass" />
@@ -6909,11 +10951,14 @@ function arePageHeaderPropsEqual(previous: PageHeaderProps, next: PageHeaderProp
     previous.isAssistantOpen === next.isAssistantOpen &&
     previous.isGridVisible === next.isGridVisible &&
     previous.isDarkMode === next.isDarkMode &&
+    previous.isCanvasSearchUnavailable === next.isCanvasSearchUnavailable &&
     previous.isEditingHeaderTitle === next.isEditingHeaderTitle &&
     previous.isSnapToGridEnabled === next.isSnapToGridEnabled &&
+    previous.isTextFormattingVisible === next.isTextFormattingVisible &&
     previous.openPages === next.openPages &&
     previous.selectedPageId === next.selectedPageId &&
     previous.textFormatState === next.textFormatState &&
+    previous.titleSearchHighlights === next.titleSearchHighlights &&
     previous.zoomLevel === next.zoomLevel
   );
 }

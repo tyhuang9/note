@@ -4,6 +4,8 @@ use std::fs;
 use std::path::PathBuf;
 use tauri::Manager;
 
+pub mod storage;
+
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AppData {
@@ -40,6 +42,7 @@ struct TextBlock {
     width: f64,
     height: f64,
     content: String,
+    background_mode: Option<String>,
     rich_content: Option<serde_json::Value>,
     is_width_manually_resized: Option<bool>,
     image_data: Option<String>,
@@ -49,7 +52,10 @@ struct TextBlock {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AppSessionState {
+    drawing_preferences: Option<serde_json::Value>,
+    text_preferences: Option<serde_json::Value>,
     is_assistant_open: Option<bool>,
+    is_drawing_tool_locked: Option<bool>,
     is_explorer_collapsed: Option<bool>,
     selected_folder_id: Option<String>,
     selected_page_id: Option<String>,
@@ -80,6 +86,60 @@ fn app_data_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(app_data_dir.join("note-data.json"))
 }
 
+fn storage_root(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn initialize_storage(app_handle: tauri::AppHandle) -> Result<storage::StorageDiagnostics, String> {
+    storage::initialize_storage_at(&storage_root(&app_handle)?)
+}
+
+#[tauri::command]
+fn load_workspace_data(app_handle: tauri::AppHandle) -> Result<storage::WorkspaceData, String> {
+    storage::load_workspace_data_at(&storage_root(&app_handle)?)
+}
+
+#[tauri::command]
+fn apply_scene_changes(
+    app_handle: tauri::AppHandle,
+    batch: storage::SceneChangeBatch,
+) -> Result<storage::SceneChangeResult, String> {
+    storage::apply_scene_changes_at(&storage_root(&app_handle)?, batch)
+}
+
+#[tauri::command]
+fn reconcile_workspace_structure(
+    app_handle: tauri::AppHandle,
+    structure: storage::WorkspaceStructure,
+) -> Result<storage::WorkspaceStructureResult, String> {
+    storage::reconcile_workspace_structure_at(&storage_root(&app_handle)?, structure)
+}
+
+#[tauri::command]
+fn save_asset(
+    app_handle: tauri::AppHandle,
+    request: storage::SaveAssetRequest,
+) -> Result<storage::AssetDto, String> {
+    storage::repository::save_asset_at(&storage_root(&app_handle)?, request)
+}
+
+#[tauri::command]
+fn load_asset(app_handle: tauri::AppHandle, asset_id: String) -> Result<storage::AssetDto, String> {
+    storage::repository::load_asset_at(&storage_root(&app_handle)?, &asset_id)
+}
+
+#[tauri::command]
+fn save_session_state(
+    app_handle: tauri::AppHandle,
+    state: serde_json::Value,
+) -> Result<(), String> {
+    storage::save_session_state_at(&storage_root(&app_handle)?, state)
+}
+
 #[tauri::command]
 fn load_app_data(app_handle: tauri::AppHandle) -> Result<AppData, String> {
     let data_path = app_data_path(&app_handle)?;
@@ -107,7 +167,17 @@ fn save_app_data(app_handle: tauri::AppHandle, data: AppData) -> Result<(), Stri
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![load_app_data, save_app_data])
+        .invoke_handler(tauri::generate_handler![
+            load_app_data,
+            save_app_data,
+            initialize_storage,
+            load_workspace_data,
+            apply_scene_changes,
+            reconcile_workspace_structure,
+            save_asset,
+            load_asset,
+            save_session_state
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

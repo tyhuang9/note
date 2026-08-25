@@ -163,7 +163,10 @@ export function getSlashCommandItems(query: string) {
       (match): match is typeof match & { score: number } =>
         match.score !== null,
     )
-    .sort((first, second) => first.score - second.score || first.index - second.index)
+    .sort(
+      (first, second) =>
+        first.score - second.score || first.index - second.index,
+    )
     .map(({ command }) => command);
 }
 

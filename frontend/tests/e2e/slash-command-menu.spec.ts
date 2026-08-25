@@ -67,9 +67,7 @@ const SLASH_COMMANDS: SlashCommandCase[] = [
 test("slash triggers only at supported boundaries", async ({ page }) => {
   await openInitialNote(page);
 
-  await clickCanvas(page, 280, 150);
-  await page.keyboard.type("/");
-  await expect(slashMenu(page)).toBeVisible();
+  await openSlashMenu(page, 280, 150);
   await expect(slashMenu(page).getByRole("option")).toHaveCount(9);
   await page.keyboard.press("Escape");
 
@@ -104,6 +102,39 @@ test("slash triggers only at supported boundaries", async ({ page }) => {
   await page.keyboard.type("# Heading /");
   await expect(headingEditor.locator(":scope > h1")).toHaveCount(1);
   await expect(slashMenu(page)).toBeVisible();
+});
+
+test("canvas find does not steal focus from text editing or close slash commands", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openInitialNote(page);
+  const editor = await openSlashMenu(page, 280, 150);
+  await page.keyboard.press("Control+f");
+  await expect(editor).toBeFocused();
+  await expect(slashMenu(page)).toBeVisible();
+  await expect(page.locator(".search-panel")).toHaveCount(0);
+});
+
+test("canvas find shortcut remains available from non-text canvas controls", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openInitialNote(page);
+  await page.getByRole("textbox", { name: "Page title" }).press("Escape");
+  const selectTool = page.getByRole("button", { name: /Select \(V/ });
+  await selectTool.focus();
+  await expect(selectTool).toBeFocused();
+  await page.keyboard.press("Control+f");
+  await expect(page.getByRole("textbox", { name: "Find in canvas" })).toBeFocused();
+});
+
+test("canvas find does not steal focus from a text input", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openInitialNote(page);
+  await page.getByRole("button", { name: "Search files" }).click();
+  const fileSearch = page.getByRole("searchbox", { name: "Search files and notes" });
+  await fileSearch.fill("draft");
+  await fileSearch.press("Control+f");
+  await expect(fileSearch).toBeFocused();
+  await expect(fileSearch).toHaveValue("draft");
+  await expect(page.locator(".search-panel")).toHaveCount(0);
 });
 
 test("slash stays literal in links, inline code, code blocks, lists, and quotes", async ({
@@ -303,6 +334,58 @@ test("keyboard navigation selects commands and supports Enter, Escape, and Tab",
   ).toBe(false);
 });
 
+test("keyboard navigation scrolls only the menu and ignores a stationary pointer", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 640, height: 480 });
+  await openInitialNote(page);
+  await page.addStyleTag({
+    content: `
+      html, body, #root { min-height: 1800px; }
+      .slash-command-popup { max-height: 160px !important; }
+    `,
+  });
+  const editor = await openSlashMenu(page, 280, 160);
+  const menu = slashMenu(page);
+  const options = menu.getByRole("option");
+
+  await options.first().hover();
+  await expectSelectedOption(options, 0);
+  await page.evaluate(() => window.scrollTo(0, 240));
+  const outerScrollTop = await page.evaluate(() => window.scrollY);
+  expect(outerScrollTop).toBeGreaterThan(0);
+
+  await page.keyboard.press("ArrowUp");
+  await expectSelectedOption(options, 8);
+  await expect
+    .poll(() => menu.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(0);
+  expect(await page.evaluate(() => window.scrollY)).toBe(outerScrollTop);
+  await expect(editor).toBeFocused();
+  await expect(editor).toHaveAttribute(
+    "aria-activedescendant",
+    (await options.nth(8).getAttribute("id")) ?? "",
+  );
+
+  await menu.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await expect(menu).not.toHaveAttribute("data-has-more-below", "true");
+  await page.keyboard.press("ArrowDown");
+  await expectSelectedOption(options, 0);
+  await expect(menu).toHaveAttribute("data-has-more-below", "true");
+  expect(await page.evaluate(() => window.scrollY)).toBe(outerScrollTop);
+  await page.keyboard.press("ArrowDown");
+  await expectSelectedOption(options, 1);
+  await page.keyboard.press("ArrowUp");
+  await expectSelectedOption(options, 0);
+
+  await options.nth(2).hover();
+  await expectSelectedOption(options, 2);
+  await expect(editor).toBeFocused();
+});
+
 test("composition, pointer hover, backspace, and outside clicks dismiss safely", async ({
   page,
 }) => {
@@ -486,7 +569,7 @@ test("divider places the caret in a following paragraph and persists after blur"
   await expect(display).toBeVisible();
   await expect(display.locator("hr")).toHaveCount(1);
 
-  await display.locator("p").click();
+  await display.locator("p").dblclick();
   const reopenedDividerOnlyEditor = block.locator(".text-block-editor-content");
   await expect(reopenedDividerOnlyEditor).toBeVisible();
   await expect(reopenedDividerOnlyEditor).toBeFocused();
@@ -500,7 +583,7 @@ test("divider places the caret in a following paragraph and persists after blur"
   await expect(display.locator("hr")).toHaveCount(1);
   await expect(display.locator("p")).toHaveText("After divider");
 
-  await display.locator("p").click();
+  await display.locator("p").dblclick();
   const reopenedEditor = block.locator(".text-block-editor-content");
   await expect(reopenedEditor).toBeVisible();
   await expect(reopenedEditor.locator("hr")).toHaveCount(1);
@@ -711,8 +794,7 @@ test("menu clamps to a phone-width viewport without clipping its footer", async 
   const viewport = { width: 320, height: 480 };
   await page.setViewportSize(viewport);
   await openInitialNote(page);
-  await clickCanvas(page, 150, 190);
-  await page.keyboard.type("/");
+  await openSlashMenu(page, 150, 190);
 
   const popup = page.locator(".slash-command-popup");
   const footer = popup.locator(".slash-command-footer");
@@ -742,8 +824,7 @@ test("menu copy reflows without truncation at 200% text size", async ({
       .slash-command-description { font-size: 24px !important; line-height: 34px !important; }
     `,
   });
-  await clickCanvas(page, 150, 190);
-  await page.keyboard.type("/");
+  await openSlashMenu(page, 150, 190);
 
   const popup = page.locator(".slash-command-popup");
   const firstOption = popup.getByRole("option").first();
@@ -834,7 +915,14 @@ async function createEditorAt(
   initialText: string,
 ) {
   await clickCanvas(page, x, y);
-  await page.keyboard.press("x");
+  const canvas = page.getByRole("tabpanel");
+  const bounds = await canvas.boundingBox();
+
+  if (!bounds) {
+    throw new Error("Canvas bounds were not available.");
+  }
+
+  await page.mouse.dblclick(bounds.x + x, bounds.y + y);
 
   const editor = page.locator(".text-block-editor-content").last();
   await expect(editor).toBeFocused();
@@ -856,10 +944,17 @@ async function openSlashMenu(
   query = "",
 ) {
   await clickCanvas(page, x, y);
-  await page.keyboard.type("/");
+  const canvas = page.getByRole("tabpanel");
+  const bounds = await canvas.boundingBox();
 
+  if (!bounds) {
+    throw new Error("Canvas bounds were not available.");
+  }
+
+  await page.mouse.dblclick(bounds.x + x, bounds.y + y);
   const editor = page.locator(".text-block-editor-content").last();
   await expect(editor).toBeFocused();
+  await page.keyboard.type("/");
   await expect(slashMenu(page)).toBeVisible();
 
   if (query) {

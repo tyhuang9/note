@@ -1,62 +1,69 @@
-# Slash Menu Design QA
+# Canvas Geometry Polish — Product Design QA
 
-**Source visual truth path**
+## Result
 
-- Four Notion slash-menu screenshots attached to the user's implementation request. The attachments are conversation-scoped and the client did not expose a local filesystem path.
-- The approved product plan intentionally uses those screenshots as an interaction-density reference while retaining Note's own colors, icons, typography, and 340px/360px popup constraints.
+`final result: passed`
 
-**Implementation evidence**
+No unresolved P0, P1, or P2 visual findings remain for the six-item canvas geometry scope.
 
-- Full dark state: `docs/qa/note-slash-menu-dark-full.png`
-- Focused dark popup: `docs/qa/note-slash-menu-dark-popup.png`
-- Focused light filtered popup: `docs/qa/note-slash-menu-light-filtered.png`
+## Final State
 
-**Viewport and normalization**
+- Product runtime: `9d0a804` on `agent/final-geometry-integration-fixes-v6`.
+- Browser: Playwright Chromium, device pixel ratio 1.
+- Isolated capture server: `http://127.0.0.1:4327`.
+- Capture test: `frontend/tests/e2e/geometry-polish-design-qa.spec.ts`, 1/1 passed.
+- Runtime diagnostics during the capture flow: 0 console errors and 0 page errors.
+- Unrelated toolbar and property chrome was hidden only in the comparison captures so the supplied canvas states and implementation states use the same visual framing. Product behavior was not altered.
 
-- Full implementation viewport: 1280 × 800 CSS px, Chromium, device scale factor 1.
-- Focused implementation popup: 340 × 360 CSS px and 340 × 360 output pixels.
-- Source screenshots are narrow desktop popup crops at their supplied display density. They were compared as interaction and hierarchy references, not as a pixel-identical clone target; the approved Note dimensions supersede the larger Notion popup dimensions.
-- State compared: empty-query dark menu, filtered light menu, selected first option, grouped results, hints, and close footer.
+## Source and Implementation Comparisons
 
-**Full-view comparison evidence**
+Each source and implementation image in a pair has identical pixel dimensions. The combined images place the supplied source on the left and the final implementation on the right without scaling.
 
-- The popup sits below the active canvas caret, remains visually unscaled at 100% canvas zoom, and has sufficient separation from Note's floating text toolbar and canvas controls.
-- Note's purple focus and selected-row treatment stays consistent with the selected textbox and existing workbench accent.
-- The body-mounted surface is not clipped by the canvas or side panels and reads as an editor command surface rather than a canvas object.
+| State | Supplied source | Final implementation | Combined evidence |
+| --- | --- | --- | --- |
+| Selected textbox, connector-label gap, and embedded shape text | `C:\Users\huang\.codex\attachments\feea1257-32a4-4660-8533-292e9ab80b2f\image-1.png` — 1017×685 | `design-qa-evidence/implementation-native-text-compact-label-dark-1017x685.png` — 1017×685 | `design-qa-evidence/comparison-1-native-text-compact-label.png` — 2034×685 |
+| Markerless selected diamond | `C:\Users\huang\.codex\attachments\feea1257-32a4-4660-8533-292e9ab80b2f\image-2.png` — 406×408 | `design-qa-evidence/implementation-markerless-diamond-dark-406x408.png` — 406×408 | `design-qa-evidence/comparison-2-markerless-diamond.png` — 812×408 |
+| Shape text editing without an outer selection box | `C:\Users\huang\.codex\attachments\feea1257-32a4-4660-8533-292e9ab80b2f\image-3.png` — 371×425 | `design-qa-evidence/implementation-centered-shape-edit-dark-371x425.png` — 371×425 | `design-qa-evidence/comparison-3-centered-shape-edit.png` — 742×425 |
 
-**Focused-region comparison evidence**
+Aggregate comparison board: `design-qa-evidence/board-geometry-polish-source-implementation.png` — 2034×1566.
 
-- Typography: labels, secondary descriptions, category headers, hints, and footer have a clear five-level hierarchy. The shared system font and compact weights match Note's workbench, and command copy wraps without information loss at 200% text size.
-- Spacing and layout rhythm: 34px icon tiles, 52px minimum rows, 6px menu inset, 10px row gaps, 10px radius, and a fixed footer produce a compact but scannable menu. Overflow is contained in the list, not the footer.
-- Colors and tokens: dark and light surfaces preserve readable foreground/secondary contrast; the selected state uses Note purple in both themes without losing the label or description.
-- Image and icon quality: no raster imagery is required. All visible icons use the shared Note HeroIcon renderer and remain crisp at 1x capture density.
-- Copy and content: command labels, descriptions, markdown hints, category names, `No commands found`, and `Close menu / Esc` are concise and consistent with the approved catalog.
-- Interaction states: Playwright verified hover, selected, filtered, empty, dark/light, narrow viewport, 50%/100%/200% canvas zoom, keyboard navigation, and dismissal behavior.
-- Browser diagnostics: the rendered slash-menu flow was exercised with `console.error` and uncaught page-error listeners; no browser errors were emitted.
+Supplemental final states:
 
-**Findings**
+- Live arrow-label editing with the real shaft gap already present: `design-qa-evidence/implementation-arrow-label-edit-dark-1017x685.png`.
+- Single transparent textbox using only its native seamless selected border/header: `design-qa-evidence/implementation-seamless-text-selection-dark-560x300.png`.
 
-- No actionable P0, P1, or P2 visual differences were found against the approved Note-specific target.
-- Resolved after independent review: the results pane now reserves a stable scrollbar gutter and shows a bottom-edge overflow cue only while more commands remain below. Hover and active rows use distinct treatments, command hints have stronger contrast, and the active option has a non-color inset indicator.
+## Findings and Resolution History
 
-**Open questions**
+| Severity | Supplied-state finding | Final resolution and evidence |
+| --- | --- | --- |
+| P1 | Connector labels could occupy a gap much wider than the rendered text and could appear detached from the actual shaft center. | Upright gaps now use the exact centered line/label-rectangle intersection plus four world units. The label remains centered on the visible shaft. The implementation comparison and live-edit supplemental capture show the compact real gap before commit. |
+| P1 | Selected textboxes and shapes displayed persistent cardinal/corner dots, adding visual noise. | All eight resize zones remain accessible and cursor-driven but visually transparent. The textbox comparison uses only the existing native border/header; the diamond comparison shows its selection outline without dots. |
+| P1 | Shape editing retained an unrelated outer selection rectangle, and entering edit mode could move short text vertically. | Editing suppresses selection/root outlines. The measured editor content center stays within two pixels of the display center at 50%, 100%, and 200%; the final comparison shows the centered, outline-free editing state. |
+| P1 | The first aggregate review found that post-transform size clamps could move the fixed opposite resize edge and that shared image resize ignored media minimums. | Clamp dimensions are now resolved before position from the fixed opposite local point. Shapes/ink use an 8-unit minimum; images use 80×60 minimum and 4000 maximum width. All eight rotated handles have invariant unit coverage. |
+| P1 | The visually hidden textbox header remained focusable and clickable while editing. | The editing header is now an inert, aria-hidden, role-less, untabbable, pointer-inert layout spacer. Shift+Tab and header-region pointer tests retain the active editor and caret. |
 
-- NVDA announcement cadence, native IME behavior, and non-US slash-key layouts require manual testing on the target Windows/Tauri environment.
+## Fidelity Review
 
-**Comparison history**
+- Geometry: connector gaps match the rendered label footprint; markerless hit zones do not change selected-object bounds; shape text is geometrically centered; the fixed opposite edge survives minimum/maximum clamps.
+- Typography: connector and embedded-shape labels use the existing system font and theme foreground with no mask or pill. Text remains readable against the canvas/shape fill.
+- Color and hierarchy: existing purple selection/focus tokens remain, while redundant resize dots and editing outlines are removed. The object itself, caret, and active border carry the hierarchy.
+- Spacing: the textbox border stays continuous at its right edge; the connector gap has only the specified breathing room; no new panel or canvas spacing was introduced.
+- Responsive and zoom behavior: focused browser coverage passed at 50%, 100%, and 200% for textbox editing, shape centering, resize geometry, connector following, and pointer-relative paste.
+- Accessibility-adjacent UX: invisible resize zones retain accessible labels, keyboard resizing, focus rings, and 44px interaction targets. Editing does not expose an invisible header control.
 
-- Pass 1: compared the supplied reference screenshots with the dark full view, focused dark popup, and focused light filtered popup. No P0/P1/P2 findings required a visual-fix iteration.
-- Pass 2: independent review identified missing scroll affordance and ambiguous simultaneous hover/active styling. The menu added a stateful overflow cue, stable scrollbar gutter, neutral non-active hover, stronger hints, keycap styling, and a high-contrast active indicator. Post-fix evidence: `docs/qa/note-slash-menu-dark-popup.png`. No P0/P1/P2 visual findings remain.
-- Pass 3: accessibility review identified ellipsized copy at enlarged text sizes. Labels and descriptions now wrap, and a 320px viewport test verifies full copy and horizontal containment at 200% text size.
+## Interaction Verification
 
-**Implementation checklist**
+- Selected a single transparent textbox and verified there is no redundant external border, visible resize marker, or move surface; its own top grip remains the drag affordance.
+- Opened an arrow label editor and verified the compact line break is present before commit and remains centered on the shaft.
+- Selected a diamond and verified eight invisible resize zones with correct cursors and no visible dots.
+- Entered shape text editing from the selected overlay and verified the selection frame disappears while the editor retains focus and centered content.
+- Verified empty/short shape text centers and long multiline content top-aligns without clipping.
+- Verified all-text group resize, pointer-position paste, image limits, cancel, undo/redo, and reload through focused automated suites.
 
-- [x] Note-native light and dark surfaces
-- [x] Clear selected, hover, grouped, filtered, and empty states
-- [x] 340px viewport-clamped width and 360px maximum height
-- [x] Fixed footer and independently scrollable options
-- [x] Stable screen scale under canvas zoom
-- [x] Shared icon language and purple accent
-- [x] Reduced-motion treatment
+## Remaining P3 Notes
 
-final result: passed
+- Chromium was the visual comparison browser. Firefox, WebKit/Safari, physical high-DPI devices, and manual screen-reader sessions were not run.
+- The production build retains its pre-existing JavaScript chunk-size warning; this visual geometry stack did not materially change that condition.
+- The full inherited Chromium inventory contains obsolete tests for superseded single-click typing, visible east-only handles, and shape text card surfaces. Current acceptance suites for the requested behavior pass; legacy cleanup is tracked separately from this visual approval.
+
+`final result: passed`

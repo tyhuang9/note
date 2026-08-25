@@ -1,10 +1,11 @@
-import type { AppData, TextBlock } from "./types";
+import type { BoxCanvasElement } from "./canvas/model/elements";
+import type { AppData } from "./types";
 import type { InteractionMode, OffscreenGroup, SelectionRect, SelectionState, ViewportRect } from "./appTypes";
 
 export const emptyData: AppData = {
   folders: [],
   pages: [],
-  blocks: [],
+  elements: [],
   isDarkMode: false,
 };
 
@@ -22,22 +23,122 @@ export function createId(prefix: string) {
   return `${prefix}-${crypto.randomUUID()}`;
 }
 
+function eventTargetElement(target: EventTarget | null): Element | null {
+  if (typeof Element !== "undefined" && target instanceof Element) {
+    return target;
+  }
+
+  return typeof Node !== "undefined" && target instanceof Node
+    ? target.parentElement
+    : null;
+}
+
+const TEXT_ENTRY_ROLE_SELECTOR = [
+  '[role="textbox"]',
+  '[role="searchbox"]',
+  '[role="combobox"]',
+  '[role="spinbutton"]',
+].join(", ");
+
+const TEXT_ENTRY_SELECTOR = [
+  "input",
+  "textarea",
+  "select",
+  '[contenteditable=""]',
+  '[contenteditable="true"]',
+  '[contenteditable="plaintext-only"]',
+  TEXT_ENTRY_ROLE_SELECTOR,
+].join(", ");
+
+const CANVAS_TOOL_SHORTCUT_EXCLUSION_SELECTOR = [
+  ".connector-endpoint-chooser",
+  ".slash-command-popup",
+  '[role="dialog"]',
+  '[aria-modal="true"]',
+].join(", ");
+
+const CANVAS_TOOL_SHORTCUT_CONTEXT_SELECTOR = [
+  ".canvas-tool-palette",
+  ".drawing-properties-panel",
+  "[data-canvas-element-id]",
+  "[data-block-id]",
+  "[data-selection-frame]",
+].join(", ");
+
 export function isTextEntryTarget(target: EventTarget | null) {
-  const element = target instanceof HTMLElement
-    ? target
-    : target instanceof Node
-      ? target.parentElement
-      : null;
+  const element = eventTargetElement(target);
 
   if (!element) {
     return false;
   }
 
   return (
-    element instanceof HTMLInputElement ||
-    element instanceof HTMLTextAreaElement ||
-    element.isContentEditable ||
-    element.closest('[contenteditable="true"]') !== null
+    (element instanceof HTMLElement && element.isContentEditable) ||
+    element.matches(TEXT_ENTRY_SELECTOR) ||
+    element.closest(TEXT_ENTRY_SELECTOR) !== null
+  );
+}
+
+type CanvasToolShortcutContext = Readonly<{
+  activeElement: Element | null;
+  canvasElement: HTMLElement | null;
+  hasCanvasKeyboardOwnership: boolean;
+  isCanvasAuthoringAvailable: boolean;
+  isModalOrOverlayOpen: boolean;
+  isTextEditing: boolean;
+  target: EventTarget | null;
+}>;
+
+type CanvasToolShortcutEvent = Readonly<Pick<KeyboardEvent,
+  "altKey" | "ctrlKey" | "isComposing" | "key" | "metaKey" | "repeat"
+>>;
+
+/**
+ * Restricts bare drawing-tool shortcuts to the active canvas while leaving all
+ * editable controls, modal surfaces, and browser-modified shortcuts alone.
+ */
+export function hasCanvasToolShortcutContext(
+  event: CanvasToolShortcutEvent,
+  context: CanvasToolShortcutContext,
+) {
+  if (
+    !context.canvasElement ||
+    !context.isCanvasAuthoringAvailable ||
+    context.isModalOrOverlayOpen ||
+    context.isTextEditing ||
+    event.isComposing ||
+    event.key === "Process" ||
+    event.repeat ||
+    event.altKey ||
+    event.ctrlKey ||
+    event.metaKey ||
+    isTextEntryTarget(context.target) ||
+    isTextEntryTarget(context.activeElement)
+  ) {
+    return false;
+  }
+
+  const target = eventTargetElement(context.target);
+  const activeElement = context.activeElement;
+  const isCanvasDomContext = (element: Element | null) => Boolean(
+    element && (
+      element === context.canvasElement ||
+      context.canvasElement?.contains(element) ||
+      element.closest(CANVAS_TOOL_SHORTCUT_CONTEXT_SELECTOR)
+    ),
+  );
+  const isExcluded = (element: Element | null) => Boolean(
+    element?.closest(CANVAS_TOOL_SHORTCUT_EXCLUSION_SELECTOR),
+  );
+
+  if (isExcluded(target) || isExcluded(activeElement)) {
+    return false;
+  }
+
+  return (
+    context.hasCanvasKeyboardOwnership ||
+    isCanvasDomContext(target) ||
+    isCanvasDomContext(activeElement)
   );
 }
 
@@ -72,7 +173,7 @@ export function rectsIntersect(first: SelectionRect, second: SelectionRect) {
 }
 
 export function getOffscreenDirection(
-  block: Pick<TextBlock, "height" | "width" | "x" | "y">,
+  block: Pick<BoxCanvasElement, "height" | "width" | "x" | "y">,
   viewport: ViewportRect,
 ): OffscreenGroup["direction"] | null {
   if (

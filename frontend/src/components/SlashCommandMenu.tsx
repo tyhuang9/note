@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { HeroIcon } from "./workbench/HeroIcon";
 import type { SlashCommandGroup, SlashCommandItem } from "../editor/slashCommands";
 
@@ -39,17 +39,38 @@ export function SlashCommandMenu({
     );
   }
 
+  function scrollActiveOptionIntoView() {
+    const menuElement = menuRef.current;
+    const optionElement = document.getElementById(
+      `${menuId}-option-${activeIndex}`,
+    );
+
+    if (!menuElement || !optionElement || !menuElement.contains(optionElement)) {
+      return;
+    }
+
+    const menuBounds = menuElement.getBoundingClientRect();
+    const optionBounds = optionElement.getBoundingClientRect();
+    const visibleTop = menuBounds.top + menuElement.clientTop;
+    const visibleBottom = visibleTop + menuElement.clientHeight;
+
+    if (optionBounds.top < visibleTop) {
+      menuElement.scrollTop += optionBounds.top - visibleTop;
+    } else if (optionBounds.bottom > visibleBottom) {
+      menuElement.scrollTop += optionBounds.bottom - visibleBottom;
+    }
+  }
+
   useEffect(() => {
     const frameId = window.requestAnimationFrame(updateScrollCue);
 
     return () => window.cancelAnimationFrame(frameId);
   }, [items]);
 
-  useEffect(() => {
-    document.getElementById(`${menuId}-option-${activeIndex}`)?.scrollIntoView({
-      block: "nearest",
-    });
-  }, [activeIndex, menuId]);
+  useLayoutEffect(() => {
+    scrollActiveOptionIntoView();
+    updateScrollCue();
+  }, [activeIndex, items, menuId]);
 
   return (
     <>
@@ -90,37 +111,37 @@ export function SlashCommandMenu({
                 {group}
               </div>
               {groupItems.map(({ index, item }) => (
-                <button
-                  aria-selected={index === activeIndex}
-                  className="slash-command-item"
-                  id={`${menuId}-option-${index}`}
-                  key={item.id}
-                  onClick={() => onSelect(item)}
-                  onPointerDown={(event) => event.preventDefault()}
-                  onPointerEnter={() => {
-                    if (index !== activeIndex) {
-                      onActiveIndexChange(index);
-                    }
-                  }}
-                  role="option"
-                  tabIndex={-1}
-                  type="button"
-                >
-                  <span className="slash-command-icon">
-                    <HeroIcon name={item.icon} />
-                  </span>
-                  <span className="slash-command-copy">
-                    <span className="slash-command-label">{item.label}</span>
-                    <span className="slash-command-description">
-                      {item.description}
+                  <button
+                    aria-selected={index === activeIndex}
+                    className="slash-command-item"
+                    id={`${menuId}-option-${index}`}
+                    key={item.id}
+                    onClick={() => onSelect(item)}
+                    onPointerDown={(event) => event.preventDefault()}
+                    onPointerMove={() => {
+                      if (index !== activeIndex) {
+                        onActiveIndexChange(index);
+                      }
+                    }}
+                    role="option"
+                    tabIndex={-1}
+                    type="button"
+                  >
+                    <span className="slash-command-icon">
+                      <HeroIcon name={item.icon} />
                     </span>
-                  </span>
-                  {item.hint ? (
-                    <span aria-hidden="true" className="slash-command-hint">
-                      {item.hint}
+                    <span className="slash-command-copy">
+                      <span className="slash-command-label">{item.label}</span>
+                      <span className="slash-command-description">
+                        {item.description}
+                      </span>
                     </span>
-                  ) : null}
-                </button>
+                    {item.hint ? (
+                      <span aria-hidden="true" className="slash-command-hint">
+                        {item.hint}
+                      </span>
+                    ) : null}
+                  </button>
               ))}
             </div>
           );

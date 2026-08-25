@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "qa:capture-excalidraw-reference": "node scripts/capture-excalidraw-reference.mjs",
     "test:e2e": "playwright test",
+    "test:unit": "tsc -p tsconfig.test.json --noEmit && vitest run",
     "preview": "vite preview",
     "tauri": "tauri"
   },
@@ -17,8 +19,11 @@
     "@tiptap/react": "^3.26.0",
     "@tiptap/starter-kit": "^3.26.0",
     "@tiptap/suggestion": "3.26.0",
+    "lucide-react": "^0.468.0",
+    "perfect-freehand": "1.2.3",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "roughjs": "^4.6.6"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
@@ -27,6 +32,7 @@
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
     "typescript": "~5.8.3",
-    "vite": "^7.0.4"
+    "vite": "^7.0.4",
+    "vitest": "^3.2.4"
   }
 }

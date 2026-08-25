@@ -151,9 +151,19 @@ function createSlashCommandRenderer(pluginKey: PluginKey) {
         return;
       }
 
+      const viewportPadding = 8;
+      const maxLeft = Math.max(
+        viewportPadding,
+        window.innerWidth - positionElement.offsetWidth - viewportPadding,
+      );
+      const maxTop = Math.max(
+        viewportPadding,
+        window.innerHeight - positionElement.offsetHeight - viewportPadding,
+      );
+
       Object.assign(positionElement.style, {
-        left: `${x}px`,
-        top: `${y}px`,
+        left: `${Math.min(Math.max(x, viewportPadding), maxLeft)}px`,
+        top: `${Math.min(Math.max(y, viewportPadding), maxTop)}px`,
         visibility: "visible",
       });
     }).catch(() => {
@@ -285,6 +295,13 @@ function createSlashCommandRenderer(pluginKey: PluginKey) {
 
         cleanupAutoUpdate = autoUpdate(reference, floatingElement, updatePosition);
         updatePosition();
+        // React commits the menu content after the first layout pass. Re-run
+        // once after that commit so flip/shift can measure the real popup box
+        // at viewport edges (especially when the canvas is zoomed).
+        frameId = window.requestAnimationFrame(() => {
+          frameId = null;
+          updatePosition();
+        });
       });
     },
     onUpdate(nextProps: SlashSuggestionProps) {

@@ -1,4 +1,4 @@
-name: Build Desktop Installers
+name: Build and Release Desktop Installers
 
 on:
   workflow_dispatch:
@@ -18,8 +18,43 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  validate-release-version:
+    name: Validate release version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Confirm the tag matches all application manifests
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+
+          const tag = process.env.RELEASE_TAG;
+          const match = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(tag);
+          if (!match) {
+            throw new Error(`Release tag "${tag}" must be a semantic version such as v0.2.0.`);
+          }
+
+          const tagVersion = match[0].slice(1);
+          const tauriVersion = JSON.parse(readFileSync("backend/src-tauri/tauri.conf.json", "utf8")).version;
+          const frontendVersion = JSON.parse(readFileSync("frontend/package.json", "utf8")).version;
+          const cargoManifest = readFileSync("backend/src-tauri/Cargo.toml", "utf8");
+          const cargoVersion = /^version\s*=\s*"([^"]+)"/m.exec(cargoManifest)?.[1];
+
+          if (!cargoVersion || new Set([tagVersion, tauriVersion, frontendVersion, cargoVersion]).size !== 1) {
+            throw new Error(
+              `Version mismatch: tag=${tagVersion}, tauri=${tauriVersion}, frontend=${frontendVersion}, cargo=${cargoVersion ?? "missing"}.`,
+            );
+          }
+          NODE
+
   build-installers:
     name: ${{ matrix.name }}
+    needs: validate-release-version
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -28,14 +63,17 @@ jobs:
         include:
           - name: Windows installers
             os: windows-latest
+            artifact_name: note-windows-installers
           - name: macOS installers
             os: macos-latest
+            artifact_name: note-macos-installers
           - name: Linux installers
             os: ubuntu-latest
+            artifact_name: note-linux-installers
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Linux system dependencies
         if: matrix.os == 'ubuntu-latest'
@@ -57,7 +95,7 @@ jobs:
             || echo "FUSE compatibility package unavailable; AppImage packaging may fail."
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -73,7 +111,7 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: frontend
-        run: npm install
+        run: npm ci
 
       - name: Run frontend unit tests
         working-directory: frontend
@@ -86,9 +124,39 @@ jobs:
       - name: Build frontend
         run: npm run build
 
-      - name: Build Tauri installers
-        if: matrix.os != 'ubuntu-latest'
-        run: npm run tauri:build
+      - name: Build Windows installer
+        if: matrix.os == 'windows-latest'
+        run: npm run tauri:build -- --bundles nsis
+
+      - name: Normalize Windows installer
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem -Path "backend/src-tauri/target/release/bundle/nsis" -Filter "*.exe" -File)
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one NSIS installer, found $($installers.Count)."
+          }
+
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          Copy-Item -LiteralPath $installers[0].FullName -Destination "artifacts/Note-Setup.exe"
+
+      - name: Build macOS disk image
+        if: matrix.os == 'macos-latest'
+        run: npm run tauri:build -- --bundles dmg
+
+      - name: Normalize macOS disk image
+        if: matrix.os == 'macos-latest'
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          disk_images=(backend/src-tauri/target/release/bundle/dmg/*.dmg)
+          if [ "${#disk_images[@]}" -ne 1 ]; then
+            echo "Expected exactly one macOS disk image, found ${#disk_images[@]}." >&2
+            exit 1
+          fi
+
+          mkdir -p artifacts
+          cp "${disk_images[0]}" artifacts/Note.dmg
 
       - name: Build Tauri installers (Linux full bundle)
         id: linux_full_bundle
@@ -98,7 +166,7 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: "1"
         run: npm run tauri:build
 
-      - name: Build Debian package fallback
+      - name: Build Debian package fallback when AppImage is unavailable
         if: matrix.os == 'ubuntu-latest' && steps.linux_full_bundle.outcome == 'failure'
         env:
           APPIMAGE_EXTRACT_AND_RUN: "1"
@@ -107,36 +175,81 @@ jobs:
       - name: Record Linux AppImage warning
         if: matrix.os == 'ubuntu-latest' && steps.linux_full_bundle.outcome == 'failure'
         run: |
-          echo "Full Linux bundle failed. Built Debian package fallback; AppImage may be absent." >> "$GITHUB_STEP_SUMMARY"
-          echo "::warning title=AppImage not guaranteed::Full Linux bundle failed; Debian fallback was built. Check logs for linuxdeploy/AppImage details."
+          echo "Full Linux bundle failed; the workflow is trying a Debian-only fallback." >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning title=AppImage not guaranteed::Full Linux bundling failed. The release will include only packages that are successfully produced."
 
-      - name: Upload Windows installers
-        if: always() && matrix.os == 'windows-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: note-windows-installers
-          if-no-files-found: error
-          path: |
-            backend/src-tauri/target/release/bundle/msi/*.msi
-            backend/src-tauri/target/release/bundle/nsis/*.exe
+      - name: Normalize Linux packages
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mkdir -p artifacts
 
-      - name: Upload macOS installers
-        if: always() && matrix.os == 'macos-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: note-macos-installers
-          if-no-files-found: error
-          path: |
-            backend/src-tauri/target/release/bundle/dmg/*.dmg
-            backend/src-tauri/target/release/bundle/macos/*.app
+          debs=(backend/src-tauri/target/release/bundle/deb/*.deb)
+          if [ "${#debs[@]}" -ne 1 ]; then
+            echo "Expected exactly one Debian package, found ${#debs[@]}." >&2
+            exit 1
+          fi
+          cp "${debs[0]}" artifacts/Note.deb
 
-      - name: Upload Linux installers
-        if: always() && matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v4
+          appimages=(backend/src-tauri/target/release/bundle/appimage/*.AppImage)
+          if [ "${#appimages[@]}" -gt 1 ]; then
+            echo "Expected at most one AppImage, found ${#appimages[@]}." >&2
+            exit 1
+          fi
+          if [ "${#appimages[@]}" -eq 1 ]; then
+            cp "${appimages[0]}" artifacts/Note.AppImage
+          else
+            echo "::warning title=AppImage unavailable::No AppImage was produced; publishing the Debian package only."
+          fi
+
+      - name: Upload normalized installer assets
+        if: always()
+        uses: actions/upload-artifact@v5
         with:
-          name: note-linux-installers
+          name: ${{ matrix.artifact_name }}
           if-no-files-found: error
-          path: |
-            backend/src-tauri/target/release/bundle/deb/*.deb
-            backend/src-tauri/target/release/bundle/appimage/*.AppImage
-            backend/src-tauri/target/release/bundle/rpm/*.rpm
+          path: artifacts/
+
+  publish-release:
+    name: Publish GitHub Release
+    needs:
+      - validate-release-version
+      - build-installers
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download normalized installer assets
+        uses: actions/download-artifact@v5
+        with:
+          pattern: note-*-installers
+          path: release-assets
+          merge-multiple: true
+
+      - name: Validate release assets and create checksums
+        run: |
+          set -euo pipefail
+          cd release-assets
+          required_assets=(Note-Setup.exe Note.dmg Note.deb)
+          for asset in "${required_assets[@]}"; do
+            test -f "$asset" || { echo "Missing required release asset: $asset" >&2; exit 1; }
+          done
+          sha256sum Note-Setup.exe Note.dmg Note.deb Note.AppImage 2>/dev/null > SHA256SUMS || \
+            sha256sum Note-Setup.exe Note.dmg Note.deb > SHA256SUMS
+
+      - name: Create or update the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release-assets/* --clobber
+          else
+            gh release create "$RELEASE_TAG" release-assets/* \
+              --generate-notes \
+              --title "Note $RELEASE_TAG"
+          fi

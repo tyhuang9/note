@@ -1,5 +1,5 @@
 import type { Ref } from "react";
-import noteAppIcon from "../../../../docs/assets/note-mark.png";
+import noteAppIcon from "../../../../docs/assets/note-mark-32.png";
 import type { WorkbenchIconComponent } from "./icons";
 import { WorkspaceTabs, type WorkspaceTab, type WorkspaceTabDropPlacement } from "./WorkspaceTabs";
 import { WindowControls, type DesktopPlatform } from "./WindowControls";

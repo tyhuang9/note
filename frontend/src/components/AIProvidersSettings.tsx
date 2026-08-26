@@ -130,6 +130,7 @@ export const AIProvidersSettings = memo(function AIProvidersSettings({
 
                 return (
                   <button
+                    aria-pressed={provider.id === selectedProvider?.id}
                     className={`ai-provider-item ${
                       provider.id === selectedProvider?.id ? "is-selected" : ""
                     }`}

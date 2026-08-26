@@ -5,6 +5,7 @@
   --brand-gold-bright: #E6B84A;
   --brand-gold-soft: rgba(212, 161, 40, 0.18);
   --brand-gold-muted: rgba(212, 161, 40, 0.1);
+  --brand-control: #7A5700;
   --workbench-app: var(--brand-charcoal);
   --workbench-panel: #25231f;
   --workbench-surface: #302e29;
@@ -469,10 +470,13 @@ button:disabled {
 
 @media (max-width: 640px) {
   .window-titlebar-brand { padding-left: 8px; padding-right: 7px; }
-  .window-titlebar-brand span { display: none; }
   .window-titlebar-sidebar-toggle { margin-right: 2px; }
   .window-titlebar .page-tab { flex-basis: 128px; }
   .window-control { width: 40px; }
+}
+
+@media (max-width: 380px) {
+  .window-titlebar-brand span { display: none; }
 }
 
 @media (forced-colors: active) {
@@ -503,7 +507,7 @@ button:disabled {
   overflow: hidden;
   padding: 0;
   border-right: 1px solid #d8dee6;
-  background: #fbfcfd;
+  background: #FBF8F2;
 }
 
 .sidebar::before {
@@ -551,7 +555,7 @@ button:disabled {
   min-height: 0;
   border-right: 1px solid #e0e5ec;
   padding: 10px 8px;
-  background: #f1f4f8;
+  background: #F3EFE7;
 }
 
 .rail-tabs {
@@ -763,6 +767,8 @@ h2 {
 
 .file-search-control.is-active {
   border-color: #D4A128;
+  outline: 2px solid var(--canvas-focus);
+  outline-offset: 1px;
   box-shadow: 0 0 0 2px rgba(212, 161, 40, 0.18);
 }
 
@@ -2494,7 +2500,7 @@ h2 {
   min-width: 0;
   min-height: 0;
   overflow: clip;
-  background: #f5f7fa;
+  background: var(--brand-warm-white);
   cursor: default;
 }
 
@@ -2551,7 +2557,7 @@ h2 {
 }
 
 .canvas.is-canvas-selected {
-  background: #f5f7fa;
+  background: var(--brand-warm-white);
 }
 
 .canvas.is-canvas-selected::after {
@@ -4159,6 +4165,7 @@ h2 {
   --canvas-tool-active-text: #FFF1C2;
   --canvas-focus: #8ab4f8;
   --canvas-highlighter-edge: #ffe066;
+  --brand-control: #E6B84A;
   color: var(--dark-text);
   background: #151515;
 }
@@ -4515,6 +4522,7 @@ h2 {
 
 .app-shell.is-dark .file-search-control.is-active {
   border-color: #B08113;
+  outline-color: var(--canvas-focus);
   box-shadow: 0 0 0 2px rgba(212, 161, 40, 0.2);
 }
 
@@ -5133,9 +5141,9 @@ h2 {
 }
 
 .file-tree-root-drop-zone.is-drop-target {
-  border-color: #D4A128;
+  border-color: #7A5700;
   background: rgba(212, 161, 40, 0.08);
-  box-shadow: inset 0 0 0 1px rgba(212, 161, 40, 0.32);
+  box-shadow: inset 0 0 0 1px #7A5700;
 }
 
 .file-tree-root-drop-hint {
@@ -5978,7 +5986,7 @@ h2 {
     display: flex;
     width: 280px;
     border-right: 1px solid #c9c9c9;
-    background: #fbfcfd;
+    background: #FBF8F2;
     box-shadow: 18px 0 38px rgba(0, 0, 0, 0.24);
   }
 
@@ -6333,10 +6341,10 @@ h2 {
 .drawing-choice-group button[aria-pressed="true"],
 .drawing-choice-group button[role="radio"][aria-checked="true"],
 .drawing-color-picker button[aria-pressed="true"] {
-  border-color: #B6840B;
+  border-color: #7A5700;
   color: #745100;
   background: #FBF1D1;
-  box-shadow: inset 0 0 0 1px #B6840B;
+  box-shadow: inset 0 0 0 1px #7A5700;
 }
 
 .drawing-choice-group button.has-mixed-value:not([aria-pressed="true"]) {
@@ -6409,7 +6417,7 @@ h2 {
 
 .drawing-opacity-row input {
   width: 100%;
-  accent-color: #7950f2;
+  accent-color: var(--brand-control);
 }
 
 .drawing-opacity-row output {
@@ -6526,21 +6534,52 @@ h2 {
   }
 }
 
-/* Final accent-bar override: selected states use surfaces, never colored left edges. */
-.slash-command-item[aria-selected="true"],
-.rail-button.is-active,
-.nav-item.is-active,
-.nav-item.is-selected,
-.ai-provider-item.is-selected,
-.app-shell.is-dark .slash-command-item[aria-selected="true"],
-.app-shell.is-dark .rail-button.is-active,
-.app-shell.is-dark .nav-item.is-active,
-.app-shell.is-dark .nav-item.is-selected,
-.app-shell.is-dark .ai-provider-item.is-selected {
-  box-shadow: none;
-}
-
 .assistant-target-context,
 .app-shell.is-dark .assistant-target-context {
   border-left: 0;
+}
+
+/* Selected controls retain a shape marker in addition to their brand color. */
+.slash-command-item[aria-selected="true"] {
+  box-shadow: inset 3px 0 0 #7A5700;
+}
+
+.rail-button[aria-pressed="true"],
+.nav-item.is-active,
+.nav-item.is-selected,
+.ai-provider-item[aria-pressed="true"] {
+  box-shadow: inset 3px 0 0 var(--brand-gold);
+}
+
+.app-shell.is-dark .slash-command-item[aria-selected="true"],
+.app-shell.is-dark .rail-button[aria-pressed="true"],
+.app-shell.is-dark .nav-item.is-active,
+.app-shell.is-dark .nav-item.is-selected,
+.app-shell.is-dark .ai-provider-item[aria-pressed="true"] {
+  box-shadow: inset 3px 0 0 var(--brand-gold-bright);
+}
+
+@media (forced-colors: active) {
+  .file-search-control.is-active,
+  .file-tree-root-drop-zone.is-drop-target,
+  .drawing-choice-group button[aria-pressed="true"],
+  .drawing-choice-group button[role="radio"][aria-checked="true"],
+  .drawing-color-picker button[aria-pressed="true"] {
+    border-color: Highlight;
+    outline-color: Highlight;
+    box-shadow: inset 0 0 0 1px Highlight;
+    forced-color-adjust: auto;
+  }
+
+  .slash-command-item[aria-selected="true"],
+  .rail-button[aria-pressed="true"],
+  .nav-item.is-active,
+  .nav-item.is-selected,
+  .search-result[aria-current="true"],
+  .ai-provider-item[aria-pressed="true"] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+    box-shadow: inset 3px 0 0 Highlight;
+    forced-color-adjust: auto;
+  }
 }

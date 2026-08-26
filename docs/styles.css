@@ -5,6 +5,7 @@
   --golden: #D4A128;
   --golden-strong: #765400;
   --golden-soft: #F8EBC5;
+  --focus: #765400;
   --muted: #5D5A55;
   --surface: #FFFEFB;
   --surface-raised: #FFFFFF;
@@ -44,7 +45,7 @@ a:hover { color: var(--charcoal); }
 
 a:focus-visible {
   border-radius: .2rem;
-  outline: 3px solid var(--golden);
+  outline: 3px solid var(--focus);
   outline-offset: 3px;
 }
 
@@ -317,6 +318,12 @@ footer {
   .steps ol { grid-template-columns: 1fr; }
 
   .hero { padding-block: 2.5rem 3rem; }
+  nav a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    padding-block: .6rem;
+  }
   .download-card p { min-height: 0; }
   footer { align-items: flex-start; flex-direction: column; }
 }
@@ -328,6 +335,7 @@ footer {
     --golden: #D4A128;
     --golden-strong: #F0C65A;
     --golden-soft: #332D21;
+    --focus: #F0C65A;
     --muted: #C8C1B5;
     --surface: #292722;
     --surface-raised: #25231F;
@@ -351,4 +359,8 @@ footer {
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   .button { transition: none; }
+}
+
+@media (forced-colors: active) {
+  a:focus-visible { outline-color: Highlight; }
 }

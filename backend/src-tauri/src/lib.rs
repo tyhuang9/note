@@ -21,6 +21,7 @@ struct AppData {
 struct Folder {
     id: String,
     name: String,
+    is_bookmarked: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -167,6 +168,7 @@ fn save_app_data(app_handle: tauri::AppHandle, data: AppData) -> Result<(), Stri
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_os::init())
         .invoke_handler(tauri::generate_handler![
             load_app_data,
             save_app_data,

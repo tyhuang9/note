@@ -31,6 +31,7 @@ export interface WorkspaceTabsProps {
   readonly onSelectTab: (pageId: string) => void;
   readonly onSetEditingActiveTab: (isEditing: boolean) => void;
   readonly selectedPageId: string;
+  readonly showWindowDragRegion?: boolean;
   readonly tabs: readonly WorkspaceTab[];
   readonly titleSearch?: Readonly<{
     pageId: string;
@@ -72,6 +73,7 @@ export function WorkspaceTabs({
   onSelectTab,
   onSetEditingActiveTab,
   selectedPageId,
+  showWindowDragRegion = false,
   tabs,
   titleSearch,
 }: Readonly<WorkspaceTabsProps>) {
@@ -299,6 +301,14 @@ export function WorkspaceTabs({
       >
         <Icon name="plus" />
       </button>
+      {showWindowDragRegion ? (
+        <div
+          aria-hidden="true"
+          className="page-tabs-drag-region"
+          data-tauri-drag-region
+          role="presentation"
+        />
+      ) : null}
     </div>
   );
 }

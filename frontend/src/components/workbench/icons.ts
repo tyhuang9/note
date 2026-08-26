@@ -13,6 +13,7 @@ export type WorkbenchIconName =
   | "code-bracket"
   | "document-plus"
   | "document-text"
+  | "ellipsis-horizontal"
   | "eye"
   | "eye-slash"
   | "folder"
@@ -38,6 +39,8 @@ export type WorkbenchIconName =
   | "sun"
   | "trash"
   | "underline"
+  | "window-maximize"
+  | "window-restore"
   | "x-mark";
 
 export interface WorkbenchIconProps {

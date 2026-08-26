@@ -1,5 +1,4 @@
 import { memo } from "react";
-import type { Ref } from "react";
 import type { WorkbenchIconComponent } from "./icons";
 
 export type ActivityRailTabId =
@@ -12,40 +11,22 @@ export interface ActivityRailProps {
   readonly activeTab: ActivityRailTabId;
   readonly bookmarkedPageCount: number;
   readonly Icon: WorkbenchIconComponent;
-  readonly isExplorerCollapsed: boolean;
   readonly onSelectTab: (
     tabId: ActivityRailTabId,
     trigger: HTMLButtonElement,
   ) => void;
-  readonly onToggleExplorer: (trigger: HTMLButtonElement) => void;
   readonly templatePageCount: number;
-  readonly toggleButtonRef: Ref<HTMLButtonElement>;
 }
 
 export const ActivityRail = memo(function ActivityRail({
   activeTab,
   bookmarkedPageCount,
   Icon,
-  isExplorerCollapsed,
   onSelectTab,
-  onToggleExplorer,
   templatePageCount,
-  toggleButtonRef,
 }: Readonly<ActivityRailProps>) {
   return (
     <nav className="activity-rail" aria-label="Primary workspace tools">
-      <button
-        type="button"
-        className="rail-button"
-        aria-controls="workspace-explorer-panel"
-        aria-expanded={!isExplorerCollapsed}
-        aria-label={isExplorerCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-        onClick={(event) => onToggleExplorer(event.currentTarget)}
-        ref={toggleButtonRef}
-        title={isExplorerCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-      >
-        <Icon name="panel" />
-      </button>
       <div className="rail-tabs" aria-label="Workspace views" role="group">
         <button
           type="button"

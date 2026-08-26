@@ -72,17 +72,22 @@ import {
   type DrawingTool,
 } from "./canvas/interaction/useInkInteraction";
 import { ActivityRail } from "./components/workbench/ActivityRail";
+import { EmbeddedTitleBar } from "./components/workbench/EmbeddedTitleBar";
 import { WorkbenchShell } from "./components/workbench/WorkbenchShell";
 import {
   getWorkspaceTabId,
   WORKSPACE_PAGE_PANEL_ID,
-  WorkspaceTabs,
 } from "./components/workbench/WorkspaceTabs";
+import { getDesktopPlatform } from "./components/workbench/WindowControls";
 import type {
   WorkbenchIconName,
   WorkbenchIconProps,
 } from "./components/workbench/icons";
 import { useWorkbenchViewport } from "./components/workbench/useWorkbenchViewport";
+import {
+  insertPagesAfterLastPageInFolder,
+  movePagesToFolder,
+} from "./pageOrganization";
 import {
   DEFAULT_BLOCK_HEIGHT,
   DEFAULT_BLOCK_WIDTH,
@@ -266,11 +271,11 @@ type DirectTextDraft = Readonly<{
 }>;
 
 type SidebarProps = {
+  bookmarkedFolders: AppData["folders"];
   bookmarkedPages: AppData["pages"];
   editingFolderId: string | null;
   editingPageId: string | null;
   explorerPanelRef: Ref<HTMLDivElement>;
-  explorerToggleButtonRef: Ref<HTMLButtonElement>;
   folders: AppData["folders"];
   isCollapsed: boolean;
   isInert: boolean;
@@ -279,11 +284,11 @@ type SidebarProps = {
   pageTemplates: AppData["pages"];
   pages: AppData["pages"];
   pageSearchQuery: string;
-  pageSearchResults: PageSearchResult[];
+  pageSearchResults: FileSearchResult[];
   selectedFolderId: string;
   selectedPageId: string;
   onCreateFolder: () => void;
-  onCreatePage: () => void;
+  onCreatePage: (folderId?: string) => void;
   onCreatePageFromTemplate: (templatePageId: string) => void;
   onCreateTemplateFromPage: () => void;
   onDeleteFolder: (folderId: string) => void;
@@ -295,6 +300,7 @@ type SidebarProps = {
   onPageDragEnd: () => void;
   onPageDragStart: (pageId: string) => boolean;
   onPageDropOnFolder: (folderId: string) => boolean;
+  onPageDropOnRoot: () => boolean;
   onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
   onRenameFolder: (folderId: string, name: string) => void;
   onRenamePage: (pageId: string, title: string) => void;
@@ -304,6 +310,7 @@ type SidebarProps = {
   onSetEditingFolderId: (folderId: string | null) => void;
   onSetEditingPageId: (pageId: string | null) => void;
   onToggleCollapse: (trigger?: HTMLElement) => void;
+  onToggleFolderBookmark: (folderId: string) => void;
   onTogglePageBookmark: (pageId: string) => void;
   pageDropTargetFolderId: string | null;
   draggedPageIds: string[];
@@ -319,25 +326,11 @@ type PageHeaderProps = {
   isDarkMode: boolean;
   isCanvasSearchUnavailable: boolean;
   isTextFormattingVisible: boolean;
-  isEditingHeaderTitle: boolean;
   isSnapToGridEnabled: boolean;
-  openPages: OpenPageTab[];
-  selectedPageId: string;
   textFormatState: TextFormatState;
-  titleSearchHighlights: readonly Readonly<{ end: number; isActive: boolean; start: number }>[];
   zoomLevel: number;
-  onClosePageTab: (pageId: string) => void;
-  onCreatePage: () => void;
   onFocusCanvasSearch: (trigger?: HTMLElement | null) => void;
   onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
-  onRenamePage: (pageId: string, title: string) => void;
-  onReorderPageTab: (
-    sourcePageId: string,
-    targetPageId: string,
-    placement: PageTabDropPlacement,
-  ) => void;
-  onSelectPageTab: (pageId: string) => void;
-  onSetEditingHeaderTitle: (isEditing: boolean) => void;
   onToggleAssistant: (trigger?: HTMLElement) => void;
   onToggleGrid: () => void;
   onToggleDarkMode: () => void;
@@ -514,14 +507,24 @@ type CopiedPage = Omit<AppData["pages"][number], "id" | "folderId"> & {
   viewport?: PageViewport;
 };
 
-type PageSearchResult = {
+type PageFileSearchResult = {
   contentMatchCount: number;
   folderName: string;
+  kind: "page";
   pageId: string;
   preview: string;
   title: string;
   titleMatches: boolean;
 };
+
+type FolderFileSearchResult = {
+  folderId: string;
+  kind: "folder";
+  name: string;
+  pageCount: number;
+};
+
+type FileSearchResult = FolderFileSearchResult | PageFileSearchResult;
 
 type CanvasSearchMatch =
   | ({ kind: "element" } & SearchMatch)
@@ -534,6 +537,7 @@ const MAX_BLOCK_HISTORY_ENTRIES = 100;
 const PAGE_SEARCH_PREVIEW_CONTEXT = 44;
 const PAGE_TEMPLATE_FOLDER_ID = "__note_page_templates__";
 const PAGE_DRAG_MIME_TYPE = "application/x-note-page";
+const PAGE_POINTER_DRAG_THRESHOLD = 5;
 const ROOT_FOLDER_ID = "";
 const PASTED_BLOCK_OFFSET = 24;
 const TEXT_BLOCK_BORDER_WIDTH = 1;
@@ -580,6 +584,25 @@ type PersistenceStatus = SaveState;
 type PendingAssetUpload = { dataUrl: string; fileName: string };
 
 type HeroIconName = WorkbenchIconName;
+type FolderMenuActionId = "bookmark" | "rename" | "delete";
+type FolderMenuState = {
+  folderId: string;
+  left: number;
+  top: number;
+};
+
+const FOLDER_MENU_ID = "folder-actions-menu";
+const FOLDER_MENU_WIDTH = 208;
+const FOLDER_MENU_HEIGHT_ESTIMATE = 126;
+const FOLDER_MENU_MARGIN = 8;
+const folderMenuActions: ReadonlyArray<{
+  id: FolderMenuActionId;
+  icon: HeroIconName;
+}> = [
+  { id: "bookmark", icon: "bookmark" },
+  { id: "rename", icon: "pencil-square" },
+  { id: "delete", icon: "trash" },
+];
 
 function isCanvasSearchPanelTarget(target: EventTarget | null): target is Element {
   return target instanceof Element && target.closest(".search-panel") !== null;
@@ -793,6 +816,9 @@ function HeroIcon({ name }: Readonly<WorkbenchIconProps>) {
           <path d="M14.25 3.75v4.5h4.5M8.25 13.5h7.5M8.25 16.5h4.5" />
         </>
       ) : null}
+      {name === "ellipsis-horizontal" ? (
+        <path d="M6.75 12a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0ZM12.75 12a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0ZM18.75 12a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Z" />
+      ) : null}
       {name === "eye" ? (
         <>
           <path d="M2.25 12s3.75-6.75 9.75-6.75S21.75 12 21.75 12s-3.75 6.75-9.75 6.75S2.25 12 2.25 12Z" />
@@ -905,7 +931,7 @@ function HeroIcon({ name }: Readonly<WorkbenchIconProps>) {
   );
 }
 
-function formatPageSearchSummary(result: PageSearchResult) {
+function formatPageSearchSummary(result: PageFileSearchResult) {
   const summaryParts: string[] = [];
 
   if (result.titleMatches) {
@@ -1608,6 +1634,10 @@ function App() {
     () => data.pages.filter((page) => page.isBookmarked),
     [data.pages],
   );
+  const bookmarkedFolders = useMemo(
+    () => data.folders.filter((folder) => folder.isBookmarked),
+    [data.folders],
+  );
   const visibleBlocks = useMemo(
     () => data.elements.filter((block): block is CanvasElement & BoxCanvasElement => block.pageId === selectedPageId && isBoxCanvasElement(block)),
     [data.elements, selectedPageId],
@@ -1742,14 +1772,38 @@ function App() {
 
     return pageBlocks;
   }, [data.elements]);
-  const pageSearchResults = useMemo<PageSearchResult[]>(() => {
+  const pageSearchResults = useMemo<FileSearchResult[]>(() => {
     const normalizedQuery = pageSearchQuery.trim().toLowerCase();
 
     if (!normalizedQuery) {
       return [];
     }
 
-    return data.pages.flatMap((page) => {
+    const folderPageCounts = new Map<string, number>();
+
+    for (const page of data.pages) {
+      if (!isTemplatePage(page)) {
+        folderPageCounts.set(
+          page.folderId,
+          (folderPageCounts.get(page.folderId) ?? 0) + 1,
+        );
+      }
+    }
+
+    const folderResults: FolderFileSearchResult[] = data.folders.flatMap(
+      (folder) =>
+        folder.name.toLowerCase().includes(normalizedQuery)
+          ? [
+              {
+                folderId: folder.id,
+                kind: "folder",
+                name: folder.name,
+                pageCount: folderPageCounts.get(folder.id) ?? 0,
+              },
+            ]
+          : [],
+    );
+    const pageResults: PageFileSearchResult[] = data.pages.flatMap((page) => {
       if (isTemplatePage(page)) {
         return [];
       }
@@ -1787,6 +1841,7 @@ function App() {
             page.folderId === ROOT_FOLDER_ID
               ? "Root"
               : folderNamesById.get(page.folderId) ?? "Unknown folder",
+          kind: "page",
           pageId: page.id,
           preview: preview || (titleMatches ? "Title match" : ""),
           title: page.title,
@@ -1794,7 +1849,9 @@ function App() {
         },
       ];
     });
-  }, [blocksByPageId, data.pages, folderNamesById, pageSearchQuery]);
+
+    return [...folderResults, ...pageResults];
+  }, [blocksByPageId, data.folders, data.pages, folderNamesById, pageSearchQuery]);
   const isCanvasElementSearchActive = isSearchOpen && Boolean(searchQuery.trim());
   const canvasSearchTextIndex = useMemo(
     () => createCanvasSearchTextIndex(visibleBlocks, isCanvasElementSearchActive),
@@ -2908,27 +2965,6 @@ function App() {
 
   function isTemplatePage(page: AppData["pages"][number]) {
     return page.folderId === PAGE_TEMPLATE_FOLDER_ID;
-  }
-
-  function insertPagesAfterLastPageInFolder(
-    pages: AppData["pages"],
-    folderId: string,
-    insertedPages: AppData["pages"],
-  ) {
-    let insertIndex = pages.length;
-
-    for (let index = pages.length - 1; index >= 0; index -= 1) {
-      if (pages[index].folderId === folderId) {
-        insertIndex = index + 1;
-        break;
-      }
-    }
-
-    return [
-      ...pages.slice(0, insertIndex),
-      ...insertedPages,
-      ...pages.slice(insertIndex),
-    ];
   }
 
   function setSidebarPageSelection(pageIds: string[]) {
@@ -4333,17 +4369,15 @@ function App() {
     setActiveMode("canvas");
   }
 
-  function createPage() {
-    const folderId = ROOT_FOLDER_ID;
+  function createPage(folderId = ROOT_FOLDER_ID) {
 
     const pageId = createId("page");
 
     setData((currentData) => ({
       ...currentData,
-      pages: [
-        ...currentData.pages,
+      pages: insertPagesAfterLastPageInFolder(currentData.pages, folderId, [
         { id: pageId, folderId, title: "New page" },
-      ],
+      ]),
     }));
     rememberPageViewport(selectedPageId);
     selectedFolderIdRef.current = folderId;
@@ -5678,37 +5712,26 @@ function App() {
   function moveDraggedPagesToFolder(folderId: string) {
     const currentData = dataRef.current;
     const targetFolder = currentData.folders.find((folder) => folder.id === folderId);
-    const draggedPageIdSet = new Set(draggedPageIdsRef.current);
 
-    if (!targetFolder || draggedPageIdSet.size === 0) {
+    if (folderId !== ROOT_FOLDER_ID && !targetFolder) {
       return false;
     }
 
-    const draggedPages = currentData.pages.filter(
-      (page) => draggedPageIdSet.has(page.id) && !isTemplatePage(page),
-    );
-
-    if (
-      draggedPages.length === 0 ||
-      draggedPages.every((page) => page.folderId === folderId)
-    ) {
-      return false;
-    }
-
-    const stationaryPages = currentData.pages.filter(
-      (page) => !draggedPageIdSet.has(page.id),
-    );
-    const movedPages = draggedPages.map((page) => ({
-      ...page,
+    const moveResult = movePagesToFolder(
+      currentData.pages,
+      draggedPageIdsRef.current,
       folderId,
-    }));
+      (page) => !isTemplatePage(page),
+    );
+
+    if (!moveResult) {
+      return false;
+    }
+
+    const { movedPages } = moveResult;
     const nextData = {
       ...currentData,
-      pages: insertPagesAfterLastPageInFolder(
-        stationaryPages,
-        folderId,
-        movedPages,
-      ),
+      pages: moveResult.pages,
     };
     const primaryMovedPageId =
       movedPages.find((page) => page.id === draggedPrimaryPageIdRef.current)?.id ??
@@ -5756,6 +5779,17 @@ function App() {
         page.id === pageId
           ? { ...page, isBookmarked: !page.isBookmarked }
           : page,
+      ),
+    }));
+  }
+
+  function toggleFolderBookmark(folderId: string) {
+    setData((currentData) => ({
+      ...currentData,
+      folders: currentData.folders.map((folder) =>
+        folder.id === folderId
+          ? { ...folder, isBookmarked: !folder.isBookmarked }
+          : folder,
       ),
     }));
   }
@@ -8873,6 +8907,7 @@ function App() {
     || activeNarrowOverlay
     || isAIProvidersOpen
   );
+  const desktopPlatform = getDesktopPlatform();
 
   return (
     <WorkbenchShell
@@ -8885,13 +8920,14 @@ function App() {
       isNarrowWorkbench={isNarrowWorkbench}
       onCloseAssistantOverlay={() => closeWorkbenchOverlay("assistant")}
       onCloseExplorerOverlay={() => closeWorkbenchOverlay("explorer")}
+      titleBar={<EmbeddedTitleBar Icon={HeroIcon} isEditingActiveTab={isEditingHeaderTitle} isExplorerCollapsed={isExplorerPresentationCollapsed} onCloseTab={closePageTab} onCreatePage={() => createPage()} onRenamePage={renamePage} onReorderTab={reorderPageTab} onSelectTab={selectPage} onSetEditingActiveTab={setIsEditingHeaderTitle} onToggleExplorer={(trigger) => toggleExplorerPresentation(trigger)} platform={desktopPlatform} selectedPageId={selectedPageId} tabs={openPages} titleSearch={{ pageId: selectedPageId, ranges: titleSearchHighlights }} toggleButtonRef={explorerToggleButtonRef} />}
     >
       <Sidebar
+        bookmarkedFolders={bookmarkedFolders}
         bookmarkedPages={bookmarkedPages}
         editingFolderId={editingFolderId}
         editingPageId={editingPageId}
         explorerPanelRef={explorerPanelRef}
-        explorerToggleButtonRef={explorerToggleButtonRef}
         folders={data.folders}
         isCollapsed={isExplorerPresentationCollapsed}
         isInert={isAssistantOverlayOpen}
@@ -8925,6 +8961,12 @@ function App() {
           endPageDrag();
           return didMovePages;
         }}
+        onPageDropOnRoot={() => {
+          const didMovePages = moveDraggedPagesToFolder(ROOT_FOLDER_ID);
+
+          endPageDrag();
+          return didMovePages;
+        }}
         onPointerDown={handleChromePointerDown}
         onRenameFolder={renameFolder}
         onRenamePage={renamePage}
@@ -8934,6 +8976,7 @@ function App() {
         onSetEditingFolderId={setEditingFolderId}
         onSetEditingPageId={setEditingPageId}
         onToggleCollapse={toggleExplorerPresentation}
+        onToggleFolderBookmark={toggleFolderBookmark}
         onTogglePageBookmark={togglePageBookmark}
         pageDropTargetFolderId={pageDropTargetFolderId}
         draggedPageIds={draggedPageIds}
@@ -8956,22 +8999,12 @@ function App() {
           isCanvasSearchUnavailable={isCanvasSearchUnavailable}
           isGridVisible={isGridVisible}
           isDarkMode={isDarkMode}
-          isEditingHeaderTitle={isEditingHeaderTitle}
           isSnapToGridEnabled={isSnapToGridEnabled}
           isTextFormattingVisible={isTextFormattingVisible}
-          openPages={openPages}
-          selectedPageId={selectedPageId}
           textFormatState={textFormatState}
-          titleSearchHighlights={titleSearchHighlights}
           zoomLevel={zoomLevel}
-          onClosePageTab={closePageTab}
-          onCreatePage={createPage}
           onFocusCanvasSearch={focusCanvasSearch}
           onPointerDown={handleChromePointerDown}
-          onRenamePage={renamePage}
-          onReorderPageTab={reorderPageTab}
-          onSelectPageTab={selectPage}
-          onSetEditingHeaderTitle={setIsEditingHeaderTitle}
           onToggleAssistant={toggleAssistantPanel}
           onToggleGrid={() =>
             setIsGridVisible((currentValue) => {
@@ -9675,11 +9708,11 @@ function App() {
 }
 
 const Sidebar = memo(function Sidebar({
+  bookmarkedFolders,
   bookmarkedPages,
   editingFolderId,
   editingPageId,
   explorerPanelRef,
-  explorerToggleButtonRef,
   folders,
   isCollapsed,
   isInert,
@@ -9703,6 +9736,7 @@ const Sidebar = memo(function Sidebar({
   onPageDragEnd,
   onPageDragStart,
   onPageDropOnFolder,
+  onPageDropOnRoot,
   onPointerDown,
   onRenameFolder,
   onRenamePage,
@@ -9712,6 +9746,7 @@ const Sidebar = memo(function Sidebar({
   onSetEditingFolderId,
   onSetEditingPageId,
   onToggleCollapse,
+  onToggleFolderBookmark,
   onTogglePageBookmark,
   pageDropTargetFolderId,
   draggedPageIds,
@@ -9719,6 +9754,36 @@ const Sidebar = memo(function Sidebar({
 }: SidebarProps) {
   const pageSearchInputRef = useRef<HTMLInputElement>(null);
   const sortMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const createFolderButtonRef = useRef<HTMLButtonElement>(null);
+  const folderMenuRef = useRef<HTMLDivElement>(null);
+  const folderMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const pagePointerDragRef = useRef<{
+    active: boolean;
+    pageId: string;
+    pointerId: number;
+    startX: number;
+    startY: number;
+  } | null>(null);
+  const pointerDropFolderIdRef = useRef<string | null>(null);
+  const suppressedPageClickRef = useRef<string | null>(null);
+  const nativePageDropCompletedRef = useRef(false);
+  const nativePageDropFolderIdRef = useRef<string | null>(null);
+  const pageDragCallbacksRef = useRef({
+    onFolderDragLeave,
+    onFolderDragOver,
+    onPageDragEnd,
+    onPageDragStart,
+    onPageDropOnFolder,
+    onPageDropOnRoot,
+  });
+  pageDragCallbacksRef.current = {
+    onFolderDragLeave,
+    onFolderDragOver,
+    onPageDragEnd,
+    onPageDragStart,
+    onPageDropOnFolder,
+    onPageDropOnRoot,
+  };
   const [activeSidebarTab, setActiveSidebarTab] = useState<SidebarTabId>("files");
   const [isPageSearchFocused, setIsPageSearchFocused] = useState(false);
   const [isSearchOptionsOpen, setIsSearchOptionsOpen] = useState(false);
@@ -9735,6 +9800,124 @@ const Sidebar = memo(function Sidebar({
   const [sortOrder, setSortOrder] = useState<SidebarSortOrder>("name-asc");
   const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
   const [isAutoRevealEnabled, setIsAutoRevealEnabled] = useState(true);
+  const [folderMenuState, setFolderMenuState] = useState<FolderMenuState | null>(
+    null,
+  );
+  useEffect(() => {
+    const folderIdAtPoint = (clientX: number, clientY: number) => {
+      const target = document
+        .elementFromPoint(clientX, clientY)
+        ?.closest<HTMLElement>("[data-page-drop-folder-id]");
+
+      return target?.dataset.pageDropFolderId ?? null;
+    };
+    const resetDrag = () => {
+      pagePointerDragRef.current = null;
+      pointerDropFolderIdRef.current = null;
+    };
+    const cancelDrag = () => {
+      if (pagePointerDragRef.current?.active) {
+        pageDragCallbacksRef.current.onPageDragEnd();
+      }
+      resetDrag();
+    };
+    const handlePointerMove = (event: PointerEvent) => {
+      const drag = pagePointerDragRef.current;
+
+      if (!drag || drag.pointerId !== event.pointerId) {
+        return;
+      }
+
+      if (!drag.active) {
+        if (
+          Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) <
+          PAGE_POINTER_DRAG_THRESHOLD
+        ) {
+          return;
+        }
+
+        if (!pageDragCallbacksRef.current.onPageDragStart(drag.pageId)) {
+          resetDrag();
+          return;
+        }
+
+        drag.active = true;
+        suppressedPageClickRef.current = drag.pageId;
+      }
+
+      event.preventDefault();
+      const nextFolderId = folderIdAtPoint(event.clientX, event.clientY);
+      const previousFolderId = pointerDropFolderIdRef.current;
+
+      if (previousFolderId === nextFolderId) {
+        return;
+      }
+      if (previousFolderId !== null) {
+        pageDragCallbacksRef.current.onFolderDragLeave(previousFolderId);
+      }
+      if (nextFolderId !== null) {
+        pageDragCallbacksRef.current.onFolderDragOver(nextFolderId);
+      }
+      pointerDropFolderIdRef.current = nextFolderId;
+    };
+    const finishDrag = (clientX: number, clientY: number) => {
+      const drag = pagePointerDragRef.current;
+
+      if (!drag) {
+        return;
+      }
+
+      if (drag.active) {
+        const targetFolderId = folderIdAtPoint(clientX, clientY);
+
+        if (targetFolderId === ROOT_FOLDER_ID) {
+          pageDragCallbacksRef.current.onPageDropOnRoot();
+        } else if (targetFolderId !== null) {
+          pageDragCallbacksRef.current.onPageDropOnFolder(targetFolderId);
+        } else {
+          pageDragCallbacksRef.current.onPageDragEnd();
+        }
+
+        window.setTimeout(() => {
+          if (suppressedPageClickRef.current === drag.pageId) {
+            suppressedPageClickRef.current = null;
+          }
+        }, 0);
+      }
+
+      resetDrag();
+    };
+    const handlePointerUp = (event: PointerEvent) => {
+      const drag = pagePointerDragRef.current;
+
+      if (!drag || drag.pointerId !== event.pointerId) {
+        return;
+      }
+
+      event.preventDefault();
+      finishDrag(event.clientX, event.clientY);
+    };
+    const handleMouseUp = (event: MouseEvent) => {
+      if (event.button === 0 && pagePointerDragRef.current) {
+        event.preventDefault();
+        finishDrag(event.clientX, event.clientY);
+      }
+    };
+
+    window.addEventListener("pointermove", handlePointerMove, { passive: false });
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("mouseup", handleMouseUp);
+    window.addEventListener("pointercancel", cancelDrag);
+    window.addEventListener("blur", cancelDrag);
+
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("mouseup", handleMouseUp);
+      window.removeEventListener("pointercancel", cancelDrag);
+      window.removeEventListener("blur", cancelDrag);
+    };
+  }, []);
   const folderNamesById = useMemo(
     () => new Map(folders.map((folder) => [folder.id, folder.name])),
     [folders],
@@ -9816,8 +9999,66 @@ const Sidebar = memo(function Sidebar({
     allFolderIds.length > 0 &&
     allFolderIds.every((folderId) => expandedFolderIds.has(folderId));
 
+  function beginPagePointerDrag(
+    event: ReactPointerEvent<HTMLDivElement>,
+    pageId: string,
+  ) {
+    if (
+      event.button !== 0 ||
+      editingPageId === pageId ||
+      (event.target instanceof Element &&
+        Boolean(event.target.closest("button, input, textarea, [contenteditable='true']")))
+    ) {
+      return;
+    }
+
+    pagePointerDragRef.current = {
+      active: false,
+      pageId,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+    };
+    pointerDropFolderIdRef.current = null;
+  }
+
   function hasPageDragData(event: DragEvent<HTMLElement>) {
-    return Array.from(event.dataTransfer.types).includes(PAGE_DRAG_MIME_TYPE);
+    return (
+      draggedPageIds.length > 0 ||
+      Array.from(event.dataTransfer.types).includes(PAGE_DRAG_MIME_TYPE)
+    );
+  }
+
+  function finishNativePageDrag() {
+    if (nativePageDropCompletedRef.current) {
+      nativePageDropCompletedRef.current = false;
+      return;
+    }
+
+    const targetFolderId = nativePageDropFolderIdRef.current;
+    nativePageDropFolderIdRef.current = null;
+
+    if (targetFolderId === ROOT_FOLDER_ID) {
+      onPageDropOnRoot();
+    } else if (targetFolderId !== null) {
+      onPageDropOnFolder(targetFolderId);
+    } else {
+      onPageDragEnd();
+    }
+  }
+
+  function handlePageRowClick(
+    event: ReactMouseEvent<HTMLDivElement>,
+    pageId: string,
+  ) {
+    if (suppressedPageClickRef.current === pageId) {
+      event.preventDefault();
+      event.stopPropagation();
+      suppressedPageClickRef.current = null;
+      return;
+    }
+
+    onSelectPage(pageId, event.metaKey || event.ctrlKey);
   }
 
   function updateSortMenuPosition() {
@@ -9856,6 +10097,209 @@ const Sidebar = memo(function Sidebar({
     setSortMenuPosition(null);
   }
 
+  function resolveFolderMenuPosition(
+    anchorX: number,
+    anchorY: number,
+    alignRight: boolean,
+  ) {
+    const panelBounds = document
+      .getElementById("workspace-explorer-panel")
+      ?.getBoundingClientRect();
+    const minimumLeft = Math.max(
+      FOLDER_MENU_MARGIN,
+      (panelBounds?.left ?? 0) + 4,
+    );
+    const maximumRight = Math.min(
+      window.innerWidth - FOLDER_MENU_MARGIN,
+      (panelBounds?.right ?? window.innerWidth) - 4,
+    );
+    const preferredLeft = alignRight ? anchorX - FOLDER_MENU_WIDTH : anchorX;
+    const left = Math.max(
+      minimumLeft,
+      Math.min(preferredLeft, maximumRight - FOLDER_MENU_WIDTH),
+    );
+    const preferredTop = anchorY;
+    const top = Math.max(
+      FOLDER_MENU_MARGIN,
+      preferredTop + FOLDER_MENU_HEIGHT_ESTIMATE <=
+      window.innerHeight - FOLDER_MENU_MARGIN
+        ? preferredTop
+        : preferredTop - FOLDER_MENU_HEIGHT_ESTIMATE,
+    );
+
+    return { left, top };
+  }
+
+  function closeFolderMenu(restoreFocus = false) {
+    setFolderMenuState(null);
+
+    if (!restoreFocus) {
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      if (folderMenuTriggerRef.current?.isConnected) {
+        folderMenuTriggerRef.current.focus();
+      } else {
+        document.getElementById("workspace-explorer-panel")?.focus();
+      }
+    });
+  }
+
+  function focusAdjacentToFolderMenu(backward: boolean) {
+    const trigger = folderMenuTriggerRef.current;
+    const focusableElements = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), a[href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter(
+      (element) =>
+        element.isConnected &&
+        !folderMenuRef.current?.contains(element) &&
+        element.getClientRects().length > 0,
+    );
+    const triggerIndex = trigger ? focusableElements.indexOf(trigger) : -1;
+    const adjacentElement =
+      triggerIndex >= 0
+        ? focusableElements[triggerIndex + (backward ? -1 : 1)]
+        : null;
+
+    closeFolderMenu();
+    window.requestAnimationFrame(() => {
+      (adjacentElement ?? trigger ?? createFolderButtonRef.current)?.focus();
+    });
+  }
+
+  function focusAfterFolderRemoval(folderId: string) {
+    const currentFolderTriggers = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".folder-menu-trigger"),
+    );
+    const removedTriggerIndex = currentFolderTriggers.findIndex(
+      (trigger) => trigger.dataset.folderId === folderId,
+    );
+
+    window.requestAnimationFrame(() => {
+      const remainingFolderTriggers = Array.from(
+        document.querySelectorAll<HTMLButtonElement>(".folder-menu-trigger"),
+      );
+      const nextFolderTrigger =
+        remainingFolderTriggers[
+          Math.min(
+            Math.max(removedTriggerIndex, 0),
+            remainingFolderTriggers.length - 1,
+          )
+        ];
+      const activeRailButton = document.querySelector<HTMLButtonElement>(
+        '.rail-button[aria-pressed="true"]',
+      );
+
+      (
+        nextFolderTrigger ??
+        createFolderButtonRef.current ??
+        activeRailButton ??
+        document.getElementById("workspace-explorer-panel")
+      )?.focus();
+    });
+  }
+
+  function openFolderMenuFromButton(
+    folderId: string,
+    trigger: HTMLButtonElement,
+  ) {
+    if (folderMenuState?.folderId === folderId) {
+      closeFolderMenu(true);
+      return;
+    }
+
+    const triggerBounds = trigger.getBoundingClientRect();
+    folderMenuTriggerRef.current = trigger;
+    closeSortMenu();
+    setFolderMenuState({
+      folderId,
+      ...resolveFolderMenuPosition(
+        triggerBounds.right,
+        triggerBounds.bottom + 4,
+        true,
+      ),
+    });
+  }
+
+  function openFolderMenuFromContext(
+    folderId: string,
+    event: ReactMouseEvent<HTMLDivElement>,
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    onSelectFolder(folderId);
+    folderMenuTriggerRef.current = event.currentTarget.querySelector<HTMLButtonElement>(
+      ".folder-menu-trigger",
+    );
+    closeSortMenu();
+    setFolderMenuState({
+      folderId,
+      ...resolveFolderMenuPosition(event.clientX, event.clientY, false),
+    });
+  }
+
+  function runFolderMenuAction(
+    actionId: FolderMenuActionId,
+    folderId: string,
+  ) {
+    const folder = folders.find((candidateFolder) => candidateFolder.id === folderId);
+
+    if (!folder) {
+      closeFolderMenu();
+      return;
+    }
+
+    if (actionId === "rename") {
+      closeFolderMenu();
+      onSetEditingFolderId(folderId);
+      return;
+    }
+
+    if (actionId === "delete") {
+      closeFolderMenu();
+      focusAfterFolderRemoval(folderId);
+      onDeleteFolder(folderId);
+      return;
+    }
+
+    const shouldMoveFocusToPanel =
+      activeSidebarTab === "bookmarks" && Boolean(folder.isBookmarked);
+    closeFolderMenu(!shouldMoveFocusToPanel);
+    if (shouldMoveFocusToPanel) {
+      focusAfterFolderRemoval(folderId);
+    }
+    onToggleFolderBookmark(folderId);
+  }
+
+  function handleFolderMenuKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    const menuItems = Array.from(
+      event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    );
+    const currentIndex = menuItems.indexOf(document.activeElement as HTMLButtonElement);
+    let nextIndex: number | null = null;
+
+    if (event.key === "ArrowDown") {
+      nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % menuItems.length;
+    } else if (event.key === "ArrowUp") {
+      nextIndex =
+        currentIndex < 0
+          ? menuItems.length - 1
+          : (currentIndex - 1 + menuItems.length) % menuItems.length;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = menuItems.length - 1;
+    }
+
+    if (nextIndex !== null) {
+      event.preventDefault();
+      menuItems[nextIndex]?.focus();
+    }
+  }
+
   useEffect(() => {
     if (pageSearchFocusRequest === 0) {
       return;
@@ -9891,6 +10335,101 @@ const Sidebar = memo(function Sidebar({
 
     return () => window.removeEventListener("resize", updateSortMenuPosition);
   }, [isSortMenuOpen]);
+
+  useLayoutEffect(() => {
+    if (!folderMenuState || !folderMenuRef.current) {
+      return;
+    }
+
+    const menuBounds = folderMenuRef.current.getBoundingClientRect();
+    const panelBounds = document
+      .getElementById("workspace-explorer-panel")
+      ?.getBoundingClientRect();
+    const minimumLeft = Math.max(
+      FOLDER_MENU_MARGIN,
+      (panelBounds?.left ?? 0) + 4,
+    );
+    const maximumRight = Math.min(
+      window.innerWidth - FOLDER_MENU_MARGIN,
+      (panelBounds?.right ?? window.innerWidth) - 4,
+    );
+    const nextLeft = Math.max(
+      minimumLeft,
+      Math.min(folderMenuState.left, maximumRight - menuBounds.width),
+    );
+    const nextTop = Math.max(
+      FOLDER_MENU_MARGIN,
+      Math.min(
+        folderMenuState.top,
+        window.innerHeight - FOLDER_MENU_MARGIN - menuBounds.height,
+      ),
+    );
+
+    if (
+      Math.abs(nextLeft - folderMenuState.left) < 0.5 &&
+      Math.abs(nextTop - folderMenuState.top) < 0.5
+    ) {
+      return;
+    }
+
+    setFolderMenuState((currentMenuState) =>
+      currentMenuState
+        ? { ...currentMenuState, left: nextLeft, top: nextTop }
+        : currentMenuState,
+    );
+  }, [folderMenuState]);
+
+  useEffect(() => {
+    if (!folderMenuState) {
+      return;
+    }
+
+    const focusFrameId = window.requestAnimationFrame(() => {
+      folderMenuRef.current
+        ?.querySelector<HTMLButtonElement>('[role="menuitem"]')
+        ?.focus();
+    });
+    const handleOutsidePointerDown = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        (folderMenuRef.current?.contains(event.target) ||
+          folderMenuTriggerRef.current?.contains(event.target))
+      ) {
+        return;
+      }
+
+      closeFolderMenu();
+    };
+    const handleMenuKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeFolderMenu(true);
+      } else if (event.key === "Tab") {
+        event.preventDefault();
+        focusAdjacentToFolderMenu(event.shiftKey);
+      }
+    };
+    const dismissFolderMenu = () => closeFolderMenu();
+
+    document.addEventListener("pointerdown", handleOutsidePointerDown, true);
+    window.addEventListener("blur", dismissFolderMenu);
+    window.addEventListener("resize", dismissFolderMenu);
+    window.addEventListener("scroll", dismissFolderMenu, true);
+    window.addEventListener("keydown", handleMenuKeyDown);
+
+    return () => {
+      window.cancelAnimationFrame(focusFrameId);
+      document.removeEventListener("pointerdown", handleOutsidePointerDown, true);
+      window.removeEventListener("blur", dismissFolderMenu);
+      window.removeEventListener("resize", dismissFolderMenu);
+      window.removeEventListener("scroll", dismissFolderMenu, true);
+      window.removeEventListener("keydown", handleMenuKeyDown);
+    };
+  }, [folderMenuState]);
+
+  useEffect(() => {
+    closeFolderMenu();
+  }, [activeSidebarTab]);
 
   useEffect(() => {
     setExpandedFolderIds((currentFolderIds) => {
@@ -9947,11 +10486,62 @@ const Sidebar = memo(function Sidebar({
     });
   }
 
+  function handleFolderRowClick(
+    event: ReactMouseEvent<HTMLDivElement>,
+    folderId: string,
+  ) {
+    const isInteractiveTarget =
+      event.target instanceof Element &&
+      Boolean(
+        event.target.closest(
+          "button, input, textarea, select, a, [contenteditable='true']",
+        ),
+      );
+
+    if (event.button !== 0 || event.detail > 1 || isInteractiveTarget) {
+      return;
+    }
+
+    if (!expandedFolderIds.has(folderId)) {
+      onSelectFolder(folderId);
+    }
+    toggleFolderExpanded(folderId);
+  }
+
+  function handleFolderRowKeyDown(
+    event: ReactKeyboardEvent<HTMLDivElement>,
+    folderId: string,
+  ) {
+    if (event.target !== event.currentTarget) {
+      return;
+    }
+
+    const isFolderExpanded = expandedFolderIds.has(folderId);
+    const shouldToggle = event.key === "Enter" || event.key === " ";
+    const shouldExpand = event.key === "ArrowRight" && !isFolderExpanded;
+    const shouldCollapse = event.key === "ArrowLeft" && isFolderExpanded;
+
+    if (!shouldToggle && !shouldExpand && !shouldCollapse) {
+      return;
+    }
+
+    event.preventDefault();
+
+    if (!isFolderExpanded) {
+      onSelectFolder(folderId);
+    }
+    toggleFolderExpanded(folderId);
+  }
+
   function toggleAllFolders() {
     setExpandedFolderIds(() =>
       areAllFoldersExpanded ? new Set() : new Set(allFolderIds),
     );
   }
+
+  const folderMenuFolder = folderMenuState
+    ? folders.find((folder) => folder.id === folderMenuState.folderId) ?? null
+    : null;
 
   return (
     <aside
@@ -9962,13 +10552,10 @@ const Sidebar = memo(function Sidebar({
     >
       <ActivityRail
         activeTab={activeSidebarTab}
-        bookmarkedPageCount={bookmarkedPages.length}
+        bookmarkedPageCount={bookmarkedFolders.length + bookmarkedPages.length}
         Icon={HeroIcon}
-        isExplorerCollapsed={isCollapsed}
         onSelectTab={openSidebarTab}
-        onToggleExplorer={onToggleCollapse}
         templatePageCount={pageTemplates.length}
-        toggleButtonRef={explorerToggleButtonRef}
       />
 
       <div
@@ -9989,7 +10576,7 @@ const Sidebar = memo(function Sidebar({
             </div>
             <div
               className={`file-search-control ${
-                isPageSearchFocused || isSearchOptionsOpen ? "is-active" : ""
+                isPageSearchFocused ? "is-active" : ""
               }`}
             >
               <HeroIcon name="magnifying-glass" />
@@ -10039,31 +10626,56 @@ const Sidebar = memo(function Sidebar({
             {pageSearchQuery.trim() ? (
               <div className="search-results" aria-label="Search results">
                 {pageSearchResults.length > 0 ? (
-                  pageSearchResults.map((result) => (
-                    <button
-                      className={`search-result ${
-                        result.pageId === selectedPageId ? "is-selected" : ""
-                      }`}
-                      key={result.pageId}
-                      onClick={() => onSelectPage(result.pageId)}
-                      type="button"
-                    >
-                      <span className="search-result-title-row">
-                        <span className="search-result-title">{result.title}</span>
-                        <span className="search-result-count">
-                          {formatPageSearchSummary(result)}
+                  pageSearchResults.map((result) =>
+                    result.kind === "folder" ? (
+                      <button
+                        aria-current={
+                          result.folderId === selectedFolderId ? "true" : undefined
+                        }
+                        className={`search-result is-folder ${
+                          result.folderId === selectedFolderId ? "is-selected" : ""
+                        }`}
+                        key={`folder:${result.folderId}`}
+                        onClick={() => onSelectFolder(result.folderId)}
+                        type="button"
+                      >
+                        <span className="search-result-title-row">
+                          <span className="file-row-icon" aria-hidden="true">
+                            <HeroIcon name="folder" />
+                          </span>
+                          <span className="search-result-title">{result.name}</span>
+                          <span className="search-result-count">
+                            {result.pageCount} {result.pageCount === 1 ? "page" : "pages"}
+                          </span>
                         </span>
-                      </span>
-                      <span className="search-result-folder">
-                        {result.folderName}
-                      </span>
-                      <span className="search-result-preview">
-                        {result.preview}
-                      </span>
-                    </button>
-                  ))
+                        <span className="search-result-folder">Folder</span>
+                      </button>
+                    ) : (
+                      <button
+                        className={`search-result ${
+                          result.pageId === selectedPageId ? "is-selected" : ""
+                        }`}
+                        key={`page:${result.pageId}`}
+                        onClick={() => onSelectPage(result.pageId)}
+                        type="button"
+                      >
+                        <span className="search-result-title-row">
+                          <span className="search-result-title">{result.title}</span>
+                          <span className="search-result-count">
+                            {formatPageSearchSummary(result)}
+                          </span>
+                        </span>
+                        <span className="search-result-folder">
+                          {result.folderName}
+                        </span>
+                        <span className="search-result-preview">
+                          {result.preview}
+                        </span>
+                      </button>
+                    ),
+                  )
                 ) : (
-                  <p className="empty-state">No matching pages</p>
+                  <p className="empty-state">No matching files or folders</p>
                 )}
               </div>
             ) : null}
@@ -10082,7 +10694,7 @@ const Sidebar = memo(function Sidebar({
                   type="button"
                   className="section-action"
                   aria-label="Create page"
-                  onClick={onCreatePage}
+                  onClick={() => onCreatePage()}
                   title="Create page"
                 >
                   <HeroIcon name="pencil-square" />
@@ -10092,6 +10704,7 @@ const Sidebar = memo(function Sidebar({
                   className="section-action"
                   aria-label="Create folder"
                   onClick={onCreateFolder}
+                  ref={createFolderButtonRef}
                   title="Create folder"
                 >
                   <HeroIcon name="folder-plus" />
@@ -10178,6 +10791,44 @@ const Sidebar = memo(function Sidebar({
               </div>
             </div>
             <div className="file-tree" role="tree" aria-label="Folders and pages">
+              <div
+                aria-label="Top-level pages"
+                data-page-drop-folder-id={ROOT_FOLDER_ID}
+                className={`file-tree-root-drop-zone ${
+                  pageDropTargetFolderId === ROOT_FOLDER_ID ? "is-drop-target" : ""
+                }`}
+                onDragEnter={(event) => {
+                  if (!hasPageDragData(event)) return;
+                  event.preventDefault();
+                  nativePageDropFolderIdRef.current = ROOT_FOLDER_ID;
+                  onFolderDragOver(ROOT_FOLDER_ID);
+                }}
+                onDragLeave={(event) => {
+                  if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                    return;
+                  }
+                  if (nativePageDropFolderIdRef.current === ROOT_FOLDER_ID) {
+                    nativePageDropFolderIdRef.current = null;
+                  }
+                  onFolderDragLeave(ROOT_FOLDER_ID);
+                }}
+                onDragOver={(event) => {
+                  if (!hasPageDragData(event)) return;
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                  nativePageDropFolderIdRef.current = ROOT_FOLDER_ID;
+                  onFolderDragOver(ROOT_FOLDER_ID);
+                }}
+                onDrop={(event) => {
+                  if (!hasPageDragData(event)) return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  nativePageDropCompletedRef.current = true;
+                  nativePageDropFolderIdRef.current = null;
+                  onPageDropOnRoot();
+                }}
+                role="group"
+              >
               {rootPages.map((page) => {
                 const isPageSelected = selectedPageIdSet.has(page.id);
                 const isPageOpen = page.id === selectedPageId;
@@ -10194,22 +10845,22 @@ const Sidebar = memo(function Sidebar({
                     key={page.id}
                     role="treeitem"
                     onDoubleClick={() => onSetEditingPageId(page.id)}
-                    onClick={(event) =>
-                      onSelectPage(page.id, event.metaKey || event.ctrlKey)
-                    }
-                    onDragEnd={onPageDragEnd}
+                    onClick={(event) => handlePageRowClick(event, page.id)}
+                    onDragEnd={finishNativePageDrag}
                     onDragStart={(event) => {
+                      pagePointerDragRef.current = null;
+                      nativePageDropCompletedRef.current = false;
+                      nativePageDropFolderIdRef.current = null;
                       if (!onPageDragStart(page.id)) {
                         event.preventDefault();
                         return;
                       }
-
                       event.dataTransfer.effectAllowed = "move";
                       event.dataTransfer.setData(PAGE_DRAG_MIME_TYPE, page.id);
                       event.dataTransfer.setData("text/plain", page.title);
                     }}
+                    onPointerDown={(event) => beginPagePointerDrag(event, page.id)}
                   >
-                    <span className="file-row-spacer" aria-hidden="true" />
                     <span className="file-row-icon">
                       <HeroIcon name="document-text" />
                     </span>
@@ -10226,7 +10877,6 @@ const Sidebar = memo(function Sidebar({
                     ) : (
                       <span className="nav-label">{page.title}</span>
                     )}
-                    <span className="file-kind">CANVAS</span>
                     <button
                       type="button"
                       className={`bookmark-toggle ${
@@ -10260,64 +10910,84 @@ const Sidebar = memo(function Sidebar({
                   </div>
                 );
               })}
+              {draggedPageIds.length > 0 ? (
+                <div className="file-tree-root-drop-hint">Move to top level</div>
+              ) : null}
+              </div>
               {sortedFolders.map((folder) => {
                 const folderPages = pagesByFolderId.get(folder.id) ?? [];
                 const isFolderExpanded = expandedFolderIds.has(folder.id);
 
                 return (
-                  <div className="file-tree-group" key={folder.id}>
+                  <div
+                    className="file-tree-group"
+                    data-page-drop-folder-id={folder.id}
+                    key={folder.id}
+                    onDragEnter={(event) => {
+                      if (!hasPageDragData(event)) return;
+                      event.preventDefault();
+                      nativePageDropFolderIdRef.current = folder.id;
+                      onFolderDragOver(folder.id);
+                    }}
+                    onDragLeave={(event) => {
+                      if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                        return;
+                      }
+                      if (nativePageDropFolderIdRef.current === folder.id) {
+                        nativePageDropFolderIdRef.current = null;
+                      }
+                      onFolderDragLeave(folder.id);
+                    }}
+                    onDragOver={(event) => {
+                      if (!hasPageDragData(event)) return;
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = "move";
+                      nativePageDropFolderIdRef.current = folder.id;
+                      onFolderDragOver(folder.id);
+                    }}
+                    onDrop={(event) => {
+                      if (!hasPageDragData(event)) return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      nativePageDropCompletedRef.current = true;
+                      nativePageDropFolderIdRef.current = null;
+                      onPageDropOnFolder(folder.id);
+                    }}
+                  >
                     <div
                       className={`nav-item nav-item-folder file-tree-row ${
                         folder.id === selectedFolderId ? "is-active" : ""
                       } ${
                         folder.id === pageDropTargetFolderId ? "is-drop-target" : ""
+                      } ${
+                        folderMenuState?.folderId === folder.id ? "has-open-menu" : ""
                       }`}
                       aria-expanded={isFolderExpanded}
+                      aria-selected={folder.id === selectedFolderId}
                       role="treeitem"
-                      onDoubleClick={() => onSetEditingFolderId(folder.id)}
-                      onClick={() => onSelectFolder(folder.id)}
-                      onDragLeave={(event) => {
-                        if (
-                          event.currentTarget.contains(event.relatedTarget as Node | null)
-                        ) {
-                          return;
-                        }
-
-                        onFolderDragLeave(folder.id);
-                      }}
-                      onDragOver={(event) => {
-                        if (!hasPageDragData(event)) {
-                          return;
-                        }
-
-                        event.preventDefault();
-                        event.dataTransfer.dropEffect = "move";
-                        onFolderDragOver(folder.id);
-                      }}
-                      onDrop={(event) => {
-                        if (!hasPageDragData(event)) {
-                          return;
-                        }
-
-                        event.preventDefault();
-                        event.stopPropagation();
-                        onPageDropOnFolder(folder.id);
-                      }}
+                      onClick={(event) => handleFolderRowClick(event, folder.id)}
+                      onContextMenu={(event) =>
+                        openFolderMenuFromContext(folder.id, event)
+                      }
+                      onKeyDown={(event) =>
+                        handleFolderRowKeyDown(event, folder.id)
+                      }
+                      tabIndex={0}
                     >
                       <button
                         type="button"
-                        className="folder-disclosure"
-                        aria-label={isFolderExpanded ? "Collapse folder" : "Expand folder"}
+                        className="folder-toggle"
+                        aria-label={`${
+                          isFolderExpanded ? "Collapse" : "Expand"
+                        } ${folder.name}`}
+                        aria-expanded={isFolderExpanded}
                         onClick={(event) => {
                           event.stopPropagation();
                           toggleFolderExpanded(folder.id);
                         }}
                       >
-                        <HeroIcon name={isFolderExpanded ? "chevron-down" : "chevron-right"} />
-                      </button>
-                      <span className="file-row-icon">
                         <HeroIcon name="folder" />
-                      </span>
+                      </button>
                       {editingFolderId === folder.id ? (
                         <InlineRename
                           ariaLabel="Folder name"
@@ -10335,14 +11005,35 @@ const Sidebar = memo(function Sidebar({
                       <span className="nav-actions">
                         <button
                           type="button"
-                          aria-label={`Delete ${folder.name}`}
+                          aria-label={`Create page in ${folder.name}`}
                           onClick={(event) => {
                             event.stopPropagation();
-                            onDeleteFolder(folder.id);
+                            setExpandedFolderIds((currentFolderIds) => {
+                              const nextFolderIds = new Set(currentFolderIds);
+                              nextFolderIds.add(folder.id);
+                              return nextFolderIds;
+                            });
+                            onCreatePage(folder.id);
                           }}
-                          title={`Delete ${folder.name}`}
+                          title={`Create page in ${folder.name}`}
                         >
-                          <HeroIcon name="trash" />
+                          <HeroIcon name="pencil-square" />
+                        </button>
+                        <button
+                          type="button"
+                          className="folder-menu-trigger"
+                          data-folder-id={folder.id}
+                          aria-controls={FOLDER_MENU_ID}
+                          aria-expanded={folderMenuState?.folderId === folder.id}
+                          aria-haspopup="menu"
+                          aria-label={`More actions for ${folder.name}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openFolderMenuFromButton(folder.id, event.currentTarget);
+                          }}
+                          title={`More actions for ${folder.name}`}
+                        >
+                          <HeroIcon name="ellipsis-horizontal" />
                         </button>
                       </span>
                     </div>
@@ -10364,22 +11055,22 @@ const Sidebar = memo(function Sidebar({
                               key={page.id}
                               role="treeitem"
                               onDoubleClick={() => onSetEditingPageId(page.id)}
-                              onClick={(event) =>
-                                onSelectPage(page.id, event.metaKey || event.ctrlKey)
-                              }
-                              onDragEnd={onPageDragEnd}
+                              onClick={(event) => handlePageRowClick(event, page.id)}
+                              onDragEnd={finishNativePageDrag}
                               onDragStart={(event) => {
+                                pagePointerDragRef.current = null;
+                                nativePageDropCompletedRef.current = false;
+                                nativePageDropFolderIdRef.current = null;
                                 if (!onPageDragStart(page.id)) {
                                   event.preventDefault();
                                   return;
                                 }
-
                                 event.dataTransfer.effectAllowed = "move";
                                 event.dataTransfer.setData(PAGE_DRAG_MIME_TYPE, page.id);
                                 event.dataTransfer.setData("text/plain", page.title);
                               }}
+                              onPointerDown={(event) => beginPagePointerDrag(event, page.id)}
                             >
-                              <span className="file-row-spacer" aria-hidden="true" />
                               <span className="file-row-icon">
                                 <HeroIcon name="document-text" />
                               </span>
@@ -10396,7 +11087,6 @@ const Sidebar = memo(function Sidebar({
                               ) : (
                                 <span className="nav-label">{page.title}</span>
                               )}
-                              <span className="file-kind">CANVAS</span>
                               <button
                                 type="button"
                                 className={`bookmark-toggle ${
@@ -10453,8 +11143,222 @@ const Sidebar = memo(function Sidebar({
               <div className="section-header">
                 <h2 id="favorites-title">Favorites</h2>
               </div>
-              {bookmarkedPages.length > 0 ? (
-                <div className="nav-list">
+              {bookmarkedFolders.length + bookmarkedPages.length > 0 ? (
+                <div className="nav-list file-tree" role="tree">
+                  {bookmarkedFolders.map((folder) => {
+                    const folderPages = pagesByFolderId.get(folder.id) ?? [];
+                    const isFolderExpanded = expandedFolderIds.has(folder.id);
+
+                    return (
+                      <div
+                        className="file-tree-group"
+                        data-page-drop-folder-id={folder.id}
+                        key={folder.id}
+                        onDragEnter={(event) => {
+                          if (!hasPageDragData(event)) return;
+                          event.preventDefault();
+                          nativePageDropFolderIdRef.current = folder.id;
+                          onFolderDragOver(folder.id);
+                        }}
+                        onDragLeave={(event) => {
+                          if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                            return;
+                          }
+                          if (nativePageDropFolderIdRef.current === folder.id) {
+                            nativePageDropFolderIdRef.current = null;
+                          }
+                          onFolderDragLeave(folder.id);
+                        }}
+                        onDragOver={(event) => {
+                          if (!hasPageDragData(event)) return;
+                          event.preventDefault();
+                          event.dataTransfer.dropEffect = "move";
+                          nativePageDropFolderIdRef.current = folder.id;
+                          onFolderDragOver(folder.id);
+                        }}
+                        onDrop={(event) => {
+                          if (!hasPageDragData(event)) return;
+                          event.preventDefault();
+                          event.stopPropagation();
+                          nativePageDropCompletedRef.current = true;
+                          nativePageDropFolderIdRef.current = null;
+                          onPageDropOnFolder(folder.id);
+                        }}
+                      >
+                        <div
+                          className={`nav-item nav-item-folder file-tree-row ${
+                            folder.id === selectedFolderId ? "is-active" : ""
+                          } ${
+                            folder.id === pageDropTargetFolderId ? "is-drop-target" : ""
+                          } ${
+                            folderMenuState?.folderId === folder.id ? "has-open-menu" : ""
+                          }`}
+                          aria-expanded={isFolderExpanded}
+                          aria-selected={folder.id === selectedFolderId}
+                          role="treeitem"
+                          onClick={(event) => handleFolderRowClick(event, folder.id)}
+                          onContextMenu={(event) =>
+                            openFolderMenuFromContext(folder.id, event)
+                          }
+                          onKeyDown={(event) =>
+                            handleFolderRowKeyDown(event, folder.id)
+                          }
+                          tabIndex={0}
+                        >
+                          <button
+                            type="button"
+                            className="folder-toggle"
+                            aria-label={`${
+                              isFolderExpanded ? "Collapse" : "Expand"
+                            } ${folder.name}`}
+                            aria-expanded={isFolderExpanded}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              toggleFolderExpanded(folder.id);
+                            }}
+                          >
+                            <HeroIcon name="folder" />
+                          </button>
+                          {editingFolderId === folder.id ? (
+                            <InlineRename
+                              ariaLabel="Folder name"
+                              initialValue={folder.name}
+                              onCancel={() => onSetEditingFolderId(null)}
+                              onCommit={(value) => {
+                                onRenameFolder(folder.id, value);
+                                onSetEditingFolderId(null);
+                              }}
+                            />
+                          ) : (
+                            <span className="nav-label">{folder.name}</span>
+                          )}
+                          <span className="item-count">{folderPages.length}</span>
+                          <span className="nav-actions">
+                            <button
+                              type="button"
+                              aria-label={`Create page in ${folder.name}`}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setExpandedFolderIds((currentFolderIds) => {
+                                  const nextFolderIds = new Set(currentFolderIds);
+                                  nextFolderIds.add(folder.id);
+                                  return nextFolderIds;
+                                });
+                                onCreatePage(folder.id);
+                              }}
+                              title={`Create page in ${folder.name}`}
+                            >
+                              <HeroIcon name="pencil-square" />
+                            </button>
+                            <button
+                              type="button"
+                              className="folder-menu-trigger"
+                              data-folder-id={folder.id}
+                              aria-controls={FOLDER_MENU_ID}
+                              aria-expanded={folderMenuState?.folderId === folder.id}
+                              aria-haspopup="menu"
+                              aria-label={`More actions for ${folder.name}`}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                openFolderMenuFromButton(folder.id, event.currentTarget);
+                              }}
+                              title={`More actions for ${folder.name}`}
+                            >
+                              <HeroIcon name="ellipsis-horizontal" />
+                            </button>
+                          </span>
+                        </div>
+                        {isFolderExpanded ? (
+                          <div className="file-tree-children" role="group">
+                            {folderPages.map((page) => {
+                              const isPageSelected = selectedPageIdSet.has(page.id);
+                              const isPageOpen = page.id === selectedPageId;
+                              const isPageDragging = draggedPageIdSet.has(page.id);
+
+                              return (
+                                <div
+                                  className={`nav-item nav-item-page file-tree-row ${
+                                    isPageSelected ? "is-selected" : ""
+                                  } ${isPageOpen ? "is-open" : ""} ${
+                                    isPageDragging ? "is-dragging" : ""
+                                  }`}
+                                  draggable={editingPageId !== page.id}
+                                  key={page.id}
+                                  role="treeitem"
+                                  onDoubleClick={() => onSetEditingPageId(page.id)}
+                                  onClick={(event) => handlePageRowClick(event, page.id)}
+                                  onDragEnd={finishNativePageDrag}
+                                  onDragStart={(event) => {
+                                    pagePointerDragRef.current = null;
+                                    nativePageDropCompletedRef.current = false;
+                                    nativePageDropFolderIdRef.current = null;
+                                    if (!onPageDragStart(page.id)) {
+                                      event.preventDefault();
+                                      return;
+                                    }
+                                    event.dataTransfer.effectAllowed = "move";
+                                    event.dataTransfer.setData(PAGE_DRAG_MIME_TYPE, page.id);
+                                    event.dataTransfer.setData("text/plain", page.title);
+                                  }}
+                                  onPointerDown={(event) => beginPagePointerDrag(event, page.id)}
+                                >
+                                  <span className="file-row-icon">
+                                    <HeroIcon name="document-text" />
+                                  </span>
+                                  {editingPageId === page.id ? (
+                                    <InlineRename
+                                      ariaLabel="Page title"
+                                      initialValue={page.title}
+                                      onCancel={() => onSetEditingPageId(null)}
+                                      onCommit={(value) => {
+                                        onRenamePage(page.id, value);
+                                        onSetEditingPageId(null);
+                                      }}
+                                    />
+                                  ) : (
+                                    <span className="nav-label">{page.title}</span>
+                                  )}
+                                  <button
+                                    type="button"
+                                    className={`bookmark-toggle ${
+                                      page.isBookmarked ? "is-bookmarked" : ""
+                                    }`}
+                                    aria-label={`${
+                                      page.isBookmarked ? "Remove bookmark from" : "Bookmark"
+                                    } ${page.title}`}
+                                    aria-pressed={Boolean(page.isBookmarked)}
+                                    title={page.isBookmarked ? "Remove bookmark" : "Bookmark"}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      onTogglePageBookmark(page.id);
+                                    }}
+                                  >
+                                    <HeroIcon name="bookmark" />
+                                  </button>
+                                  <span className="nav-actions">
+                                    <button
+                                      type="button"
+                                      aria-label={`Delete ${page.title}`}
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        onDeletePage(page.id);
+                                      }}
+                                      title={`Delete ${page.title}`}
+                                    >
+                                      <HeroIcon name="trash" />
+                                    </button>
+                                  </span>
+                                </div>
+                              );
+                            })}
+                            {folderPages.length === 0 ? (
+                              <p className="empty-state file-tree-empty">No pages</p>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
                   {bookmarkedPages.map((page) => (
                     <div
                       className={`nav-item nav-item-bookmark ${
@@ -10566,6 +11470,50 @@ const Sidebar = memo(function Sidebar({
           ) : null}
           </div>
         ) : null}
+        {folderMenuState && folderMenuFolder ? (
+          <div
+            aria-label={`Folder actions for ${folderMenuFolder.name}`}
+            className="folder-menu-popover"
+            id={FOLDER_MENU_ID}
+            onContextMenu={(event) => event.preventDefault()}
+            onKeyDown={handleFolderMenuKeyDown}
+            ref={folderMenuRef}
+            role="menu"
+            style={{ left: folderMenuState.left, top: folderMenuState.top }}
+          >
+            {folderMenuActions.map((action) => {
+              const label =
+                action.id === "bookmark"
+                  ? folderMenuFolder.isBookmarked
+                    ? "Remove bookmark"
+                    : "Bookmark"
+                  : action.id === "rename"
+                    ? "Rename"
+                    : "Delete";
+
+              return (
+                <Fragment key={action.id}>
+                  {action.id === "delete" ? (
+                    <span className="folder-menu-separator" aria-hidden="true" />
+                  ) : null}
+                  <button
+                    className={`folder-menu-item ${
+                      action.id === "delete" ? "is-danger" : ""
+                    }`}
+                    onClick={() =>
+                      runFolderMenuAction(action.id, folderMenuFolder.id)
+                    }
+                    role="menuitem"
+                    type="button"
+                  >
+                    <HeroIcon name={action.icon} />
+                    <span>{label}</span>
+                  </button>
+                </Fragment>
+              );
+            })}
+          </div>
+        ) : null}
       </div>
     </aside>
   );
@@ -10601,22 +11549,12 @@ const PageHeader = memo(function PageHeader({
   isGridVisible,
   isDarkMode,
   isCanvasSearchUnavailable,
-  isEditingHeaderTitle,
   isSnapToGridEnabled,
   isTextFormattingVisible,
-  openPages,
-  selectedPageId,
   textFormatState,
-  titleSearchHighlights,
   zoomLevel,
-  onClosePageTab,
-  onCreatePage,
   onFocusCanvasSearch,
   onPointerDown,
-  onRenamePage,
-  onReorderPageTab,
-  onSelectPageTab,
-  onSetEditingHeaderTitle,
   onToggleAssistant,
   onToggleGrid,
   onToggleDarkMode,
@@ -10640,19 +11578,6 @@ const PageHeader = memo(function PageHeader({
       className="page-header"
       onPointerDown={onPointerDown}
     >
-      <WorkspaceTabs
-        Icon={HeroIcon}
-        isEditingActiveTab={isEditingHeaderTitle}
-        onCloseTab={onClosePageTab}
-        onCreatePage={onCreatePage}
-        onRenamePage={onRenamePage}
-        onReorderTab={onReorderPageTab}
-        onSelectTab={onSelectPageTab}
-        onSetEditingActiveTab={onSetEditingHeaderTitle}
-        selectedPageId={selectedPageId}
-        tabs={openPages}
-        titleSearch={{ pageId: selectedPageId, ranges: titleSearchHighlights }}
-      />
       <div className="page-header-actions">
         {isTextFormattingVisible ? (
           <GlobalTextToolbar
@@ -10952,13 +11877,9 @@ function arePageHeaderPropsEqual(previous: PageHeaderProps, next: PageHeaderProp
     previous.isGridVisible === next.isGridVisible &&
     previous.isDarkMode === next.isDarkMode &&
     previous.isCanvasSearchUnavailable === next.isCanvasSearchUnavailable &&
-    previous.isEditingHeaderTitle === next.isEditingHeaderTitle &&
     previous.isSnapToGridEnabled === next.isSnapToGridEnabled &&
     previous.isTextFormattingVisible === next.isTextFormattingVisible &&
-    previous.openPages === next.openPages &&
-    previous.selectedPageId === next.selectedPageId &&
     previous.textFormatState === next.textFormatState &&
-    previous.titleSearchHighlights === next.titleSearchHighlights &&
     previous.zoomLevel === next.zoomLevel
   );
 }

@@ -1,5 +1,5 @@
 import type { Ref } from "react";
-import noteAppIcon from "../../../../backend/src-tauri/icons/32x32.png";
+import noteAppIcon from "../../../../docs/assets/note-mark.png";
 import type { WorkbenchIconComponent } from "./icons";
 import { WorkspaceTabs, type WorkspaceTab, type WorkspaceTabDropPlacement } from "./WorkspaceTabs";
 import { WindowControls, type DesktopPlatform } from "./WindowControls";
@@ -29,7 +29,7 @@ export function EmbeddedTitleBar({ Icon, isEditingActiveTab, isExplorerCollapsed
     <header className={`window-titlebar ${platform ? `is-${platform}` : ""}`}>
       {platform === "macos" ? <div aria-hidden="true" className="window-titlebar-macos-inset" /> : null}
       <div className="window-titlebar-brand">
-        <img alt="" className="window-titlebar-app-icon" src={noteAppIcon} />
+        <img alt="" aria-hidden="true" className="window-titlebar-app-icon" src={noteAppIcon} />
         <span>Note</span>
       </div>
       <button aria-controls="workspace-explorer-panel" aria-expanded={!isExplorerCollapsed} aria-label={isExplorerCollapsed ? "Expand sidebar" : "Collapse sidebar"} className="window-titlebar-sidebar-toggle" onClick={(event) => onToggleExplorer(event.currentTarget)} ref={toggleButtonRef} title={isExplorerCollapsed ? "Expand sidebar" : "Collapse sidebar"} type="button">

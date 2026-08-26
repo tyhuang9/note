@@ -160,6 +160,34 @@ test("a newer picker selection invalidates a delayed external drop", async ({ pa
   await expect(imageImportStatus(page)).toHaveCount(0);
 });
 
+test("a stale drop cannot commit after its managed asset save resolves", async ({ page }) => {
+  await installDelayedAssetStorageMock(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: /create new note/i }).click();
+
+  await dispatchFileDrop(page, [{ dataUrl: PNG_DATA_URL, name: "older-saved.png", type: "image/png" }]);
+  await expect.poll(() => assetSaveCalls(page)).toBe(1);
+
+  await dispatchFileDrop(page, [
+    { dataUrl: PNG_DATA_URL, name: "current-saved.png", type: "image/png" },
+    { dataUrl: "data:text/plain;base64,bm90ZXM=", name: "ignored.txt", type: "text/plain" },
+  ]);
+  await expect.poll(() => assetSaveCalls(page)).toBe(2);
+  await expect(page.locator('.text-block-image[alt="current-saved.png"]')).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveText("Only image files can be imported.");
+  await expect(imageImportStatus(page)).toHaveText("Imported 1 image: current-saved.png. Skipped 1 file.");
+
+  await page.evaluate(() => {
+    (window as unknown as { releaseFirstAssetSave?: () => void }).releaseFirstAssetSave?.();
+  });
+  await page.waitForTimeout(100);
+
+  await expect(page.locator('.text-block-image[alt="older-saved.png"]')).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Select and move image older-saved\.png/i })).toHaveCount(0);
+  await expect(page.getByRole("alert")).toHaveText("Only image files can be imported.");
+  await expect(imageImportStatus(page)).toHaveText("Imported 1 image: current-saved.png. Skipped 1 file.");
+});
+
 test("a Files transfer without readable files reports an import error without saving", async ({ page }) => {
   const wasPrevented = await dispatchUnreadableFileDrop(page);
 
@@ -261,4 +289,84 @@ async function expectNoSaveFailure(page: Page) {
 
 function imageImportStatus(page: Page) {
   return page.getByRole("status").filter({ hasText: "Imported" });
+}
+
+async function assetSaveCalls(page: Page) {
+  return page.evaluate(() => (window as unknown as { __noteAssetSaveCalls: number }).__noteAssetSaveCalls);
+}
+
+async function installDelayedAssetStorageMock(page: Page) {
+  await page.addInitScript(() => {
+    type ElementRecord = { id: string; pageId: string } & Record<string, unknown>;
+    type PageRecord = { id: string; folderId: string; revision: number; title: string };
+    type Storage = {
+      elements: ElementRecord[];
+      folders: Array<{ id: string; name: string }>;
+      isDarkMode?: boolean;
+      pages: PageRecord[];
+      warnings: string[];
+    };
+    const runtime = window as unknown as {
+      __TAURI_INTERNALS__: { invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> };
+      __noteAssetSaveCalls: number;
+      isTauri: boolean;
+      releaseFirstAssetSave?: () => void;
+    };
+    const data: Storage = { elements: [], folders: [], pages: [], warnings: [] };
+    runtime.isTauri = true;
+    runtime.__noteAssetSaveCalls = 0;
+    runtime.__TAURI_INTERNALS__ = {
+      invoke: async (command, args = {}) => {
+        if (command === "initialize_storage") {
+          return { databasePath: "mock.db", importedLegacyData: false, schemaVersion: 1, warnings: [] };
+        }
+        if (command === "load_workspace_data") return data;
+        if (command === "reconcile_workspace_structure") {
+          const structure = args.structure as {
+            folders: Storage["folders"];
+            isDarkMode?: boolean;
+            pages: Array<Omit<PageRecord, "revision">>;
+          };
+          const revisions = new Map(data.pages.map((page) => [page.id, page.revision]));
+          data.folders = structure.folders;
+          data.isDarkMode = structure.isDarkMode;
+          data.pages = structure.pages.map((page) => ({ ...page, revision: revisions.get(page.id) ?? 0 }));
+          return { pages: data.pages };
+        }
+        if (command === "save_asset") {
+          runtime.__noteAssetSaveCalls += 1;
+          const request = args.request as { fileName?: string; mediaType: string };
+          const asset = {
+            byteSize: 1,
+            fileName: request.fileName ?? "Canvas image",
+            id: `asset-${runtime.__noteAssetSaveCalls}`,
+            mediaType: request.mediaType,
+            naturalHeight: 1,
+            naturalWidth: 1,
+          };
+          if (runtime.__noteAssetSaveCalls === 1) {
+            return await new Promise((resolve) => {
+              runtime.releaseFirstAssetSave = () => resolve(asset);
+            });
+          }
+          return asset;
+        }
+        if (command === "apply_scene_changes") {
+          const batch = args.batch as { deletedElementIds: string[]; pageId: string; upserts: ElementRecord[] };
+          const deleted = new Set(batch.deletedElementIds);
+          data.elements = data.elements.filter((element) => element.pageId !== batch.pageId || !deleted.has(element.id));
+          const byId = new Map(data.elements.map((element) => [element.id, element]));
+          for (const element of batch.upserts) byId.set(element.id, element);
+          data.elements = [...byId.values()];
+          const page = data.pages.find((candidate) => candidate.id === batch.pageId);
+          if (!page) throw new Error("missing page");
+          page.revision += 1;
+          return { newRevision: page.revision, pageId: batch.pageId };
+        }
+        if (command === "save_session_state") return;
+        if (command === "load_asset") throw new Error("unexpected asset load");
+        throw new Error(`Unexpected command ${command}`);
+      },
+    };
+  });
 }

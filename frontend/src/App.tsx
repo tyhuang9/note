@@ -6282,13 +6282,19 @@ function App() {
       if (selectedPageIdRef.current !== pageId) break;
 
       const placement = getImageFileDropPlacement(origin, index);
-      await createImageBlock(
+      const created = await createImageBlock(
         placement.x,
         placement.y,
         dataUrl,
         file.name || "Canvas image",
+        {
+          canCommit: () => (
+            selectedPageIdRef.current === pageId
+            && isCurrentImageFileDropRequest(requestId)
+          ),
+        },
       );
-      if (!isCurrentImageFileDropRequest(requestId)) return;
+      if (!created || !isCurrentImageFileDropRequest(requestId)) return;
       importedFiles.push(file);
     }
 
@@ -6346,11 +6352,13 @@ function App() {
     y: number,
     imageData: string,
     imageName: string,
-  ) {
+    options?: { canCommit?: () => boolean },
+  ): Promise<boolean> {
     const pageId = selectedPageIdRef.current;
     if (!pageId) {
-      return;
+      return false;
     }
+    if (options?.canCommit && !options.canCommit()) return false;
 
     const blockId = createId("block");
     let assetId = createId("image-asset");
@@ -6361,14 +6369,21 @@ function App() {
     if (repository) {
       try {
         const managedDataUrl = await managedImageDataUrl(imageData);
+        if (options?.canCommit && !options.canCommit()) return false;
         const asset = await repository.saveAsset(
           assetRequestFromDataUrl(managedDataUrl, { fileName: imageName }),
         );
+        if (options?.canCommit && !options.canCommit()) {
+          // SceneRepository has no asset deletion API, so a raced successful
+          // save can remain unreferenced while stale canvas state is avoided.
+          return false;
+        }
         assetId = asset.id;
         sourceForDisplay = managedDataUrl;
         naturalWidth = asset.naturalWidth ?? naturalWidth;
         naturalHeight = asset.naturalHeight ?? naturalHeight;
       } catch (reason) {
+        if (options?.canCommit && !options.canCommit()) return false;
         const error = reason instanceof Error ? reason : new Error(String(reason));
         // Keep the user-visible image in memory and let the normal retry path
         // upload it before the scene batch is ever sent.
@@ -6379,6 +6394,7 @@ function App() {
         setPersistenceStatus({ kind: "failed", error });
       }
     }
+    if (options?.canCommit && !options.canCommit()) return false;
     const blockPosition = snapPoint({ x, y });
     const timestamp = Date.now();
 
@@ -6411,6 +6427,7 @@ function App() {
     setIsCanvasKeyboardActive(true);
     setActiveMode("selected");
     setInsertionPoint(null);
+    return true;
   }
 
   const updateBlock = useCallback((blockId: string, updates: BlockUpdates) => {

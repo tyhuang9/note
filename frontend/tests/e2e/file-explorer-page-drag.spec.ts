@@ -203,3 +203,56 @@ test("Explorer pointer drags leave pages unchanged without a new target", async 
   ]);
   await expect(rootPage).toHaveCount(1);
 });
+
+test("Escape cancels an active Explorer pointer drag without moving pages", async ({ page }) => {
+  await installExplorerWorkspace(page);
+  await page.goto("/");
+
+  const rootPage = page
+    .locator('[data-page-drop-folder-id=""] .nav-item-page')
+    .filter({ hasText: "Root anchor" });
+  const targetFolderRow = page
+    .locator('[data-page-drop-folder-id="target"] .nav-item-folder')
+    .first();
+  const rootPageBox = await rootPage.boundingBox();
+
+  if (!rootPageBox) {
+    throw new Error("The Explorer drag source was not visible.");
+  }
+
+  await page.mouse.move(
+    rootPageBox.x + rootPageBox.width / 2,
+    rootPageBox.y + rootPageBox.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    rootPageBox.x + rootPageBox.width / 2 + 8,
+    rootPageBox.y + rootPageBox.height / 2 + 2,
+  );
+  await expect(rootPage).toHaveClass(/is-dragging/);
+
+  const targetFolderBox = await targetFolderRow.boundingBox();
+
+  if (!targetFolderBox) {
+    throw new Error("The Explorer drag target was not visible.");
+  }
+
+  await page.mouse.move(
+    targetFolderBox.x + targetFolderBox.width / 2,
+    targetFolderBox.y + targetFolderBox.height / 2,
+    { steps: 8 },
+  );
+  await expect(targetFolderRow).toHaveClass(/is-drop-target/);
+
+  await page.keyboard.press("Escape");
+  await expect(rootPage).not.toHaveClass(/is-dragging/);
+  await expect(targetFolderRow).not.toHaveClass(/is-drop-target/);
+  await page.mouse.up();
+
+  await expect.poll(() => workspacePages(page)).toEqual([
+    { folderId: "", id: "root" },
+    { folderId: "source", id: "source-first" },
+    { folderId: "source", id: "source-second" },
+    { folderId: "target", id: "target-existing" },
+  ]);
+});

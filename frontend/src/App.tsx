@@ -10054,12 +10054,22 @@ const Sidebar = memo(function Sidebar({
         finishDrag(event.clientX, event.clientY);
       }
     };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || !pagePointerDragRef.current?.active) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      cancelDrag();
+    };
 
     window.addEventListener("pointermove", handlePointerMove, { passive: false });
     window.addEventListener("pointerup", handlePointerUp);
     window.addEventListener("mouseup", handleMouseUp);
     window.addEventListener("pointercancel", cancelDrag);
     window.addEventListener("blur", cancelDrag);
+    window.addEventListener("keydown", handleKeyDown, true);
 
     return () => {
       window.removeEventListener("pointermove", handlePointerMove);
@@ -10067,6 +10077,7 @@ const Sidebar = memo(function Sidebar({
       window.removeEventListener("mouseup", handleMouseUp);
       window.removeEventListener("pointercancel", cancelDrag);
       window.removeEventListener("blur", cancelDrag);
+      window.removeEventListener("keydown", handleKeyDown, true);
     };
   }, []);
   const folderNamesById = useMemo(

@@ -71,6 +71,16 @@ import {
   useInkInteraction,
   type DrawingTool,
 } from "./canvas/interaction/useInkInteraction";
+import {
+  classifyDroppedImageFiles,
+  EMPTY_IMAGE_FILE_DROP_ERROR,
+  getDroppedFiles,
+  getImageFileDropError,
+  getImageFileDropPlacement,
+  hasExternalFileDrop,
+  MAX_IMAGE_FILE_DROP_BYTES,
+  MAX_IMAGE_FILE_DROP_FILES,
+} from "./canvas/interaction/imageFileDrop";
 import { ActivityRail } from "./components/workbench/ActivityRail";
 import { EmbeddedTitleBar } from "./components/workbench/EmbeddedTitleBar";
 import { WorkbenchShell } from "./components/workbench/WorkbenchShell";
@@ -1372,6 +1382,7 @@ function App() {
   const [pendingImagePlacement, setPendingImagePlacement] =
     useState<PendingImagePlacement | null>(null);
   const [imageImportError, setImageImportError] = useState<string | null>(null);
+  const [imageImportStatus, setImageImportStatus] = useState<string | null>(null);
   const [panOffset, setPanOffset] = useState<PanOffset>({ x: 0, y: 0 });
   const [livePanOffset, setLivePanOffset] = useState<PanOffset>(panOffset);
   const [insertionPoint, setInsertionPoint] = useState<InsertionPoint | null>(null);
@@ -1519,6 +1530,7 @@ function App() {
   const isTemporaryHandActiveRef = useRef(false);
   const pendingImagePlacementRef = useRef<PendingImagePlacement | null>(null);
   const imagePickerRequestRef = useRef(0);
+  const imageFileDropRequestRef = useRef(0);
   const drawingPropertyPreviewRef = useRef<DrawingPropertyPreviewTransaction | null>(null);
   const authoringFocusReturnRafRef = useRef<number | null>(null);
   const directTextFocusReturnRafRef = useRef<number | null>(null);
@@ -6127,7 +6139,9 @@ function App() {
   }
 
   function requestImagePicker() {
+    imageFileDropRequestRef.current += 1;
     setImageImportError(null);
+    setImageImportStatus(null);
     activeToolRef.current = "image";
     setActiveTool("image");
     const input = imagePickerInputRef.current;
@@ -6153,6 +6167,9 @@ function App() {
   }
 
   async function handleImageFileSelected(file: File | undefined) {
+    const imageImportRequestId = imageFileDropRequestRef.current + 1;
+    imageFileDropRequestRef.current = imageImportRequestId;
+    setImageImportStatus(null);
     if (!file || !file.type.startsWith("image/")) return;
     if (rejectOversizedImageBlob(file)) return;
     setImageImportError(null);
@@ -6164,7 +6181,10 @@ function App() {
     } catch {
       return;
     }
-    if (imagePickerRequestRef.current !== requestId) return;
+    if (
+      imagePickerRequestRef.current !== requestId
+      || !isCurrentImageFileDropRequest(imageImportRequestId)
+    ) return;
     const pending = {
       dataUrl,
       fileName: file.name || "Canvas image",
@@ -6172,6 +6192,112 @@ function App() {
     };
     pendingImagePlacementRef.current = pending;
     setPendingImagePlacement(pending);
+  }
+
+  function isCurrentImageFileDropRequest(requestId: number) {
+    return imageFileDropRequestRef.current === requestId;
+  }
+
+  function setImageFileDropError(message: string, requestId?: number) {
+    if (requestId !== undefined && !isCurrentImageFileDropRequest(requestId)) return;
+    setImageImportError(message);
+  }
+
+  function setImageFileDropStatus(message: string, requestId: number) {
+    if (!isCurrentImageFileDropRequest(requestId)) return;
+    setImageImportStatus(message);
+  }
+
+  function getImageFileDropStatus(
+    importedFiles: readonly File[],
+    skippedCount: number,
+  ): string {
+    const importedCount = importedFiles.length;
+    const importedLabel = importedCount === 1
+      ? `Imported 1 image: ${importedFiles[0].name || "Canvas image"}.`
+      : `Imported ${importedCount} images.`;
+    if (skippedCount === 0) return importedLabel;
+    return `${importedLabel} Skipped ${skippedCount} ${skippedCount === 1 ? "file" : "files"}.`;
+  }
+
+  function getCanvasFileDropOrigin(event: DragEvent<HTMLElement>): CanvasPoint | null {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+
+    const bounds = canvas.getBoundingClientRect();
+    return {
+      x: (event.clientX - bounds.left - panOffsetRef.current.x) / zoomLevelRef.current,
+      y: (event.clientY - bounds.top - panOffsetRef.current.y) / zoomLevelRef.current,
+    };
+  }
+
+  async function handleCanvasImageFileDrop(event: DragEvent<HTMLElement>) {
+    if (!hasExternalFileDrop(event.dataTransfer)) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    const requestId = imageFileDropRequestRef.current + 1;
+    imageFileDropRequestRef.current = requestId;
+    setImageImportStatus(null);
+
+    const files = getDroppedFiles(event.dataTransfer);
+    if (files.length === 0) {
+      setImageFileDropError(EMPTY_IMAGE_FILE_DROP_ERROR, requestId);
+      return;
+    }
+
+    const imageFileDropLimits = {
+      maxAssetBytes: MAX_ASSET_BYTES,
+      maxFiles: MAX_IMAGE_FILE_DROP_FILES,
+      maxTotalBytes: MAX_IMAGE_FILE_DROP_BYTES,
+    };
+    const result = classifyDroppedImageFiles(files, imageFileDropLimits);
+    const rejectionError = getImageFileDropError(result, imageFileDropLimits);
+    if (rejectionError) {
+      setImageFileDropError(rejectionError, requestId);
+    } else {
+      setImageImportError(null);
+    }
+    if (result.accepted.length === 0) return;
+
+    const pageId = selectedPageIdRef.current;
+    const origin = getCanvasFileDropOrigin(event);
+    if (!pageId || !origin) return;
+
+    const importedFiles: File[] = [];
+    for (const [index, file] of result.accepted.entries()) {
+      let dataUrl: string;
+      try {
+        dataUrl = await readBlobAsDataUrl(file);
+      } catch {
+        if (!isCurrentImageFileDropRequest(requestId)) return;
+        setImageFileDropError("Could not read image data.", requestId);
+        continue;
+      }
+
+      if (!isCurrentImageFileDropRequest(requestId)) return;
+
+      // A drop belongs to the page that was active when it happened. Do not
+      // create later files on a page the user selected while reading them.
+      if (selectedPageIdRef.current !== pageId) break;
+
+      const placement = getImageFileDropPlacement(origin, index);
+      await createImageBlock(
+        placement.x,
+        placement.y,
+        dataUrl,
+        file.name || "Canvas image",
+      );
+      if (!isCurrentImageFileDropRequest(requestId)) return;
+      importedFiles.push(file);
+    }
+
+    if (importedFiles.length > 0) {
+      setImageFileDropStatus(
+        getImageFileDropStatus(importedFiles, files.length - importedFiles.length),
+        requestId,
+      );
+    }
   }
 
   function placePendingImage(point: CanvasPoint) {
@@ -9071,6 +9197,12 @@ function App() {
           isKeyboardTextCreationAvailable={isKeyboardTextCreationAvailable}
           onDoubleClick={canvasInteraction.handleDoubleClick}
           onDoubleClickCapture={canvasInteraction.handleDoubleClickCapture}
+          onDragOver={(event) => {
+            if (!hasExternalFileDrop(event.dataTransfer)) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "copy";
+          }}
+          onDrop={handleCanvasImageFileDrop}
           onLostPointerCapture={(event) => {
             inkInteraction.handlePointerCancelCapture(event);
             canvasInteraction.handlePointerCancel(event);
@@ -9128,6 +9260,11 @@ function App() {
               />
             </div>
             {imageImportError ? <div className="canvas-image-import-error" role="alert">{imageImportError}</div> : null}
+            {imageImportStatus ? (
+              <div aria-atomic="true" aria-live="polite" className="canvas-accessibility-status" role="status">
+                {imageImportStatus}
+              </div>
+            ) : null}
             {availableDrawingPropertiesContext ? (
               <DrawingPropertiesPanel
                 contextLabel={availableDrawingPropertiesContext.contextLabel}

@@ -94,6 +94,10 @@ footer {
   border-radius: .65rem;
 }
 
+.brand picture {
+  display: inline-flex;
+}
+
 nav {
   display: flex;
   flex-wrap: wrap;

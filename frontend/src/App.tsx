@@ -9062,7 +9062,7 @@ function App() {
       isNarrowWorkbench={isNarrowWorkbench}
       onCloseAssistantOverlay={() => closeWorkbenchOverlay("assistant")}
       onCloseExplorerOverlay={() => closeWorkbenchOverlay("explorer")}
-      titleBar={<EmbeddedTitleBar Icon={HeroIcon} isEditingActiveTab={isEditingHeaderTitle} isExplorerCollapsed={isExplorerPresentationCollapsed} onCloseTab={closePageTab} onCreatePage={() => createPage()} onRenamePage={renamePage} onReorderTab={reorderPageTab} onSelectTab={selectPage} onSetEditingActiveTab={setIsEditingHeaderTitle} onToggleExplorer={(trigger) => toggleExplorerPresentation(trigger)} platform={desktopPlatform} selectedPageId={selectedPageId} tabs={openPages} titleSearch={{ pageId: selectedPageId, ranges: titleSearchHighlights }} toggleButtonRef={explorerToggleButtonRef} />}
+      titleBar={<EmbeddedTitleBar Icon={HeroIcon} isDarkMode={isDarkMode} isEditingActiveTab={isEditingHeaderTitle} isExplorerCollapsed={isExplorerPresentationCollapsed} onCloseTab={closePageTab} onCreatePage={() => createPage()} onRenamePage={renamePage} onReorderTab={reorderPageTab} onSelectTab={selectPage} onSetEditingActiveTab={setIsEditingHeaderTitle} onToggleExplorer={(trigger) => toggleExplorerPresentation(trigger)} platform={desktopPlatform} selectedPageId={selectedPageId} tabs={openPages} titleSearch={{ pageId: selectedPageId, ranges: titleSearchHighlights }} toggleButtonRef={explorerToggleButtonRef} />}
     >
       <Sidebar
         bookmarkedFolders={bookmarkedFolders}

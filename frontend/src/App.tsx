@@ -546,7 +546,6 @@ const SELECTION_FRAME_PADDING_PX = 4;
 const MAX_BLOCK_HISTORY_ENTRIES = 100;
 const PAGE_SEARCH_PREVIEW_CONTEXT = 44;
 const PAGE_TEMPLATE_FOLDER_ID = "__note_page_templates__";
-const PAGE_DRAG_MIME_TYPE = "application/x-note-page";
 const PAGE_POINTER_DRAG_THRESHOLD = 5;
 const ROOT_FOLDER_ID = "";
 const PASTED_BLOCK_OFFSET = 24;
@@ -9920,8 +9919,6 @@ const Sidebar = memo(function Sidebar({
   } | null>(null);
   const pointerDropFolderIdRef = useRef<string | null>(null);
   const suppressedPageClickRef = useRef<string | null>(null);
-  const nativePageDropCompletedRef = useRef(false);
-  const nativePageDropFolderIdRef = useRef<string | null>(null);
   const pageDragCallbacksRef = useRef({
     onFolderDragLeave,
     onFolderDragOver,
@@ -10174,31 +10171,6 @@ const Sidebar = memo(function Sidebar({
       startY: event.clientY,
     };
     pointerDropFolderIdRef.current = null;
-  }
-
-  function hasPageDragData(event: DragEvent<HTMLElement>) {
-    return (
-      draggedPageIds.length > 0 ||
-      Array.from(event.dataTransfer.types).includes(PAGE_DRAG_MIME_TYPE)
-    );
-  }
-
-  function finishNativePageDrag() {
-    if (nativePageDropCompletedRef.current) {
-      nativePageDropCompletedRef.current = false;
-      return;
-    }
-
-    const targetFolderId = nativePageDropFolderIdRef.current;
-    nativePageDropFolderIdRef.current = null;
-
-    if (targetFolderId === ROOT_FOLDER_ID) {
-      onPageDropOnRoot();
-    } else if (targetFolderId !== null) {
-      onPageDropOnFolder(targetFolderId);
-    } else {
-      onPageDragEnd();
-    }
   }
 
   function handlePageRowClick(
@@ -10951,36 +10923,6 @@ const Sidebar = memo(function Sidebar({
                 className={`file-tree-root-drop-zone ${
                   pageDropTargetFolderId === ROOT_FOLDER_ID ? "is-drop-target" : ""
                 }`}
-                onDragEnter={(event) => {
-                  if (!hasPageDragData(event)) return;
-                  event.preventDefault();
-                  nativePageDropFolderIdRef.current = ROOT_FOLDER_ID;
-                  onFolderDragOver(ROOT_FOLDER_ID);
-                }}
-                onDragLeave={(event) => {
-                  if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
-                    return;
-                  }
-                  if (nativePageDropFolderIdRef.current === ROOT_FOLDER_ID) {
-                    nativePageDropFolderIdRef.current = null;
-                  }
-                  onFolderDragLeave(ROOT_FOLDER_ID);
-                }}
-                onDragOver={(event) => {
-                  if (!hasPageDragData(event)) return;
-                  event.preventDefault();
-                  event.dataTransfer.dropEffect = "move";
-                  nativePageDropFolderIdRef.current = ROOT_FOLDER_ID;
-                  onFolderDragOver(ROOT_FOLDER_ID);
-                }}
-                onDrop={(event) => {
-                  if (!hasPageDragData(event)) return;
-                  event.preventDefault();
-                  event.stopPropagation();
-                  nativePageDropCompletedRef.current = true;
-                  nativePageDropFolderIdRef.current = null;
-                  onPageDropOnRoot();
-                }}
                 role="group"
               >
               {rootPages.map((page) => {
@@ -10995,24 +10937,10 @@ const Sidebar = memo(function Sidebar({
                     } ${isPageOpen ? "is-open" : ""} ${
                       isPageDragging ? "is-dragging" : ""
                     }`}
-                    draggable={editingPageId !== page.id}
                     key={page.id}
                     role="treeitem"
                     onDoubleClick={() => onSetEditingPageId(page.id)}
                     onClick={(event) => handlePageRowClick(event, page.id)}
-                    onDragEnd={finishNativePageDrag}
-                    onDragStart={(event) => {
-                      pagePointerDragRef.current = null;
-                      nativePageDropCompletedRef.current = false;
-                      nativePageDropFolderIdRef.current = null;
-                      if (!onPageDragStart(page.id)) {
-                        event.preventDefault();
-                        return;
-                      }
-                      event.dataTransfer.effectAllowed = "move";
-                      event.dataTransfer.setData(PAGE_DRAG_MIME_TYPE, page.id);
-                      event.dataTransfer.setData("text/plain", page.title);
-                    }}
                     onPointerDown={(event) => beginPagePointerDrag(event, page.id)}
                   >
                     <span className="file-row-icon">
@@ -11077,36 +11005,6 @@ const Sidebar = memo(function Sidebar({
                     className="file-tree-group"
                     data-page-drop-folder-id={folder.id}
                     key={folder.id}
-                    onDragEnter={(event) => {
-                      if (!hasPageDragData(event)) return;
-                      event.preventDefault();
-                      nativePageDropFolderIdRef.current = folder.id;
-                      onFolderDragOver(folder.id);
-                    }}
-                    onDragLeave={(event) => {
-                      if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
-                        return;
-                      }
-                      if (nativePageDropFolderIdRef.current === folder.id) {
-                        nativePageDropFolderIdRef.current = null;
-                      }
-                      onFolderDragLeave(folder.id);
-                    }}
-                    onDragOver={(event) => {
-                      if (!hasPageDragData(event)) return;
-                      event.preventDefault();
-                      event.dataTransfer.dropEffect = "move";
-                      nativePageDropFolderIdRef.current = folder.id;
-                      onFolderDragOver(folder.id);
-                    }}
-                    onDrop={(event) => {
-                      if (!hasPageDragData(event)) return;
-                      event.preventDefault();
-                      event.stopPropagation();
-                      nativePageDropCompletedRef.current = true;
-                      nativePageDropFolderIdRef.current = null;
-                      onPageDropOnFolder(folder.id);
-                    }}
                   >
                     <div
                       className={`nav-item nav-item-folder file-tree-row ${
@@ -11205,24 +11103,10 @@ const Sidebar = memo(function Sidebar({
                               } ${isPageOpen ? "is-open" : ""} ${
                                 isPageDragging ? "is-dragging" : ""
                               }`}
-                              draggable={editingPageId !== page.id}
                               key={page.id}
                               role="treeitem"
                               onDoubleClick={() => onSetEditingPageId(page.id)}
                               onClick={(event) => handlePageRowClick(event, page.id)}
-                              onDragEnd={finishNativePageDrag}
-                              onDragStart={(event) => {
-                                pagePointerDragRef.current = null;
-                                nativePageDropCompletedRef.current = false;
-                                nativePageDropFolderIdRef.current = null;
-                                if (!onPageDragStart(page.id)) {
-                                  event.preventDefault();
-                                  return;
-                                }
-                                event.dataTransfer.effectAllowed = "move";
-                                event.dataTransfer.setData(PAGE_DRAG_MIME_TYPE, page.id);
-                                event.dataTransfer.setData("text/plain", page.title);
-                              }}
                               onPointerDown={(event) => beginPagePointerDrag(event, page.id)}
                             >
                               <span className="file-row-icon">
@@ -11308,36 +11192,6 @@ const Sidebar = memo(function Sidebar({
                         className="file-tree-group"
                         data-page-drop-folder-id={folder.id}
                         key={folder.id}
-                        onDragEnter={(event) => {
-                          if (!hasPageDragData(event)) return;
-                          event.preventDefault();
-                          nativePageDropFolderIdRef.current = folder.id;
-                          onFolderDragOver(folder.id);
-                        }}
-                        onDragLeave={(event) => {
-                          if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
-                            return;
-                          }
-                          if (nativePageDropFolderIdRef.current === folder.id) {
-                            nativePageDropFolderIdRef.current = null;
-                          }
-                          onFolderDragLeave(folder.id);
-                        }}
-                        onDragOver={(event) => {
-                          if (!hasPageDragData(event)) return;
-                          event.preventDefault();
-                          event.dataTransfer.dropEffect = "move";
-                          nativePageDropFolderIdRef.current = folder.id;
-                          onFolderDragOver(folder.id);
-                        }}
-                        onDrop={(event) => {
-                          if (!hasPageDragData(event)) return;
-                          event.preventDefault();
-                          event.stopPropagation();
-                          nativePageDropCompletedRef.current = true;
-                          nativePageDropFolderIdRef.current = null;
-                          onPageDropOnFolder(folder.id);
-                        }}
                       >
                         <div
                           className={`nav-item nav-item-folder file-tree-row ${
@@ -11436,24 +11290,10 @@ const Sidebar = memo(function Sidebar({
                                   } ${isPageOpen ? "is-open" : ""} ${
                                     isPageDragging ? "is-dragging" : ""
                                   }`}
-                                  draggable={editingPageId !== page.id}
                                   key={page.id}
                                   role="treeitem"
                                   onDoubleClick={() => onSetEditingPageId(page.id)}
                                   onClick={(event) => handlePageRowClick(event, page.id)}
-                                  onDragEnd={finishNativePageDrag}
-                                  onDragStart={(event) => {
-                                    pagePointerDragRef.current = null;
-                                    nativePageDropCompletedRef.current = false;
-                                    nativePageDropFolderIdRef.current = null;
-                                    if (!onPageDragStart(page.id)) {
-                                      event.preventDefault();
-                                      return;
-                                    }
-                                    event.dataTransfer.effectAllowed = "move";
-                                    event.dataTransfer.setData(PAGE_DRAG_MIME_TYPE, page.id);
-                                    event.dataTransfer.setData("text/plain", page.title);
-                                  }}
                                   onPointerDown={(event) => beginPagePointerDrag(event, page.id)}
                                 >
                                   <span className="file-row-icon">

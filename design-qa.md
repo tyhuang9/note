@@ -23,7 +23,7 @@ The combined comparison pairs Codex's selected project row and context menu with
 
 - Fonts and typography: Note keeps its existing 13px explorer type and compact truncation. Menu labels use a 13px medium weight that matches the density of the Codex reference without changing the app-wide type system.
 - Spacing and layout rhythm: folder rows retain their 30px height and compact 4px grid gap. The two 24px actions occupy one 48px group. The menu uses 34px items, 6px padding, an 8px radius, and separators before the destructive action.
-- Colors and visual tokens: existing dark surfaces and purple selection remain. The menu uses Note's neutral dark tokens; Delete receives a restrained destructive color while retaining sufficient contrast.
+- Colors and visual tokens: existing dark surfaces remain, while selected states use golden, contrast-safe inset or outline markers rather than the former accent. The menu uses Note's neutral dark tokens; Delete receives a restrained destructive color while retaining sufficient contrast.
 - Image quality and asset fidelity: no raster substitutes or new generated artwork were introduced. Folder, add-page, bookmark, rename, delete, and ellipsis symbols use the existing Hero-style icon system.
 - Copy and content: Codex-specific project actions were adapted to Note rather than copied. The shared options are `Bookmark`/`Remove bookmark`, `Rename`, and `Delete`; the direct row action remains `Create page in {folder}`.
 
@@ -33,7 +33,7 @@ The combined comparison pairs Codex's selected project row and context menu with
 - Right-click: passed in Files and Favorites; opens the identical three ordered actions.
 - Keyboard: Arrow Down and End move focus; Escape returns to More; Shift+Tab returns to Add page; Tab advances past More without dropping focus to the document body.
 - Focus recovery: deleting a folder or removing it from Favorites focuses the nearest surviving folder action, Create folder, or the active labelled rail control.
-- Reflow and contrast: the rendered menu is measured and clamped at an 8px viewport margin, including a 1024 × 220 edge case. The light-theme focus outline uses solid `#6d28d9`, exceeding the 3:1 non-text contrast requirement.
+- Reflow and contrast: the rendered menu is measured and clamped at an 8px viewport margin, including a 1024 × 220 edge case. Current light-theme focus treatments use contrast-safe tokens: `#765400` for docs and `#005FCC` for app search/light contexts, with solid outlines that exceed the 3:1 non-text contrast requirement.
 - Menu dismissal: outside pointer, Escape, Tab, scroll, resize, and window blur are handled.
 - Console errors: none. The web preview reports only the expected Tauri/SQLite-unavailable warning and uses session storage.
 

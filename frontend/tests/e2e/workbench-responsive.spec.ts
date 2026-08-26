@@ -164,6 +164,43 @@ test("canvas zoom stays anchored to the cursor", async ({ page }) => {
   ).toBeLessThanOrEqual(1);
 });
 
+test("embedded titlebar keeps canvas controls docked and operable", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await createInitialNote(page);
+
+  const canvas = page.getByRole("tabpanel");
+  const controls = page.getByRole("toolbar", { name: "Canvas controls" });
+  const grid = controls.getByRole("button", { name: "Grid" });
+  const snapToGrid = controls.getByRole("button", { name: "Snap to grid" });
+
+  await expect(controls).toBeVisible();
+
+  const [canvasBounds, controlsBounds] = await Promise.all([
+    canvas.boundingBox(),
+    controls.boundingBox(),
+  ]);
+
+  if (!canvasBounds || !controlsBounds) {
+    throw new Error("Expected the canvas and its controls to have bounds.");
+  }
+
+  expect(controlsBounds.x).toBeGreaterThanOrEqual(canvasBounds.x);
+  expect(controlsBounds.y).toBeGreaterThanOrEqual(canvasBounds.y);
+  expect(controlsBounds.x + controlsBounds.width).toBeLessThanOrEqual(
+    canvasBounds.x + canvasBounds.width,
+  );
+  expect(controlsBounds.y + controlsBounds.height).toBeLessThanOrEqual(
+    canvasBounds.y + canvasBounds.height,
+  );
+
+  await expect(snapToGrid).toBeDisabled();
+  await grid.click();
+  await expect(grid).toHaveAttribute("aria-pressed", "true");
+  await expect(snapToGrid).toBeEnabled();
+  await snapToGrid.click();
+  await expect(snapToGrid).toHaveAttribute("aria-pressed", "true");
+});
+
 test("canvas search and assistant controls share a raised viewport-safe dock", async ({
   page,
 }) => {

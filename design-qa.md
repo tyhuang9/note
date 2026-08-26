@@ -88,3 +88,51 @@ GO. The branding is legible and consistent across light/dark and compact/desktop
 - Unverified: final native packaged icon appearance in installed Windows/macOS/Linux shells, macOS `.icns` rendering, Windows `.ico`/tile rendering, Firefox/Safari behavior, screen-reader/AT announcements, the deployed GitHub Pages origin, and release/download availability. These require packaged builds, additional browsers/AT, or the deployed environment.
 - Known pre-existing risk: two broader canvas/template Playwright cases fail on both base and branch; track separately from this branding change.
 - Branch readiness: **GO for branding review/PR**. No P0–P2 branding, responsive, link, build, or accessibility regression was found in the verified scope.
+
+## Theme-aware identity and explorer polish — 2026-08-26
+
+This follow-up supersedes the earlier statements that selected controls retain left-edge inset markers and that selected folder actions remain persistently visible.
+
+### Source and implementation evidence
+
+- Source visual truth: `C:\Users\huang\AppData\Local\Temp\codex-clipboard-e605e238-37e0-4abe-8622-cfd6f025bb26.png` (1442 × 1092 pixels), including the approved Light and Dark Note icon variants.
+- Browser-rendered implementations:
+  - `C:\Users\huang\AppData\Local\Temp\note-theme-icon-qa\implementation-dark-hover.png`
+  - `C:\Users\huang\AppData\Local\Temp\note-theme-icon-qa\implementation-light.png`
+- Combined comparison evidence: `C:\Users\huang\AppData\Local\Temp\note-theme-icon-qa\source-implementation-comparison.png` (1600 × 1440 pixels).
+- Viewport/state: 1280 × 720 CSS pixels at device pixel ratio 1.25 in the Codex in-app Browser. Returned screenshots are 1280 × 720 pixels, so they were compared at their returned density without resampling. Dark capture shows a selected page with its row hovered; light capture shows the same workspace after the in-app theme toggle.
+- Focused-region rationale: the titlebar mark and explorer row are clearly readable in the full-view screenshots at their actual 22px/32px UI scale, so no separate enlarged implementation crop was needed.
+
+### Required fidelity surfaces
+
+- Fonts and typography: no type styles changed. The Note wordmark, explorer labels, toolbar labels, and titlebar hierarchy retain the existing system-font sizing and weights.
+- Spacing and layout rhythm: the 22px titlebar logo slot, 32px explorer rows, 24px row-action targets, workbench grid, and toolbar placement are unchanged. Hiding actions does not collapse their grid tracks, so labels do not shift when controls appear.
+- Colors and visual tokens: the light titlebar uses the approved warm-white mark and the dark titlebar uses a charcoal derivative with warm-white glyphs and the approved gold stroke. Selected states keep their filled surfaces and focus outlines but no longer use colored left-edge bars.
+- Image quality and asset fidelity: the implementation uses real PNG derivatives of the supplied Note mark. The dark mark preserves the supplied geometry, transparent outer corners, gold signature, and source aspect ratio. No CSS, inline-SVG, emoji, or text-glyph approximation was introduced.
+- Copy and content: no product copy changed. Existing accessible names for Bookmark, Delete, Create page, More actions, theme toggle, and tree disclosure remain intact.
+
+### Interaction, accessibility, and runtime checks
+
+- PASS — titlebar mark switches from `data-theme-variant="dark"` to `light` with the app theme and loads distinct fingerprinted PNG assets.
+- PASS — row Bookmark/Delete/Add page/More actions are hidden at rest, appear on pointer hover, and remain visible when their row or a descendant has keyboard focus. Open menus keep their trigger visible.
+- PASS — `@media (hover: none), (pointer: coarse)` keeps row actions visible on touch, hybrid-pointer, and no-hover devices; the folder disclosure button remains visible as the tree item's primary control.
+- PASS — selected rail, file, provider, and slash-command states no longer use colored left-edge inset markers. Forced-colors mode retains a 2px `Highlight` outline rather than recreating a left bar.
+- PASS — the Windows primary window explicitly sets `skipTaskbar: false`; the Tauri bundle references Linux PNG, macOS ICNS, and Windows ICO assets. File signatures were verified by the branding test.
+- PASS — `tauri build --debug --no-bundle` compiled the native Windows application. The embedded executable resource was extracted as `C:\Users\huang\AppData\Local\Temp\note-theme-icon-qa\windows-exe-icon.png` (32 × 32 pixels) and visually matches the approved Note mark.
+- PASS — primary app interactions tested: create a note, finish rename, hover the file row, toggle light/dark mode, and inspect both logo states. Browser console errors: none.
+- PASS — docs home rendered in dark mode with the dark 48px mark. Docs favicons follow the system color scheme, while the app favicon follows the in-app theme state.
+
+### Findings and comparison history
+
+No actionable P0, P1, or P2 visual, responsive, interaction, or accessibility mismatch remains.
+
+- Initial mismatch: the warm-white mark remained in the dark titlebar. Fix: add a faithful dark raster derivative and select the correct asset from app state. Post-fix evidence: both titlebar variants visibly match the corresponding supplied brand variant.
+- Initial mismatch: selected rows and controls used gold left-edge bars. Fix: remove left-edge inset markers while preserving filled selection surfaces and focus/forced-color outlines.
+- Initial mismatch: bookmarked and selected explorer items could expose secondary actions without hover. Fix: centralize hidden-at-rest behavior for `.nav-actions` and `.bookmark-toggle`, with hover, focus-within, open-menu, and touch fallbacks. Automated hover/focus checks pass.
+
+### Remaining gaps
+
+- P3/unverified: installed taskbar, Dock, Start-menu, and Linux desktop-shell rendering requires packaged builds on each target OS. Configuration, referenced assets, and Windows/macOS/Linux file signatures are verified locally.
+- P3/unverified: manual screen-reader announcements, Safari/Firefox favicon media selection, and physical touch hardware remain outside this local Chromium pass.
+
+final result: passed

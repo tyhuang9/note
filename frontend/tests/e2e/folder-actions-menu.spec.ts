@@ -28,6 +28,11 @@ async function expectMenuInsideViewport(page: Page, menu: Locator) {
   );
 }
 
+async function clickRowAction(row: Locator, action: Locator) {
+  await row.hover();
+  await action.click();
+}
+
 test("folder More and right-click share one accessible action menu", async ({
   page,
 }) => {
@@ -45,7 +50,7 @@ test("folder More and right-click share one accessible action menu", async ({
   await expect(folderRow.getByRole("button", { name: /delete/i })).toHaveCount(0);
   await expect(folderRow.getByRole("button", { name: /bookmark/i })).toHaveCount(0);
 
-  await moreButton.click();
+  await clickRowAction(folderRow, moreButton);
   const menu = page.getByRole("menu", { name: "Folder actions for Project notes" });
   const menuItems = menu.getByRole("menuitem");
 
@@ -63,24 +68,24 @@ test("folder More and right-click share one accessible action menu", async ({
   await expect(menu).toHaveCount(0);
   await expect(moreButton).toBeFocused();
 
-  await moreButton.click();
+  await clickRowAction(folderRow, moreButton);
   await page.keyboard.press("Tab");
   await expect(menu).toHaveCount(0);
   await expect
     .poll(() => page.evaluate(() => document.activeElement !== document.body))
     .toBe(true);
 
-  await moreButton.click();
+  await clickRowAction(folderRow, moreButton);
   await page.keyboard.press("Shift+Tab");
   await expect(menu).toHaveCount(0);
   await expect(addPageButton).toBeFocused();
 
-  await moreButton.click();
+  await clickRowAction(folderRow, moreButton);
   await page.getByRole("heading", { name: "Files" }).click();
   await expect(menu).toHaveCount(0);
 
   await page.setViewportSize({ width: 1024, height: 220 });
-  await moreButton.click();
+  await clickRowAction(folderRow, moreButton);
   await expectMenuInsideViewport(page, menu);
   await page.keyboard.press("Escape");
   await page.setViewportSize({ width: 1024, height: 720 });
@@ -99,11 +104,17 @@ test("folder More and right-click share one accessible action menu", async ({
     .locator(".nav-item-folder")
     .filter({ hasText: "Renamed project" })
     .first();
-  await renamedRow.getByRole("button", { name: "More actions for Renamed project" }).click();
+  await clickRowAction(
+    renamedRow,
+    renamedRow.getByRole("button", { name: "More actions for Renamed project" }),
+  );
   await page.getByRole("menuitem", { name: "Bookmark" }).click();
   await expect(page.getByRole("button", { name: "1 favorites" })).toBeVisible();
 
-  await renamedRow.getByRole("button", { name: "Create page in Renamed project" }).click();
+  await clickRowAction(
+    renamedRow,
+    renamedRow.getByRole("button", { name: "Create page in Renamed project" }),
+  );
   await expect(page.getByRole("textbox", { name: "Page title" })).toBeFocused();
   await page.getByRole("textbox", { name: "Page title" }).press("Escape");
 
@@ -112,9 +123,10 @@ test("folder More and right-click share one accessible action menu", async ({
     .locator(".nav-item-folder")
     .filter({ hasText: "Renamed project" })
     .first();
-  await favoriteRow
-    .getByRole("button", { name: "More actions for Renamed project" })
-    .click();
+  await clickRowAction(
+    favoriteRow,
+    favoriteRow.getByRole("button", { name: "More actions for Renamed project" }),
+  );
   await page.getByRole("menuitem", { name: "Remove bookmark" }).click();
   const emptyFavoritesButton = page.getByRole("button", { name: "0 favorites" });
   await expect(emptyFavoritesButton).toBeFocused();

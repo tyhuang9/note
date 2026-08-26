@@ -8,6 +8,7 @@ export type TextBlock = TextElement;
 export type Folder = {
   id: string;
   name: string;
+  isBookmarked?: boolean;
 };
 
 export type Page = {

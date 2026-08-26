@@ -1,7 +1,7 @@
 use rusqlite::{Connection, OpenFlags};
 use std::{path::Path, time::Duration};
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 pub fn open(path: &Path) -> Result<Connection, String> {
     if let Some(parent) = path.parent() {
@@ -51,5 +51,64 @@ PRAGMA user_version=1;
         tx.commit()
             .map_err(|e| format!("commit migration 1: {e}"))?;
     }
+    if current < 2 {
+        let tx = connection.transaction().map_err(|e| e.to_string())?;
+        tx.execute_batch(
+            r#"
+ALTER TABLE folders ADD COLUMN is_bookmarked INTEGER NOT NULL DEFAULT 0 CHECK(is_bookmarked IN (0,1));
+INSERT INTO schema_migrations(version,applied_at) VALUES(2,unixepoch('subsec')*1000);
+PRAGMA user_version=2;
+"#,
+        )
+        .map_err(|e| format!("apply migration 2: {e}"))?;
+        tx.commit()
+            .map_err(|e| format!("commit migration 2: {e}"))?;
+    }
     Ok(SCHEMA_VERSION)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migration_two_adds_folder_bookmarks_without_changing_existing_folders() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                r#"
+CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE folders(id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL);
+INSERT INTO folders(id,name) VALUES('folder','Folder');
+INSERT INTO schema_migrations(version,applied_at) VALUES(1,0);
+PRAGMA user_version=1;
+"#,
+            )
+            .unwrap();
+
+        assert_eq!(migrate(&mut connection).unwrap(), 2);
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT id,name,is_bookmarked FROM folders WHERE id='folder'",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, i64>(2)?,
+                        ))
+                    },
+                )
+                .unwrap(),
+            ("folder".into(), "Folder".into(), 0),
+        );
+        assert_eq!(
+            connection
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            2,
+        );
+    }
 }

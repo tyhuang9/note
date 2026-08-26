@@ -6,6 +6,8 @@ use serde_json::Value;
 pub struct FolderDto {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub is_bookmarked: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

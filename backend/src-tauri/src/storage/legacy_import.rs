@@ -33,6 +33,8 @@ struct LegacyData {
 struct LegacyFolder {
     id: String,
     name: String,
+    #[serde(default)]
+    is_bookmarked: bool,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -139,8 +141,8 @@ pub fn import_if_needed(
                 return Err(format!("invalid or duplicate legacy folder id: {}", f.id));
             }
             tx.execute(
-                "INSERT INTO folders(id,name) VALUES(?,?)",
-                params![f.id, f.name],
+                "INSERT INTO folders(id,name,is_bookmarked) VALUES(?,?,?)",
+                params![f.id, f.name, f.is_bookmarked as i64],
             )
             .map_err(|e| format!("import folder {}: {e}", f.id))?;
         }

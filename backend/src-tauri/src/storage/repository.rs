@@ -2129,13 +2129,16 @@ pub fn load_workspace_data_at(root: &Path) -> Result<WorkspaceData, String> {
     database::migrate(&mut c)?;
     let folders = {
         let mut s = c
-            .prepare("SELECT id,name FROM folders WHERE id NOT IN (?,?) ORDER BY rowid")
+            .prepare(
+                "SELECT id,name,is_bookmarked FROM folders WHERE id NOT IN (?,?) ORDER BY rowid",
+            )
             .map_err(|e| e.to_string())?;
         let rows = s
             .query_map(params![ROOT_FOLDER_ID, TEMPLATE_FOLDER_ID], |r| {
                 Ok(FolderDto {
                     id: r.get(0)?,
                     name: r.get(1)?,
+                    is_bookmarked: r.get::<_, i64>(2)? != 0,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -2254,21 +2257,21 @@ pub fn reconcile_workspace_structure_at(
 
     transaction
         .execute(
-            "INSERT INTO folders(id,name) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name",
+            "INSERT INTO folders(id,name,is_bookmarked) VALUES(?,?,0) ON CONFLICT(id) DO UPDATE SET name=excluded.name,is_bookmarked=0",
             params![ROOT_FOLDER_ID, "Root"],
         )
         .map_err(|error| error.to_string())?;
     transaction
         .execute(
-            "INSERT INTO folders(id,name) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name",
+            "INSERT INTO folders(id,name,is_bookmarked) VALUES(?,?,0) ON CONFLICT(id) DO UPDATE SET name=excluded.name,is_bookmarked=0",
             params![TEMPLATE_FOLDER_ID, "Templates"],
         )
         .map_err(|error| error.to_string())?;
     for folder in &structure.folders {
         transaction
             .execute(
-                "INSERT INTO folders(id,name) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name",
-                params![folder.id, folder.name.trim()],
+                "INSERT INTO folders(id,name,is_bookmarked) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,is_bookmarked=excluded.is_bookmarked",
+                params![folder.id, folder.name.trim(), folder.is_bookmarked as i64],
             )
             .map_err(|error| format!("save folder {}: {error}", folder.id))?;
     }
@@ -4531,6 +4534,7 @@ mod tests {
                 folders: vec![FolderDto {
                     id: "projects".into(),
                     name: "Projects".into(),
+                    is_bookmarked: true,
                 }],
                 pages: vec![
                     WorkspacePageDto {
@@ -4562,7 +4566,8 @@ mod tests {
             load_workspace_data_at(directory.path()).unwrap().folders,
             vec![FolderDto {
                 id: "projects".into(),
-                name: "Projects".into()
+                name: "Projects".into(),
+                is_bookmarked: true,
             }]
         );
         let connection = database::open(&directory.path().join("note.db")).unwrap();
@@ -4585,6 +4590,7 @@ mod tests {
                 folders: vec![FolderDto {
                     id: "folder".into(),
                     name: "Folder".into(),
+                    is_bookmarked: false,
                 }],
                 pages: vec![WorkspacePageDto {
                     id: "page".into(),
@@ -4615,6 +4621,7 @@ mod tests {
                 folders: vec![FolderDto {
                     id: "folder".into(),
                     name: "Folder renamed".into(),
+                    is_bookmarked: true,
                 }],
                 pages: vec![WorkspacePageDto {
                     id: "page".into(),
@@ -4627,6 +4634,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(updated.pages[0].revision, 1);
+        assert!(load_workspace_data_at(directory.path()).unwrap().folders[0].is_bookmarked);
         let rejected = reconcile_workspace_structure_at(
             directory.path(),
             WorkspaceStructure {

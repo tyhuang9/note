@@ -18,7 +18,10 @@ Note is a local-first desktop workspace for arranging ideas without leaving
 your device. Create pages, place text, images, and drawing elements, and connect
 them on an open canvas that stays yours.
 
-![A short walkthrough of creating a note page and connecting a simple diagram](docs/assets/note-demo.gif)
+<picture>
+  <source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/note-demo-static.png" type="image/png" />
+  <img src="docs/assets/note-demo.gif" alt="Note's Pen tool drawing an upward-looking face stroke by stroke" width="900" height="454" />
+</picture>
 
 ## Install
 

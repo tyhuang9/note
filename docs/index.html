@@ -47,13 +47,16 @@
           <p class="fine-print">Current builds are unsigned. Verify the GitHub release before opening one.</p>
         </div>
         <figure class="demo">
-          <img
-            src="assets/note-demo.gif"
-            width="900"
-            height="454"
-            alt="A short visual tour of Note's canvas, selection controls, and dark theme"
-          />
-          <figcaption>Real interface captures: canvas tools, selection controls, and dark theme.</figcaption>
+          <picture>
+            <source media="(prefers-reduced-motion: reduce)" srcset="assets/note-demo-static.png" type="image/png" />
+            <img
+              src="assets/note-demo.gif"
+              width="900"
+              height="454"
+              alt="Note's Pen tool drawing an upward-looking face stroke by stroke"
+            />
+          </picture>
+          <figcaption>A face sketch takes shape in Note with the Pen tool.</figcaption>
         </figure>
       </section>
 

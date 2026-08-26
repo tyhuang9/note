@@ -51,3 +51,40 @@ No actionable P0, P1, or P2 visual or interaction mismatch remains for the reque
 - P3: Note's menu is wider than the supplied Codex crop to keep labels and focus outlines comfortable inside the narrower explorer; this is an intentional usability adaptation.
 
 final result: passed
+
+## Branding QA — 2026-08-26
+
+### Verification plan
+
+- Expected behavior/success path: the approved Note raster mark, `#FAF8F4` warm white, `#1F1F1F` charcoal, `#D4A128` gold, tagline, and product description are consistently connected across the app, README, and GitHub Pages docs; app and docs remain usable in light/dark themes at 375, 390, and 1440 CSS px.
+- Failure/risk paths: missing or wrongly sized assets, unresolved favicon/build imports, stale SVG branding, broken local docs links, horizontal overflow, hidden titlebar branding, color-only selection/focus, and forced-colors loss.
+- Automated/manual gates: branding/config scripts, production build, unit suite, focused responsive Playwright, local rendered docs/app inspection, local-link resolution, raster dimension checks, and `git diff --check`.
+
+### Coverage report and test results
+
+- PASS — `npm --prefix frontend run test:branding`: palette, messaging, metadata, raster signatures/dimensions, accessible focus/selection source rules, and forced-colors selectors connected.
+- PASS — `npm --prefix frontend run test:tauri-config`: `dragDropEnabled: false` in every Tauri window config.
+- PASS — `npm --prefix frontend run build`: TypeScript and Vite production build completed; compiled `dist/index.html` resolves the fingerprinted 32px PNG favicon. Vite emitted only the existing >500 kB chunk-size advisory.
+- PASS — `npm --prefix frontend run test:unit`: 33 files, 287 tests passed.
+- PASS — focused Playwright `embedded titlebar keeps canvas controls docked and operable`: 1/1 passed.
+- PASS for branding/responsive scope — the full `workbench-responsive.spec.ts` reported the desktop docking, embedded titlebar, viewport-safe dock, compact/narrow overlay, narrow search, tab keyboard, and assistant selection cases as passing. Two unrelated canvas creation/template cases failed because their expected text element/editor was never created. Both failures reproduced at untouched base `1fe27ac` with the same assertions, so they are pre-existing and are not branding regressions.
+- PASS — GitHub Pages local-link validator equivalent: all relative `href`/`src` references in rendered `docs/index.html` and `docs/install.html` resolve locally; no console/page errors.
+- PASS — `git diff --check 1fe27ac..HEAD`.
+- Tests written: none; this pass executed and documented existing automated coverage only.
+
+### Rendered and source evidence
+
+- Docs home and install pages were rendered in Chromium at 375, 390, and 1440 CSS px in both light and dark schemes. Every case matched viewport width with no horizontal overflow, loaded the 48×48 brand mark, applied the expected theme colors, and exposed a solid 3px focus outline. Mobile primary-navigation links measured 44px high. Visual inspection confirmed coherent logo, typography, hierarchy, cards, actions, and responsive stacking.
+- The web app was rendered at 375, 390, and 1440 CSS px in both themes. The shell and embedded titlebar matched the viewport without horizontal overflow; the 32×32 raster loaded and rendered crisply at 22×22 CSS px; brand text/icon, toolbar, rail, and canvas remained visible. Selected rail controls retained a 3px inset shape marker. Chromium forced-colors emulation was active and produced a 2px selected-control outline.
+- Asset inspection: canonical mark is 1254×1254; derivatives are exactly 32×32 and 48×48; Tauri 32px source is 32×32. No SVG branding files or SVG references remain in the docs/Tauri branding surfaces.
+- Temporary screenshots were inspected from `%TEMP%\note-brand-qa`; no screenshots or generated evidence were added to the branch.
+
+### Accessibility/UX gate
+
+GO. The branding is legible and consistent across light/dark and compact/desktop layouts. Keyboard focus and selected states are not color-only, mobile docs targets meet the 44px target used by this branch, decorative marks are excluded from accessible naming, and forced-colors source/rendered behavior is present.
+
+### Gaps remaining and branch readiness
+
+- Unverified: final native packaged icon appearance in installed Windows/macOS/Linux shells, macOS `.icns` rendering, Windows `.ico`/tile rendering, Firefox/Safari behavior, screen-reader/AT announcements, the deployed GitHub Pages origin, and release/download availability. These require packaged builds, additional browsers/AT, or the deployed environment.
+- Known pre-existing risk: two broader canvas/template Playwright cases fail on both base and branch; track separately from this branding change.
+- Branch readiness: **GO for branding review/PR**. No P0–P2 branding, responsive, link, build, or accessibility regression was found in the verified scope.

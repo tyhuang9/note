@@ -1,69 +1,53 @@
-# Canvas Geometry Polish — Product Design QA
+# Design QA — Codex-style folder actions
 
-## Result
+- Source visual truth:
+  - `C:\Users\huang\AppData\Local\Temp\codex-clipboard-96a0d368-e597-4954-98be-0ea27056d672.png`
+  - `C:\Users\huang\AppData\Local\Temp\codex-clipboard-0b14c64c-66a5-4e75-be79-6292312b754d.png`
+- Implementation screenshots:
+  - `C:\Users\huang\Documents\Projects\Note\worktrees\notion-style-header\design-qa-folder-row.png`
+  - `C:\Users\huang\Documents\Projects\Note\worktrees\notion-style-header\design-qa-folder-menu.png`
+- Combined focused comparison: `C:\Users\huang\Documents\Projects\Note\worktrees\notion-style-header\design-qa-folder-menu-comparison.png`
+- Viewport: 1042 × 986 CSS pixels, device pixel ratio 1.25, in-app Browser. Browser captures were returned at 1042 × 986 pixels, so source and focused implementation crops were compared at their returned native size without density resampling.
+- Source pixels: 310 × 132 for the folder-row reference and 295 × 285 for the menu reference. Focused implementation crops: 280 × 80 for the row and 224 × 145 for the menu.
+- State: dark theme, Favorites view, one expanded bookmarked folder with one child page; both closed-row and right-click menu states captured.
 
-`final result: passed`
+## Full-view comparison evidence
 
-No unresolved P0, P1, or P2 visual findings remain for the six-item canvas geometry scope.
+The implementation preserves Note's header, rail, 280px explorer, canvas, dark palette, 30px row rhythm, and existing folder hierarchy. The change is contained to the folder action area and its menu.
 
-## Final State
+## Focused region comparison evidence
 
-- Product runtime: `9d0a804` on `agent/final-geometry-integration-fixes-v6`.
-- Browser: Playwright Chromium, device pixel ratio 1.
-- Isolated capture server: `http://127.0.0.1:4327`.
-- Capture test: `frontend/tests/e2e/geometry-polish-design-qa.spec.ts`, 1/1 passed.
-- Runtime diagnostics during the capture flow: 0 console errors and 0 page errors.
-- Unrelated toolbar and property chrome was hidden only in the comparison captures so the supplied canvas states and implementation states use the same visual framing. Product behavior was not altered.
+The combined comparison pairs Codex's selected project row and context menu with Note's updated folder row and shared menu. Note now shows only Add page and More at the right edge, keeps those controls visible on the selected folder, and moves Bookmark, Rename, and Delete into a compact dark menu. The ellipsis and right-click routes render the same menu instance and ordered actions.
 
-## Source and Implementation Comparisons
+## Required fidelity surfaces
 
-Each source and implementation image in a pair has identical pixel dimensions. The combined images place the supplied source on the left and the final implementation on the right without scaling.
+- Fonts and typography: Note keeps its existing 13px explorer type and compact truncation. Menu labels use a 13px medium weight that matches the density of the Codex reference without changing the app-wide type system.
+- Spacing and layout rhythm: folder rows retain their 30px height and compact 4px grid gap. The two 24px actions occupy one 48px group. The menu uses 34px items, 6px padding, an 8px radius, and separators before the destructive action.
+- Colors and visual tokens: existing dark surfaces and purple selection remain. The menu uses Note's neutral dark tokens; Delete receives a restrained destructive color while retaining sufficient contrast.
+- Image quality and asset fidelity: no raster substitutes or new generated artwork were introduced. Folder, add-page, bookmark, rename, delete, and ellipsis symbols use the existing Hero-style icon system.
+- Copy and content: Codex-specific project actions were adapted to Note rather than copied. The shared options are `Bookmark`/`Remove bookmark`, `Rename`, and `Delete`; the direct row action remains `Create page in {folder}`.
 
-| State | Supplied source | Final implementation | Combined evidence |
-| --- | --- | --- | --- |
-| Selected textbox, connector-label gap, and embedded shape text | `C:\Users\huang\.codex\attachments\feea1257-32a4-4660-8533-292e9ab80b2f\image-1.png` — 1017×685 | `design-qa-evidence/implementation-native-text-compact-label-dark-1017x685.png` — 1017×685 | `design-qa-evidence/comparison-1-native-text-compact-label.png` — 2034×685 |
-| Markerless selected diamond | `C:\Users\huang\.codex\attachments\feea1257-32a4-4660-8533-292e9ab80b2f\image-2.png` — 406×408 | `design-qa-evidence/implementation-markerless-diamond-dark-406x408.png` — 406×408 | `design-qa-evidence/comparison-2-markerless-diamond.png` — 812×408 |
-| Shape text editing without an outer selection box | `C:\Users\huang\.codex\attachments\feea1257-32a4-4660-8533-292e9ab80b2f\image-3.png` — 371×425 | `design-qa-evidence/implementation-centered-shape-edit-dark-371x425.png` — 371×425 | `design-qa-evidence/comparison-3-centered-shape-edit.png` — 742×425 |
+## Interaction and runtime checks
 
-Aggregate comparison board: `design-qa-evidence/board-geometry-polish-source-implementation.png` — 2034×1566.
+- More button: passed; opens the shared menu, reports `aria-haspopup="menu"`, updates `aria-expanded`, and focuses the first item.
+- Right-click: passed in Files and Favorites; opens the identical three ordered actions.
+- Keyboard: Arrow Down and End move focus; Escape returns to More; Shift+Tab returns to Add page; Tab advances past More without dropping focus to the document body.
+- Focus recovery: deleting a folder or removing it from Favorites focuses the nearest surviving folder action, Create folder, or the active labelled rail control.
+- Reflow and contrast: the rendered menu is measured and clamped at an 8px viewport margin, including a 1024 × 220 edge case. The light-theme focus outline uses solid `#6d28d9`, exceeding the 3:1 non-text contrast requirement.
+- Menu dismissal: outside pointer, Escape, Tab, scroll, resize, and window blur are handled.
+- Console errors: none. The web preview reports only the expected Tauri/SQLite-unavailable warning and uses session storage.
 
-Supplemental final states:
+## Findings
 
-- Live arrow-label editing with the real shaft gap already present: `design-qa-evidence/implementation-arrow-label-edit-dark-1017x685.png`.
-- Single transparent textbox using only its native seamless selected border/header: `design-qa-evidence/implementation-seamless-text-selection-dark-560x300.png`.
+No actionable P0, P1, or P2 visual or interaction mismatch remains for the requested folder action pattern.
 
-## Findings and Resolution History
+## Comparison history
 
-| Severity | Supplied-state finding | Final resolution and evidence |
-| --- | --- | --- |
-| P1 | Connector labels could occupy a gap much wider than the rendered text and could appear detached from the actual shaft center. | Upright gaps now use the exact centered line/label-rectangle intersection plus four world units. The label remains centered on the visible shaft. The implementation comparison and live-edit supplemental capture show the compact real gap before commit. |
-| P1 | Selected textboxes and shapes displayed persistent cardinal/corner dots, adding visual noise. | All eight resize zones remain accessible and cursor-driven but visually transparent. The textbox comparison uses only the existing native border/header; the diamond comparison shows its selection outline without dots. |
-| P1 | Shape editing retained an unrelated outer selection rectangle, and entering edit mode could move short text vertically. | Editing suppresses selection/root outlines. The measured editor content center stays within two pixels of the display center at 50%, 100%, and 200%; the final comparison shows the centered, outline-free editing state. |
-| P1 | The first aggregate review found that post-transform size clamps could move the fixed opposite resize edge and that shared image resize ignored media minimums. | Clamp dimensions are now resolved before position from the fixed opposite local point. Shapes/ink use an 8-unit minimum; images use 80×60 minimum and 4000 maximum width. All eight rotated handles have invariant unit coverage. |
-| P1 | The visually hidden textbox header remained focusable and clickable while editing. | The editing header is now an inert, aria-hidden, role-less, untabbable, pointer-inert layout spacer. Shift+Tab and header-region pointer tests retain the active editor and caret. |
+- Initial issue: folder rows exposed Bookmark and Delete directly, diverging from the simple Codex project-row pattern. Fix: retain Add page, replace the second visible action with More, and move Bookmark, Rename, and Delete into one shared menu used by More and right-click. Post-fix evidence: `design-qa-folder-menu-comparison.png`.
+- Accessibility review issue: the initial light focus ring was too faint, the estimated menu height could clip near the viewport edge, and destructive/removal actions could leave focus on a generic container. Fix: use a solid focus outline, clamp from measured bounds, and restore focus to a meaningful surviving action. Post-fix focused browser test: passed.
 
-## Fidelity Review
+## Follow-up polish
 
-- Geometry: connector gaps match the rendered label footprint; markerless hit zones do not change selected-object bounds; shape text is geometrically centered; the fixed opposite edge survives minimum/maximum clamps.
-- Typography: connector and embedded-shape labels use the existing system font and theme foreground with no mask or pill. Text remains readable against the canvas/shape fill.
-- Color and hierarchy: existing purple selection/focus tokens remain, while redundant resize dots and editing outlines are removed. The object itself, caret, and active border carry the hierarchy.
-- Spacing: the textbox border stays continuous at its right edge; the connector gap has only the specified breathing room; no new panel or canvas spacing was introduced.
-- Responsive and zoom behavior: focused browser coverage passed at 50%, 100%, and 200% for textbox editing, shape centering, resize geometry, connector following, and pointer-relative paste.
-- Accessibility-adjacent UX: invisible resize zones retain accessible labels, keyboard resizing, focus rings, and 44px interaction targets. Editing does not expose an invisible header control.
+- P3: Note's menu is wider than the supplied Codex crop to keep labels and focus outlines comfortable inside the narrower explorer; this is an intentional usability adaptation.
 
-## Interaction Verification
-
-- Selected a single transparent textbox and verified there is no redundant external border, visible resize marker, or move surface; its own top grip remains the drag affordance.
-- Opened an arrow label editor and verified the compact line break is present before commit and remains centered on the shaft.
-- Selected a diamond and verified eight invisible resize zones with correct cursors and no visible dots.
-- Entered shape text editing from the selected overlay and verified the selection frame disappears while the editor retains focus and centered content.
-- Verified empty/short shape text centers and long multiline content top-aligns without clipping.
-- Verified all-text group resize, pointer-position paste, image limits, cancel, undo/redo, and reload through focused automated suites.
-
-## Remaining P3 Notes
-
-- Chromium was the visual comparison browser. Firefox, WebKit/Safari, physical high-DPI devices, and manual screen-reader sessions were not run.
-- The production build retains its pre-existing JavaScript chunk-size warning; this visual geometry stack did not materially change that condition.
-- The full inherited Chromium inventory contains obsolete tests for superseded single-click typing, visible east-only handles, and shape text card surfaces. Current acceptance suites for the requested behavior pass; legacy cleanup is tracked separately from this visual approval.
-
-`final result: passed`
+final result: passed

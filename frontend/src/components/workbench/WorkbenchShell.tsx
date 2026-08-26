@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 
 export interface WorkbenchShellProps {
   readonly children: ReactNode;
+  readonly titleBar: ReactNode;
   readonly isAssistantOverlayOpen: boolean;
   readonly isAssistantOpen: boolean;
   readonly isCompactWorkbench: boolean;
@@ -15,6 +16,7 @@ export interface WorkbenchShellProps {
 
 export function WorkbenchShell({
   children,
+  titleBar,
   isAssistantOverlayOpen,
   isAssistantOpen,
   isCompactWorkbench,
@@ -27,7 +29,7 @@ export function WorkbenchShell({
 }: Readonly<WorkbenchShellProps>) {
   return (
     <main
-      className={`app-shell workbench-shell ${isDarkMode ? "is-dark" : ""} ${
+      className={`app-shell workbench-shell has-embedded-titlebar ${isDarkMode ? "is-dark" : ""} ${
         isExplorerCollapsed ? "is-sidebar-collapsed" : ""
       } ${isAssistantOpen ? "has-assistant-panel" : ""} ${
         isCompactWorkbench ? "is-compact-workbench" : ""
@@ -35,6 +37,7 @@ export function WorkbenchShell({
         isExplorerOverlayOpen ? "is-explorer-overlay-open" : ""
       } ${isAssistantOverlayOpen ? "is-assistant-overlay-open" : ""}`}
     >
+      {titleBar}
       {children}
       {isExplorerOverlayOpen ? (
         <button

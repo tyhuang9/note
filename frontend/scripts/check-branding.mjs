@@ -51,7 +51,7 @@ assert.match(appCss, /@media \(forced-colors: active\)[\s\S]*\.ai-provider-item\
 assert.match(aiProviders, /aria-pressed={provider\.id === selectedProvider\?\.id}/, "provider selection must be programmatically exposed");
 assert.match(appCss, /--brand-control:\s*#7A5700/i, "light controls must use the brand control token");
 assert.doesNotMatch(appCss, /#7950f2/i, "legacy purple control accents must not remain");
-assert.match(appCss, /\.rail-button\[aria-pressed="true"\][\s\S]*box-shadow:\s*inset 3px 0 0/, "selected controls must retain a shape marker");
+assert.match(appCss, /\.rail-button\[aria-pressed="true"\][\s\S]*box-shadow:\s*inset 3px 0 0 var\(--brand-control\)/, "light selected controls must retain a contrast-safe shape marker");
 assert.match(docsCss, /nav a\s*{[^}]*min-height:\s*44px/s, "mobile docs navigation must keep accessible touch targets");
 assert.ok(frontendRoot.endsWith("frontend\\") || frontendRoot.endsWith("frontend/"));
 

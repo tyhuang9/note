@@ -6548,7 +6548,7 @@ h2 {
 .nav-item.is-active,
 .nav-item.is-selected,
 .ai-provider-item[aria-pressed="true"] {
-  box-shadow: inset 3px 0 0 var(--brand-gold);
+  box-shadow: inset 3px 0 0 var(--brand-control);
 }
 
 .app-shell.is-dark .slash-command-item[aria-selected="true"],

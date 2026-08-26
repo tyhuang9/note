@@ -21,14 +21,14 @@
 **Full-view comparison evidence**
 
 - The popup sits below the active canvas caret, remains visually unscaled at 100% canvas zoom, and has sufficient separation from Note's floating text toolbar and canvas controls.
-- Note's purple focus and selected-row treatment stays consistent with the selected textbox and existing workbench accent.
+- Note's golden focus and selected-row treatment stays consistent with the selected textbox and current workbench identity.
 - The body-mounted surface is not clipped by the canvas or side panels and reads as an editor command surface rather than a canvas object.
 
 **Focused-region comparison evidence**
 
 - Typography: labels, secondary descriptions, category headers, hints, and footer have a clear five-level hierarchy. The shared system font and compact weights match Note's workbench, and command copy wraps without information loss at 200% text size.
 - Spacing and layout rhythm: 34px icon tiles, 52px minimum rows, 6px menu inset, 10px row gaps, 10px radius, and a fixed footer produce a compact but scannable menu. Overflow is contained in the list, not the footer.
-- Colors and tokens: dark and light surfaces preserve readable foreground/secondary contrast; the selected state uses Note purple in both themes without losing the label or description.
+- Colors and tokens: dark and light surfaces preserve readable foreground/secondary contrast; the selected state uses Note gold in both themes without losing the label or description.
 - Image and icon quality: no raster imagery is required. All visible icons use the shared Note HeroIcon renderer and remain crisp at 1x capture density.
 - Copy and content: command labels, descriptions, markdown hints, category names, `No commands found`, and `Close menu / Esc` are concise and consistent with the approved catalog.
 - Interaction states: Playwright verified hover, selected, filtered, empty, dark/light, narrow viewport, 50%/100%/200% canvas zoom, keyboard navigation, and dismissal behavior.
@@ -56,7 +56,7 @@
 - [x] 340px viewport-clamped width and 360px maximum height
 - [x] Fixed footer and independently scrollable options
 - [x] Stable screen scale under canvas zoom
-- [x] Shared icon language and purple accent
+- [x] Shared icon language and golden accent
 - [x] Reduced-motion treatment
 
 final result: passed

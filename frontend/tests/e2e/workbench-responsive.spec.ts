@@ -170,7 +170,7 @@ test("embedded titlebar keeps canvas controls docked and operable", async ({ pag
 
   const canvas = page.getByRole("tabpanel");
   const controls = page.getByRole("toolbar", { name: "Canvas controls" });
-  const grid = controls.getByRole("button", { name: "Grid" });
+  const grid = controls.getByRole("button", { name: "Grid", exact: true });
   const snapToGrid = controls.getByRole("button", { name: "Snap to grid" });
 
   await expect(controls).toBeVisible();

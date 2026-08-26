@@ -71,6 +71,16 @@ import {
   useInkInteraction,
   type DrawingTool,
 } from "./canvas/interaction/useInkInteraction";
+import {
+  classifyDroppedImageFiles,
+  EMPTY_IMAGE_FILE_DROP_ERROR,
+  getDroppedFiles,
+  getImageFileDropError,
+  getImageFileDropPlacement,
+  hasExternalFileDrop,
+  MAX_IMAGE_FILE_DROP_BYTES,
+  MAX_IMAGE_FILE_DROP_FILES,
+} from "./canvas/interaction/imageFileDrop";
 import { ActivityRail } from "./components/workbench/ActivityRail";
 import { EmbeddedTitleBar } from "./components/workbench/EmbeddedTitleBar";
 import { WorkbenchShell } from "./components/workbench/WorkbenchShell";
@@ -536,7 +546,6 @@ const SELECTION_FRAME_PADDING_PX = 4;
 const MAX_BLOCK_HISTORY_ENTRIES = 100;
 const PAGE_SEARCH_PREVIEW_CONTEXT = 44;
 const PAGE_TEMPLATE_FOLDER_ID = "__note_page_templates__";
-const PAGE_DRAG_MIME_TYPE = "application/x-note-page";
 const PAGE_POINTER_DRAG_THRESHOLD = 5;
 const ROOT_FOLDER_ID = "";
 const PASTED_BLOCK_OFFSET = 24;
@@ -1372,6 +1381,7 @@ function App() {
   const [pendingImagePlacement, setPendingImagePlacement] =
     useState<PendingImagePlacement | null>(null);
   const [imageImportError, setImageImportError] = useState<string | null>(null);
+  const [imageImportStatus, setImageImportStatus] = useState<string | null>(null);
   const [panOffset, setPanOffset] = useState<PanOffset>({ x: 0, y: 0 });
   const [livePanOffset, setLivePanOffset] = useState<PanOffset>(panOffset);
   const [insertionPoint, setInsertionPoint] = useState<InsertionPoint | null>(null);
@@ -1519,6 +1529,7 @@ function App() {
   const isTemporaryHandActiveRef = useRef(false);
   const pendingImagePlacementRef = useRef<PendingImagePlacement | null>(null);
   const imagePickerRequestRef = useRef(0);
+  const imageFileDropRequestRef = useRef(0);
   const drawingPropertyPreviewRef = useRef<DrawingPropertyPreviewTransaction | null>(null);
   const authoringFocusReturnRafRef = useRef<number | null>(null);
   const directTextFocusReturnRafRef = useRef<number | null>(null);
@@ -6127,7 +6138,9 @@ function App() {
   }
 
   function requestImagePicker() {
+    imageFileDropRequestRef.current += 1;
     setImageImportError(null);
+    setImageImportStatus(null);
     activeToolRef.current = "image";
     setActiveTool("image");
     const input = imagePickerInputRef.current;
@@ -6153,6 +6166,9 @@ function App() {
   }
 
   async function handleImageFileSelected(file: File | undefined) {
+    const imageImportRequestId = imageFileDropRequestRef.current + 1;
+    imageFileDropRequestRef.current = imageImportRequestId;
+    setImageImportStatus(null);
     if (!file || !file.type.startsWith("image/")) return;
     if (rejectOversizedImageBlob(file)) return;
     setImageImportError(null);
@@ -6164,7 +6180,10 @@ function App() {
     } catch {
       return;
     }
-    if (imagePickerRequestRef.current !== requestId) return;
+    if (
+      imagePickerRequestRef.current !== requestId
+      || !isCurrentImageFileDropRequest(imageImportRequestId)
+    ) return;
     const pending = {
       dataUrl,
       fileName: file.name || "Canvas image",
@@ -6172,6 +6191,118 @@ function App() {
     };
     pendingImagePlacementRef.current = pending;
     setPendingImagePlacement(pending);
+  }
+
+  function isCurrentImageFileDropRequest(requestId: number) {
+    return imageFileDropRequestRef.current === requestId;
+  }
+
+  function setImageFileDropError(message: string, requestId?: number) {
+    if (requestId !== undefined && !isCurrentImageFileDropRequest(requestId)) return;
+    setImageImportError(message);
+  }
+
+  function setImageFileDropStatus(message: string, requestId: number) {
+    if (!isCurrentImageFileDropRequest(requestId)) return;
+    setImageImportStatus(message);
+  }
+
+  function getImageFileDropStatus(
+    importedFiles: readonly File[],
+    skippedCount: number,
+  ): string {
+    const importedCount = importedFiles.length;
+    const importedLabel = importedCount === 1
+      ? `Imported 1 image: ${importedFiles[0].name || "Canvas image"}.`
+      : `Imported ${importedCount} images.`;
+    if (skippedCount === 0) return importedLabel;
+    return `${importedLabel} Skipped ${skippedCount} ${skippedCount === 1 ? "file" : "files"}.`;
+  }
+
+  function getCanvasFileDropOrigin(event: DragEvent<HTMLElement>): CanvasPoint | null {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+
+    const bounds = canvas.getBoundingClientRect();
+    return {
+      x: (event.clientX - bounds.left - panOffsetRef.current.x) / zoomLevelRef.current,
+      y: (event.clientY - bounds.top - panOffsetRef.current.y) / zoomLevelRef.current,
+    };
+  }
+
+  async function handleCanvasImageFileDrop(event: DragEvent<HTMLElement>) {
+    if (!hasExternalFileDrop(event.dataTransfer)) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    const requestId = imageFileDropRequestRef.current + 1;
+    imageFileDropRequestRef.current = requestId;
+    setImageImportStatus(null);
+
+    const files = getDroppedFiles(event.dataTransfer);
+    if (files.length === 0) {
+      setImageFileDropError(EMPTY_IMAGE_FILE_DROP_ERROR, requestId);
+      return;
+    }
+
+    const imageFileDropLimits = {
+      maxAssetBytes: MAX_ASSET_BYTES,
+      maxFiles: MAX_IMAGE_FILE_DROP_FILES,
+      maxTotalBytes: MAX_IMAGE_FILE_DROP_BYTES,
+    };
+    const result = classifyDroppedImageFiles(files, imageFileDropLimits);
+    const rejectionError = getImageFileDropError(result, imageFileDropLimits);
+    if (rejectionError) {
+      setImageFileDropError(rejectionError, requestId);
+    } else {
+      setImageImportError(null);
+    }
+    if (result.accepted.length === 0) return;
+
+    const pageId = selectedPageIdRef.current;
+    const origin = getCanvasFileDropOrigin(event);
+    if (!pageId || !origin) return;
+
+    const importedFiles: File[] = [];
+    for (const [index, file] of result.accepted.entries()) {
+      let dataUrl: string;
+      try {
+        dataUrl = await readBlobAsDataUrl(file);
+      } catch {
+        if (!isCurrentImageFileDropRequest(requestId)) return;
+        setImageFileDropError("Could not read image data.", requestId);
+        continue;
+      }
+
+      if (!isCurrentImageFileDropRequest(requestId)) return;
+
+      // A drop belongs to the page that was active when it happened. Do not
+      // create later files on a page the user selected while reading them.
+      if (selectedPageIdRef.current !== pageId) break;
+
+      const placement = getImageFileDropPlacement(origin, index);
+      const created = await createImageBlock(
+        placement.x,
+        placement.y,
+        dataUrl,
+        file.name || "Canvas image",
+        {
+          canCommit: () => (
+            selectedPageIdRef.current === pageId
+            && isCurrentImageFileDropRequest(requestId)
+          ),
+        },
+      );
+      if (!created || !isCurrentImageFileDropRequest(requestId)) return;
+      importedFiles.push(file);
+    }
+
+    if (importedFiles.length > 0) {
+      setImageFileDropStatus(
+        getImageFileDropStatus(importedFiles, files.length - importedFiles.length),
+        requestId,
+      );
+    }
   }
 
   function placePendingImage(point: CanvasPoint) {
@@ -6220,11 +6351,13 @@ function App() {
     y: number,
     imageData: string,
     imageName: string,
-  ) {
+    options?: { canCommit?: () => boolean },
+  ): Promise<boolean> {
     const pageId = selectedPageIdRef.current;
     if (!pageId) {
-      return;
+      return false;
     }
+    if (options?.canCommit && !options.canCommit()) return false;
 
     const blockId = createId("block");
     let assetId = createId("image-asset");
@@ -6235,14 +6368,21 @@ function App() {
     if (repository) {
       try {
         const managedDataUrl = await managedImageDataUrl(imageData);
+        if (options?.canCommit && !options.canCommit()) return false;
         const asset = await repository.saveAsset(
           assetRequestFromDataUrl(managedDataUrl, { fileName: imageName }),
         );
+        if (options?.canCommit && !options.canCommit()) {
+          // SceneRepository has no asset deletion API, so a raced successful
+          // save can remain unreferenced while stale canvas state is avoided.
+          return false;
+        }
         assetId = asset.id;
         sourceForDisplay = managedDataUrl;
         naturalWidth = asset.naturalWidth ?? naturalWidth;
         naturalHeight = asset.naturalHeight ?? naturalHeight;
       } catch (reason) {
+        if (options?.canCommit && !options.canCommit()) return false;
         const error = reason instanceof Error ? reason : new Error(String(reason));
         // Keep the user-visible image in memory and let the normal retry path
         // upload it before the scene batch is ever sent.
@@ -6253,6 +6393,7 @@ function App() {
         setPersistenceStatus({ kind: "failed", error });
       }
     }
+    if (options?.canCommit && !options.canCommit()) return false;
     const blockPosition = snapPoint({ x, y });
     const timestamp = Date.now();
 
@@ -6285,6 +6426,7 @@ function App() {
     setIsCanvasKeyboardActive(true);
     setActiveMode("selected");
     setInsertionPoint(null);
+    return true;
   }
 
   const updateBlock = useCallback((blockId: string, updates: BlockUpdates) => {
@@ -9071,6 +9213,12 @@ function App() {
           isKeyboardTextCreationAvailable={isKeyboardTextCreationAvailable}
           onDoubleClick={canvasInteraction.handleDoubleClick}
           onDoubleClickCapture={canvasInteraction.handleDoubleClickCapture}
+          onDragOver={(event) => {
+            if (!hasExternalFileDrop(event.dataTransfer)) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "copy";
+          }}
+          onDrop={handleCanvasImageFileDrop}
           onLostPointerCapture={(event) => {
             inkInteraction.handlePointerCancelCapture(event);
             canvasInteraction.handlePointerCancel(event);
@@ -9128,6 +9276,11 @@ function App() {
               />
             </div>
             {imageImportError ? <div className="canvas-image-import-error" role="alert">{imageImportError}</div> : null}
+            {imageImportStatus ? (
+              <div aria-atomic="true" aria-live="polite" className="canvas-accessibility-status" role="status">
+                {imageImportStatus}
+              </div>
+            ) : null}
             {availableDrawingPropertiesContext ? (
               <DrawingPropertiesPanel
                 contextLabel={availableDrawingPropertiesContext.contextLabel}
@@ -9766,8 +9919,6 @@ const Sidebar = memo(function Sidebar({
   } | null>(null);
   const pointerDropFolderIdRef = useRef<string | null>(null);
   const suppressedPageClickRef = useRef<string | null>(null);
-  const nativePageDropCompletedRef = useRef(false);
-  const nativePageDropFolderIdRef = useRef<string | null>(null);
   const pageDragCallbacksRef = useRef({
     onFolderDragLeave,
     onFolderDragOver,
@@ -9903,12 +10054,22 @@ const Sidebar = memo(function Sidebar({
         finishDrag(event.clientX, event.clientY);
       }
     };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || !pagePointerDragRef.current?.active) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      cancelDrag();
+    };
 
     window.addEventListener("pointermove", handlePointerMove, { passive: false });
     window.addEventListener("pointerup", handlePointerUp);
     window.addEventListener("mouseup", handleMouseUp);
     window.addEventListener("pointercancel", cancelDrag);
     window.addEventListener("blur", cancelDrag);
+    window.addEventListener("keydown", handleKeyDown, true);
 
     return () => {
       window.removeEventListener("pointermove", handlePointerMove);
@@ -9916,6 +10077,7 @@ const Sidebar = memo(function Sidebar({
       window.removeEventListener("mouseup", handleMouseUp);
       window.removeEventListener("pointercancel", cancelDrag);
       window.removeEventListener("blur", cancelDrag);
+      window.removeEventListener("keydown", handleKeyDown, true);
     };
   }, []);
   const folderNamesById = useMemo(
@@ -10020,31 +10182,6 @@ const Sidebar = memo(function Sidebar({
       startY: event.clientY,
     };
     pointerDropFolderIdRef.current = null;
-  }
-
-  function hasPageDragData(event: DragEvent<HTMLElement>) {
-    return (
-      draggedPageIds.length > 0 ||
-      Array.from(event.dataTransfer.types).includes(PAGE_DRAG_MIME_TYPE)
-    );
-  }
-
-  function finishNativePageDrag() {
-    if (nativePageDropCompletedRef.current) {
-      nativePageDropCompletedRef.current = false;
-      return;
-    }
-
-    const targetFolderId = nativePageDropFolderIdRef.current;
-    nativePageDropFolderIdRef.current = null;
-
-    if (targetFolderId === ROOT_FOLDER_ID) {
-      onPageDropOnRoot();
-    } else if (targetFolderId !== null) {
-      onPageDropOnFolder(targetFolderId);
-    } else {
-      onPageDragEnd();
-    }
   }
 
   function handlePageRowClick(
@@ -10797,36 +10934,6 @@ const Sidebar = memo(function Sidebar({
                 className={`file-tree-root-drop-zone ${
                   pageDropTargetFolderId === ROOT_FOLDER_ID ? "is-drop-target" : ""
                 }`}
-                onDragEnter={(event) => {
-                  if (!hasPageDragData(event)) return;
-                  event.preventDefault();
-                  nativePageDropFolderIdRef.current = ROOT_FOLDER_ID;
-                  onFolderDragOver(ROOT_FOLDER_ID);
-                }}
-                onDragLeave={(event) => {
-                  if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
-                    return;
-                  }
-                  if (nativePageDropFolderIdRef.current === ROOT_FOLDER_ID) {
-                    nativePageDropFolderIdRef.current = null;
-                  }
-                  onFolderDragLeave(ROOT_FOLDER_ID);
-                }}
-                onDragOver={(event) => {
-                  if (!hasPageDragData(event)) return;
-                  event.preventDefault();
-                  event.dataTransfer.dropEffect = "move";
-                  nativePageDropFolderIdRef.current = ROOT_FOLDER_ID;
-                  onFolderDragOver(ROOT_FOLDER_ID);
-                }}
-                onDrop={(event) => {
-                  if (!hasPageDragData(event)) return;
-                  event.preventDefault();
-                  event.stopPropagation();
-                  nativePageDropCompletedRef.current = true;
-                  nativePageDropFolderIdRef.current = null;
-                  onPageDropOnRoot();
-                }}
                 role="group"
               >
               {rootPages.map((page) => {
@@ -10841,24 +10948,10 @@ const Sidebar = memo(function Sidebar({
                     } ${isPageOpen ? "is-open" : ""} ${
                       isPageDragging ? "is-dragging" : ""
                     }`}
-                    draggable={editingPageId !== page.id}
                     key={page.id}
                     role="treeitem"
                     onDoubleClick={() => onSetEditingPageId(page.id)}
                     onClick={(event) => handlePageRowClick(event, page.id)}
-                    onDragEnd={finishNativePageDrag}
-                    onDragStart={(event) => {
-                      pagePointerDragRef.current = null;
-                      nativePageDropCompletedRef.current = false;
-                      nativePageDropFolderIdRef.current = null;
-                      if (!onPageDragStart(page.id)) {
-                        event.preventDefault();
-                        return;
-                      }
-                      event.dataTransfer.effectAllowed = "move";
-                      event.dataTransfer.setData(PAGE_DRAG_MIME_TYPE, page.id);
-                      event.dataTransfer.setData("text/plain", page.title);
-                    }}
                     onPointerDown={(event) => beginPagePointerDrag(event, page.id)}
                   >
                     <span className="file-row-icon">
@@ -10923,36 +11016,6 @@ const Sidebar = memo(function Sidebar({
                     className="file-tree-group"
                     data-page-drop-folder-id={folder.id}
                     key={folder.id}
-                    onDragEnter={(event) => {
-                      if (!hasPageDragData(event)) return;
-                      event.preventDefault();
-                      nativePageDropFolderIdRef.current = folder.id;
-                      onFolderDragOver(folder.id);
-                    }}
-                    onDragLeave={(event) => {
-                      if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
-                        return;
-                      }
-                      if (nativePageDropFolderIdRef.current === folder.id) {
-                        nativePageDropFolderIdRef.current = null;
-                      }
-                      onFolderDragLeave(folder.id);
-                    }}
-                    onDragOver={(event) => {
-                      if (!hasPageDragData(event)) return;
-                      event.preventDefault();
-                      event.dataTransfer.dropEffect = "move";
-                      nativePageDropFolderIdRef.current = folder.id;
-                      onFolderDragOver(folder.id);
-                    }}
-                    onDrop={(event) => {
-                      if (!hasPageDragData(event)) return;
-                      event.preventDefault();
-                      event.stopPropagation();
-                      nativePageDropCompletedRef.current = true;
-                      nativePageDropFolderIdRef.current = null;
-                      onPageDropOnFolder(folder.id);
-                    }}
                   >
                     <div
                       className={`nav-item nav-item-folder file-tree-row ${
@@ -11051,24 +11114,10 @@ const Sidebar = memo(function Sidebar({
                               } ${isPageOpen ? "is-open" : ""} ${
                                 isPageDragging ? "is-dragging" : ""
                               }`}
-                              draggable={editingPageId !== page.id}
                               key={page.id}
                               role="treeitem"
                               onDoubleClick={() => onSetEditingPageId(page.id)}
                               onClick={(event) => handlePageRowClick(event, page.id)}
-                              onDragEnd={finishNativePageDrag}
-                              onDragStart={(event) => {
-                                pagePointerDragRef.current = null;
-                                nativePageDropCompletedRef.current = false;
-                                nativePageDropFolderIdRef.current = null;
-                                if (!onPageDragStart(page.id)) {
-                                  event.preventDefault();
-                                  return;
-                                }
-                                event.dataTransfer.effectAllowed = "move";
-                                event.dataTransfer.setData(PAGE_DRAG_MIME_TYPE, page.id);
-                                event.dataTransfer.setData("text/plain", page.title);
-                              }}
                               onPointerDown={(event) => beginPagePointerDrag(event, page.id)}
                             >
                               <span className="file-row-icon">
@@ -11154,36 +11203,6 @@ const Sidebar = memo(function Sidebar({
                         className="file-tree-group"
                         data-page-drop-folder-id={folder.id}
                         key={folder.id}
-                        onDragEnter={(event) => {
-                          if (!hasPageDragData(event)) return;
-                          event.preventDefault();
-                          nativePageDropFolderIdRef.current = folder.id;
-                          onFolderDragOver(folder.id);
-                        }}
-                        onDragLeave={(event) => {
-                          if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
-                            return;
-                          }
-                          if (nativePageDropFolderIdRef.current === folder.id) {
-                            nativePageDropFolderIdRef.current = null;
-                          }
-                          onFolderDragLeave(folder.id);
-                        }}
-                        onDragOver={(event) => {
-                          if (!hasPageDragData(event)) return;
-                          event.preventDefault();
-                          event.dataTransfer.dropEffect = "move";
-                          nativePageDropFolderIdRef.current = folder.id;
-                          onFolderDragOver(folder.id);
-                        }}
-                        onDrop={(event) => {
-                          if (!hasPageDragData(event)) return;
-                          event.preventDefault();
-                          event.stopPropagation();
-                          nativePageDropCompletedRef.current = true;
-                          nativePageDropFolderIdRef.current = null;
-                          onPageDropOnFolder(folder.id);
-                        }}
                       >
                         <div
                           className={`nav-item nav-item-folder file-tree-row ${
@@ -11282,24 +11301,10 @@ const Sidebar = memo(function Sidebar({
                                   } ${isPageOpen ? "is-open" : ""} ${
                                     isPageDragging ? "is-dragging" : ""
                                   }`}
-                                  draggable={editingPageId !== page.id}
                                   key={page.id}
                                   role="treeitem"
                                   onDoubleClick={() => onSetEditingPageId(page.id)}
                                   onClick={(event) => handlePageRowClick(event, page.id)}
-                                  onDragEnd={finishNativePageDrag}
-                                  onDragStart={(event) => {
-                                    pagePointerDragRef.current = null;
-                                    nativePageDropCompletedRef.current = false;
-                                    nativePageDropFolderIdRef.current = null;
-                                    if (!onPageDragStart(page.id)) {
-                                      event.preventDefault();
-                                      return;
-                                    }
-                                    event.dataTransfer.effectAllowed = "move";
-                                    event.dataTransfer.setData(PAGE_DRAG_MIME_TYPE, page.id);
-                                    event.dataTransfer.setData("text/plain", page.title);
-                                  }}
                                   onPointerDown={(event) => beginPagePointerDrag(event, page.id)}
                                 >
                                   <span className="file-row-icon">

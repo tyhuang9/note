@@ -6,6 +6,7 @@
       "height": 600,
       "minWidth": 320,
       "minHeight": 240,
+      "dragDropEnabled": false,
       "decorations": true,
       "hiddenTitle": true,
       "titleBarStyle": "Overlay",

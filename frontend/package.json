@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "qa:capture-excalidraw-reference": "node scripts/capture-excalidraw-reference.mjs",
     "test:e2e": "playwright test",
+    "test:tauri-config": "node scripts/check-tauri-drag-drop-config.mjs",
     "test:unit": "tsc -p tsconfig.test.json --noEmit && vitest run",
     "preview": "vite preview",
     "tauri": "tauri"

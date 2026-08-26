@@ -1,5 +1,6 @@
 import { forwardRef, type ReactNode } from "react";
 import type {
+  DragEventHandler,
   MouseEventHandler,
   PointerEventHandler,
   WheelEventHandler,
@@ -17,6 +18,8 @@ type CanvasViewportProps = {
   isKeyboardTextCreationAvailable?: boolean;
   onDoubleClick: MouseEventHandler<HTMLElement>;
   onDoubleClickCapture?: MouseEventHandler<HTMLElement>;
+  onDragOver?: DragEventHandler<HTMLElement>;
+  onDrop?: DragEventHandler<HTMLElement>;
   onPointerCancel: PointerEventHandler<HTMLElement>;
   onPointerCancelCapture?: PointerEventHandler<HTMLElement>;
   onPointerDown: PointerEventHandler<HTMLElement>;
@@ -44,6 +47,8 @@ export const CanvasViewport = forwardRef<HTMLElement, CanvasViewportProps>(
       isKeyboardTextCreationAvailable = false,
       onDoubleClick,
       onDoubleClickCapture,
+      onDragOver,
+      onDrop,
       onPointerCancel,
       onPointerCancelCapture,
       onPointerDown,
@@ -88,6 +93,8 @@ export const CanvasViewport = forwardRef<HTMLElement, CanvasViewportProps>(
           if (isSearchPanelEvent(event)) return;
           onDoubleClickCapture?.(event);
         }}
+        onDragOver={onDragOver}
+        onDrop={onDrop}
         onKeyDownCapture={(event) => {
           if (isSearchPanelEvent(event)) return;
         }}

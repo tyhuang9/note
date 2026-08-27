@@ -76,6 +76,7 @@ Var RemoveOnlyMode
 Var MaintenanceDetected
 Var MaintenanceInstalledVersion
 Var MaintenanceVersionComparison
+Var MaintenanceVersionValid
 Var MaintenanceInstallPath
 Var MaintenanceArpInstallPath
 Var MaintenanceUninstallerPath
@@ -499,6 +500,7 @@ Function DetectExistingInstall
   StrCpy $MaintenanceDetected 0
   StrCpy $MaintenanceInstalledVersion ""
   StrCpy $MaintenanceVersionComparison 2
+  StrCpy $MaintenanceVersionValid 0
   StrCpy $MaintenanceInstallPath ""
   StrCpy $MaintenanceArpInstallPath ""
   StrCpy $MaintenanceUninstallerPath ""
@@ -535,8 +537,15 @@ Function DetectExistingInstall
   StrCpy $MaintenanceDetected 1
   ReadRegStr $MaintenanceInstalledVersion SHCTX "${UNINSTKEY}" "DisplayVersion"
   ${If} $MaintenanceInstalledVersion != ""
-    nsis_tauri_utils::SemverCompare "${VERSION}" $MaintenanceInstalledVersion
-    Pop $MaintenanceVersionComparison
+    ; `0.0.0-0` is the lowest valid SemVer. The Tauri helper returns 1
+    ; only when this valid sentinel is compared with an invalid version.
+    nsis_tauri_utils::SemverCompare "0.0.0-0" $MaintenanceInstalledVersion
+    Pop $0
+    ${If} $0 <> 1
+      StrCpy $MaintenanceVersionValid 1
+      nsis_tauri_utils::SemverCompare "${VERSION}" $MaintenanceInstalledVersion
+      Pop $MaintenanceVersionComparison
+    ${EndIf}
   ${EndIf}
 
   StrCpy $MaintenanceUninstallerPath "$MaintenanceInstallPath\uninstall.exe"
@@ -619,6 +628,9 @@ Function NormalizeMaintenanceInstallPath
 FunctionEnd
 
 Section EarlyChecks
+  ; Re-read the registry immediately before payload sections so every setup
+  ; mode applies the same fail-closed registration and version decisions.
+  Call DetectExistingInstall
   ${If} $MaintenanceRegistrationInvalid = 1
     ${If} ${Silent}
       System::Call 'kernel32::AttachConsole(i -1)i.r0'
@@ -631,8 +643,32 @@ Section EarlyChecks
     ${EndIf}
     Abort
   ${EndIf}
+  ${If} $MaintenanceDetected = 1
+    ${If} $MaintenanceVersionValid <> 1
+      Goto maintenance_version_invalid
+    ${EndIf}
+    ${If} $MaintenanceVersionComparison <> 0
+    ${AndIf} $MaintenanceVersionComparison <> 1
+    ${AndIf} $MaintenanceVersionComparison <> -1
+      Goto maintenance_version_invalid
+    ${EndIf}
+  ${EndIf}
+  Goto maintenance_version_valid
+
+  maintenance_version_invalid:
+    ${If} ${Silent}
+      System::Call 'kernel32::AttachConsole(i -1)i.r0'
+      ${If} $0 <> 0
+        System::Call 'kernel32::GetStdHandle(i -11)i.r0'
+        FileWrite $0 "Cannot install Note because the existing installation has a missing or invalid version.$\r$\n"
+      ${EndIf}
+    ${Else}
+      MessageBox MB_ICONSTOP "Cannot install Note because the existing Note registration has a missing or invalid version. Repair or remove that registration through Windows, then run setup again."
+    ${EndIf}
+    Abort
+
+  maintenance_version_valid:
   ${If} ${Silent}
-    Call DetectExistingInstall
     ${If} $MaintenanceDetected = 1
       ${If} $MaintenanceVersionComparison = -1
         System::Call 'kernel32::AttachConsole(i -1)i.r0'

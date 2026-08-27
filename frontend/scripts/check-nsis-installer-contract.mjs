@@ -22,9 +22,11 @@ const config = JSON.parse(configText);
 const nsis = config.bundle?.windows?.nsis;
 const pageLeaveReinstall = template.match(/Function PageLeaveReinstall([\s\S]*?)FunctionEnd/)?.[1];
 const existingInstallDetection = template.match(/Function DetectExistingInstall([\s\S]*?)FunctionEnd/)?.[1];
+const earlyChecks = template.match(/Section EarlyChecks([\s\S]*?)SectionEnd/)?.[1];
 
 assert.ok(pageLeaveReinstall, "the vendored template must define PageLeaveReinstall");
 assert.ok(existingInstallDetection, "the vendored template must define shared existing-install detection");
+assert.ok(earlyChecks, "the vendored template must define payload preflight checks");
 
 assert.equal(config.productName, "Note", "installer product identity must remain stable");
 assert.equal(config.identifier, "com.tyhuang.note", "installer bundle identity must remain stable");
@@ -67,10 +69,13 @@ assert.doesNotMatch(pageLeaveReinstall, /ReadRegStr \$R1 SHCTX "\$\{UNINSTKEY\}"
 assert.match(pageLeaveReinstall, /\$\{If\} \$RemoveOnlyMode = 1\s+Quit\s+\$\{EndIf\}\s+reinst_done:/, "remove-only must exit setup instead of reinstalling");
 assert.match(pageLeaveReinstall, /\$\{Else\}\s+Quit\s+; User chose to cancel setup/, "newer installed versions must block an implicit downgrade");
 assert.match(template, /Function \.onInit[\s\S]*?Call DetectExistingInstall[\s\S]*?FunctionEnd/, "detection must initialize outside maintenance page callbacks");
-assert.match(template, /ReadRegStr \$MaintenanceInstalledVersion SHCTX "\$\{UNINSTKEY\}" "DisplayVersion"[\s\S]*?nsis_tauri_utils::SemverCompare/, "shared detection must compare versions after stable identity and install-path validation");
-assert.match(template, /Section EarlyChecks[\s\S]*?\$\{If\} \$\{Silent\}[\s\S]*?Call DetectExistingInstall[\s\S]*?\$MaintenanceVersionComparison = -1[\s\S]*?Abort/, "silent newer-version downgrades must abort before payload sections");
+assert.match(existingInstallDetection, /ReadRegStr \$MaintenanceInstalledVersion SHCTX "\$\{UNINSTKEY\}" "DisplayVersion"[\s\S]*?SemverCompare "0\.0\.0-0" \$MaintenanceInstalledVersion[\s\S]*?\$0 <> 1[\s\S]*?StrCpy \$MaintenanceVersionValid 1[\s\S]*?SemverCompare "\$\{VERSION\}" \$MaintenanceInstalledVersion/, "shared detection must validate DisplayVersion before comparing it");
+assert.match(earlyChecks, /Call DetectExistingInstall[\s\S]*?\$\{If\} \$\{Silent\}[\s\S]*?\$MaintenanceVersionComparison = -1[\s\S]*?Abort/, "silent newer-version downgrades must abort before payload sections");
 assert.match(template, /Section EarlyChecks[\s\S]*?\$MaintenanceRegistrationInvalid = 1[\s\S]*?conflicting or unsafe install locations[\s\S]*?Abort/, "invalid registered install locations must block a second installation before payload sections");
-assert.match(template, /Section EarlyChecks[\s\S]*?\$MaintenanceVersionComparison = 0[\s\S]*?StrCpy \$UpdateMode 0[\s\S]*?\$MaintenanceVersionComparison = 1[\s\S]*?StrCpy \$UpdateMode 1/, "silent same-version repairs and older-version updates must be deterministic");
+assert.match(earlyChecks, /\$MaintenanceDetected = 1[\s\S]*?\$MaintenanceVersionValid <> 1[\s\S]*?Goto maintenance_version_invalid[\s\S]*?maintenance_version_invalid:[\s\S]*?missing or invalid version[\s\S]*?Abort/, "interactive, silent, passive, and updater launches must fail closed for missing or malformed registered versions before payload sections");
+assert.match(earlyChecks, /\$\{If\} \$MaintenanceDetected = 1[\s\S]*?\$\{EndIf\}\s+Goto maintenance_version_valid[\s\S]*?maintenance_version_valid:\s+\$\{If\} \$\{Silent\}/, "an absent registration must bypass version preflight and remain eligible for a fresh install");
+assert.ok(template.indexOf("Section EarlyChecks") < template.indexOf("Section WebView2"), "version preflight must execute before WebView2 and application payload sections");
+assert.match(earlyChecks, /\$MaintenanceVersionComparison = 0[\s\S]*?StrCpy \$UpdateMode 0[\s\S]*?\$MaintenanceVersionComparison = 1[\s\S]*?StrCpy \$UpdateMode 1/, "silent same-version repairs and older-version updates must be deterministic");
 assert.match(pageLeaveReinstall, /\$\{If\} \$UpdateMode = 1[\s\S]*?\$\{If\} \$MaintenanceDetected = 1[\s\S]*?\$MaintenanceVersionComparison = 0[\s\S]*?\$MaintenanceVersionComparison = 1[\s\S]*?Goto reinst_done[\s\S]*?Abort/, "the /UPDATE bypass must apply only to detected compatible NSIS installs");
 assert.match(pageLeaveReinstall, /\$\{If\} \$PassiveMode = 1[\s\S]*?\$\{If\} \$R0 = 0\s+StrCpy \$R1 1[\s\S]*?\$\{ElseIf\} \$R0 = 1\s+StrCpy \$R1 1[\s\S]*?\$\{ElseIf\} \$R0 = -1\s+StrCpy \$R1 0[\s\S]*?\$\{Else\}\s+\$\{NSD_GetState\} \$R2 \$R1/, "passive mode must default to Repair, Update, or Cancel before reading dialog controls");
 assert.match(

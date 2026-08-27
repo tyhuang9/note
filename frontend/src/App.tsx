@@ -4360,9 +4360,14 @@ function App() {
       const repository = repositoryRef.current;
       if (repository) {
         await repository.moveFolderToTrash(folderId);
-        const nextTrashEntries = await repository.listTrash();
-        setTrashEntries(nextTrashEntries);
-        const message = `Moved ${folderName} to Trash. ${nextTrashEntries.length} items remain in Trash.`;
+        let message: string;
+        try {
+          const nextTrashEntries = await repository.listTrash();
+          setTrashEntries(nextTrashEntries);
+          message = `Moved ${folderName} to Trash. ${nextTrashEntries.length} items remain in Trash.`;
+        } catch {
+          message = `Moved ${folderName} to Trash. Trash could not refresh; it will update when reopened.`;
+        }
         setTrashAnnouncement(message);
         setTrashFeedback(message);
       } else {
@@ -5760,6 +5765,7 @@ function App() {
       return;
     }
     try {
+      await flushPendingPersistence();
       if (entry.kind === "folder") {
         await repository.restoreFolderFromTrash(entry.id);
       } else {
@@ -5839,8 +5845,14 @@ function App() {
       return;
     }
     try {
+      await flushPendingPersistence();
       const preview = await repository.getTrashPurgePreview();
       if (preview.pageCount === 0 && preview.folderCount === 0) {
+        const nextTrashEntries = await repository.listTrash();
+        setTrashEntries(nextTrashEntries);
+        const message = "Trash is already empty.";
+        setTrashAnnouncement(message);
+        setTrashFeedback(message);
         return;
       }
       const confirmed = window.confirm(
@@ -5851,9 +5863,11 @@ function App() {
         return;
       }
       setTrashFeedback("Permanently deleting Trash items…");
-      await repository.purgeTrash(preview);
+      const purgeResult = await repository.purgeTrash(preview);
       setTrashEntries(await repository.listTrash());
-      const message = `Permanently deleted ${preview.folderCount} folders, ${preview.pageCount} pages, and ${preview.elementCount} canvas elements.`;
+      const message = purgeResult.cleanupWarning
+        ? `Permanently deleted ${preview.folderCount} folders, ${preview.pageCount} pages, and ${preview.elementCount} canvas elements. Some purged assets will be cleaned up automatically.`
+        : `Permanently deleted ${preview.folderCount} folders, ${preview.pageCount} pages, and ${preview.elementCount} canvas elements.`;
       setTrashAnnouncement(message);
       setTrashFeedback(message);
       window.requestAnimationFrame(() => {
@@ -6001,9 +6015,14 @@ function App() {
       const repository = repositoryRef.current;
       if (repository) {
         await repository.movePageToTrash(pageId);
-        const nextTrashEntries = await repository.listTrash();
-        setTrashEntries(nextTrashEntries);
-        const message = `Moved ${pageName} to Trash. ${nextTrashEntries.length} items remain in Trash.`;
+        let message: string;
+        try {
+          const nextTrashEntries = await repository.listTrash();
+          setTrashEntries(nextTrashEntries);
+          message = `Moved ${pageName} to Trash. ${nextTrashEntries.length} items remain in Trash.`;
+        } catch {
+          message = `Moved ${pageName} to Trash. Trash could not refresh; it will update when reopened.`;
+        }
         setTrashAnnouncement(message);
         setTrashFeedback(message);
       } else {

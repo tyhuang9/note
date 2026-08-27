@@ -64,6 +64,7 @@ export type TrashPurgePreview = {
   folderCount: number;
   pageCount: number;
   elementCount: number;
+  cleanupWarning?: string;
 };
 
 export type SaveAssetRequest = {

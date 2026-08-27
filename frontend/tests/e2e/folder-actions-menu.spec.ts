@@ -38,6 +38,16 @@ test("folder More and right-click share one accessible action menu", async ({
 }) => {
   await page.setViewportSize({ width: 1024, height: 720 });
   const folderRow = await createFolder(page, "Project notes");
+  const rootPageTrashAction = page.getByRole("button", {
+    name: "Move New page to Trash",
+  });
+  await expect(rootPageTrashAction).toHaveCount(1);
+  await rootPageTrashAction.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#workspace-explorer-panel")).toBeFocused();
+  await expect(page.locator("[data-trash-announcement]")).toHaveText(
+    "Moved New page to Trash.",
+  );
   const addPageButton = folderRow.getByRole("button", {
     name: "Create page in Project notes",
   });
@@ -144,7 +154,7 @@ test("folder More and right-click share one accessible action menu", async ({
   await expect(page.locator("[data-trash-announcement]")).toHaveText(
     "Moved Renamed project to Trash.",
   );
-  await page.getByRole("button", { name: "1 items in Trash" }).click();
+  await page.getByRole("button", { name: "2 items in Trash" }).click();
   await expect(page.getByRole("list", { name: "Trashed items" })).toBeVisible();
-  await expect(page.getByRole("listitem")).toContainText("Renamed project");
+  await expect(page.getByRole("listitem").filter({ hasText: "Renamed project" })).toContainText("Renamed project");
 });

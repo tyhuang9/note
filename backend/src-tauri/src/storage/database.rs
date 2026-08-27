@@ -178,4 +178,21 @@ PRAGMA user_version=2;
             .unwrap();
         assert_eq!(rows, vec![("active".into(), None)]);
     }
+
+    #[test]
+    fn migration_five_rolls_back_on_failure_and_retries_cleanly() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(r#"
+CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE asset_cleanup_journal(asset_id TEXT PRIMARY KEY NOT NULL, relative_path TEXT NOT NULL, staged_path TEXT NOT NULL);
+PRAGMA user_version=4;
+"#).unwrap();
+
+        assert!(migrate(&mut connection).is_err());
+        assert_eq!(connection.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0)).unwrap(), 4);
+        assert_eq!(connection.query_row("SELECT count(*) FROM schema_migrations WHERE version=5", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+        connection.execute("DROP TABLE asset_cleanup_journal", []).unwrap();
+        assert_eq!(migrate(&mut connection).unwrap(), 5);
+    }
 }

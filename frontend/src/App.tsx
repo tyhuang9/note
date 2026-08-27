@@ -310,7 +310,7 @@ type SidebarProps = {
   onDeleteFolder: (folderId: string) => void;
   onDeletePage: (pageId: string) => void;
   onDeletePageTemplate: (templatePageId: string) => void;
-  onRestoreTrashEntry: (entry: TrashEntry) => void;
+  onRestoreTrashEntry: (entry: TrashEntry, restoreIndex: number) => void;
   onEmptyTrash: () => void;
   onFolderDragLeave: (folderId: string) => void;
   onFolderDragOver: (folderId: string) => void;
@@ -5714,7 +5714,7 @@ function App() {
     void deletePage(templatePageId);
   }
 
-  async function restoreTrashEntry(entry: TrashEntry) {
+  async function restoreTrashEntry(entry: TrashEntry, restoreIndex: number) {
     const repository = repositoryRef.current;
     if (!repository) {
       return;
@@ -5764,8 +5764,11 @@ function App() {
       setSelectedPageId(selectedPageIdRef.current);
       setSidebarPageSelection(selectedPageIdRef.current ? [selectedPageIdRef.current] : []);
       window.requestAnimationFrame(() => {
-        const nextRestore = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-trash-restore]"))
-          .find((button) => button.isConnected && button.getClientRects().length > 0);
+        const remainingRestoreButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-trash-restore]"))
+          .filter((button) => button.isConnected && button.getClientRects().length > 0);
+        const nextRestore = remainingRestoreButtons[
+          Math.min(restoreIndex, Math.max(remainingRestoreButtons.length - 1, 0))
+        ];
         const emptyTrash = document.querySelector<HTMLButtonElement>("[data-empty-trash]");
         (nextRestore ?? (emptyTrash?.disabled ? null : emptyTrash) ?? trashRailButtonRef.current ?? document.getElementById("trash-title"))?.focus();
       });
@@ -11165,12 +11168,13 @@ const Sidebar = memo(function Sidebar({
                     <span className="nav-actions">
                       <button
                         type="button"
-                        aria-label={`Delete ${page.title}`}
+                        aria-label={`Move ${page.title} to Trash`}
+                        data-page-trash-action={page.id}
                         onClick={(event) => {
                           event.stopPropagation();
                           onDeletePage(page.id);
                         }}
-                        title={`Delete ${page.title}`}
+                        title={`Move ${page.title} to Trash`}
                       >
                         <HeroIcon name="trash" />
                       </button>
@@ -11672,7 +11676,7 @@ const Sidebar = memo(function Sidebar({
               </div>
               {trashEntries.length > 0 ? (
                 <ul className="nav-list trash-list" aria-label="Trashed items">
-                  {trashEntries.map((entry) => (
+                  {trashEntries.map((entry, restoreIndex) => (
                     <li className="nav-item nav-item-template" key={`${entry.kind}-${entry.id}`}>
                       <span className="file-row-icon">
                         <HeroIcon name={entry.kind === "folder" ? "folder" : "document-text"} />
@@ -11683,7 +11687,7 @@ const Sidebar = memo(function Sidebar({
                         <button
                           aria-label={`Restore ${entry.name}`}
                           data-trash-restore
-                          onClick={() => onRestoreTrashEntry(entry)}
+                          onClick={() => onRestoreTrashEntry(entry, restoreIndex)}
                           title={`Restore ${entry.name}`}
                           type="button"
                         >

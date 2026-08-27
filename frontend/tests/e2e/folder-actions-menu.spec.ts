@@ -141,4 +141,10 @@ test("folder More and right-click share one accessible action menu", async ({
   await page.getByRole("menuitem", { name: "Move to Trash" }).click();
   await expect(fileRow).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Create folder" })).toBeFocused();
+  await expect(page.locator("[data-trash-announcement]")).toHaveText(
+    "Moved Renamed project to Trash.",
+  );
+  await page.getByRole("button", { name: "1 items in Trash" }).click();
+  await expect(page.getByRole("list", { name: "Trashed items" })).toBeVisible();
+  await expect(page.getByRole("listitem")).toContainText("Renamed project");
 });

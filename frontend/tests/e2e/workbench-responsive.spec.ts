@@ -201,22 +201,45 @@ test("embedded titlebar keeps canvas controls docked and operable", async ({ pag
   await expect(snapToGrid).toHaveAttribute("aria-pressed", "true");
 });
 
-test("canvas search and assistant controls share a raised viewport-safe dock", async ({
+test("canvas controls keep canvas actions in a raised viewport-safe dock", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await createInitialNote(page);
 
   const controls = page.getByRole("toolbar", { name: "Canvas controls" });
-  const assistantToggle = page.getByRole("button", { name: "AI assistant" });
   const findButton = controls.getByRole("button", { name: "Find in canvas" });
+  const zoomOut = controls.getByRole("button", { name: "Zoom out" });
+  const zoomIn = controls.getByRole("button", { name: "Zoom in" });
 
-  await expect(assistantToggle).toHaveCount(1);
-  await expect(controls.getByRole("button", { name: "AI assistant" })).toBeVisible();
-  await expect(page.getByRole("textbox", { name: "Page title" })).toBeFocused();
+  await expect(controls.getByRole("button", { name: "AI assistant" })).toHaveCount(0);
+  await expect(controls.getByRole("button", { name: "Dark mode" })).toHaveCount(0);
+  await expect(zoomOut.locator("path")).toHaveCount(1);
+  await expect(zoomIn.locator("path")).toHaveCount(1);
   await expect(findButton).toBeDisabled();
   await page.getByRole("textbox", { name: "Page title" }).press("Escape");
   await expect(findButton).toBeEnabled();
+  await expect(zoomOut).toBeEnabled();
+  await expect(zoomIn).toBeEnabled();
+  await zoomIn.click();
+  await expect(controls.getByRole("status", { name: "Zoom 110%" })).toHaveText(
+    "110%",
+  );
+  await zoomOut.click();
+  await expect(controls.getByLabel("Zoom 100%")).toHaveText("100%");
+
+  for (let step = 0; step < 10; step += 1) {
+    await zoomIn.click();
+  }
+  await expect(controls.getByLabel("Zoom 200%")).toHaveText("200%");
+  await expect(zoomIn).toBeDisabled();
+
+  for (let step = 0; step < 15; step += 1) {
+    await zoomOut.click();
+  }
+  await expect(controls.getByLabel("Zoom 50%")).toHaveText("50%");
+  await expect(zoomOut).toBeDisabled();
+
   await findButton.click();
 
   const search = page.locator(".search-panel");
@@ -249,6 +272,104 @@ test("canvas search and assistant controls share a raised viewport-safe dock", a
       ),
     )
     .toBe(1);
+});
+
+test("global utilities live at the bottom of the activity rail", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await createInitialNote(page);
+
+  const rail = page.getByRole("navigation", { name: "Primary workspace tools" });
+  const utilities = rail.getByRole("group", { name: "Global utilities" });
+  const assistantToggle = utilities.getByRole("button", { name: "AI assistant" });
+  const themeToggle = utilities.getByRole("button", { name: "Dark mode" });
+
+  await expect(assistantToggle).toBeVisible();
+  await expect(themeToggle).toBeVisible();
+  await expect(assistantToggle).not.toHaveAttribute("aria-pressed");
+  await expect(assistantToggle).not.toHaveAttribute("aria-controls");
+  await expect(themeToggle).toHaveAttribute("title", "Switch to light mode");
+
+  const [railBounds, utilityBounds] = await Promise.all([
+    rail.boundingBox(),
+    utilities.boundingBox(),
+  ]);
+
+  if (!railBounds || !utilityBounds) {
+    throw new Error("Expected the activity rail utilities to have bounds.");
+  }
+
+  expect(utilityBounds.y + utilityBounds.height).toBeLessThanOrEqual(
+    railBounds.y + railBounds.height,
+  );
+  expect(railBounds.y + railBounds.height - (utilityBounds.y + utilityBounds.height))
+    .toBeLessThanOrEqual(12);
+
+  await themeToggle.click();
+  await expect(themeToggle).toHaveAttribute("aria-pressed", "false");
+  await expect(themeToggle).toHaveAttribute("title", "Switch to dark mode");
+
+  await themeToggle.press("Shift+Tab");
+  await expect(assistantToggle).toBeFocused();
+  await expect(assistantToggle).toHaveCSS("outline-style", "solid");
+  await expect(assistantToggle).toHaveCSS("outline-width", "2px");
+  await expect(assistantToggle).toHaveCSS("outline-color", "rgb(118, 84, 0)");
+  await assistantToggle.press("Enter");
+  await expect(page.getByRole("complementary", { name: "AI assistant" })).toBeVisible();
+  await expect(assistantToggle).toHaveAttribute("aria-expanded", "true");
+  await expect(assistantToggle).toHaveAttribute(
+    "aria-controls",
+    "workspace-assistant-panel",
+  );
+});
+
+test.describe("coarse pointer controls", () => {
+  test.use({ hasTouch: true });
+
+  test("keeps global and canvas actions touchable in a centered narrow dock", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await createInitialNote(page);
+
+    await expect
+      .poll(() => page.evaluate(() => matchMedia("(pointer: coarse)").matches))
+      .toBe(true);
+
+    const controls = page.getByRole("toolbar", { name: "Canvas controls" });
+    const workspace = page.locator(".workspace");
+    const canvasButtons = controls.getByRole("button");
+    const globalUtilities = page.getByRole("group", { name: "Global utilities" });
+    const utilityButtons = globalUtilities.getByRole("button");
+
+    for (const buttons of [canvasButtons, utilityButtons]) {
+      const buttonCount = await buttons.count();
+      for (let index = 0; index < buttonCount; index += 1) {
+        const bounds = await buttons.nth(index).boundingBox();
+        expect(bounds?.width).toBeGreaterThanOrEqual(44);
+        expect(bounds?.height).toBeGreaterThanOrEqual(44);
+      }
+    }
+
+    const [controlsBounds, workspaceBounds] = await Promise.all([
+      controls.boundingBox(),
+      workspace.boundingBox(),
+    ]);
+
+    if (!controlsBounds || !workspaceBounds) {
+      throw new Error("Expected the narrow canvas dock and workspace to have bounds.");
+    }
+
+    expect(controlsBounds.x).toBeGreaterThanOrEqual(workspaceBounds.x + 8);
+    expect(controlsBounds.x + controlsBounds.width).toBeLessThanOrEqual(
+      workspaceBounds.x + workspaceBounds.width - 8,
+    );
+    expect(
+      Math.abs(
+        controlsBounds.x + controlsBounds.width / 2 -
+          (workspaceBounds.x + workspaceBounds.width / 2),
+      ),
+    ).toBeLessThanOrEqual(1);
+  });
 });
 
 test("compact assistant behaves as a focus-managed overlay", async ({ page }) => {

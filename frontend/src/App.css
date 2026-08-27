@@ -563,6 +563,14 @@ button:disabled {
   gap: 8px;
 }
 
+.rail-utilities {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: auto;
+}
+
 .rail-button {
   display: inline-flex;
   position: relative;
@@ -587,6 +595,11 @@ button:disabled {
   border-color: #d2d8e1;
   color: #263241;
   background: #ffffff;
+}
+
+.rail-button:focus-visible {
+  outline: 2px solid #765400;
+  outline-offset: 2px;
 }
 
 .rail-button.has-count::after {
@@ -5627,6 +5640,10 @@ h2 {
   background: var(--workbench-surface);
 }
 
+.app-shell.is-dark .rail-button:focus-visible {
+  outline-color: #E6B84A;
+}
+
 .app-shell.is-dark .rail-button.is-active {
   border-color: transparent;
   color: #E6B84A;
@@ -5987,11 +6004,12 @@ h2 {
   }
 
   .canvas-controls {
-    right: 8px;
+    right: auto;
     bottom: max(40px, calc(env(safe-area-inset-bottom) + 24px));
-    left: 8px;
-    max-width: none;
-    transform: none;
+    left: 50%;
+    width: max-content;
+    max-width: calc(100% - 16px);
+    transform: translateX(-50%);
   }
 
   .search-panel {
@@ -6518,6 +6536,11 @@ h2 {
 }
 
 @media (forced-colors: active) {
+  .rail-button:focus-visible {
+    outline-color: Highlight;
+    forced-color-adjust: auto;
+  }
+
   .file-search-control.is-active,
   .file-tree-root-drop-zone.is-drop-target,
   .drawing-choice-group button[aria-pressed="true"],
@@ -6542,6 +6565,25 @@ h2 {
 }
 
 @media (hover: none), (pointer: coarse) {
+  .activity-rail {
+    padding-right: 2px;
+    padding-left: 2px;
+  }
+
+  .rail-button {
+    flex-basis: 44px;
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+  }
+
+  .canvas-controls > .icon-button {
+    flex-basis: 44px;
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+  }
+
   .nav-actions,
   .bookmark-toggle {
     opacity: 1;

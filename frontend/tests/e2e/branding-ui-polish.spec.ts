@@ -12,7 +12,7 @@ test("titlebar mark follows the app theme without left-edge selection accents", 
 
   const titlebarMark = page.locator(".window-titlebar-app-icon");
   const themeToggle = page.getByRole("button", { name: "Dark mode" });
-  const activeRailButton = page.locator('.rail-button[aria-pressed="true"]');
+  const activeRailButton = page.getByRole("button", { name: "File explorer" });
   const selectedFile = page.locator(".nav-item-page.is-selected").first();
 
   await expect(themeToggle).toHaveAttribute("aria-pressed", "true");

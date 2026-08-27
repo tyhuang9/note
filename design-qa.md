@@ -52,6 +52,44 @@ No actionable P0, P1, or P2 visual or interaction mismatch remains for the reque
 
 final result: passed
 
+## Canvas controls and global utilities — 2026-08-26
+
+### Verification plan
+
+- Expected behavior/success path: the floating canvas dock contains only canvas-scoped Find, Zoom out, live zoom percentage, Zoom in, Grid, and Snap controls; zoom changes in 10% steps and disables at 50%/200%; AI assistant and theme are available in a bottom-anchored global utility group in the activity rail.
+- Failure/risk paths: duplicate or missing controls, blank icons, stale memoized theme/assistant state, inaccessible focus, redundant ARIA state, lost assistant focus return, dock overflow, and controls that remain operable beyond zoom limits.
+- Automated/manual gates: TypeScript/Vite build, unit suite, branding validation, focused Playwright at desktop/compact/narrow widths, keyboard operation, disabled limit checks, light/dark rendered inspection, fresh 390px mobile inspection, and `git diff --check`.
+
+### Rendered evidence and visual findings
+
+- Dark desktop: `C:\Users\huang\AppData\Local\Temp\note-canvas-utilities-dark.png` at 1440 × 900 CSS pixels.
+- Light desktop after correction: `C:\Users\huang\AppData\Local\Temp\note-canvas-utilities-light-fixed.png` at 1440 × 900 CSS pixels.
+- Fresh narrow load: `C:\Users\huang\AppData\Local\Temp\note-canvas-utilities-mobile-fresh.png` at 390 × 844 CSS pixels.
+- Coarse-pointer narrow load: `C:\Users\huang\AppData\Local\Temp\note-canvas-utilities-mobile-touch.png` at 390 × 844 CSS pixels.
+- PASS — the bottom canvas dock remains centered, compact, and fully contained at desktop and on a fresh narrow load. The control order clearly groups zoom decrement, percentage, and increment between Find and Grid/Snap.
+- PASS — AI and theme form a separated, bottom-anchored rail group in both themes and on the narrow layout. They remain available when the explorer content panel is collapsed.
+- PASS — the narrow dock sizes to its content and remains centered. Coarse-pointer media expands every canvas and rail action to at least 44 × 44 CSS pixels while preserving the 48px rail column.
+- Initial issue found during visual inspection: the local App icon renderer accepted `minus` in its type but did not draw its path, leaving Zoom out blank. Fix: add the matching Hero-style minus path and assert both zoom buttons render a path.
+- Initial accessibility issue: inherited light-rail focus styling was below 3:1 non-text contrast. Fix: add a 2px `#765400` light focus ring, `#E6B84A` dark override, and `Highlight` forced-colors override. Keyboard Playwright coverage tabs to the assistant, verifies the ring, and opens the panel with Enter.
+- ARIA cleanup: the assistant disclosure now uses `aria-expanded` and conditionally present `aria-controls` without redundant `aria-pressed`; theme remains a pressed-state toggle.
+- Zoom feedback: the visible percentage is also an atomic polite status region, so button-driven changes are announced without moving focus.
+
+### Automated and interaction checks
+
+- PASS — `npm --prefix frontend run build`; Vite emitted only the existing >500 kB chunk advisory.
+- PASS — `npm --prefix frontend run test:unit`: 33 files / 287 tests.
+- PASS — `npm --prefix frontend run test:branding`.
+- PASS — focused Playwright: titlebar theme identity, embedded dock operation, canvas control composition/zoom limits, global utility placement/keyboard operation, coarse-pointer touch sizing/centering, compact assistant focus management, and narrow overlay exclusivity (7/7).
+- Known pre-existing behavior: the broader freehand shortcut case can fail later while creating a text editor; the relocated theme button is found and the shortcut-scope assertions before that point pass. This test is outside the changed zoom/global-utility behavior and matches the previously documented canvas-creation instability.
+- PASS — local preview at `http://127.0.0.1:4175/` returned HTTP 200 and reflected the current source through Vite hot reload.
+
+### Remaining gaps
+
+- P3/unverified: manual screen-reader announcements, physical touch hardware, and non-Chromium browsers were not exercised locally.
+- Desktop/fine-pointer controls retain the app's compact 30–32px geometry; coarse-pointer controls expand to the 44px touch target used by this branch.
+
+final result: passed
+
 ## Branding QA — 2026-08-26
 
 ### Verification plan

@@ -281,6 +281,7 @@ type DirectTextDraft = Readonly<{
 }>;
 
 type SidebarProps = {
+  assistantToggleButtonRef: Ref<HTMLButtonElement>;
   bookmarkedFolders: AppData["folders"];
   bookmarkedPages: AppData["pages"];
   editingFolderId: string | null;
@@ -288,6 +289,8 @@ type SidebarProps = {
   explorerPanelRef: Ref<HTMLDivElement>;
   folders: AppData["folders"];
   isCollapsed: boolean;
+  isAssistantOpen: boolean;
+  isDarkMode: boolean;
   isInert: boolean;
   isNarrowWorkbench: boolean;
   pageSearchFocusRequest: number;
@@ -320,6 +323,8 @@ type SidebarProps = {
   onSetEditingFolderId: (folderId: string | null) => void;
   onSetEditingPageId: (pageId: string | null) => void;
   onToggleCollapse: (trigger?: HTMLElement) => void;
+  onToggleAssistant: (trigger?: HTMLElement) => void;
+  onToggleDarkMode: () => void;
   onToggleFolderBookmark: (folderId: string) => void;
   onTogglePageBookmark: (pageId: string) => void;
   pageDropTargetFolderId: string | null;
@@ -329,11 +334,8 @@ type SidebarProps = {
 
 type PageHeaderProps = {
   activeTextEditor: Editor | null;
-  assistantToggleButtonRef: Ref<HTMLButtonElement>;
   canvasSearchButtonRef: Ref<HTMLButtonElement>;
-  isAssistantOpen: boolean;
   isGridVisible: boolean;
-  isDarkMode: boolean;
   isCanvasSearchUnavailable: boolean;
   isTextFormattingVisible: boolean;
   isSnapToGridEnabled: boolean;
@@ -341,9 +343,9 @@ type PageHeaderProps = {
   zoomLevel: number;
   onFocusCanvasSearch: (trigger?: HTMLElement | null) => void;
   onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
-  onToggleAssistant: (trigger?: HTMLElement) => void;
   onToggleGrid: () => void;
-  onToggleDarkMode: () => void;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
   onToggleSnapToGrid: () => void;
   onSetTextFontFamily: (fontFamily: TextFontFamily) => void;
   onSetTextFontSize: (fontSize: TextFontSize) => void;
@@ -864,6 +866,7 @@ function HeroIcon({ name }: Readonly<WorkbenchIconProps>) {
       {name === "moon" ? (
         <path d="M21 14.25A8.25 8.25 0 0 1 9.75 3a7.5 7.5 0 1 0 11.25 11.25Z" />
       ) : null}
+      {name === "minus" ? <path d="M5.25 12h13.5" /> : null}
       {name === "numbered-list" ? (
         <>
           <path d="M9 6.75h10.5M9 12h10.5M9 17.25h10.5" />
@@ -9065,6 +9068,7 @@ function App() {
       titleBar={<EmbeddedTitleBar Icon={HeroIcon} isDarkMode={isDarkMode} isEditingActiveTab={isEditingHeaderTitle} isExplorerCollapsed={isExplorerPresentationCollapsed} onCloseTab={closePageTab} onCreatePage={() => createPage()} onRenamePage={renamePage} onReorderTab={reorderPageTab} onSelectTab={selectPage} onSetEditingActiveTab={setIsEditingHeaderTitle} onToggleExplorer={(trigger) => toggleExplorerPresentation(trigger)} platform={desktopPlatform} selectedPageId={selectedPageId} tabs={openPages} titleSearch={{ pageId: selectedPageId, ranges: titleSearchHighlights }} toggleButtonRef={explorerToggleButtonRef} />}
     >
       <Sidebar
+        assistantToggleButtonRef={assistantToggleButtonRef}
         bookmarkedFolders={bookmarkedFolders}
         bookmarkedPages={bookmarkedPages}
         editingFolderId={editingFolderId}
@@ -9072,6 +9076,8 @@ function App() {
         explorerPanelRef={explorerPanelRef}
         folders={data.folders}
         isCollapsed={isExplorerPresentationCollapsed}
+        isAssistantOpen={shouldRenderAssistantPanel}
+        isDarkMode={isDarkMode}
         isInert={isAssistantOverlayOpen}
         isNarrowWorkbench={isNarrowWorkbench}
         pageSearchFocusRequest={pageSearchFocusRequest}
@@ -9118,6 +9124,8 @@ function App() {
         onSetEditingFolderId={setEditingFolderId}
         onSetEditingPageId={setEditingPageId}
         onToggleCollapse={toggleExplorerPresentation}
+        onToggleAssistant={toggleAssistantPanel}
+        onToggleDarkMode={() => setIsDarkMode((currentMode) => !currentMode)}
         onToggleFolderBookmark={toggleFolderBookmark}
         onTogglePageBookmark={togglePageBookmark}
         pageDropTargetFolderId={pageDropTargetFolderId}
@@ -9135,19 +9143,15 @@ function App() {
       >
         <PageHeader
           activeTextEditor={activeTextEditor}
-          assistantToggleButtonRef={assistantToggleButtonRef}
           canvasSearchButtonRef={canvasSearchButtonRef}
-          isAssistantOpen={shouldRenderAssistantPanel}
           isCanvasSearchUnavailable={isCanvasSearchUnavailable}
           isGridVisible={isGridVisible}
-          isDarkMode={isDarkMode}
           isSnapToGridEnabled={isSnapToGridEnabled}
           isTextFormattingVisible={isTextFormattingVisible}
           textFormatState={textFormatState}
           zoomLevel={zoomLevel}
           onFocusCanvasSearch={focusCanvasSearch}
           onPointerDown={handleChromePointerDown}
-          onToggleAssistant={toggleAssistantPanel}
           onToggleGrid={() =>
             setIsGridVisible((currentValue) => {
               const nextValue = !currentValue;
@@ -9159,7 +9163,8 @@ function App() {
               return nextValue;
             })
           }
-          onToggleDarkMode={() => setIsDarkMode((currentMode) => !currentMode)}
+          onZoomIn={() => updateZoom(ZOOM_STEP)}
+          onZoomOut={() => updateZoom(-ZOOM_STEP)}
           onToggleSnapToGrid={() =>
             setIsSnapToGridEnabled((currentValue) =>
               isGridVisible ? !currentValue : false,
@@ -9861,6 +9866,7 @@ function App() {
 }
 
 const Sidebar = memo(function Sidebar({
+  assistantToggleButtonRef,
   bookmarkedFolders,
   bookmarkedPages,
   editingFolderId,
@@ -9869,6 +9875,8 @@ const Sidebar = memo(function Sidebar({
   folders,
   isCollapsed,
   isInert,
+  isAssistantOpen,
+  isDarkMode,
   pageSearchFocusRequest,
   pageTemplates,
   pages,
@@ -9899,6 +9907,8 @@ const Sidebar = memo(function Sidebar({
   onSetEditingFolderId,
   onSetEditingPageId,
   onToggleCollapse,
+  onToggleAssistant,
+  onToggleDarkMode,
   onToggleFolderBookmark,
   onTogglePageBookmark,
   pageDropTargetFolderId,
@@ -10689,9 +10699,14 @@ const Sidebar = memo(function Sidebar({
     >
       <ActivityRail
         activeTab={activeSidebarTab}
+        assistantToggleButtonRef={assistantToggleButtonRef}
         bookmarkedPageCount={bookmarkedFolders.length + bookmarkedPages.length}
         Icon={HeroIcon}
+        isAssistantOpen={isAssistantOpen}
+        isDarkMode={isDarkMode}
         onSelectTab={openSidebarTab}
+        onToggleAssistant={onToggleAssistant}
+        onToggleDarkMode={onToggleDarkMode}
         templatePageCount={pageTemplates.length}
       />
 
@@ -11532,6 +11547,8 @@ function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps) {
     previous.editingPageId === next.editingPageId &&
     previous.folders === next.folders &&
     previous.isCollapsed === next.isCollapsed &&
+    previous.isAssistantOpen === next.isAssistantOpen &&
+    previous.isDarkMode === next.isDarkMode &&
     previous.isInert === next.isInert &&
     previous.isNarrowWorkbench === next.isNarrowWorkbench &&
     previous.pageSearchFocusRequest === next.pageSearchFocusRequest &&
@@ -11548,11 +11565,8 @@ function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps) {
 
 const PageHeader = memo(function PageHeader({
   activeTextEditor,
-  assistantToggleButtonRef,
   canvasSearchButtonRef,
-  isAssistantOpen,
   isGridVisible,
-  isDarkMode,
   isCanvasSearchUnavailable,
   isSnapToGridEnabled,
   isTextFormattingVisible,
@@ -11560,9 +11574,9 @@ const PageHeader = memo(function PageHeader({
   zoomLevel,
   onFocusCanvasSearch,
   onPointerDown,
-  onToggleAssistant,
   onToggleGrid,
-  onToggleDarkMode,
+  onZoomIn,
+  onZoomOut,
   onToggleSnapToGrid,
   onSetTextFontFamily,
   onSetTextFontSize,
@@ -11574,10 +11588,6 @@ const PageHeader = memo(function PageHeader({
     : isSnapToGridEnabled
       ? "Disable snap to grid"
       : "Enable snap to grid";
-  const themeToggleTitle = isDarkMode
-    ? "Switch to light mode"
-    : "Switch to dark mode";
-
   return (
     <header
       className="page-header"
@@ -11624,25 +11634,35 @@ const PageHeader = memo(function PageHeader({
             <HeroIcon name="magnifying-glass" />
           </button>
           <button
-            aria-controls="workspace-assistant-panel"
-            aria-expanded={isAssistantOpen}
-            aria-label="AI assistant"
-            aria-pressed={isAssistantOpen}
+            aria-label="Zoom out"
             className="header-toggle icon-button"
-            data-tooltip="AI assistant"
-            onClick={(event) => onToggleAssistant(event.currentTarget)}
-            ref={assistantToggleButtonRef}
+            data-tooltip="Zoom out (Ctrl+-)"
+            disabled={zoomLevel <= MIN_ZOOM}
+            onClick={onZoomOut}
             type="button"
           >
-            <HeroIcon name="sparkles" />
+            <HeroIcon name="minus" />
           </button>
           <span
+            aria-atomic="true"
             aria-label={`Zoom ${Math.round(zoomLevel * 100)}%`}
+            aria-live="polite"
             className="zoom-indicator"
             data-tooltip="Zoom level"
+            role="status"
           >
             {Math.round(zoomLevel * 100)}%
           </span>
+          <button
+            aria-label="Zoom in"
+            className="header-toggle icon-button"
+            data-tooltip="Zoom in (Ctrl++)"
+            disabled={zoomLevel >= MAX_ZOOM}
+            onClick={onZoomIn}
+            type="button"
+          >
+            <HeroIcon name="plus" />
+          </button>
           <button
             aria-label="Grid"
             aria-pressed={isGridVisible}
@@ -11663,16 +11683,6 @@ const PageHeader = memo(function PageHeader({
             type="button"
           >
             <HeroIcon name="adjustments-horizontal" />
-          </button>
-          <button
-            aria-label="Dark mode"
-            aria-pressed={isDarkMode}
-            className="theme-toggle icon-button"
-            data-tooltip={themeToggleTitle}
-            onClick={onToggleDarkMode}
-            type="button"
-          >
-            <HeroIcon name={isDarkMode ? "sun" : "moon"} />
           </button>
         </div>
       </div>
@@ -11878,9 +11888,7 @@ function GlobalTextToolbar({
 function arePageHeaderPropsEqual(previous: PageHeaderProps, next: PageHeaderProps) {
   return (
     previous.activeTextEditor === next.activeTextEditor &&
-    previous.isAssistantOpen === next.isAssistantOpen &&
     previous.isGridVisible === next.isGridVisible &&
-    previous.isDarkMode === next.isDarkMode &&
     previous.isCanvasSearchUnavailable === next.isCanvasSearchUnavailable &&
     previous.isSnapToGridEnabled === next.isSnapToGridEnabled &&
     previous.isTextFormattingVisible === next.isTextFormattingVisible &&

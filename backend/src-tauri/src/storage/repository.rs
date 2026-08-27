@@ -2586,16 +2586,13 @@ fn retry_asset_cleanup(root: &Path) -> Result<(), String> {
                 fs::rename(&source, &staged_path)
                     .map_err(|e| format!("stage purged asset: {e}"))?;
             }
-            if let Err(error) = transaction.execute("DELETE FROM assets WHERE id=?", [&id]) {
-                if staged_path.exists() && !source.exists() {
-                    let _ = fs::rename(&staged_path, &source);
-                }
-                return Err(format!("delete purged asset metadata: {error}"));
-            }
             if staged_path.exists() {
                 fs::remove_file(&staged_path)
                     .map_err(|e| format!("remove staged purged asset: {e}"))?;
             }
+            transaction
+                .execute("DELETE FROM assets WHERE id=?", [&id])
+                .map_err(|e| format!("delete purged asset metadata: {e}"))?;
             transaction
                 .execute("DELETE FROM asset_cleanup_journal WHERE asset_id=?", [&id])
                 .map_err(|e| e.to_string())?;
@@ -5654,6 +5651,7 @@ mod tests {
         let valid_asset = save_test_asset(directory.path(), "valid.png");
         let malformed_file = asset_file(directory.path(), &malformed_asset.id);
         let valid_file = asset_file(directory.path(), &valid_asset.id);
+        let malformed_relative = malformed_file.file_name().unwrap().to_string_lossy().into_owned();
         let valid_relative = valid_file.file_name().unwrap().to_string_lossy().into_owned();
         let connection = database::open(&directory.path().join("note.db")).unwrap();
         connection
@@ -5706,6 +5704,17 @@ mod tests {
             0
         );
         assert!(load_asset_at(directory.path(), &valid_asset.id).is_err());
+        connection
+            .execute(
+                "UPDATE asset_cleanup_journal SET relative_path=? WHERE asset_id=?",
+                params![malformed_relative, &malformed_asset.id],
+            )
+            .unwrap();
+        drop(connection);
+
+        retry_asset_cleanup(directory.path()).unwrap();
+        assert!(!malformed_file.exists());
+        assert!(load_asset_at(directory.path(), &malformed_asset.id).is_err());
     }
 
     #[test]

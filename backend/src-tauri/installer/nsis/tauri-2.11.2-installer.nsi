@@ -76,6 +76,9 @@ Var RemoveOnlyMode
 Var MaintenanceDetected
 Var MaintenanceInstalledVersion
 Var MaintenanceVersionComparison
+Var MaintenanceInstallPath
+Var MaintenanceUninstallerPath
+Var MaintenanceUninstallerTrusted
 
 Name "${PRODUCTNAME}"
 BrandingText "${COPYRIGHT}"
@@ -241,6 +244,19 @@ Function PageReinstall
     Pop $R3
     ${NSD_OnClick} $R3 PageReinstallUpdateSelection
 
+    ; Repair and Update can recover a missing/corrupt uninstaller in place.
+    ; Remove is available only when the known uninstaller path and command
+    ; exactly match the registered Note installation.
+    ${If} $MaintenanceUninstallerTrusted <> 1
+      ${If} $R0 = -1
+        ${NSD_SetText} $R2 "Remove unavailable — repair Note first"
+        EnableWindow $R2 0
+      ${Else}
+        ${NSD_SetText} $R3 "Remove unavailable — repair Note first"
+        EnableWindow $R3 0
+      ${EndIf}
+    ${EndIf}
+
     ; Default to Cancel when a newer version is installed. For all other
     ; maintenance actions, retain the upstream first-choice default.
     ${If} $R0 = -1
@@ -308,32 +324,40 @@ Function PageLeaveReinstall
     ${If} $R1 = 1              ; User chose to repair
       Goto reinst_done
     ${Else}                    ; User chose to remove
-      StrCpy $RemoveOnlyMode 1
-      Goto reinst_uninstall
+      Goto request_remove
     ${EndIf}
   ${ElseIf} $R0 = 1 ; Upgrading
     ${If} $R1 = 1              ; User chose to update
       StrCpy $UpdateMode 1
-      Goto reinst_uninstall
+      ${If} $MaintenanceUninstallerTrusted = 1
+        Goto reinst_uninstall
+      ${Else}
+        Goto reinst_done
+      ${EndIf}
     ${Else}
-      StrCpy $RemoveOnlyMode 1 ; User chose to remove
-      Goto reinst_uninstall
+      Goto request_remove       ; User chose to remove
     ${EndIf}
   ${ElseIf} $R0 = -1 ; Downgrading
     ${If} $R1 = 1              ; User chose to remove
-      StrCpy $RemoveOnlyMode 1
-      Goto reinst_uninstall
+      Goto request_remove
     ${Else}
       Quit                     ; User chose to cancel setup
     ${EndIf}
   ${EndIf}
 
+  request_remove:
+    ${If} $MaintenanceUninstallerTrusted <> 1
+      Call RefuseRemove
+      Abort
+    ${EndIf}
+    StrCpy $RemoveOnlyMode 1
+
   reinst_uninstall:
     HideWindow
     ClearErrors
 
-    ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""
-    ReadRegStr $R1 SHCTX "${UNINSTKEY}" "UninstallString"
+    StrCpy $4 $MaintenanceInstallPath
+    StrCpy $R1 "$\"$MaintenanceUninstallerPath$\""
     ${IfThen} $UpdateMode = 1 ${|} StrCpy $R1 "$R1 /UPDATE" ${|} ; append /UPDATE
     ${IfThen} $PassiveMode = 1 ${|} StrCpy $R1 "$R1 /P" ${|} ; append /P
     StrCpy $R1 "$R1 _?=$4" ; append uninstall directory
@@ -473,16 +497,39 @@ Function DetectExistingInstall
   StrCpy $MaintenanceDetected 0
   StrCpy $MaintenanceInstalledVersion ""
   StrCpy $MaintenanceVersionComparison 2
+  StrCpy $MaintenanceInstallPath ""
+  StrCpy $MaintenanceUninstallerPath ""
+  StrCpy $MaintenanceUninstallerTrusted 0
 
-  ReadRegStr $0 SHCTX "${UNINSTKEY}" "UninstallString"
-  ${IfThen} $0 == "" ${|} Return ${|}
+  ReadRegStr $0 SHCTX "${UNINSTKEY}" "DisplayName"
+  ${IfThen} $0 != "${PRODUCTNAME}" ${|} Return ${|}
+  ReadRegStr $0 SHCTX "${UNINSTKEY}" "Publisher"
+  ${IfThen} $0 != "${MANUFACTURER}" ${|} Return ${|}
+
+  ReadRegStr $MaintenanceInstallPath SHCTX "${MANUPRODUCTKEY}" ""
+  ${IfThen} $MaintenanceInstallPath == "" ${|} Return ${|}
+  GetFullPathName $MaintenanceInstallPath "$MaintenanceInstallPath"
+  ${StrCase} $0 $MaintenanceInstallPath "U"
+  ${StrCase} $1 "$LOCALAPPDATA\" "U"
+  StrLen $2 $1
+  StrCpy $3 $0 $2
+  ${IfThen} $3 != $1 ${|} Return ${|}
+  StrCpy $3 $0 1 $2
+  ${IfThen} $3 == "" ${|} Return ${|}
 
   StrCpy $MaintenanceDetected 1
   ReadRegStr $MaintenanceInstalledVersion SHCTX "${UNINSTKEY}" "DisplayVersion"
-  ${IfThen} $MaintenanceInstalledVersion == "" ${|} Return ${|}
+  ${If} $MaintenanceInstalledVersion != ""
+    nsis_tauri_utils::SemverCompare "${VERSION}" $MaintenanceInstalledVersion
+    Pop $MaintenanceVersionComparison
+  ${EndIf}
 
-  nsis_tauri_utils::SemverCompare "${VERSION}" $MaintenanceInstalledVersion
-  Pop $MaintenanceVersionComparison
+  StrCpy $MaintenanceUninstallerPath "$MaintenanceInstallPath\uninstall.exe"
+  ReadRegStr $0 SHCTX "${UNINSTKEY}" "UninstallString"
+  ${If} $0 == "$\"$MaintenanceUninstallerPath$\""
+  ${AndIf} ${FileExists} "$MaintenanceUninstallerPath"
+    StrCpy $MaintenanceUninstallerTrusted 1
+  ${EndIf}
 FunctionEnd
 
 Section EarlyChecks
@@ -848,9 +895,14 @@ Section Uninstall
 SectionEnd
 
 Function RestorePreviousInstallLocation
-  ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""
-  StrCmp $4 "" +2 0
-    StrCpy $INSTDIR $4
+  Call DetectExistingInstall
+  ${If} $MaintenanceDetected = 1
+    StrCpy $INSTDIR $MaintenanceInstallPath
+  ${EndIf}
+FunctionEnd
+
+Function RefuseRemove
+  MessageBox MB_ICONEXCLAMATION "Note cannot safely remove this installation because its uninstaller is missing or does not match the registered install path. Choose Repair or Update to recreate it, then run Remove again."
 FunctionEnd
 
 Function Skip

@@ -23,6 +23,7 @@ export interface ActivityRailProps {
   readonly onToggleAssistant: (trigger: HTMLButtonElement) => void;
   readonly onToggleDarkMode: () => void;
   readonly templatePageCount: number;
+  readonly trashToggleButtonRef: Ref<HTMLButtonElement>;
   readonly trashEntryCount: number;
 }
 
@@ -37,6 +38,7 @@ export const ActivityRail = memo(function ActivityRail({
   onToggleAssistant,
   onToggleDarkMode,
   templatePageCount,
+  trashToggleButtonRef,
   trashEntryCount,
 }: Readonly<ActivityRailProps>) {
   const themeToggleTitle = isDarkMode
@@ -103,6 +105,7 @@ export const ActivityRail = memo(function ActivityRail({
           aria-label={`${trashEntryCount} items in Trash`}
           aria-pressed={activeTab === "trash"}
           onClick={(event) => onSelectTab("trash", event.currentTarget)}
+          ref={trashToggleButtonRef}
           title="Trash"
         >
           <Icon name="archive-box" />

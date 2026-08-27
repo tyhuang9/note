@@ -283,6 +283,7 @@ type DirectTextDraft = Readonly<{
 
 type SidebarProps = {
   assistantToggleButtonRef: Ref<HTMLButtonElement>;
+  trashRailButtonRef: Ref<HTMLButtonElement>;
   bookmarkedFolders: AppData["folders"];
   bookmarkedPages: AppData["pages"];
   editingFolderId: string | null;
@@ -1370,6 +1371,7 @@ function applyFormatStateToBlock(
 function App() {
   const [data, setData] = useState<AppData>(emptyData);
   const [trashEntries, setTrashEntries] = useState<TrashEntry[]>([]);
+  const [trashAnnouncement, setTrashAnnouncement] = useState("");
   const [selectedFolderId, setSelectedFolderId] = useState("");
   const [selectedPageId, setSelectedPageIdState] = useState("");
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
@@ -1486,6 +1488,7 @@ function App() {
   const searchReturnFocusRef = useRef<HTMLElement | null>(null);
   const explorerPanelRef = useRef<HTMLDivElement | null>(null);
   const explorerToggleButtonRef = useRef<HTMLButtonElement | null>(null);
+  const trashRailButtonRef = useRef<HTMLButtonElement | null>(null);
   const assistantPanelRef = useRef<HTMLElement | null>(null);
   const assistantToggleButtonRef = useRef<HTMLButtonElement | null>(null);
   const overlayReturnFocusRef = useRef<HTMLElement | null>(null);
@@ -4324,20 +4327,25 @@ function App() {
   }
 
   async function deleteFolder(folderId: string) {
+    const folderName = dataRef.current.folders.find((folder) => folder.id === folderId)?.name ?? "folder";
     try {
       await flushPendingPersistence();
       const repository = repositoryRef.current;
       if (repository) {
         await repository.moveFolderToTrash(folderId);
-        setTrashEntries(await repository.listTrash());
+        const nextTrashEntries = await repository.listTrash();
+        setTrashEntries(nextTrashEntries);
+        setTrashAnnouncement(`Moved ${folderName} to Trash. ${nextTrashEntries.length} items remain in Trash.`);
       } else {
         const folder = dataRef.current.folders.find((candidate) => candidate.id === folderId);
         if (folder) {
           setTrashEntries((entries) => [{ id: folder.id, kind: "folder", name: folder.name, trashedAt: Date.now() }, ...entries]);
+          setTrashAnnouncement(`Moved ${folder.name} to Trash.`);
         }
       }
     } catch (error) {
       setPersistenceStatus({ kind: "failed", error: error instanceof Error ? error : new Error(String(error)) });
+      setTrashAnnouncement(`Could not move ${folderName} to Trash.`);
       return;
     }
     setData((currentData) => {
@@ -5742,7 +5750,9 @@ function App() {
       }
       dataRef.current = nextData;
       setData(nextData);
-      setTrashEntries(await repository.listTrash());
+      const nextTrashEntries = await repository.listTrash();
+      setTrashEntries(nextTrashEntries);
+      setTrashAnnouncement(`Restored ${entry.name}. ${nextTrashEntries.length} items remain in Trash.`);
 
       const restoredPage = entry.kind === "page"
         ? nextData.pages.find((page) => page.id === entry.id)
@@ -5753,8 +5763,15 @@ function App() {
       setSelectedFolderId(selectedFolderIdRef.current);
       setSelectedPageId(selectedPageIdRef.current);
       setSidebarPageSelection(selectedPageIdRef.current ? [selectedPageIdRef.current] : []);
+      window.requestAnimationFrame(() => {
+        const nextRestore = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-trash-restore]"))
+          .find((button) => button.isConnected && button.getClientRects().length > 0);
+        const emptyTrash = document.querySelector<HTMLButtonElement>("[data-empty-trash]");
+        (nextRestore ?? (emptyTrash?.disabled ? null : emptyTrash) ?? trashRailButtonRef.current ?? document.getElementById("trash-title"))?.focus();
+      });
     } catch (error) {
       setPersistenceStatus({ kind: "failed", error: error instanceof Error ? error : new Error(String(error)) });
+      setTrashAnnouncement(`Could not restore ${entry.name}.`);
     }
   }
 
@@ -5776,8 +5793,13 @@ function App() {
       }
       await repository.purgeTrash(preview);
       setTrashEntries(await repository.listTrash());
+      setTrashAnnouncement(`Permanently deleted ${preview.folderCount} folders, ${preview.pageCount} pages, and ${preview.elementCount} canvas elements.`);
+      window.requestAnimationFrame(() => {
+        (trashRailButtonRef.current ?? document.getElementById("trash-title"))?.focus();
+      });
     } catch (error) {
       setPersistenceStatus({ kind: "failed", error: error instanceof Error ? error : new Error(String(error)) });
+      setTrashAnnouncement("Could not empty Trash.");
     }
   }
 
@@ -5898,20 +5920,30 @@ function App() {
   }
 
   async function deletePage(pageId: string) {
+    const pageToTrash = dataRef.current.pages.find((page) => page.id === pageId);
+    const pageName = pageToTrash?.title ?? "page";
+    const siblingPages = dataRef.current.pages.filter((page) => page.folderId === pageToTrash?.folderId && !isTemplatePage(page));
+    const pageIndex = siblingPages.findIndex((page) => page.id === pageId);
+    const successorPageId = siblingPages[pageIndex + 1]?.id ?? siblingPages[pageIndex - 1]?.id ?? null;
+    const parentFolderId = pageToTrash?.folderId ?? null;
     try {
       await flushPendingPersistence();
       const repository = repositoryRef.current;
       if (repository) {
         await repository.movePageToTrash(pageId);
-        setTrashEntries(await repository.listTrash());
+        const nextTrashEntries = await repository.listTrash();
+        setTrashEntries(nextTrashEntries);
+        setTrashAnnouncement(`Moved ${pageName} to Trash. ${nextTrashEntries.length} items remain in Trash.`);
       } else {
         const page = dataRef.current.pages.find((candidate) => candidate.id === pageId);
         if (page) {
           setTrashEntries((entries) => [{ id: page.id, kind: "page", name: page.title, trashedAt: Date.now() }, ...entries]);
+          setTrashAnnouncement(`Moved ${page.title} to Trash.`);
         }
       }
     } catch (error) {
       setPersistenceStatus({ kind: "failed", error: error instanceof Error ? error : new Error(String(error)) });
+      setTrashAnnouncement(`Could not move ${pageName} to Trash.`);
       return;
     }
     setData((currentData) => {
@@ -5952,6 +5984,16 @@ function App() {
         pages: nextPages,
         elements: currentData.elements.filter((block) => block.pageId !== pageId),
       };
+    });
+    window.requestAnimationFrame(() => {
+      const successorAction = successorPageId
+        ? Array.from(document.querySelectorAll<HTMLButtonElement>("[data-page-trash-action]"))
+          .find((button) => button.dataset.pageTrashAction === successorPageId && button.getClientRects().length > 0)
+        : null;
+      const parentControl = parentFolderId
+        ? document.querySelector<HTMLButtonElement>(`.folder-menu-trigger[data-folder-id="${CSS.escape(parentFolderId)}"]`)
+        : null;
+      (successorAction ?? parentControl ?? explorerPanelRef.current)?.focus();
     });
   }
 
@@ -9174,6 +9216,7 @@ function App() {
     >
       <Sidebar
         assistantToggleButtonRef={assistantToggleButtonRef}
+        trashRailButtonRef={trashRailButtonRef}
         bookmarkedFolders={bookmarkedFolders}
         bookmarkedPages={bookmarkedPages}
         editingFolderId={editingFolderId}
@@ -9240,6 +9283,9 @@ function App() {
         draggedPageIds={draggedPageIds}
         selectedPageIds={selectedSidebarPageIds}
       />
+      <div aria-atomic="true" aria-live="polite" className="canvas-accessibility-status" data-trash-announcement role="status">
+        {trashAnnouncement}
+      </div>
 
       <section
         className={`workspace ${isTextFormattingVisible ? "has-text-formatting" : ""} ${isShapeTextEditing ? "is-shape-text-editing" : ""} ${isPropertiesPanelOpen && availableDrawingPropertiesContext ? "has-compact-properties" : ""}`}
@@ -9975,6 +10021,7 @@ function App() {
 
 const Sidebar = memo(function Sidebar({
   assistantToggleButtonRef,
+  trashRailButtonRef,
   bookmarkedFolders,
   bookmarkedPages,
   editingFolderId,
@@ -10819,6 +10866,7 @@ const Sidebar = memo(function Sidebar({
         onToggleAssistant={onToggleAssistant}
         onToggleDarkMode={onToggleDarkMode}
         templatePageCount={pageTemplates.length}
+        trashToggleButtonRef={trashRailButtonRef}
         trashEntryCount={trashEntries.length}
       />
 
@@ -11284,6 +11332,7 @@ const Sidebar = memo(function Sidebar({
                                 <button
                                   type="button"
                                   aria-label={`Move ${page.title} to Trash`}
+                                  data-page-trash-action={page.id}
                                   onClick={(event) => {
                                     event.stopPropagation();
                                     onDeletePage(page.id);
@@ -11471,6 +11520,7 @@ const Sidebar = memo(function Sidebar({
                                     <button
                                       type="button"
                                       aria-label={`Move ${page.title} to Trash`}
+                                      data-page-trash-action={page.id}
                                       onClick={(event) => {
                                         event.stopPropagation();
                                         onDeletePage(page.id);
@@ -11607,10 +11657,11 @@ const Sidebar = memo(function Sidebar({
               aria-labelledby="trash-title"
             >
               <div className="section-header">
-                <h2 id="trash-title">Trash</h2>
+                <h2 id="trash-title" tabIndex={-1}>Trash</h2>
                 <button
                   aria-label="Empty Trash"
                   className="section-action"
+                  data-empty-trash
                   disabled={trashEntries.length === 0}
                   onClick={onEmptyTrash}
                   title="Permanently delete everything in Trash"
@@ -11620,9 +11671,9 @@ const Sidebar = memo(function Sidebar({
                 </button>
               </div>
               {trashEntries.length > 0 ? (
-                <div className="nav-list" aria-label="Trashed items">
+                <ul className="nav-list trash-list" aria-label="Trashed items">
                   {trashEntries.map((entry) => (
-                    <div className="nav-item nav-item-template" key={`${entry.kind}-${entry.id}`}>
+                    <li className="nav-item nav-item-template" key={`${entry.kind}-${entry.id}`}>
                       <span className="file-row-icon">
                         <HeroIcon name={entry.kind === "folder" ? "folder" : "document-text"} />
                       </span>
@@ -11631,6 +11682,7 @@ const Sidebar = memo(function Sidebar({
                       <span className="nav-actions">
                         <button
                           aria-label={`Restore ${entry.name}`}
+                          data-trash-restore
                           onClick={() => onRestoreTrashEntry(entry)}
                           title={`Restore ${entry.name}`}
                           type="button"
@@ -11638,9 +11690,9 @@ const Sidebar = memo(function Sidebar({
                           <HeroIcon name="check" />
                         </button>
                       </span>
-                    </div>
+                    </li>
                   ))}
-                </div>
+                </ul>
               ) : (
                 <p className="sidebar-placeholder">Trash is empty</p>
               )}

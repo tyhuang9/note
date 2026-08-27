@@ -50,6 +50,8 @@ pub struct TrashPurgePreview {
     pub folder_count: i64,
     pub page_count: i64,
     pub element_count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cleanup_warning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

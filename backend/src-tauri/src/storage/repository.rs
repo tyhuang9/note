@@ -2454,6 +2454,7 @@ SELECT
         folder_count,
         page_count,
         element_count,
+        cleanup_warning: None,
     })
 }
 
@@ -2519,7 +2520,7 @@ fn retry_asset_cleanup(root: &Path) -> Result<(), String> {
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
     let entries: Vec<(String, String, String)> = transaction
-        .prepare("SELECT asset_id,relative_path,staged_path FROM asset_cleanup_journal")
+        .prepare("SELECT asset_id,relative_path,staged_path FROM asset_cleanup_journal ORDER BY rowid")
         .map_err(|e| e.to_string())?
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
         .map_err(|e| e.to_string())?
@@ -2543,60 +2544,73 @@ fn retry_asset_cleanup(root: &Path) -> Result<(), String> {
         })
         .collect();
     let assets_dir = root.join("assets");
+    let mut warnings = Vec::new();
     for (id, relative, staged) in entries {
-        let relative = cleanup_path_component(&relative, "relative path")?;
-        let staged = cleanup_path_component(&staged, "staged path")?;
-        let parsed_id =
-            uuid::Uuid::parse_str(&id).map_err(|_| "invalid asset cleanup id".to_owned())?;
-        if staged != format!(".purging-{parsed_id}") {
-            return Err("invalid asset cleanup staged path".into());
-        }
-        let authoritative: Option<(String, String)> = transaction
-            .query_row(
-                "SELECT relative_path,media_type FROM assets WHERE id=?",
-                [&id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()
-            .map_err(|error| error.to_string())?;
-        let (authoritative_relative, media_type) =
-            authoritative.ok_or_else(|| "asset cleanup metadata is unavailable".to_owned())?;
-        if relative != authoritative_relative {
-            return Err("asset cleanup path does not match authoritative asset metadata".into());
-        }
-        validate_managed_cleanup_path(parsed_id, &relative, &media_type)?;
-        if live.contains(&id) {
+        let cleanup = (|| -> Result<(), String> {
+            let relative = cleanup_path_component(&relative, "relative path")?;
+            let staged = cleanup_path_component(&staged, "staged path")?;
+            let parsed_id = uuid::Uuid::parse_str(&id)
+                .map_err(|_| "invalid asset cleanup id".to_owned())?;
+            if staged != format!(".purging-{parsed_id}") {
+                return Err("invalid asset cleanup staged path".into());
+            }
+            let authoritative: Option<(String, String)> = transaction
+                .query_row(
+                    "SELECT relative_path,media_type FROM assets WHERE id=?",
+                    [&id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map_err(|error| error.to_string())?;
+            let (authoritative_relative, media_type) = authoritative
+                .ok_or_else(|| "asset cleanup metadata is unavailable".to_owned())?;
+            if relative != authoritative_relative {
+                return Err("asset cleanup path does not match authoritative asset metadata".into());
+            }
+            validate_managed_cleanup_path(parsed_id, &relative, &media_type)?;
+            if live.contains(&id) {
+                let source = assets_dir.join(&relative);
+                let staged_path = assets_dir.join(&staged);
+                if staged_path.exists() && !source.exists() {
+                    fs::rename(&staged_path, &source)
+                        .map_err(|e| format!("restore live asset staged for cleanup: {e}"))?;
+                }
+                transaction
+                    .execute("DELETE FROM asset_cleanup_journal WHERE asset_id=?", [&id])
+                    .map_err(|e| e.to_string())?;
+                return Ok(());
+            }
             let source = assets_dir.join(&relative);
             let staged_path = assets_dir.join(&staged);
-            if staged_path.exists() && !source.exists() {
-                fs::rename(&staged_path, &source)
-                    .map_err(|e| format!("restore live asset staged for cleanup: {e}"))?;
+            if source.exists() && !staged_path.exists() {
+                fs::rename(&source, &staged_path)
+                    .map_err(|e| format!("stage purged asset: {e}"))?;
+            }
+            if let Err(error) = transaction.execute("DELETE FROM assets WHERE id=?", [&id]) {
+                if staged_path.exists() && !source.exists() {
+                    let _ = fs::rename(&staged_path, &source);
+                }
+                return Err(format!("delete purged asset metadata: {error}"));
+            }
+            if staged_path.exists() {
+                fs::remove_file(&staged_path)
+                    .map_err(|e| format!("remove staged purged asset: {e}"))?;
             }
             transaction
                 .execute("DELETE FROM asset_cleanup_journal WHERE asset_id=?", [&id])
                 .map_err(|e| e.to_string())?;
-            continue;
+            Ok(())
+        })();
+        if let Err(error) = cleanup {
+            warnings.push(format!("{id}: {error}"));
         }
-        let source = assets_dir.join(&relative);
-        let staged_path = assets_dir.join(&staged);
-        if source.exists() && !staged_path.exists() {
-            fs::rename(&source, &staged_path).map_err(|e| format!("stage purged asset: {e}"))?;
-        }
-        if let Err(error) = transaction.execute("DELETE FROM assets WHERE id=?", [&id]) {
-            if staged_path.exists() && !source.exists() {
-                let _ = fs::rename(&staged_path, &source);
-            }
-            return Err(format!("delete purged asset metadata: {error}"));
-        }
-        if staged_path.exists() {
-            fs::remove_file(&staged_path)
-                .map_err(|e| format!("remove staged purged asset: {e}"))?;
-        }
-        transaction
-            .execute("DELETE FROM asset_cleanup_journal WHERE asset_id=?", [&id])
-            .map_err(|e| e.to_string())?;
     }
-    transaction.commit().map_err(|error| error.to_string())
+    transaction.commit().map_err(|error| error.to_string())?;
+    if warnings.is_empty() {
+        Ok(())
+    } else {
+        Err(warnings.join("; "))
+    }
 }
 
 pub fn trash_purge_preview_at(root: &Path) -> Result<TrashPurgePreview, String> {
@@ -2724,7 +2738,7 @@ pub fn purge_trash_at(
         }
     }
     transaction.commit().map_err(|error| error.to_string())?;
-    retry_asset_cleanup(root)?;
+    preview.cleanup_warning = retry_asset_cleanup(root).err();
     preview.confirmation_token = request.confirmation_token;
     Ok(preview)
 }
@@ -5630,6 +5644,113 @@ mod tests {
             .unwrap_err()
             .contains("relative path"));
         assert!(asset_file(directory.path(), &asset.id).exists());
+    }
+
+    #[test]
+    fn deferred_cleanup_continues_after_a_malformed_journal_entry() {
+        let directory = root();
+        initialize_storage_at(directory.path()).unwrap();
+        let malformed_asset = save_test_asset(directory.path(), "malformed.png");
+        let valid_asset = save_test_asset(directory.path(), "valid.png");
+        let malformed_file = asset_file(directory.path(), &malformed_asset.id);
+        let valid_file = asset_file(directory.path(), &valid_asset.id);
+        let valid_relative = valid_file.file_name().unwrap().to_string_lossy().into_owned();
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO asset_cleanup_journal(asset_id,relative_path,staged_path) VALUES(?,?,?)",
+                params![
+                    &malformed_asset.id,
+                    "../note.db",
+                    format!(".purging-{}", malformed_asset.id)
+                ],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO asset_cleanup_journal(asset_id,relative_path,staged_path) VALUES(?,?,?)",
+                params![
+                    &valid_asset.id,
+                    valid_relative,
+                    format!(".purging-{}", valid_asset.id)
+                ],
+            )
+            .unwrap();
+        drop(connection);
+
+        assert!(retry_asset_cleanup(directory.path())
+            .unwrap_err()
+            .contains("relative path"));
+        assert!(malformed_file.exists());
+        assert!(!valid_file.exists());
+
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM asset_cleanup_journal WHERE asset_id=?",
+                    [&malformed_asset.id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM asset_cleanup_journal WHERE asset_id=?",
+                    [&valid_asset.id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            0
+        );
+        assert!(load_asset_at(directory.path(), &valid_asset.id).is_err());
+    }
+
+    #[test]
+    fn purge_succeeds_when_deferred_asset_cleanup_reports_a_warning() {
+        let directory = root();
+        seed_page(directory.path());
+        let asset = save_test_asset(directory.path(), "retry.png");
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO asset_cleanup_journal(asset_id,relative_path,staged_path) VALUES(?,?,?)",
+                params![
+                    &asset.id,
+                    "../note.db",
+                    format!(".purging-{}", asset.id)
+                ],
+            )
+            .unwrap();
+        drop(connection);
+        trash_page_at(directory.path(), "p").unwrap();
+        let preview = trash_purge_preview_at(directory.path()).unwrap();
+
+        let result = purge_trash_at(directory.path(), purge_request(&preview)).unwrap();
+
+        assert!(result
+            .cleanup_warning
+            .as_deref()
+            .is_some_and(|warning| warning.contains("relative path")));
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM pages WHERE id='p'", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM asset_cleanup_journal WHERE asset_id=?",
+                    [&asset.id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
     }
 
     #[test]

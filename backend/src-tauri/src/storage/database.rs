@@ -1,7 +1,7 @@
 use rusqlite::{Connection, OpenFlags};
 use std::{path::Path, time::Duration};
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 pub fn open(path: &Path) -> Result<Connection, String> {
     if let Some(parent) = path.parent() {
@@ -64,6 +64,24 @@ PRAGMA user_version=2;
         tx.commit()
             .map_err(|e| format!("commit migration 2: {e}"))?;
     }
+    if current < 3 {
+        let tx = connection.transaction().map_err(|e| e.to_string())?;
+        tx.execute_batch(
+            r#"
+ALTER TABLE folders ADD COLUMN lifecycle TEXT NOT NULL DEFAULT 'active' CHECK(lifecycle IN ('active','trashed'));
+ALTER TABLE folders ADD COLUMN trashed_at INTEGER;
+ALTER TABLE pages ADD COLUMN lifecycle TEXT NOT NULL DEFAULT 'active' CHECK(lifecycle IN ('active','trashed'));
+ALTER TABLE pages ADD COLUMN trashed_at INTEGER;
+CREATE INDEX folders_lifecycle_idx ON folders(lifecycle);
+CREATE INDEX pages_lifecycle_idx ON pages(lifecycle);
+INSERT INTO schema_migrations(version,applied_at) VALUES(3,unixepoch('subsec')*1000);
+PRAGMA user_version=3;
+"#,
+        )
+        .map_err(|e| format!("apply migration 3: {e}"))?;
+        tx.commit()
+            .map_err(|e| format!("commit migration 3: {e}"))?;
+    }
     Ok(SCHEMA_VERSION)
 }
 
@@ -80,6 +98,7 @@ mod tests {
 CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
 CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE folders(id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL);
+CREATE TABLE pages(id TEXT PRIMARY KEY NOT NULL, folder_id TEXT NOT NULL, title TEXT NOT NULL, is_bookmarked INTEGER NOT NULL DEFAULT 0, revision INTEGER NOT NULL DEFAULT 0);
 INSERT INTO folders(id,name) VALUES('folder','Folder');
 INSERT INTO schema_migrations(version,applied_at) VALUES(1,0);
 PRAGMA user_version=1;
@@ -87,7 +106,7 @@ PRAGMA user_version=1;
             )
             .unwrap();
 
-        assert_eq!(migrate(&mut connection).unwrap(), 2);
+        assert_eq!(migrate(&mut connection).unwrap(), 3);
         assert_eq!(
             connection
                 .query_row(
@@ -108,7 +127,32 @@ PRAGMA user_version=1;
             connection
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            2,
+            3,
         );
+    }
+
+    #[test]
+    fn migration_three_marks_existing_rows_active() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(r#"
+CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE folders(id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, is_bookmarked INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE pages(id TEXT PRIMARY KEY NOT NULL, folder_id TEXT NOT NULL, title TEXT NOT NULL, is_bookmarked INTEGER NOT NULL DEFAULT 0, revision INTEGER NOT NULL DEFAULT 0);
+INSERT INTO folders(id,name) VALUES('folder','Folder');
+INSERT INTO pages(id,folder_id,title) VALUES('page','folder','Page');
+INSERT INTO schema_migrations(version,applied_at) VALUES(2,0);
+PRAGMA user_version=2;
+"#).unwrap();
+
+        migrate(&mut connection).unwrap();
+        let rows: Vec<(String, Option<i64>)> = connection
+            .prepare("SELECT lifecycle,trashed_at FROM pages")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(rows, vec![("active".into(), None)]);
     }
 }

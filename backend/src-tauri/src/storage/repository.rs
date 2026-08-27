@@ -2,7 +2,12 @@ use super::{assets, database, legacy_import, models::*};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 use serde_json::Value;
-use std::{collections::HashMap, io::Write, path::Path};
+use std::{
+    collections::HashMap,
+    io::Write,
+    path::Path,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 /// These folders are real rows solely to satisfy the page foreign key. They
 /// are not user folders and are filtered from the workspace DTO.
@@ -27,6 +32,14 @@ const MAX_RICH_TEXT_ATTRIBUTE_BYTES: usize = 12 * 1024 * 1024;
 const MIN_VISUAL_RECTANGLE_ROUNDNESS: f64 = 0.06;
 const DIAMOND_CORNER_INSET: f64 = 0.08;
 const RAY_INTERSECTION_TOLERANCE: f64 = 1e-12;
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(i64::MAX as u128) as i64
+}
 
 struct PayloadLimitWriter {
     bytes_written: usize,
@@ -2130,7 +2143,7 @@ pub fn load_workspace_data_at(root: &Path) -> Result<WorkspaceData, String> {
     let folders = {
         let mut s = c
             .prepare(
-                "SELECT id,name,is_bookmarked FROM folders WHERE id NOT IN (?,?) ORDER BY rowid",
+                "SELECT id,name,is_bookmarked,lifecycle,trashed_at FROM folders WHERE id NOT IN (?,?) AND lifecycle='active' ORDER BY rowid",
             )
             .map_err(|e| e.to_string())?;
         let rows = s
@@ -2139,6 +2152,8 @@ pub fn load_workspace_data_at(root: &Path) -> Result<WorkspaceData, String> {
                     id: r.get(0)?,
                     name: r.get(1)?,
                     is_bookmarked: r.get::<_, i64>(2)? != 0,
+                    lifecycle: r.get(3)?,
+                    trashed_at: r.get(4)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -2147,7 +2162,7 @@ pub fn load_workspace_data_at(root: &Path) -> Result<WorkspaceData, String> {
     };
     let pages = {
         let mut s = c
-            .prepare("SELECT id,folder_id,title,is_bookmarked,revision FROM pages ORDER BY rowid")
+            .prepare("SELECT p.id,p.folder_id,p.title,p.is_bookmarked,p.revision,p.lifecycle,p.trashed_at FROM pages p JOIN folders f ON f.id=p.folder_id WHERE p.lifecycle='active' AND f.lifecycle='active' ORDER BY p.rowid")
             .map_err(|e| e.to_string())?;
         let rows = s
             .query_map([], |r| {
@@ -2157,6 +2172,8 @@ pub fn load_workspace_data_at(root: &Path) -> Result<WorkspaceData, String> {
                     title: r.get(2)?,
                     is_bookmarked: r.get::<_, i64>(3)? != 0,
                     revision: r.get(4)?,
+                    lifecycle: r.get(5)?,
+                    trashed_at: r.get(6)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -2165,7 +2182,7 @@ pub fn load_workspace_data_at(root: &Path) -> Result<WorkspaceData, String> {
     };
     let elements = {
         let mut s = c
-            .prepare("SELECT payload_json FROM elements ORDER BY page_id,z_index,id")
+            .prepare("SELECT e.payload_json FROM elements e JOIN pages p ON p.id=e.page_id JOIN folders f ON f.id=p.folder_id WHERE p.lifecycle='active' AND f.lifecycle='active' ORDER BY e.page_id,e.z_index,e.id")
             .map_err(|e| e.to_string())?;
         let rows = s
             .query_map([], |r| r.get::<_, String>(0))
@@ -2270,7 +2287,7 @@ pub fn reconcile_workspace_structure_at(
     for folder in &structure.folders {
         transaction
             .execute(
-                "INSERT INTO folders(id,name,is_bookmarked) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,is_bookmarked=excluded.is_bookmarked",
+                "INSERT INTO folders(id,name,is_bookmarked) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,is_bookmarked=excluded.is_bookmarked WHERE folders.lifecycle='active'",
                 params![folder.id, folder.name.trim(), folder.is_bookmarked as i64],
             )
             .map_err(|error| format!("save folder {}: {error}", folder.id))?;
@@ -2283,7 +2300,7 @@ pub fn reconcile_workspace_structure_at(
         .collect();
     let existing_page_ids = {
         let mut statement = transaction
-            .prepare("SELECT id FROM pages")
+            .prepare("SELECT p.id FROM pages p JOIN folders f ON f.id=p.folder_id WHERE p.lifecycle='active' AND f.lifecycle='active'")
             .map_err(|error| error.to_string())?;
         let page_ids = statement
             .query_map([], |row| row.get::<_, String>(0))
@@ -2302,7 +2319,7 @@ pub fn reconcile_workspace_structure_at(
     for page in &structure.pages {
         transaction
             .execute(
-                "INSERT INTO pages(id,folder_id,title,is_bookmarked) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET folder_id=excluded.folder_id,title=excluded.title,is_bookmarked=excluded.is_bookmarked",
+                "INSERT INTO pages(id,folder_id,title,is_bookmarked) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET folder_id=excluded.folder_id,title=excluded.title,is_bookmarked=excluded.is_bookmarked WHERE pages.lifecycle='active'",
                 params![page.id, page.folder_id, page.title.trim(), page.is_bookmarked as i64],
             )
             .map_err(|error| format!("save page {}: {error}", page.id))?;
@@ -2316,7 +2333,7 @@ pub fn reconcile_workspace_structure_at(
         .collect();
     let existing_folder_ids = {
         let mut statement = transaction
-            .prepare("SELECT id FROM folders")
+            .prepare("SELECT id FROM folders WHERE lifecycle='active'")
             .map_err(|error| error.to_string())?;
         let folder_ids = statement
             .query_map([], |row| row.get::<_, String>(0))
@@ -2344,6 +2361,170 @@ pub fn reconcile_workspace_structure_at(
 
     let pages = load_workspace_data_at(root)?.pages;
     Ok(WorkspaceStructureResult { pages })
+}
+
+fn change_lifecycle(root: &Path, table: &str, id: &str, lifecycle: &str) -> Result<(), String> {
+    if id.trim().is_empty() {
+        return Err("item id must be a non-empty string".into());
+    }
+    let mut connection = database::open(&root.join("note.db"))?;
+    database::migrate(&mut connection)?;
+    let changed = match table {
+        "pages" => connection.execute(
+            "UPDATE pages SET lifecycle=?, trashed_at=CASE WHEN ?='trashed' THEN ? ELSE NULL END WHERE id=? AND lifecycle<>?",
+            params![lifecycle, lifecycle, now_ms(), id, lifecycle],
+        ),
+        "folders" => {
+            if matches!(id, ROOT_FOLDER_ID | TEMPLATE_FOLDER_ID) {
+                return Err("reserved folders cannot be moved to Trash".into());
+            }
+            connection.execute(
+                "UPDATE folders SET lifecycle=?, trashed_at=CASE WHEN ?='trashed' THEN ? ELSE NULL END WHERE id=? AND lifecycle<>?",
+                params![lifecycle, lifecycle, now_ms(), id, lifecycle],
+            )
+        }
+        _ => return Err("unsupported Trash item kind".into()),
+    }
+    .map_err(|error| error.to_string())?;
+    if changed == 0 {
+        return Err(format!("{table} item not found or already {lifecycle}"));
+    }
+    Ok(())
+}
+
+pub fn trash_page_at(root: &Path, id: &str) -> Result<(), String> {
+    change_lifecycle(root, "pages", id, "trashed")
+}
+
+pub fn trash_folder_at(root: &Path, id: &str) -> Result<(), String> {
+    change_lifecycle(root, "folders", id, "trashed")
+}
+
+pub fn restore_folder_at(root: &Path, id: &str) -> Result<(), String> {
+    change_lifecycle(root, "folders", id, "active")
+}
+
+pub fn restore_page_at(root: &Path, id: &str) -> Result<(), String> {
+    if id.trim().is_empty() {
+        return Err("page id must be a non-empty string".into());
+    }
+    let mut connection = database::open(&root.join("note.db"))?;
+    database::migrate(&mut connection)?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+    let parent_lifecycle: Option<String> = transaction
+        .query_row(
+            "SELECT f.lifecycle FROM pages p LEFT JOIN folders f ON f.id=p.folder_id WHERE p.id=? AND p.lifecycle='trashed'",
+            [id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    let parent_lifecycle =
+        parent_lifecycle.ok_or_else(|| "page not found or not in Trash".to_owned())?;
+    let folder_id = if parent_lifecycle == "active" {
+        None
+    } else {
+        Some(ROOT_FOLDER_ID)
+    };
+    if folder_id.is_some() {
+        transaction.execute(
+            "INSERT INTO folders(id,name,is_bookmarked) VALUES(?,?,0) ON CONFLICT(id) DO NOTHING",
+            params![ROOT_FOLDER_ID, "Root"],
+        ).map_err(|error| error.to_string())?;
+    }
+    transaction
+        .execute(
+            "UPDATE pages SET lifecycle='active',trashed_at=NULL,folder_id=COALESCE(?,folder_id) WHERE id=? AND lifecycle='trashed'",
+            params![folder_id, id],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+pub fn list_trash_at(root: &Path) -> Result<Vec<TrashEntryDto>, String> {
+    let mut connection = database::open(&root.join("note.db"))?;
+    database::migrate(&mut connection)?;
+    let mut statement = connection
+        .prepare(
+            r#"
+SELECT id,'folder' AS kind,name,trashed_at FROM folders
+WHERE lifecycle='trashed' AND id NOT IN (?,?)
+UNION ALL
+SELECT id,'page' AS kind,title,trashed_at FROM pages WHERE lifecycle='trashed'
+ORDER BY trashed_at DESC
+"#,
+        )
+        .map_err(|error| error.to_string())?;
+    let entries = statement
+        .query_map(params![ROOT_FOLDER_ID, TEMPLATE_FOLDER_ID], |row| {
+            Ok(TrashEntryDto {
+                id: row.get(0)?,
+                kind: row.get(1)?,
+                name: row.get(2)?,
+                trashed_at: row.get(3)?,
+            })
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(entries)
+}
+
+fn trash_purge_preview(connection: &rusqlite::Connection) -> Result<TrashPurgePreview, String> {
+    let (folder_count, page_count, element_count) = connection.query_row(r#"
+WITH purged_pages AS (
+  SELECT p.id FROM pages p LEFT JOIN folders f ON f.id=p.folder_id
+  WHERE p.lifecycle='trashed' OR f.lifecycle='trashed'
+)
+SELECT
+  (SELECT count(*) FROM folders WHERE lifecycle='trashed' AND id NOT IN ('','__note_page_templates__')),
+  (SELECT count(*) FROM purged_pages),
+  (SELECT count(*) FROM elements WHERE page_id IN purged_pages)
+"#, [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).map_err(|error| error.to_string())?;
+    Ok(TrashPurgePreview {
+        folder_count,
+        page_count,
+        element_count,
+    })
+}
+
+pub fn trash_purge_preview_at(root: &Path) -> Result<TrashPurgePreview, String> {
+    let mut connection = database::open(&root.join("note.db"))?;
+    database::migrate(&mut connection)?;
+    trash_purge_preview(&connection)
+}
+
+pub fn purge_trash_at(
+    root: &Path,
+    request: TrashPurgeRequest,
+) -> Result<TrashPurgePreview, String> {
+    if request.expected_page_count < 0 || request.expected_element_count < 0 {
+        return Err("purge confirmation counts must be non-negative".into());
+    }
+    let mut connection = database::open(&root.join("note.db"))?;
+    database::migrate(&mut connection)?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+    let preview = trash_purge_preview(&transaction)?;
+    if preview.page_count != request.expected_page_count
+        || preview.element_count != request.expected_element_count
+    {
+        return Err("Trash changed; review the affected counts and confirm again".into());
+    }
+    transaction
+        .execute(
+            "DELETE FROM folders WHERE lifecycle='trashed' AND id NOT IN (?,?)",
+            params![ROOT_FOLDER_ID, TEMPLATE_FOLDER_ID],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute("DELETE FROM pages WHERE lifecycle='trashed'", [])
+        .map_err(|error| error.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(preview)
 }
 pub fn apply_scene_changes_at(
     root: &Path,
@@ -4535,6 +4716,8 @@ mod tests {
                     id: "projects".into(),
                     name: "Projects".into(),
                     is_bookmarked: true,
+                    lifecycle: "active".into(),
+                    trashed_at: None,
                 }],
                 pages: vec![
                     WorkspacePageDto {
@@ -4568,6 +4751,8 @@ mod tests {
                 id: "projects".into(),
                 name: "Projects".into(),
                 is_bookmarked: true,
+                lifecycle: "active".into(),
+                trashed_at: None,
             }]
         );
         let connection = database::open(&directory.path().join("note.db")).unwrap();
@@ -4591,6 +4776,8 @@ mod tests {
                     id: "folder".into(),
                     name: "Folder".into(),
                     is_bookmarked: false,
+                    lifecycle: "active".into(),
+                    trashed_at: None,
                 }],
                 pages: vec![WorkspacePageDto {
                     id: "page".into(),
@@ -4622,6 +4809,8 @@ mod tests {
                     id: "folder".into(),
                     name: "Folder renamed".into(),
                     is_bookmarked: true,
+                    lifecycle: "active".into(),
+                    trashed_at: None,
                 }],
                 pages: vec![WorkspacePageDto {
                     id: "page".into(),
@@ -4673,5 +4862,141 @@ mod tests {
         let loaded = load_workspace_data_at(directory.path()).unwrap();
         assert!(loaded.folders.is_empty());
         assert_eq!(loaded.pages[0].folder_id, ROOT_FOLDER_ID);
+    }
+
+    #[test]
+    fn trashed_folder_hides_active_children_without_rewriting_their_lifecycle() {
+        let directory = root();
+        seed_page(directory.path());
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![element("e", 1)],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+
+        trash_folder_at(directory.path(), "f").unwrap();
+        let hidden = load_workspace_data_at(directory.path()).unwrap();
+        assert!(hidden.folders.is_empty());
+        assert!(hidden.pages.is_empty());
+        assert!(hidden.elements.is_empty());
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT lifecycle FROM pages WHERE id='p'", [], |row| row
+                    .get::<_, String>(
+                    0
+                ))
+                .unwrap(),
+            "active"
+        );
+        assert_eq!(
+            list_trash_at(directory.path())
+                .unwrap()
+                .iter()
+                .map(|entry| entry.kind.as_str())
+                .collect::<Vec<_>>(),
+            vec!["folder"]
+        );
+
+        restore_folder_at(directory.path(), "f").unwrap();
+        let restored = load_workspace_data_at(directory.path()).unwrap();
+        assert_eq!(restored.pages.len(), 1);
+        assert_eq!(restored.elements.len(), 1);
+    }
+
+    #[test]
+    fn separately_trashed_child_stays_hidden_and_restore_falls_back_to_root() {
+        let directory = root();
+        seed_page(directory.path());
+        trash_page_at(directory.path(), "p").unwrap();
+        trash_folder_at(directory.path(), "f").unwrap();
+        restore_folder_at(directory.path(), "f").unwrap();
+        assert!(load_workspace_data_at(directory.path())
+            .unwrap()
+            .pages
+            .is_empty());
+
+        trash_folder_at(directory.path(), "f").unwrap();
+        restore_page_at(directory.path(), "p").unwrap();
+        let restored = load_workspace_data_at(directory.path()).unwrap();
+        assert_eq!(restored.pages.len(), 1);
+        assert_eq!(restored.pages[0].folder_id, ROOT_FOLDER_ID);
+    }
+
+    #[test]
+    fn purge_requires_current_confirmation_and_cascades_scene_rows() {
+        let directory = root();
+        seed_page(directory.path());
+        seed_additional_page(directory.path(), "p2");
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![element("e1", 1)],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+        let mut second_page_element = element("e2", 1);
+        second_page_element["pageId"] = json!("p2");
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p2".into(),
+                base_revision: 0,
+                upserts: vec![second_page_element],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+        trash_page_at(directory.path(), "p2").unwrap();
+        trash_folder_at(directory.path(), "f").unwrap();
+
+        let preview = trash_purge_preview_at(directory.path()).unwrap();
+        assert_eq!(
+            (
+                preview.folder_count,
+                preview.page_count,
+                preview.element_count
+            ),
+            (1, 2, 2)
+        );
+        assert!(purge_trash_at(
+            directory.path(),
+            TrashPurgeRequest {
+                expected_page_count: 1,
+                expected_element_count: 2
+            }
+        )
+        .is_err());
+        purge_trash_at(
+            directory.path(),
+            TrashPurgeRequest {
+                expected_page_count: preview.page_count,
+                expected_element_count: preview.element_count,
+            },
+        )
+        .unwrap();
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM pages", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM elements", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert!(list_trash_at(directory.path()).unwrap().is_empty());
     }
 }

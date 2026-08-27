@@ -259,6 +259,7 @@ import {
   MAX_ASSET_BYTES,
   type SceneRepository,
   type StoragePage,
+  type TrashEntry,
 } from "./canvas/persistence/sceneRepository";
 import {
   SceneChangeQueue,
@@ -295,6 +296,7 @@ type SidebarProps = {
   isNarrowWorkbench: boolean;
   pageSearchFocusRequest: number;
   pageTemplates: AppData["pages"];
+  trashEntries: readonly TrashEntry[];
   pages: AppData["pages"];
   pageSearchQuery: string;
   pageSearchResults: FileSearchResult[];
@@ -307,6 +309,8 @@ type SidebarProps = {
   onDeleteFolder: (folderId: string) => void;
   onDeletePage: (pageId: string) => void;
   onDeletePageTemplate: (templatePageId: string) => void;
+  onRestoreTrashEntry: (entry: TrashEntry) => void;
+  onEmptyTrash: () => void;
   onFolderDragLeave: (folderId: string) => void;
   onFolderDragOver: (folderId: string) => void;
   onFocusPageSearch: (trigger?: HTMLElement) => void;
@@ -590,7 +594,7 @@ type SidebarSortOrder =
   | "modified-asc"
   | "created-desc"
   | "created-asc";
-type SidebarTabId = "files" | "search" | "bookmarks" | "templates";
+type SidebarTabId = "files" | "search" | "bookmarks" | "templates" | "trash";
 type PersistenceStatus = SaveState;
 type PendingAssetUpload = { dataUrl: string; fileName: string };
 
@@ -1365,6 +1369,7 @@ function applyFormatStateToBlock(
 
 function App() {
   const [data, setData] = useState<AppData>(emptyData);
+  const [trashEntries, setTrashEntries] = useState<TrashEntry[]>([]);
   const [selectedFolderId, setSelectedFolderId] = useState("");
   const [selectedPageId, setSelectedPageIdState] = useState("");
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
@@ -2313,6 +2318,7 @@ function App() {
         const repository = createSceneRepository();
         const diagnostics = await repository.initializeStorage();
         const workspace = await repository.loadWorkspace();
+        const loadedTrashEntries = await repository.listTrash();
         const savedData: AppData = {
           elements: workspace.elements,
           folders: workspace.folders,
@@ -2416,6 +2422,7 @@ function App() {
         }
         sceneChangeQueueRef.current = queue;
         setData(savedData);
+        setTrashEntries(loadedTrashEntries);
         setIsDarkMode(savedData.isDarkMode ?? true);
         setIsSidebarCollapsed(savedSessionState?.isExplorerCollapsed ?? false);
         setIsAssistantOpen(savedSessionState?.isAssistantOpen ?? false);
@@ -4316,7 +4323,23 @@ function App() {
     }));
   }
 
-  function deleteFolder(folderId: string) {
+  async function deleteFolder(folderId: string) {
+    try {
+      await flushPendingPersistence();
+      const repository = repositoryRef.current;
+      if (repository) {
+        await repository.moveFolderToTrash(folderId);
+        setTrashEntries(await repository.listTrash());
+      } else {
+        const folder = dataRef.current.folders.find((candidate) => candidate.id === folderId);
+        if (folder) {
+          setTrashEntries((entries) => [{ id: folder.id, kind: "folder", name: folder.name, trashedAt: Date.now() }, ...entries]);
+        }
+      }
+    } catch (error) {
+      setPersistenceStatus({ kind: "failed", error: error instanceof Error ? error : new Error(String(error)) });
+      return;
+    }
     setData((currentData) => {
       const nextFolders = currentData.folders.filter(
         (folder) => folder.id !== folderId,
@@ -5680,16 +5703,82 @@ function App() {
       return;
     }
 
-    const nextData = {
-      ...currentData,
-      pages: currentData.pages.filter((page) => page.id !== templatePageId),
-      elements: currentData.elements.filter(
-        (block) => block.pageId !== templatePageId,
-      ),
-    };
+    void deletePage(templatePageId);
+  }
 
-    dataRef.current = nextData;
-    setData(nextData);
+  async function restoreTrashEntry(entry: TrashEntry) {
+    const repository = repositoryRef.current;
+    if (!repository) {
+      return;
+    }
+
+    try {
+      if (entry.kind === "folder") {
+        await repository.restoreFolderFromTrash(entry.id);
+      } else {
+        await repository.restorePageFromTrash(entry.id);
+      }
+      const workspace = await repository.loadWorkspace();
+      const nextData: AppData = {
+        elements: workspace.elements,
+        folders: workspace.folders,
+        isDarkMode: workspace.isDarkMode,
+        pages: workspace.pages.map(({ revision: _revision, ...page }) => page),
+        sessionState: dataRef.current.sessionState,
+      };
+      const activePageIds = new Set(nextData.pages.map((page) => page.id));
+      for (const page of dataRef.current.pages) {
+        if (!activePageIds.has(page.id)) {
+          sceneChangeQueueRef.current?.forgetPage(page.id);
+        }
+      }
+      pageRevisionsRef.current = new Map(workspace.pages.map((page) => [page.id, page.revision]));
+      for (const page of workspace.pages) {
+        sceneChangeQueueRef.current?.seed(
+          page.id,
+          page.revision,
+          workspace.elements.filter((element) => element.pageId === page.id),
+        );
+      }
+      dataRef.current = nextData;
+      setData(nextData);
+      setTrashEntries(await repository.listTrash());
+
+      const restoredPage = entry.kind === "page"
+        ? nextData.pages.find((page) => page.id === entry.id)
+        : undefined;
+      const fallbackPage = restoredPage ?? nextData.pages.find((page) => !isTemplatePage(page));
+      selectedFolderIdRef.current = fallbackPage?.folderId ?? ROOT_FOLDER_ID;
+      selectedPageIdRef.current = fallbackPage?.id ?? "";
+      setSelectedFolderId(selectedFolderIdRef.current);
+      setSelectedPageId(selectedPageIdRef.current);
+      setSidebarPageSelection(selectedPageIdRef.current ? [selectedPageIdRef.current] : []);
+    } catch (error) {
+      setPersistenceStatus({ kind: "failed", error: error instanceof Error ? error : new Error(String(error)) });
+    }
+  }
+
+  async function emptyTrash() {
+    const repository = repositoryRef.current;
+    if (!repository) {
+      return;
+    }
+    try {
+      const preview = await repository.getTrashPurgePreview();
+      if (preview.pageCount === 0 && preview.folderCount === 0) {
+        return;
+      }
+      const confirmed = window.confirm(
+        `Permanently delete ${preview.folderCount} folder${preview.folderCount === 1 ? "" : "s"}, ${preview.pageCount} page${preview.pageCount === 1 ? "" : "s"}, and ${preview.elementCount} canvas element${preview.elementCount === 1 ? "" : "s"}?\n\nThis cannot be undone.`,
+      );
+      if (!confirmed) {
+        return;
+      }
+      await repository.purgeTrash(preview);
+      setTrashEntries(await repository.listTrash());
+    } catch (error) {
+      setPersistenceStatus({ kind: "failed", error: error instanceof Error ? error : new Error(String(error)) });
+    }
   }
 
   function beginPageDrag(pageId: string) {
@@ -5808,7 +5897,23 @@ function App() {
     }));
   }
 
-  function deletePage(pageId: string) {
+  async function deletePage(pageId: string) {
+    try {
+      await flushPendingPersistence();
+      const repository = repositoryRef.current;
+      if (repository) {
+        await repository.movePageToTrash(pageId);
+        setTrashEntries(await repository.listTrash());
+      } else {
+        const page = dataRef.current.pages.find((candidate) => candidate.id === pageId);
+        if (page) {
+          setTrashEntries((entries) => [{ id: page.id, kind: "page", name: page.title, trashedAt: Date.now() }, ...entries]);
+        }
+      }
+    } catch (error) {
+      setPersistenceStatus({ kind: "failed", error: error instanceof Error ? error : new Error(String(error)) });
+      return;
+    }
     setData((currentData) => {
       const pageToDelete = currentData.pages.find((page) => page.id === pageId);
       const nextPages = currentData.pages.filter((page) => page.id !== pageId);
@@ -9082,6 +9187,7 @@ function App() {
         isNarrowWorkbench={isNarrowWorkbench}
         pageSearchFocusRequest={pageSearchFocusRequest}
         pageTemplates={pageTemplates}
+        trashEntries={trashEntries}
         pages={explorerPages}
         pageSearchQuery={pageSearchQuery}
         pageSearchResults={pageSearchResults}
@@ -9094,6 +9200,8 @@ function App() {
         onDeleteFolder={deleteFolder}
         onDeletePage={deletePage}
         onDeletePageTemplate={deletePageTemplate}
+        onRestoreTrashEntry={restoreTrashEntry}
+        onEmptyTrash={emptyTrash}
         onFolderDragLeave={(folderId) => {
           if (pageDropTargetFolderId === folderId) {
             setPageDropTargetFolderId(null);
@@ -9879,6 +9987,7 @@ const Sidebar = memo(function Sidebar({
   isDarkMode,
   pageSearchFocusRequest,
   pageTemplates,
+  trashEntries,
   pages,
   pageSearchQuery,
   pageSearchResults,
@@ -9891,6 +10000,8 @@ const Sidebar = memo(function Sidebar({
   onDeleteFolder,
   onDeletePage,
   onDeletePageTemplate,
+  onRestoreTrashEntry,
+  onEmptyTrash,
   onFolderDragLeave,
   onFolderDragOver,
   onFocusPageSearch,
@@ -10708,6 +10819,7 @@ const Sidebar = memo(function Sidebar({
         onToggleAssistant={onToggleAssistant}
         onToggleDarkMode={onToggleDarkMode}
         templatePageCount={pageTemplates.length}
+        trashEntryCount={trashEntries.length}
       />
 
       <div
@@ -11171,12 +11283,12 @@ const Sidebar = memo(function Sidebar({
                               <span className="nav-actions">
                                 <button
                                   type="button"
-                                  aria-label={`Delete ${page.title}`}
+                                  aria-label={`Move ${page.title} to Trash`}
                                   onClick={(event) => {
                                     event.stopPropagation();
                                     onDeletePage(page.id);
                                   }}
-                                  title={`Delete ${page.title}`}
+                                  title={`Move ${page.title} to Trash`}
                                 >
                                   <HeroIcon name="trash" />
                                 </button>
@@ -11358,12 +11470,12 @@ const Sidebar = memo(function Sidebar({
                                   <span className="nav-actions">
                                     <button
                                       type="button"
-                                      aria-label={`Delete ${page.title}`}
+                                      aria-label={`Move ${page.title} to Trash`}
                                       onClick={(event) => {
                                         event.stopPropagation();
                                         onDeletePage(page.id);
                                       }}
-                                      title={`Delete ${page.title}`}
+                                      title={`Move ${page.title} to Trash`}
                                     >
                                       <HeroIcon name="trash" />
                                     </button>
@@ -11461,17 +11573,17 @@ const Sidebar = memo(function Sidebar({
                       </button>
                       <span className="nav-actions">
                         <button
-                          aria-label={`Delete template ${templatePage.title}`}
+                          aria-label={`Move template ${templatePage.title} to Trash`}
                           onClick={() => {
                             const didConfirm = window.confirm(
-                              `Delete template "${templatePage.title}"?\n\nPages already created from this template will not be affected.`,
+                              `Move template "${templatePage.title}" to Trash?\n\nPages already created from this template will not be affected.`,
                             );
 
                             if (didConfirm) {
                               onDeletePageTemplate(templatePage.id);
                             }
                           }}
-                          title={`Delete template ${templatePage.title}`}
+                          title={`Move template ${templatePage.title} to Trash`}
                           type="button"
                         >
                           <HeroIcon name="trash" />
@@ -11485,6 +11597,52 @@ const Sidebar = memo(function Sidebar({
                   <HeroIcon name="rectangle-stack" />
                   No templates
                 </p>
+              )}
+            </section>
+          ) : null}
+
+          {activeSidebarTab === "trash" ? (
+            <section
+              className="sidebar-section sidebar-tab-panel compact-section"
+              aria-labelledby="trash-title"
+            >
+              <div className="section-header">
+                <h2 id="trash-title">Trash</h2>
+                <button
+                  aria-label="Empty Trash"
+                  className="section-action"
+                  disabled={trashEntries.length === 0}
+                  onClick={onEmptyTrash}
+                  title="Permanently delete everything in Trash"
+                  type="button"
+                >
+                  <HeroIcon name="trash" />
+                </button>
+              </div>
+              {trashEntries.length > 0 ? (
+                <div className="nav-list" aria-label="Trashed items">
+                  {trashEntries.map((entry) => (
+                    <div className="nav-item nav-item-template" key={`${entry.kind}-${entry.id}`}>
+                      <span className="file-row-icon">
+                        <HeroIcon name={entry.kind === "folder" ? "folder" : "document-text"} />
+                      </span>
+                      <span className="nav-label">{entry.name}</span>
+                      <span className="file-kind">{entry.kind.toUpperCase()}</span>
+                      <span className="nav-actions">
+                        <button
+                          aria-label={`Restore ${entry.name}`}
+                          onClick={() => onRestoreTrashEntry(entry)}
+                          title={`Restore ${entry.name}`}
+                          type="button"
+                        >
+                          <HeroIcon name="check" />
+                        </button>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="sidebar-placeholder">Trash is empty</p>
               )}
             </section>
           ) : null}
@@ -11509,7 +11667,7 @@ const Sidebar = memo(function Sidebar({
                     : "Bookmark"
                   : action.id === "rename"
                     ? "Rename"
-                    : "Delete";
+                    : "Move to Trash";
 
               return (
                 <Fragment key={action.id}>
@@ -11518,7 +11676,7 @@ const Sidebar = memo(function Sidebar({
                   ) : null}
                   <button
                     className={`folder-menu-item ${
-                      action.id === "delete" ? "is-danger" : ""
+      action.id === "delete" ? "is-danger" : ""
                     }`}
                     onClick={() =>
                       runFolderMenuAction(action.id, folderMenuFolder.id)
@@ -11553,6 +11711,7 @@ function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps) {
     previous.isNarrowWorkbench === next.isNarrowWorkbench &&
     previous.pageSearchFocusRequest === next.pageSearchFocusRequest &&
     previous.pageTemplates === next.pageTemplates &&
+    previous.trashEntries === next.trashEntries &&
     previous.pages === next.pages &&
     previous.pageSearchQuery === next.pageSearchQuery &&
     previous.pageSearchResults === next.pageSearchResults &&

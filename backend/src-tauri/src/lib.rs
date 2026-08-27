@@ -142,6 +142,49 @@ fn save_session_state(
 }
 
 #[tauri::command]
+fn move_page_to_trash(app_handle: tauri::AppHandle, page_id: String) -> Result<(), String> {
+    storage::trash_page_at(&storage_root(&app_handle)?, &page_id)
+}
+
+#[tauri::command]
+fn move_folder_to_trash(app_handle: tauri::AppHandle, folder_id: String) -> Result<(), String> {
+    storage::trash_folder_at(&storage_root(&app_handle)?, &folder_id)
+}
+
+#[tauri::command]
+fn restore_page_from_trash(app_handle: tauri::AppHandle, page_id: String) -> Result<(), String> {
+    storage::restore_page_at(&storage_root(&app_handle)?, &page_id)
+}
+
+#[tauri::command]
+fn restore_folder_from_trash(
+    app_handle: tauri::AppHandle,
+    folder_id: String,
+) -> Result<(), String> {
+    storage::restore_folder_at(&storage_root(&app_handle)?, &folder_id)
+}
+
+#[tauri::command]
+fn list_trash(app_handle: tauri::AppHandle) -> Result<Vec<storage::TrashEntryDto>, String> {
+    storage::list_trash_at(&storage_root(&app_handle)?)
+}
+
+#[tauri::command]
+fn get_trash_purge_preview(
+    app_handle: tauri::AppHandle,
+) -> Result<storage::TrashPurgePreview, String> {
+    storage::trash_purge_preview_at(&storage_root(&app_handle)?)
+}
+
+#[tauri::command]
+fn purge_trash(
+    app_handle: tauri::AppHandle,
+    request: storage::TrashPurgeRequest,
+) -> Result<storage::TrashPurgePreview, String> {
+    storage::purge_trash_at(&storage_root(&app_handle)?, request)
+}
+
+#[tauri::command]
 fn load_app_data(app_handle: tauri::AppHandle) -> Result<AppData, String> {
     let data_path = app_data_path(&app_handle)?;
 
@@ -178,7 +221,14 @@ pub fn run() {
             reconcile_workspace_structure,
             save_asset,
             load_asset,
-            save_session_state
+            save_session_state,
+            move_page_to_trash,
+            move_folder_to_trash,
+            restore_page_from_trash,
+            restore_folder_from_trash,
+            list_trash,
+            get_trash_purge_preview,
+            purge_trash
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -47,7 +47,7 @@ test("folder More and right-click share one accessible action menu", async ({
 
   await expect(addPageButton).toHaveCount(1);
   await expect(moreButton).toHaveCount(1);
-  await expect(folderRow.getByRole("button", { name: /delete/i })).toHaveCount(0);
+  await expect(folderRow.getByRole("button", { name: /move .* to trash/i })).toHaveCount(0);
   await expect(folderRow.getByRole("button", { name: /bookmark/i })).toHaveCount(0);
 
   await clickRowAction(folderRow, moreButton);
@@ -55,7 +55,7 @@ test("folder More and right-click share one accessible action menu", async ({
   const menuItems = menu.getByRole("menuitem");
 
   await expect(menu).toBeVisible();
-  await expect(menuItems).toHaveText(["Bookmark", "Rename", "Delete"]);
+  await expect(menuItems).toHaveText(["Bookmark", "Rename", "Move to Trash"]);
   await expect(menuItems.first()).toBeFocused();
   await expect(moreButton).toHaveAttribute("aria-expanded", "true");
   await expectMenuInsideViewport(page, menu);
@@ -63,7 +63,7 @@ test("folder More and right-click share one accessible action menu", async ({
   await page.keyboard.press("ArrowDown");
   await expect(menu.getByRole("menuitem", { name: "Rename" })).toBeFocused();
   await page.keyboard.press("End");
-  await expect(menu.getByRole("menuitem", { name: "Delete" })).toBeFocused();
+  await expect(menu.getByRole("menuitem", { name: "Move to Trash" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(menu).toHaveCount(0);
   await expect(moreButton).toBeFocused();
@@ -92,7 +92,7 @@ test("folder More and right-click share one accessible action menu", async ({
 
   await folderRow.click({ button: "right" });
   await expect(menu).toBeVisible();
-  await expect(menuItems).toHaveText(["Bookmark", "Rename", "Delete"]);
+  await expect(menuItems).toHaveText(["Bookmark", "Rename", "Move to Trash"]);
   await menu.getByRole("menuitem", { name: "Rename" }).click();
 
   const renameInput = page.getByRole("textbox", { name: "Folder name" });
@@ -138,7 +138,7 @@ test("folder More and right-click share one accessible action menu", async ({
     .first();
 
   await fileRow.click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Delete" }).click();
+  await page.getByRole("menuitem", { name: "Move to Trash" }).click();
   await expect(fileRow).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Create folder" })).toBeFocused();
 });

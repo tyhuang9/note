@@ -25,30 +25,7 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Verify local documentation links
-        run: |
-          node --input-type=module <<'NODE'
-          import { existsSync, readFileSync } from "node:fs";
-          import { resolve } from "node:path";
-
-          const docsRoot = resolve("docs");
-          const pages = ["index.html", "install.html"];
-          const referencePattern = /(?:href|src)="([^"]+)"/g;
-          const ignored = /^(?:#|[a-z][a-z0-9+.-]*:|\/\/)/i;
-
-          for (const page of pages) {
-            const pagePath = resolve(docsRoot, page);
-            if (!existsSync(pagePath)) throw new Error(`Missing documentation page: ${page}`);
-            const content = readFileSync(pagePath, "utf8");
-            for (const match of content.matchAll(referencePattern)) {
-              const reference = match[1].split("#", 1)[0].split("?", 1)[0];
-              if (!reference || ignored.test(reference)) continue;
-              const target = resolve(docsRoot, reference);
-              if (!target.startsWith(`${docsRoot}/`) || !existsSync(target)) {
-                throw new Error(`${page} references a missing local file: ${match[1]}`);
-              }
-            }
-          }
-          NODE
+        run: node docs/scripts/validate-site.mjs
 
   deploy:
     name: Deploy documentation site

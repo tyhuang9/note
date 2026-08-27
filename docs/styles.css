@@ -106,6 +106,12 @@ nav {
 
 nav a { font-size: .95rem; }
 
+nav a[aria-current="page"] {
+  color: var(--charcoal);
+  text-decoration-thickness: .14em;
+  text-underline-offset: .3em;
+}
+
 .hero {
   display: grid;
   grid-template-columns: minmax(0, .82fr) minmax(0, 1.18fr);
@@ -254,7 +260,8 @@ figcaption {
 .callout,
 .warning {
   margin-top: 1.5rem;
-  border-left: .3rem solid var(--golden);
+  border: 1px solid var(--line);
+  border-radius: .75rem;
   padding: 1rem 1.2rem;
   background: var(--golden-soft);
 }
@@ -294,7 +301,6 @@ figcaption {
 }
 
 .warning {
-  border-color: #C37A00;
   background: var(--warning-surface);
   color: var(--warning);
 }
@@ -330,6 +336,27 @@ footer {
   }
   .download-card p { min-height: 0; }
   footer { align-items: flex-start; flex-direction: column; }
+}
+
+@media (max-width: 28rem) {
+  nav {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: .35rem;
+    width: 100%;
+  }
+
+  nav a {
+    justify-content: center;
+    padding: .5rem 0;
+    font-size: .82rem;
+    text-align: center;
+  }
+}
+
+@media (max-width: 22rem) {
+  nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  nav a:last-child { grid-column: 1 / -1; }
 }
 
 @media (prefers-color-scheme: dark) {

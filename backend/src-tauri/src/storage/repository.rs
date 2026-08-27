@@ -2414,10 +2414,10 @@ fn list_trash_from_connection(
     let mut statement = connection
         .prepare(
             r#"
-SELECT id,'folder' AS kind,name,trashed_at FROM folders
+SELECT id,'folder' AS kind,substr(name,1,160),'Workspace',trashed_at FROM folders
 WHERE lifecycle='trashed' AND id NOT IN (?,?)
 UNION ALL
-SELECT id,'page' AS kind,title,trashed_at FROM pages WHERE lifecycle='trashed'
+SELECT p.id,'page' AS kind,substr(p.title,1,160),substr(COALESCE(NULLIF(f.name,''),'Root'),1,160),p.trashed_at FROM pages p LEFT JOIN folders f ON f.id=p.folder_id WHERE p.lifecycle='trashed'
 ORDER BY trashed_at DESC
 "#,
         )
@@ -2428,7 +2428,8 @@ ORDER BY trashed_at DESC
                 id: row.get(0)?,
                 kind: row.get(1)?,
                 name: row.get(2)?,
-                trashed_at: row.get(3)?,
+                previous_location: row.get(3)?,
+                trashed_at: row.get(4)?,
             })
         })
         .map_err(|error| error.to_string())?
@@ -5138,6 +5139,58 @@ mod tests {
         let restored = load_workspace_data_at(directory.path()).unwrap();
         assert_eq!(restored.pages.len(), 1);
         assert_eq!(restored.elements.len(), 1);
+    }
+
+    #[test]
+    fn trash_metadata_distinguishes_duplicate_names_by_location_and_time() {
+        let directory = root();
+        seed_page(directory.path());
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO folders(id,name) VALUES('other','Other folder')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute("INSERT INTO folders(id,name) VALUES('','Root')", [])
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO pages(id,folder_id,title) VALUES('root-duplicate','','Duplicate')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO pages(id,folder_id,title) VALUES('folder-duplicate','other','Duplicate')",
+                [],
+            )
+            .unwrap();
+
+        trash_page_at(directory.path(), "root-duplicate").unwrap();
+        trash_page_at(directory.path(), "folder-duplicate").unwrap();
+        connection
+            .execute(
+                "UPDATE pages SET trashed_at=100 WHERE id='root-duplicate'",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE pages SET trashed_at=200 WHERE id='folder-duplicate'",
+                [],
+            )
+            .unwrap();
+
+        let entries = list_trash_at(directory.path()).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].name, "Duplicate");
+        assert_eq!(entries[0].previous_location, "Other folder");
+        assert_eq!(entries[0].trashed_at, 200);
+        assert_eq!(entries[1].name, "Duplicate");
+        assert_eq!(entries[1].previous_location, "Root");
+        assert_eq!(entries[1].trashed_at, 100);
     }
 
     #[test]

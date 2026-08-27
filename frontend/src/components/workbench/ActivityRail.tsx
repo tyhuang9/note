@@ -108,7 +108,7 @@ export const ActivityRail = memo(function ActivityRail({
           ref={trashToggleButtonRef}
           title="Trash"
         >
-          <Icon name="archive-box" />
+          <Icon name="trash" />
         </button>
       </div>
       <div className="rail-utilities" aria-label="Global utilities" role="group">

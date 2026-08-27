@@ -298,6 +298,8 @@ type SidebarProps = {
   pageSearchFocusRequest: number;
   pageTemplates: AppData["pages"];
   trashEntries: readonly TrashEntry[];
+  trashFeedback: string;
+  pendingTrashAction: string | null;
   pages: AppData["pages"];
   pageSearchQuery: string;
   pageSearchResults: FileSearchResult[];
@@ -1372,6 +1374,8 @@ function App() {
   const [data, setData] = useState<AppData>(emptyData);
   const [trashEntries, setTrashEntries] = useState<TrashEntry[]>([]);
   const [trashAnnouncement, setTrashAnnouncement] = useState("");
+  const [trashFeedback, setTrashFeedback] = useState("");
+  const [pendingTrashAction, setPendingTrashAction] = useState<string | null>(null);
   const [selectedFolderId, setSelectedFolderId] = useState("");
   const [selectedPageId, setSelectedPageIdState] = useState("");
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
@@ -4335,17 +4339,23 @@ function App() {
         await repository.moveFolderToTrash(folderId);
         const nextTrashEntries = await repository.listTrash();
         setTrashEntries(nextTrashEntries);
-        setTrashAnnouncement(`Moved ${folderName} to Trash. ${nextTrashEntries.length} items remain in Trash.`);
+        const message = `Moved ${folderName} to Trash. ${nextTrashEntries.length} items remain in Trash.`;
+        setTrashAnnouncement(message);
+        setTrashFeedback(message);
       } else {
         const folder = dataRef.current.folders.find((candidate) => candidate.id === folderId);
         if (folder) {
-          setTrashEntries((entries) => [{ id: folder.id, kind: "folder", name: folder.name, trashedAt: Date.now() }, ...entries]);
-          setTrashAnnouncement(`Moved ${folder.name} to Trash.`);
+          setTrashEntries((entries) => [{ id: folder.id, kind: "folder", name: folder.name, previousLocation: "Workspace", trashedAt: Date.now() }, ...entries]);
+          const message = `Moved ${folder.name} to Trash.`;
+          setTrashAnnouncement(message);
+          setTrashFeedback(message);
         }
       }
     } catch (error) {
       setPersistenceStatus({ kind: "failed", error: error instanceof Error ? error : new Error(String(error)) });
-      setTrashAnnouncement(`Could not move ${folderName} to Trash.`);
+      const message = `Could not move ${folderName} to Trash.`;
+      setTrashAnnouncement(message);
+      setTrashFeedback(message);
       return;
     }
     setData((currentData) => {
@@ -5717,9 +5727,12 @@ function App() {
   async function restoreTrashEntry(entry: TrashEntry, restoreIndex: number) {
     const repository = repositoryRef.current;
     if (!repository) {
+      setTrashFeedback(`Could not restore ${entry.name}: storage is unavailable.`);
       return;
     }
 
+    setPendingTrashAction(`restore:${entry.id}`);
+    setTrashFeedback(`Restoring ${entry.name}…`);
     try {
       if (entry.kind === "folder") {
         await repository.restoreFolderFromTrash(entry.id);
@@ -5752,13 +5765,20 @@ function App() {
       setData(nextData);
       const nextTrashEntries = await repository.listTrash();
       setTrashEntries(nextTrashEntries);
-      setTrashAnnouncement(`Restored ${entry.name}. ${nextTrashEntries.length} items remain in Trash.`);
+      const message = `Restored ${entry.name}. ${nextTrashEntries.length} items remain in Trash.`;
+      setTrashAnnouncement(message);
+      setTrashFeedback(message);
 
       const restoredPage = entry.kind === "page"
         ? nextData.pages.find((page) => page.id === entry.id)
         : undefined;
-      const fallbackPage = restoredPage ?? nextData.pages.find((page) => !isTemplatePage(page));
-      selectedFolderIdRef.current = fallbackPage?.folderId ?? ROOT_FOLDER_ID;
+      const restoredFolderPage = entry.kind === "folder"
+        ? nextData.pages.find((page) => page.folderId === entry.id && !isTemplatePage(page))
+        : undefined;
+      const fallbackPage = restoredPage ?? restoredFolderPage ?? nextData.pages.find((page) => !isTemplatePage(page));
+      selectedFolderIdRef.current = entry.kind === "folder"
+        ? entry.id
+        : fallbackPage?.folderId ?? ROOT_FOLDER_ID;
       selectedPageIdRef.current = fallbackPage?.id ?? "";
       setSelectedFolderId(selectedFolderIdRef.current);
       setSelectedPageId(selectedPageIdRef.current);
@@ -5774,13 +5794,18 @@ function App() {
       });
     } catch (error) {
       setPersistenceStatus({ kind: "failed", error: error instanceof Error ? error : new Error(String(error)) });
-      setTrashAnnouncement(`Could not restore ${entry.name}.`);
+      const message = `Could not restore ${entry.name}.`;
+      setTrashAnnouncement(message);
+      setTrashFeedback(message);
+    } finally {
+      setPendingTrashAction(null);
     }
   }
 
   async function emptyTrash() {
     const repository = repositoryRef.current;
     if (!repository) {
+      setTrashFeedback("Could not empty Trash: storage is unavailable.");
       return;
     }
     try {
@@ -5794,15 +5819,23 @@ function App() {
       if (!confirmed) {
         return;
       }
+      setPendingTrashAction("empty");
+      setTrashFeedback("Permanently deleting Trash items…");
       await repository.purgeTrash(preview);
       setTrashEntries(await repository.listTrash());
-      setTrashAnnouncement(`Permanently deleted ${preview.folderCount} folders, ${preview.pageCount} pages, and ${preview.elementCount} canvas elements.`);
+      const message = `Permanently deleted ${preview.folderCount} folders, ${preview.pageCount} pages, and ${preview.elementCount} canvas elements.`;
+      setTrashAnnouncement(message);
+      setTrashFeedback(message);
       window.requestAnimationFrame(() => {
         (trashRailButtonRef.current ?? document.getElementById("trash-title"))?.focus();
       });
     } catch (error) {
       setPersistenceStatus({ kind: "failed", error: error instanceof Error ? error : new Error(String(error)) });
-      setTrashAnnouncement("Could not empty Trash.");
+      const message = "Could not empty Trash.";
+      setTrashAnnouncement(message);
+      setTrashFeedback(message);
+    } finally {
+      setPendingTrashAction(null);
     }
   }
 
@@ -5936,17 +5969,23 @@ function App() {
         await repository.movePageToTrash(pageId);
         const nextTrashEntries = await repository.listTrash();
         setTrashEntries(nextTrashEntries);
-        setTrashAnnouncement(`Moved ${pageName} to Trash. ${nextTrashEntries.length} items remain in Trash.`);
+        const message = `Moved ${pageName} to Trash. ${nextTrashEntries.length} items remain in Trash.`;
+        setTrashAnnouncement(message);
+        setTrashFeedback(message);
       } else {
         const page = dataRef.current.pages.find((candidate) => candidate.id === pageId);
         if (page) {
-          setTrashEntries((entries) => [{ id: page.id, kind: "page", name: page.title, trashedAt: Date.now() }, ...entries]);
-          setTrashAnnouncement(`Moved ${page.title} to Trash.`);
+          setTrashEntries((entries) => [{ id: page.id, kind: "page", name: page.title, previousLocation: page.folderId === ROOT_FOLDER_ID ? "Root" : "Workspace", trashedAt: Date.now() }, ...entries]);
+          const message = `Moved ${page.title} to Trash.`;
+          setTrashAnnouncement(message);
+          setTrashFeedback(message);
         }
       }
     } catch (error) {
       setPersistenceStatus({ kind: "failed", error: error instanceof Error ? error : new Error(String(error)) });
-      setTrashAnnouncement(`Could not move ${pageName} to Trash.`);
+      const message = `Could not move ${pageName} to Trash.`;
+      setTrashAnnouncement(message);
+      setTrashFeedback(message);
       return;
     }
     setData((currentData) => {
@@ -9234,6 +9273,8 @@ function App() {
         pageSearchFocusRequest={pageSearchFocusRequest}
         pageTemplates={pageTemplates}
         trashEntries={trashEntries}
+        trashFeedback={trashFeedback}
+        pendingTrashAction={pendingTrashAction}
         pages={explorerPages}
         pageSearchQuery={pageSearchQuery}
         pageSearchResults={pageSearchResults}
@@ -10038,6 +10079,8 @@ const Sidebar = memo(function Sidebar({
   pageSearchFocusRequest,
   pageTemplates,
   trashEntries,
+  trashFeedback,
+  pendingTrashAction,
   pages,
   pageSearchQuery,
   pageSearchResults,
@@ -11628,15 +11671,7 @@ const Sidebar = memo(function Sidebar({
                       <span className="nav-actions">
                         <button
                           aria-label={`Move template ${templatePage.title} to Trash`}
-                          onClick={() => {
-                            const didConfirm = window.confirm(
-                              `Move template "${templatePage.title}" to Trash?\n\nPages already created from this template will not be affected.`,
-                            );
-
-                            if (didConfirm) {
-                              onDeletePageTemplate(templatePage.id);
-                            }
-                          }}
+                          onClick={() => onDeletePageTemplate(templatePage.id)}
                           title={`Move template ${templatePage.title} to Trash`}
                           type="button"
                         >
@@ -11663,17 +11698,18 @@ const Sidebar = memo(function Sidebar({
               <div className="section-header">
                 <h2 id="trash-title" tabIndex={-1}>Trash</h2>
                 <button
-                  aria-label="Empty Trash"
+                  aria-label={pendingTrashAction === "empty" ? "Emptying Trash" : "Empty Trash"}
                   className="section-action"
                   data-empty-trash
-                  disabled={trashEntries.length === 0}
+                  disabled={trashEntries.length === 0 || pendingTrashAction === "empty"}
                   onClick={onEmptyTrash}
-                  title="Permanently delete everything in Trash"
+                  title={pendingTrashAction === "empty" ? "Emptying Trash" : "Permanently delete everything in Trash"}
                   type="button"
                 >
                   <HeroIcon name="trash" />
                 </button>
               </div>
+              {trashFeedback ? <p className="trash-feedback" role="status">{trashFeedback}</p> : null}
               {trashEntries.length > 0 ? (
                 <ul className="nav-list trash-list" aria-label="Trashed items">
                   {trashEntries.map((entry, restoreIndex) => (
@@ -11681,14 +11717,20 @@ const Sidebar = memo(function Sidebar({
                       <span className="file-row-icon">
                         <HeroIcon name={entry.kind === "folder" ? "folder" : "document-text"} />
                       </span>
-                      <span className="nav-label">{entry.name}</span>
+                      <span className="nav-label">
+                        {entry.name}
+                        <span className="trash-entry-detail">
+                          {`${entry.previousLocation} · ${new Date(entry.trashedAt).toLocaleString()}`}
+                        </span>
+                      </span>
                       <span className="file-kind">{entry.kind.toUpperCase()}</span>
                       <span className="nav-actions">
                         <button
-                          aria-label={`Restore ${entry.name}`}
+                          aria-label={pendingTrashAction === `restore:${entry.id}` ? `Restoring ${entry.name}` : `Restore ${entry.name}`}
                           data-trash-restore
+                          disabled={pendingTrashAction !== null}
                           onClick={() => onRestoreTrashEntry(entry, restoreIndex)}
-                          title={`Restore ${entry.name}`}
+                          title={pendingTrashAction === `restore:${entry.id}` ? `Restoring ${entry.name}` : `Restore ${entry.name}`}
                           type="button"
                         >
                           <HeroIcon name="check" />
@@ -11768,6 +11810,8 @@ function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps) {
     previous.pageSearchFocusRequest === next.pageSearchFocusRequest &&
     previous.pageTemplates === next.pageTemplates &&
     previous.trashEntries === next.trashEntries &&
+    previous.trashFeedback === next.trashFeedback &&
+    previous.pendingTrashAction === next.pendingTrashAction &&
     previous.pages === next.pages &&
     previous.pageSearchQuery === next.pageSearchQuery &&
     previous.pageSearchResults === next.pageSearchResults &&

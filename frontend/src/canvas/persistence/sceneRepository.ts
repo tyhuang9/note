@@ -55,6 +55,7 @@ export type TrashEntry = {
   id: string;
   kind: "folder" | "page";
   name: string;
+  previousLocation: string;
   trashedAt: number;
 };
 

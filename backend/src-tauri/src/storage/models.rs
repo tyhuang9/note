@@ -39,6 +39,7 @@ pub struct TrashEntryDto {
     pub id: String,
     pub kind: String,
     pub name: String,
+    pub previous_location: String,
     pub trashed_at: i64,
 }
 

@@ -156,5 +156,9 @@ test("folder More and right-click share one accessible action menu", async ({
   );
   await page.getByRole("button", { name: "2 items in Trash" }).click();
   await expect(page.getByRole("list", { name: "Trashed items" })).toBeVisible();
-  await expect(page.getByRole("listitem").filter({ hasText: "Renamed project" })).toContainText("Renamed project");
+  const trashedFolder = page.getByRole("listitem").filter({ hasText: "Renamed project" });
+  await expect(trashedFolder).toContainText("Renamed project");
+  await expect(trashedFolder).toContainText("Workspace");
+  await expect(trashedFolder.locator(".trash-entry-detail")).toContainText("·");
+  await expect(page.locator(".trash-feedback")).toHaveText("Moved Renamed project to Trash.");
 });

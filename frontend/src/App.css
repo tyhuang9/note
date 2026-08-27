@@ -1365,6 +1365,23 @@ h2 {
   white-space: nowrap;
 }
 
+.trash-entry-detail {
+  display: block;
+  overflow: hidden;
+  color: #7a8795;
+  font-size: 11px;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trash-feedback {
+  margin: 4px 0 8px;
+  color: #475467;
+  font-size: 12px;
+  line-height: 16px;
+}
+
 .item-count {
   color: #7a8795;
   font-size: 12px;

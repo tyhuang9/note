@@ -838,6 +838,11 @@
                 "minLength": 1,
                 "type": "string"
               },
+              "attachmentId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
               "expiresAtUnixMs": {
                 "maximum": 9007199254740991,
                 "minimum": 0,
@@ -949,6 +954,7 @@
             },
             "required": [
               "approvalId",
+              "attachmentId",
               "runId",
               "toolCallId",
               "provider",

@@ -583,6 +583,7 @@ fn screenshot_approval_artifact_schema() -> Value {
     object_schema(
         &[
             "approvalId",
+            "attachmentId",
             "runId",
             "toolCallId",
             "provider",
@@ -596,6 +597,7 @@ fn screenshot_approval_artifact_schema() -> Value {
         ],
         json!({
             "approvalId":id_schema(),
+            "attachmentId":id_schema(),
             "runId":id_schema(),
             "toolCallId":id_schema(),
             "provider":provider_endpoint_schema(),
@@ -935,6 +937,16 @@ pub fn validate_tool_invocation(
 }
 
 pub fn validate_tool_result(
+    capability_id: CapabilityId,
+    value: &Value,
+) -> Result<(), ContractValidationError> {
+    if capability_id == CapabilityId::CanvasRequestScreenshot {
+        return Err(ContractValidationError::InvalidScreenshotApproval);
+    }
+    validate_tool_result_schema(capability_id, value)
+}
+
+fn validate_tool_result_schema(
     capability_id: CapabilityId,
     value: &Value,
 ) -> Result<(), ContractValidationError> {
@@ -1649,8 +1661,19 @@ pub struct ViewportContext {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ScreenshotToolResult {
+    pub approval_artifact: ScreenshotApprovalArtifact,
+    pub attachment_id: String,
+    pub media_type: String,
+    pub requires_approval: bool,
+    pub persisted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ScreenshotApprovalArtifact {
     pub approval_id: String,
+    pub attachment_id: String,
     pub run_id: String,
     pub tool_call_id: String,
     pub provider: ProviderEndpointIdentity,
@@ -1673,12 +1696,15 @@ impl ScreenshotApprovalArtifact {
         page_revision: u64,
         viewport: &ViewportContext,
         scale: f64,
+        attachment_id: &str,
         now_unix_ms: u64,
     ) -> Result<(), ContractValidationError> {
         key.validate()?;
         provider.validate()?;
         self.provider.validate()?;
         if !valid_identifier(&self.approval_id)
+            || !valid_identifier(&self.attachment_id)
+            || self.attachment_id != attachment_id
             || self.run_id != key.run_id
             || self.tool_call_id != key.tool_call_id
             || &self.provider != provider
@@ -1705,6 +1731,49 @@ impl ScreenshotApprovalArtifact {
         check_serialized_size(self, MAX_TOOL_RESULT_BYTES)?;
         Ok(())
     }
+}
+
+/// Native hosts must compare and consume the complete stored approval in one
+/// transaction. Missing, expired, mismatched, or previously consumed approvals
+/// must fail; screenshot bytes must not be exposed before this call succeeds.
+pub trait ScreenshotApprovalConsumer {
+    fn consume_atomically(
+        &mut self,
+        expected: &ScreenshotApprovalArtifact,
+    ) -> Result<(), ContractValidationError>;
+}
+
+pub fn validate_and_consume_screenshot_tool_result<C: ScreenshotApprovalConsumer>(
+    value: &Value,
+    expected: &ScreenshotApprovalArtifact,
+    now_unix_ms: u64,
+    consumer: &mut C,
+) -> Result<ScreenshotToolResult, ContractValidationError> {
+    validate_tool_result_schema(CapabilityId::CanvasRequestScreenshot, value)?;
+    let result: ScreenshotToolResult = serde_json::from_value(value.clone())
+        .map_err(|error| ContractValidationError::UnknownField(error.to_string()))?;
+    let key = ToolCallIdempotencyKey {
+        run_id: expected.run_id.clone(),
+        tool_call_id: expected.tool_call_id.clone(),
+    };
+    expected.validate_for(
+        &key,
+        &expected.provider,
+        &expected.page_id,
+        expected.page_revision,
+        &expected.viewport,
+        expected.scale,
+        &expected.attachment_id,
+        now_unix_ms,
+    )?;
+    if result.approval_artifact != *expected
+        || result.attachment_id != expected.attachment_id
+        || result.attachment_id != result.approval_artifact.attachment_id
+    {
+        return Err(ContractValidationError::InvalidScreenshotApproval);
+    }
+    consumer.consume_atomically(expected)?;
+    Ok(result)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -2482,6 +2551,7 @@ mod tests {
     fn screenshot_artifact() -> ScreenshotApprovalArtifact {
         ScreenshotApprovalArtifact {
             approval_id: "approval".into(),
+            attachment_id: "attachment".into(),
             run_id: "run".into(),
             tool_call_id: "call".into(),
             provider: provider_identity(),
@@ -2498,6 +2568,34 @@ mod tests {
             expires_at_unix_ms: 2_000,
             single_use: true,
         }
+    }
+
+    #[derive(Default)]
+    struct OneShotScreenshotApprovals {
+        consumed: BTreeSet<String>,
+    }
+
+    impl ScreenshotApprovalConsumer for OneShotScreenshotApprovals {
+        fn consume_atomically(
+            &mut self,
+            expected: &ScreenshotApprovalArtifact,
+        ) -> Result<(), ContractValidationError> {
+            if self.consumed.insert(expected.approval_id.clone()) {
+                Ok(())
+            } else {
+                Err(ContractValidationError::InvalidScreenshotApproval)
+            }
+        }
+    }
+
+    fn screenshot_result(artifact: &ScreenshotApprovalArtifact) -> Value {
+        json!({
+            "approvalArtifact": serde_json::to_value(artifact).unwrap(),
+            "attachmentId": artifact.attachment_id,
+            "mediaType": "image/png",
+            "requiresApproval": true,
+            "persisted": false
+        })
     }
 
     fn context_envelope() -> AgentContextEnvelope {
@@ -2630,12 +2728,29 @@ mod tests {
     fn receipts_maps_screenshots_and_json_safe_revisions_validate() {
         let receipt = json!({"receipt": serde_json::to_value(MutationReceipt { audit_id: "audit".into(), change_set_id: "change".into(), run_id: "run".into(), tool_call_id: "call".into(), changed_resources: vec![], workspace_revision: MAX_JSON_SAFE_REVISION as u64, page_revisions: BTreeMap::from([("page".into(), MAX_JSON_SAFE_REVISION as u64)]), inverse_change_set: BoundedInverseChangeSet { inverse_change_set_id: "undo".into(), changes: vec![InverseChange::RestoreResource { kind: ChangedResourceKind::Page, id: "page".into() }] } }).unwrap()});
         assert!(validate_tool_result(CapabilityId::WorkspaceCreatePage, &receipt).is_ok());
-        let screenshot = json!({"approvalArtifact":serde_json::to_value(screenshot_artifact()).unwrap(),"attachmentId":"attachment","mediaType":"image/png","requiresApproval":true,"persisted":false});
-        assert!(validate_tool_result(CapabilityId::CanvasRequestScreenshot, &screenshot).is_ok());
-        let mut invalid_screenshot = screenshot;
+        let artifact = screenshot_artifact();
+        let screenshot = screenshot_result(&artifact);
+        assert_eq!(
+            validate_tool_result(CapabilityId::CanvasRequestScreenshot, &screenshot),
+            Err(ContractValidationError::InvalidScreenshotApproval)
+        );
+        let mut approvals = OneShotScreenshotApprovals::default();
+        assert!(validate_and_consume_screenshot_tool_result(
+            &screenshot,
+            &artifact,
+            1_500,
+            &mut approvals,
+        )
+        .is_ok());
+        let mut invalid_screenshot = screenshot_result(&artifact);
         invalid_screenshot["approvalArtifact"]["pageRevision"] = json!(MAX_JSON_SAFE_REVISION + 1);
         assert!(matches!(
-            validate_tool_result(CapabilityId::CanvasRequestScreenshot, &invalid_screenshot),
+            validate_and_consume_screenshot_tool_result(
+                &invalid_screenshot,
+                &artifact,
+                1_500,
+                &mut OneShotScreenshotApprovals::default(),
+            ),
             Err(ContractValidationError::SchemaViolation { .. })
         ));
     }
@@ -2781,6 +2896,7 @@ mod tests {
                 0,
                 &artifact.viewport,
                 1.0,
+                "attachment",
                 1_500,
             )
             .is_ok());
@@ -2792,6 +2908,7 @@ mod tests {
                 0,
                 &artifact.viewport,
                 1.0,
+                "attachment",
                 1_500,
             ),
             Err(ContractValidationError::InvalidScreenshotApproval)
@@ -2804,8 +2921,49 @@ mod tests {
                 0,
                 &artifact.viewport,
                 1.0,
+                "attachment",
                 2_001,
             ),
+            Err(ContractValidationError::InvalidScreenshotApproval)
+        );
+    }
+
+    #[test]
+    fn screenshot_result_rejects_attachment_swaps_and_consumes_once() {
+        let artifact = screenshot_artifact();
+        let mut swapped = screenshot_result(&artifact);
+        swapped["attachmentId"] = json!("other-attachment");
+        let mut approvals = OneShotScreenshotApprovals::default();
+        assert_eq!(
+            validate_and_consume_screenshot_tool_result(&swapped, &artifact, 1_500, &mut approvals,),
+            Err(ContractValidationError::InvalidScreenshotApproval)
+        );
+        assert!(approvals.consumed.is_empty());
+
+        let mut fully_swapped = screenshot_result(&artifact);
+        fully_swapped["attachmentId"] = json!("other-attachment");
+        fully_swapped["approvalArtifact"]["attachmentId"] = json!("other-attachment");
+        assert_eq!(
+            validate_and_consume_screenshot_tool_result(
+                &fully_swapped,
+                &artifact,
+                1_500,
+                &mut approvals,
+            ),
+            Err(ContractValidationError::InvalidScreenshotApproval)
+        );
+        assert!(approvals.consumed.is_empty());
+
+        let result = screenshot_result(&artifact);
+        assert!(validate_and_consume_screenshot_tool_result(
+            &result,
+            &artifact,
+            1_500,
+            &mut approvals,
+        )
+        .is_ok());
+        assert_eq!(
+            validate_and_consume_screenshot_tool_result(&result, &artifact, 1_500, &mut approvals,),
             Err(ContractValidationError::InvalidScreenshotApproval)
         );
     }

@@ -612,8 +612,16 @@ fn semantic_operations_schema() -> Value {
         json!({"type":enum_schema(&["create_line"]), "elementId":id_schema(), "startX":number_schema(-1_000_000.0,1_000_000.0), "startY":number_schema(-1_000_000.0,1_000_000.0), "endX":number_schema(-1_000_000.0,1_000_000.0), "endY":number_schema(-1_000_000.0,1_000_000.0), "style":line_style_schema()}),
     );
     let arrow = object_schema(
-        &["type", "elementId", "start", "end", "style", "labelStyle"],
-        json!({"type":enum_schema(&["create_arrow"]), "elementId":id_schema(), "start":element_anchor_schema(), "end":element_anchor_schema(), "style":arrow_style_schema(), "labelStyle":text_style_schema()}),
+        &[
+            "type",
+            "elementId",
+            "start",
+            "end",
+            "style",
+            "label",
+            "labelStyle",
+        ],
+        json!({"type":enum_schema(&["create_arrow"]), "elementId":id_schema(), "start":element_anchor_schema(), "end":element_anchor_schema(), "style":arrow_style_schema(), "label":string_schema(0,1_000), "labelStyle":text_style_schema()}),
     );
     let shape_text = object_schema(
         &["type", "elementId", "text", "textStyle"],
@@ -1281,6 +1289,7 @@ pub enum SemanticCanvasOperation {
         start: ElementAnchor,
         end: ElementAnchor,
         style: ArrowStyle,
+        label: String,
         label_style: TextStyle,
     },
     SetShapeText {

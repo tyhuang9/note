@@ -2783,6 +2783,11 @@
                       ],
                       "type": "object"
                     },
+                    "label": {
+                      "maxLength": 1000,
+                      "minLength": 0,
+                      "type": "string"
+                    },
                     "labelStyle": {
                       "additionalProperties": false,
                       "properties": {
@@ -2901,6 +2906,7 @@
                     "start",
                     "end",
                     "style",
+                    "label",
                     "labelStyle"
                   ],
                   "type": "object"

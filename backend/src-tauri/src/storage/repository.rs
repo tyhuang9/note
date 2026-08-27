@@ -2523,7 +2523,8 @@ fn retry_asset_cleanup(root: &Path) -> Result<(), String> {
     for (id, relative, staged) in entries {
         let relative = cleanup_path_component(&relative, "relative path")?;
         let staged = cleanup_path_component(&staged, "staged path")?;
-        let parsed_id = uuid::Uuid::parse_str(&id).map_err(|_| "invalid asset cleanup id".to_owned())?;
+        let parsed_id =
+            uuid::Uuid::parse_str(&id).map_err(|_| "invalid asset cleanup id".to_owned())?;
         if staged != format!(".purging-{parsed_id}") {
             return Err("invalid asset cleanup staged path".into());
         }
@@ -2568,10 +2569,15 @@ pub fn trash_purge_preview_at(root: &Path) -> Result<TrashPurgePreview, String> 
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
     transaction
-        .execute("DELETE FROM trash_purge_snapshots WHERE expires_at<?", [now_ms()])
+        .execute(
+            "DELETE FROM trash_purge_snapshots WHERE expires_at<?",
+            [now_ms()],
+        )
         .map_err(|e| e.to_string())?;
     let outstanding: i64 = transaction
-        .query_row("SELECT count(*) FROM trash_purge_snapshots", [], |row| row.get(0))
+        .query_row("SELECT count(*) FROM trash_purge_snapshots", [], |row| {
+            row.get(0)
+        })
         .map_err(|e| e.to_string())?;
     if outstanding >= 32 {
         transaction
@@ -5517,7 +5523,9 @@ mod tests {
         ).unwrap();
         drop(connection);
 
-        assert!(retry_asset_cleanup(directory.path()).unwrap_err().contains("relative path"));
+        assert!(retry_asset_cleanup(directory.path())
+            .unwrap_err()
+            .contains("relative path"));
         assert!(asset_file(directory.path(), &asset.id).exists());
     }
 }

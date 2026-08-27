@@ -103,7 +103,8 @@ CREATE TABLE asset_cleanup_journal(asset_id TEXT PRIMARY KEY NOT NULL, relative_
 INSERT INTO schema_migrations(version,applied_at) VALUES(5,unixepoch('subsec')*1000);
 PRAGMA user_version=5;
 "#).map_err(|e| format!("apply migration 5: {e}"))?;
-        tx.commit().map_err(|e| format!("commit migration 5: {e}"))?;
+        tx.commit()
+            .map_err(|e| format!("commit migration 5: {e}"))?;
     }
     Ok(SCHEMA_VERSION)
 }
@@ -190,9 +191,25 @@ PRAGMA user_version=4;
 "#).unwrap();
 
         assert!(migrate(&mut connection).is_err());
-        assert_eq!(connection.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0)).unwrap(), 4);
-        assert_eq!(connection.query_row("SELECT count(*) FROM schema_migrations WHERE version=5", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
-        connection.execute("DROP TABLE asset_cleanup_journal", []).unwrap();
+        assert_eq!(
+            connection
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            4
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM schema_migrations WHERE version=5",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        connection
+            .execute("DROP TABLE asset_cleanup_journal", [])
+            .unwrap();
         assert_eq!(migrate(&mut connection).unwrap(), 5);
     }
 }

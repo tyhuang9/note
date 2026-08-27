@@ -383,7 +383,7 @@
               "minLength": 1,
               "type": "string"
             },
-            "maxItems": 100,
+            "maxItems": 50,
             "minItems": 1,
             "type": "array"
           },
@@ -691,25 +691,192 @@
                           "additionalProperties": false,
                           "properties": {
                             "operation": {
-                              "properties": {
-                                "type": {
-                                  "enum": [
-                                    "create_folder",
-                                    "rename_folder",
-                                    "create_page",
-                                    "rename_page",
-                                    "move_page",
-                                    "bookmark_page",
-                                    "archive_items",
-                                    "restore_items"
+                              "oneOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "folder_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "maxLength": 120,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "create_folder",
+                                        "rename_folder"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "folder_id",
+                                    "name"
                                   ],
-                                  "type": "string"
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "folder_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "title": {
+                                      "maxLength": 240,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "create_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "folder_id",
+                                    "title"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "title": {
+                                      "maxLength": 240,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "rename_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "title"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "folder_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "move_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "folder_id"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "bookmarked": {
+                                      "type": "boolean"
+                                    },
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "bookmark_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "bookmarked"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "items": {
+                                      "items": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "id": {
+                                            "maxLength": 128,
+                                            "minLength": 1,
+                                            "type": "string"
+                                          },
+                                          "kind": {
+                                            "enum": [
+                                              "folder",
+                                              "page"
+                                            ],
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "id"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      "maxItems": 10,
+                                      "minItems": 1,
+                                      "type": "array"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "archive_items",
+                                        "restore_items"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "items"
+                                  ],
+                                  "type": "object"
                                 }
-                              },
-                              "required": [
-                                "type"
-                              ],
-                              "type": "object"
+                              ]
                             },
                             "type": {
                               "enum": [
@@ -900,25 +1067,192 @@
                           "additionalProperties": false,
                           "properties": {
                             "operation": {
-                              "properties": {
-                                "type": {
-                                  "enum": [
-                                    "create_folder",
-                                    "rename_folder",
-                                    "create_page",
-                                    "rename_page",
-                                    "move_page",
-                                    "bookmark_page",
-                                    "archive_items",
-                                    "restore_items"
+                              "oneOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "folder_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "maxLength": 120,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "create_folder",
+                                        "rename_folder"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "folder_id",
+                                    "name"
                                   ],
-                                  "type": "string"
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "folder_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "title": {
+                                      "maxLength": 240,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "create_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "folder_id",
+                                    "title"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "title": {
+                                      "maxLength": 240,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "rename_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "title"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "folder_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "move_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "folder_id"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "bookmarked": {
+                                      "type": "boolean"
+                                    },
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "bookmark_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "bookmarked"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "items": {
+                                      "items": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "id": {
+                                            "maxLength": 128,
+                                            "minLength": 1,
+                                            "type": "string"
+                                          },
+                                          "kind": {
+                                            "enum": [
+                                              "folder",
+                                              "page"
+                                            ],
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "id"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      "maxItems": 10,
+                                      "minItems": 1,
+                                      "type": "array"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "archive_items",
+                                        "restore_items"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "items"
+                                  ],
+                                  "type": "object"
                                 }
-                              },
-                              "required": [
-                                "type"
-                              ],
-                              "type": "object"
+                              ]
                             },
                             "type": {
                               "enum": [
@@ -1103,25 +1437,192 @@
                           "additionalProperties": false,
                           "properties": {
                             "operation": {
-                              "properties": {
-                                "type": {
-                                  "enum": [
-                                    "create_folder",
-                                    "rename_folder",
-                                    "create_page",
-                                    "rename_page",
-                                    "move_page",
-                                    "bookmark_page",
-                                    "archive_items",
-                                    "restore_items"
+                              "oneOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "folder_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "maxLength": 120,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "create_folder",
+                                        "rename_folder"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "folder_id",
+                                    "name"
                                   ],
-                                  "type": "string"
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "folder_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "title": {
+                                      "maxLength": 240,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "create_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "folder_id",
+                                    "title"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "title": {
+                                      "maxLength": 240,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "rename_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "title"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "folder_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "move_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "folder_id"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "bookmarked": {
+                                      "type": "boolean"
+                                    },
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "bookmark_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "bookmarked"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "items": {
+                                      "items": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "id": {
+                                            "maxLength": 128,
+                                            "minLength": 1,
+                                            "type": "string"
+                                          },
+                                          "kind": {
+                                            "enum": [
+                                              "folder",
+                                              "page"
+                                            ],
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "id"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      "maxItems": 10,
+                                      "minItems": 1,
+                                      "type": "array"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "archive_items",
+                                        "restore_items"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "items"
+                                  ],
+                                  "type": "object"
                                 }
-                              },
-                              "required": [
-                                "type"
-                              ],
-                              "type": "object"
+                              ]
                             },
                             "type": {
                               "enum": [
@@ -1312,25 +1813,192 @@
                           "additionalProperties": false,
                           "properties": {
                             "operation": {
-                              "properties": {
-                                "type": {
-                                  "enum": [
-                                    "create_folder",
-                                    "rename_folder",
-                                    "create_page",
-                                    "rename_page",
-                                    "move_page",
-                                    "bookmark_page",
-                                    "archive_items",
-                                    "restore_items"
+                              "oneOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "folder_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "maxLength": 120,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "create_folder",
+                                        "rename_folder"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "folder_id",
+                                    "name"
                                   ],
-                                  "type": "string"
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "folder_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "title": {
+                                      "maxLength": 240,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "create_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "folder_id",
+                                    "title"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "title": {
+                                      "maxLength": 240,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "rename_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "title"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "folder_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "move_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "folder_id"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "bookmarked": {
+                                      "type": "boolean"
+                                    },
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "bookmark_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "bookmarked"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "items": {
+                                      "items": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "id": {
+                                            "maxLength": 128,
+                                            "minLength": 1,
+                                            "type": "string"
+                                          },
+                                          "kind": {
+                                            "enum": [
+                                              "folder",
+                                              "page"
+                                            ],
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "id"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      "maxItems": 10,
+                                      "minItems": 1,
+                                      "type": "array"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "archive_items",
+                                        "restore_items"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "items"
+                                  ],
+                                  "type": "object"
                                 }
-                              },
-                              "required": [
-                                "type"
-                              ],
-                              "type": "object"
+                              ]
                             },
                             "type": {
                               "enum": [
@@ -1521,25 +2189,192 @@
                           "additionalProperties": false,
                           "properties": {
                             "operation": {
-                              "properties": {
-                                "type": {
-                                  "enum": [
-                                    "create_folder",
-                                    "rename_folder",
-                                    "create_page",
-                                    "rename_page",
-                                    "move_page",
-                                    "bookmark_page",
-                                    "archive_items",
-                                    "restore_items"
+                              "oneOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "folder_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "maxLength": 120,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "create_folder",
+                                        "rename_folder"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "folder_id",
+                                    "name"
                                   ],
-                                  "type": "string"
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "folder_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "title": {
+                                      "maxLength": 240,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "create_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "folder_id",
+                                    "title"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "title": {
+                                      "maxLength": 240,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "rename_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "title"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "folder_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "move_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "folder_id"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "bookmarked": {
+                                      "type": "boolean"
+                                    },
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "bookmark_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "bookmarked"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "items": {
+                                      "items": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "id": {
+                                            "maxLength": 128,
+                                            "minLength": 1,
+                                            "type": "string"
+                                          },
+                                          "kind": {
+                                            "enum": [
+                                              "folder",
+                                              "page"
+                                            ],
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "id"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      "maxItems": 10,
+                                      "minItems": 1,
+                                      "type": "array"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "archive_items",
+                                        "restore_items"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "items"
+                                  ],
+                                  "type": "object"
                                 }
-                              },
-                              "required": [
-                                "type"
-                              ],
-                              "type": "object"
+                              ]
                             },
                             "type": {
                               "enum": [
@@ -1728,25 +2563,192 @@
                           "additionalProperties": false,
                           "properties": {
                             "operation": {
-                              "properties": {
-                                "type": {
-                                  "enum": [
-                                    "create_folder",
-                                    "rename_folder",
-                                    "create_page",
-                                    "rename_page",
-                                    "move_page",
-                                    "bookmark_page",
-                                    "archive_items",
-                                    "restore_items"
+                              "oneOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "folder_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "maxLength": 120,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "create_folder",
+                                        "rename_folder"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "folder_id",
+                                    "name"
                                   ],
-                                  "type": "string"
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "folder_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "title": {
+                                      "maxLength": 240,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "create_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "folder_id",
+                                    "title"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "title": {
+                                      "maxLength": 240,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "rename_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "title"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "folder_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "move_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "folder_id"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "bookmarked": {
+                                      "type": "boolean"
+                                    },
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "bookmark_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "bookmarked"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "items": {
+                                      "items": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "id": {
+                                            "maxLength": 128,
+                                            "minLength": 1,
+                                            "type": "string"
+                                          },
+                                          "kind": {
+                                            "enum": [
+                                              "folder",
+                                              "page"
+                                            ],
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "id"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      "maxItems": 10,
+                                      "minItems": 1,
+                                      "type": "array"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "archive_items",
+                                        "restore_items"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "items"
+                                  ],
+                                  "type": "object"
                                 }
-                              },
-                              "required": [
-                                "type"
-                              ],
-                              "type": "object"
+                              ]
                             },
                             "type": {
                               "enum": [
@@ -1953,25 +2955,192 @@
                           "additionalProperties": false,
                           "properties": {
                             "operation": {
-                              "properties": {
-                                "type": {
-                                  "enum": [
-                                    "create_folder",
-                                    "rename_folder",
-                                    "create_page",
-                                    "rename_page",
-                                    "move_page",
-                                    "bookmark_page",
-                                    "archive_items",
-                                    "restore_items"
+                              "oneOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "folder_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "maxLength": 120,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "create_folder",
+                                        "rename_folder"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "folder_id",
+                                    "name"
                                   ],
-                                  "type": "string"
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "folder_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "title": {
+                                      "maxLength": 240,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "create_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "folder_id",
+                                    "title"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "title": {
+                                      "maxLength": 240,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "rename_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "title"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "folder_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "move_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "folder_id"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "bookmarked": {
+                                      "type": "boolean"
+                                    },
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "bookmark_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "bookmarked"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "items": {
+                                      "items": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "id": {
+                                            "maxLength": 128,
+                                            "minLength": 1,
+                                            "type": "string"
+                                          },
+                                          "kind": {
+                                            "enum": [
+                                              "folder",
+                                              "page"
+                                            ],
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "id"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      "maxItems": 10,
+                                      "minItems": 1,
+                                      "type": "array"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "archive_items",
+                                        "restore_items"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "items"
+                                  ],
+                                  "type": "object"
                                 }
-                              },
-                              "required": [
-                                "type"
-                              ],
-                              "type": "object"
+                              ]
                             },
                             "type": {
                               "enum": [
@@ -2081,7 +3250,7 @@
           }
         },
         "required": [
-          "archiveIds",
+          "items",
           "expectedWorkspaceRevision"
         ],
         "type": "object"
@@ -2178,25 +3347,192 @@
                           "additionalProperties": false,
                           "properties": {
                             "operation": {
-                              "properties": {
-                                "type": {
-                                  "enum": [
-                                    "create_folder",
-                                    "rename_folder",
-                                    "create_page",
-                                    "rename_page",
-                                    "move_page",
-                                    "bookmark_page",
-                                    "archive_items",
-                                    "restore_items"
+                              "oneOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "folder_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "maxLength": 120,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "create_folder",
+                                        "rename_folder"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "folder_id",
+                                    "name"
                                   ],
-                                  "type": "string"
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "folder_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "title": {
+                                      "maxLength": 240,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "create_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "folder_id",
+                                    "title"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "title": {
+                                      "maxLength": 240,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "rename_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "title"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "folder_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "move_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "folder_id"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "bookmarked": {
+                                      "type": "boolean"
+                                    },
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "bookmark_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "bookmarked"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "items": {
+                                      "items": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "id": {
+                                            "maxLength": 128,
+                                            "minLength": 1,
+                                            "type": "string"
+                                          },
+                                          "kind": {
+                                            "enum": [
+                                              "folder",
+                                              "page"
+                                            ],
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "id"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      "maxItems": 10,
+                                      "minItems": 1,
+                                      "type": "array"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "archive_items",
+                                        "restore_items"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "items"
+                                  ],
+                                  "type": "object"
                                 }
-                              },
-                              "required": [
-                                "type"
-                              ],
-                              "type": "object"
+                              ]
                             },
                             "type": {
                               "enum": [
@@ -2805,9 +4141,9 @@
                           "type": "string"
                         },
                         "fontSize": {
-                          "maximum": 96.0,
-                          "minimum": 8.0,
-                          "type": "number"
+                          "maximum": 96,
+                          "minimum": 8,
+                          "type": "integer"
                         },
                         "fontWeight": {
                           "enum": [
@@ -2941,9 +4277,9 @@
                           "type": "string"
                         },
                         "fontSize": {
-                          "maximum": 96.0,
-                          "minimum": 8.0,
-                          "type": "number"
+                          "maximum": 96,
+                          "minimum": 8,
+                          "type": "integer"
                         },
                         "fontWeight": {
                           "enum": [
@@ -3296,25 +4632,192 @@
                           "additionalProperties": false,
                           "properties": {
                             "operation": {
-                              "properties": {
-                                "type": {
-                                  "enum": [
-                                    "create_folder",
-                                    "rename_folder",
-                                    "create_page",
-                                    "rename_page",
-                                    "move_page",
-                                    "bookmark_page",
-                                    "archive_items",
-                                    "restore_items"
+                              "oneOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "folder_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "maxLength": 120,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "create_folder",
+                                        "rename_folder"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "folder_id",
+                                    "name"
                                   ],
-                                  "type": "string"
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "folder_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "title": {
+                                      "maxLength": 240,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "create_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "folder_id",
+                                    "title"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "title": {
+                                      "maxLength": 240,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "rename_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "title"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "folder_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "move_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "folder_id"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "bookmarked": {
+                                      "type": "boolean"
+                                    },
+                                    "page_id": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "bookmark_page"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "page_id",
+                                    "bookmarked"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "items": {
+                                      "items": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "id": {
+                                            "maxLength": 128,
+                                            "minLength": 1,
+                                            "type": "string"
+                                          },
+                                          "kind": {
+                                            "enum": [
+                                              "folder",
+                                              "page"
+                                            ],
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "id"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      "maxItems": 10,
+                                      "minItems": 1,
+                                      "type": "array"
+                                    },
+                                    "type": {
+                                      "enum": [
+                                        "archive_items",
+                                        "restore_items"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "items"
+                                  ],
+                                  "type": "object"
                                 }
-                              },
-                              "required": [
-                                "type"
-                              ],
-                              "type": "object"
+                              ]
                             },
                             "type": {
                               "enum": [

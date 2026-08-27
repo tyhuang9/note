@@ -258,7 +258,7 @@ pub fn canonical_manifest() -> AgentManifest {
                 CapabilityId::CanvasReadElements,
                 object_schema(
                     &["pageId", "elementIds"],
-                    json!({"pageId": id_schema(), "elementIds": array_schema(id_schema(), 1, 100)}),
+                    json!({"pageId": id_schema(), "elementIds": array_schema(id_schema(), 1, 50)}),
                 ),
                 elements_output_schema(),
                 DataScope::CanvasElements,
@@ -371,7 +371,7 @@ pub fn canonical_manifest() -> AgentManifest {
             capability(
                 CapabilityId::WorkspaceRestoreItems,
                 object_schema(
-                    &["archiveIds", "expectedWorkspaceRevision"],
+                    &["items", "expectedWorkspaceRevision"],
                     json!({"items": array_schema(archive_item_schema(), 1, 10), "expectedWorkspaceRevision": revision_schema()}),
                 ),
                 receipt_output_schema(),
@@ -548,7 +548,33 @@ fn inverse_change_set_schema() -> Value {
     )
 }
 fn workspace_operation_schema() -> Value {
-    json!({"type":"object", "required":["type"], "properties":{"type":enum_schema(&["create_folder", "rename_folder", "create_page", "rename_page", "move_page", "bookmark_page", "archive_items", "restore_items"])}})
+    let folder = || {
+        object_schema(
+            &["type", "folder_id", "name"],
+            json!({"type":enum_schema(&["create_folder", "rename_folder"]), "folder_id":id_schema(), "name":string_schema(1,120)}),
+        )
+    };
+    let create_page = object_schema(
+        &["type", "page_id", "folder_id", "title"],
+        json!({"type":enum_schema(&["create_page"]), "page_id":id_schema(), "folder_id":id_schema(), "title":string_schema(1,240)}),
+    );
+    let rename_page = object_schema(
+        &["type", "page_id", "title"],
+        json!({"type":enum_schema(&["rename_page"]), "page_id":id_schema(), "title":string_schema(1,240)}),
+    );
+    let move_page = object_schema(
+        &["type", "page_id", "folder_id"],
+        json!({"type":enum_schema(&["move_page"]), "page_id":id_schema(), "folder_id":id_schema()}),
+    );
+    let bookmark = object_schema(
+        &["type", "page_id", "bookmarked"],
+        json!({"type":enum_schema(&["bookmark_page"]), "page_id":id_schema(), "bookmarked":boolean_schema()}),
+    );
+    let archive = object_schema(
+        &["type", "items"],
+        json!({"type":enum_schema(&["archive_items", "restore_items"]), "items":array_schema(archive_item_schema(),1,10)}),
+    );
+    json!({"oneOf":[folder(), create_page, rename_page, move_page, bookmark, archive]})
 }
 fn changed_resource_schema() -> Value {
     object_schema(
@@ -667,7 +693,7 @@ fn arrowhead_schema() -> Value {
 fn text_style_schema() -> Value {
     object_schema(
         &[],
-        json!({"fontSize":number_schema(8.0,96.0), "fontWeight":enum_schema(&["normal", "bold"]), "color":string_schema(1,32), "alignment":enum_schema(&["left", "center", "right"])}),
+        json!({"fontSize":integer_schema(8,96), "fontWeight":enum_schema(&["normal", "bold"]), "color":string_schema(1,32), "alignment":enum_schema(&["left", "center", "right"])}),
     )
 }
 fn bindable_element_kind_schema() -> Value {
@@ -719,6 +745,8 @@ pub enum ContractValidationError {
     InvalidCanvasChangeSet,
     #[error("permission grant requests a capability outside its profile")]
     PermissionEscalation,
+    #[error("canvas change set exceeds V1 creation or touched-element budgets")]
+    CanvasBudgetExceeded,
 }
 
 /// Parses untrusted JSON and rejects unknown DTO fields before it reaches a host.
@@ -1174,6 +1202,19 @@ impl WorkspaceChangeSet {
                 }) {
                     return Err(ContractValidationError::InvalidCanvasChangeSet);
                 }
+                let created = operations
+                    .iter()
+                    .map(SemanticCanvasOperation::created_count)
+                    .sum::<usize>();
+                let touched: BTreeSet<_> = operations
+                    .iter()
+                    .flat_map(SemanticCanvasOperation::touched_ids)
+                    .collect();
+                if created > DEFAULT_LIMITS.max_created_elements as usize
+                    || touched.len() > DEFAULT_LIMITS.max_touched_elements as usize
+                {
+                    return Err(ContractValidationError::CanvasBudgetExceeded);
+                }
             }
         }
         Ok(())
@@ -1315,11 +1356,53 @@ pub enum SemanticCanvasOperation {
         placement: ReorderPlacement,
     },
 }
+impl SemanticCanvasOperation {
+    fn created_count(&self) -> usize {
+        match self {
+            Self::CreateText { .. }
+            | Self::CreateShape { .. }
+            | Self::CreateConnector { .. }
+            | Self::CreateLine { .. }
+            | Self::CreateArrow { .. } => 1,
+            Self::DuplicateElements { targets, .. } => targets.len(),
+            _ => 0,
+        }
+    }
+    fn touched_ids(&self) -> Vec<&str> {
+        match self {
+            Self::MoveElements { targets, .. }
+            | Self::DuplicateElements { targets, .. }
+            | Self::AlignElements { targets, .. }
+            | Self::DistributeElements { targets, .. }
+            | Self::ReorderElements { targets, .. } => targets
+                .iter()
+                .map(|target| target.element_id.as_str())
+                .collect(),
+            Self::CreateConnector { start, end, .. } | Self::CreateArrow { start, end, .. } => {
+                vec![start.element_id.as_str(), end.element_id.as_str()]
+            }
+            Self::CreateText { element_id, .. }
+            | Self::ReplaceText { element_id, .. }
+            | Self::CreateShape { element_id, .. }
+            | Self::ResizeElement { element_id, .. }
+            | Self::SetStyle { element_id, .. }
+            | Self::SetConnectorLabel { element_id, .. }
+            | Self::CreateLine { element_id, .. }
+            | Self::SetShapeText { element_id, .. } => vec![element_id.as_str()],
+        }
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ArchiveItemTarget {
-    pub kind: ChangedResourceKind,
+    pub kind: ArchiveItemKind,
     pub id: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveItemKind {
+    Folder,
+    Page,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

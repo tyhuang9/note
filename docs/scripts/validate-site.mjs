@@ -82,8 +82,15 @@ for (const page of pages) {
 }
 
 const home = readFileSync(resolve(docsRoot, "index.html"), "utf8");
+const styles = readFileSync(resolve(docsRoot, "styles.css"), "utf8");
 if (!/<source\b[^>]*media="\(prefers-reduced-motion: reduce\)"[^>]*srcset="assets\/note-demo-static\.png"/i.test(home)) {
   fail("index.html must provide the static demo image for reduced-motion visitors.");
+}
+if (/border-(?:left|top)\s*:[^;]*(?:var\(--golden|#D4A128|#E6B84A|#7A5700)/i.test(styles)) {
+  fail("styles.css must not use brand-colored left or top borders.");
+}
+if (/box-shadow\s*:\s*inset\s+(?:0\s+[1-9]|[1-9][\d.]*\S*\s+0)[^;]*(?:var\(--golden|#D4A128|#E6B84A|#7A5700)/i.test(styles)) {
+  fail("styles.css must not simulate brand-colored left or top borders with inset shadows.");
 }
 for (const page of pages) {
   const content = readFileSync(resolve(docsRoot, page), "utf8");

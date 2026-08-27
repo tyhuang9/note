@@ -247,7 +247,6 @@ figcaption {
   border: 1px solid var(--line);
   border-radius: 1rem;
   background: var(--surface);
-  box-shadow: inset 0 3px var(--golden);
 }
 
 .download-card { padding: 1.5rem; }

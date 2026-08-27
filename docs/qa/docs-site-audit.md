@@ -25,6 +25,10 @@
 4. **Unsigned-build notice — healthy after fix.** The notice remains prominent without the deprecated colored left-edge accent.
    - Before: `docs/qa/docs-site-audit/05-warning-left-border-before.png`
    - After: `docs/qa/docs-site-audit/09-warning-card-after.png`
+5. **First-use cards — healthy after follow-up.** Gold top-edge accents are removed; each card now uses one neutral complete border.
+   - Reference: `docs/qa/docs-site-audit/12-first-use-colored-top-border-reference.png`
+   - After: `docs/qa/docs-site-audit/10-first-use-no-top-accent-after.png`
+   - Focused comparison: `docs/qa/docs-site-audit/13-first-use-top-border-comparison.png`
 
 The full-page browser capture was rejected because the animated GIF caused a stitched duplicate of the First Use section. DOM inspection confirmed one section; stable viewport captures above are the accepted evidence.
 
@@ -32,6 +36,7 @@ The full-page browser capture was rejected because the animated GIF caused a sti
 
 - **Responsive navigation:** the 320px header previously orphaned “All releases” on a left-aligned second row. Navigation is now consistent between pages, uses explicit current-page styling, and changes to a centered two-row grid at the narrowest supported width.
 - **Visual consistency:** the callout and unsigned-build notice no longer use colored left borders. They use complete neutral borders and rounded corners while keeping their warning surfaces.
+- **Card restraint:** download and first-use cards no longer use a gold top-edge accent. Their neutral complete borders provide structure without directional decoration.
 - **Navigation clarity:** Overview, Install guide, and All releases now appear in the same order on both pages. The active page uses `aria-current="page"` and a stronger underline.
 - **Skip-link robustness:** both `main` landmarks are programmatically focusable with `tabindex="-1"`.
 - **Copy quality:** “GitHub release” now uses consistent sentence-case wording.

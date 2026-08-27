@@ -1912,6 +1912,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-os",
  "tempfile",
+ "thiserror 2.0.18",
  "url",
  "uuid",
 ]

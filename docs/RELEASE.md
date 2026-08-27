@@ -23,7 +23,7 @@ Published filenames are deliberately version-independent:
 
 | Platform | Asset | Notes |
 | --- | --- | --- |
-| Windows | `Note-Setup.exe` | NSIS installer for the current user; no administrator installation is required. |
+| Windows | `Note-Setup.exe` | NSIS installer for the current user; no administrator installation is required. Existing installs offer Update, Repair, or Remove as appropriate; Remove exits setup after uninstalling. |
 | macOS | `Note.dmg` | Disk image from the macOS runner. |
 | Debian/Ubuntu | `Note.deb` | Required Linux release asset. |
 | Linux, when available | `Note.AppImage` | Optional: AppImage packaging can fail on hosted runners. |

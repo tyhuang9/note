@@ -4,6 +4,7 @@ use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 use serde_json::Value;
 use std::{
     collections::HashMap,
+    fs,
     io::Write,
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
@@ -2447,6 +2448,33 @@ SELECT
     })
 }
 
+fn asset_ids_for_purged_pages(connection: &rusqlite::Connection) -> Result<Vec<String>, String> {
+    let mut statement = connection.prepare("WITH purged_pages AS (SELECT p.id FROM pages p LEFT JOIN folders f ON f.id=p.folder_id WHERE p.lifecycle='trashed' OR f.lifecycle='trashed') SELECT payload_json FROM elements WHERE page_id IN purged_pages").map_err(|e| e.to_string())?;
+    let mut ids = std::collections::HashSet::new();
+    for payload in statement.query_map([], |row| row.get::<_, String>(0)).map_err(|e| e.to_string())? {
+        let payload = payload.map_err(|e| e.to_string())?;
+        if let Some(id) = serde_json::from_str::<Value>(&payload).ok().and_then(|value| value.get("assetId").and_then(Value::as_str).map(str::to_owned)) { ids.insert(id); }
+    }
+    Ok(ids.into_iter().collect())
+}
+
+fn retry_asset_cleanup(root: &Path) -> Result<(), String> {
+    let mut connection = database::open(&root.join("note.db"))?;
+    database::migrate(&mut connection)?;
+    let entries: Vec<(String,String,String)> = connection.prepare("SELECT asset_id,relative_path,staged_path FROM asset_cleanup_journal").map_err(|e| e.to_string())?.query_map([], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).map_err(|e| e.to_string())?.collect::<Result<_,_>>().map_err(|e| e.to_string())?;
+    let live: std::collections::HashSet<String> = connection.prepare("SELECT payload_json FROM elements").map_err(|e| e.to_string())?.query_map([], |row| row.get::<_,String>(0)).map_err(|e| e.to_string())?.filter_map(Result::ok).filter_map(|payload| serde_json::from_str::<Value>(&payload).ok().and_then(|value| value.get("assetId").and_then(Value::as_str).map(str::to_owned))).collect();
+    let assets_dir = root.join("assets");
+    for (id, relative, staged) in entries {
+        if live.contains(&id) { connection.execute("DELETE FROM asset_cleanup_journal WHERE asset_id=?", [&id]).map_err(|e| e.to_string())?; continue; }
+        let source = assets_dir.join(&relative); let staged_path = assets_dir.join(&staged);
+        if source.exists() && !staged_path.exists() { fs::rename(&source, &staged_path).map_err(|e| format!("stage purged asset: {e}"))?; }
+        if let Err(error) = connection.execute("DELETE FROM assets WHERE id=?", [&id]) { if staged_path.exists() && !source.exists() { let _ = fs::rename(&staged_path, &source); } return Err(format!("delete purged asset metadata: {error}")); }
+        if staged_path.exists() { fs::remove_file(&staged_path).map_err(|e| format!("remove staged purged asset: {e}"))?; }
+        connection.execute("DELETE FROM asset_cleanup_journal WHERE asset_id=?", [&id]).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 pub fn trash_purge_preview_at(root: &Path) -> Result<TrashPurgePreview, String> {
     let mut connection = database::open(&root.join("note.db"))?;
     database::migrate(&mut connection)?;
@@ -2472,6 +2500,7 @@ pub fn purge_trash_at(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
+    let asset_ids = asset_ids_for_purged_pages(&transaction)?;
     let snapshot: Option<(String, i64)> = transaction.query_row("SELECT snapshot_json,expires_at FROM trash_purge_snapshots WHERE token=?", [&request.confirmation_token], |row| Ok((row.get(0)?,row.get(1)?))).optional().map_err(|e| e.to_string())?;
     transaction.execute("DELETE FROM trash_purge_snapshots WHERE token=?", [&request.confirmation_token]).map_err(|e| e.to_string())?;
     let (snapshot, expires_at) = snapshot.ok_or("invalid or already-used Trash confirmation")?;
@@ -2493,7 +2522,9 @@ pub fn purge_trash_at(
     transaction
         .execute("DELETE FROM pages WHERE lifecycle='trashed'", [])
         .map_err(|error| error.to_string())?;
+    for id in asset_ids { if let Some(relative) = transaction.query_row("SELECT relative_path FROM assets WHERE id=?", [&id], |row| row.get::<_,String>(0)).optional().map_err(|e| e.to_string())? { transaction.execute("INSERT OR IGNORE INTO asset_cleanup_journal(asset_id,relative_path,staged_path) VALUES(?,?,?)", params![id,relative,format!(".purging-{id}")]).map_err(|e| e.to_string())?; } }
     transaction.commit().map_err(|error| error.to_string())?;
+    retry_asset_cleanup(root)?;
     preview.confirmation_token = request.confirmation_token;
     Ok(preview)
 }

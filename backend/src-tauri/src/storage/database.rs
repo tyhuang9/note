@@ -1,7 +1,7 @@
 use rusqlite::{Connection, OpenFlags};
 use std::{path::Path, time::Duration};
 
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 pub fn open(path: &Path) -> Result<Connection, String> {
     if let Some(parent) = path.parent() {
@@ -94,6 +94,13 @@ INSERT INTO schema_migrations(version,applied_at) VALUES(4,unixepoch('subsec')*1
 PRAGMA user_version=4;
 "#).map_err(|e| format!("apply migration 4: {e}"))?;
         tx.commit().map_err(|e| format!("commit migration 4: {e}"))?;
+    }
+    if current < 5 {
+        connection.execute_batch(r#"
+CREATE TABLE asset_cleanup_journal(asset_id TEXT PRIMARY KEY NOT NULL, relative_path TEXT NOT NULL, staged_path TEXT NOT NULL);
+INSERT INTO schema_migrations(version,applied_at) VALUES(5,unixepoch('subsec')*1000);
+PRAGMA user_version=5;
+"#).map_err(|e| format!("apply migration 5: {e}"))?;
     }
     Ok(SCHEMA_VERSION)
 }

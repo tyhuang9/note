@@ -59,6 +59,7 @@ export type TrashEntry = {
 };
 
 export type TrashPurgePreview = {
+  confirmationToken: string;
   folderCount: number;
   pageCount: number;
   elementCount: number;
@@ -129,6 +130,8 @@ export function createSceneRepository(invoke: Invoke = tauriInvoke): SceneReposi
     getTrashPurgePreview: () => invoke<TrashPurgePreview>("get_trash_purge_preview"),
     purgeTrash: (preview) => invoke<TrashPurgePreview>("purge_trash", {
       request: {
+        confirmationToken: preview.confirmationToken,
+        expectedFolderCount: preview.folderCount,
         expectedPageCount: preview.pageCount,
         expectedElementCount: preview.elementCount,
       },

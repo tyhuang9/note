@@ -45,6 +45,7 @@ pub struct TrashEntryDto {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TrashPurgePreview {
+    pub confirmation_token: String,
     pub folder_count: i64,
     pub page_count: i64,
     pub element_count: i64,
@@ -53,6 +54,8 @@ pub struct TrashPurgePreview {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TrashPurgeRequest {
+    pub confirmation_token: String,
+    pub expected_folder_count: i64,
     pub expected_page_count: i64,
     pub expected_element_count: i64,
 }

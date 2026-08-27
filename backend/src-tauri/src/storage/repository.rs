@@ -2293,29 +2293,6 @@ pub fn reconcile_workspace_structure_at(
             .map_err(|error| format!("save folder {}: {error}", folder.id))?;
     }
 
-    let desired_page_ids: std::collections::HashSet<&str> = structure
-        .pages
-        .iter()
-        .map(|page| page.id.as_str())
-        .collect();
-    let existing_page_ids = {
-        let mut statement = transaction
-            .prepare("SELECT p.id FROM pages p JOIN folders f ON f.id=p.folder_id WHERE p.lifecycle='active' AND f.lifecycle='active'")
-            .map_err(|error| error.to_string())?;
-        let page_ids = statement
-            .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|error| error.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| error.to_string())?;
-        page_ids
-    };
-    for page_id in existing_page_ids {
-        if !desired_page_ids.contains(page_id.as_str()) {
-            transaction
-                .execute("DELETE FROM pages WHERE id=?", [page_id])
-                .map_err(|error| error.to_string())?;
-        }
-    }
     for page in &structure.pages {
         transaction
             .execute(
@@ -2325,30 +2302,6 @@ pub fn reconcile_workspace_structure_at(
             .map_err(|error| format!("save page {}: {error}", page.id))?;
     }
 
-    let desired_folder_ids: std::collections::HashSet<&str> = structure
-        .folders
-        .iter()
-        .map(|folder| folder.id.as_str())
-        .chain([ROOT_FOLDER_ID, TEMPLATE_FOLDER_ID])
-        .collect();
-    let existing_folder_ids = {
-        let mut statement = transaction
-            .prepare("SELECT id FROM folders WHERE lifecycle='active'")
-            .map_err(|error| error.to_string())?;
-        let folder_ids = statement
-            .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|error| error.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| error.to_string())?;
-        folder_ids
-    };
-    for folder_id in existing_folder_ids {
-        if !desired_folder_ids.contains(folder_id.as_str()) {
-            transaction
-                .execute("DELETE FROM folders WHERE id=?", [folder_id])
-                .map_err(|error| error.to_string())?;
-        }
-    }
     if let Some(is_dark_mode) = structure.is_dark_mode {
         transaction
             .execute(
@@ -2413,7 +2366,7 @@ pub fn restore_page_at(root: &Path, id: &str) -> Result<(), String> {
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
-    let parent_lifecycle: Option<String> = transaction
+    let parent_lifecycle: Option<Option<String>> = transaction
         .query_row(
             "SELECT f.lifecycle FROM pages p LEFT JOIN folders f ON f.id=p.folder_id WHERE p.id=? AND p.lifecycle='trashed'",
             [id],
@@ -2421,8 +2374,7 @@ pub fn restore_page_at(root: &Path, id: &str) -> Result<(), String> {
         )
         .optional()
         .map_err(|error| error.to_string())?;
-    let parent_lifecycle =
-        parent_lifecycle.ok_or_else(|| "page not found or not in Trash".to_owned())?;
+    let parent_lifecycle = parent_lifecycle.ok_or_else(|| "page not found or not in Trash".to_owned())?.unwrap_or_default();
     let folder_id = if parent_lifecycle == "active" {
         None
     } else {
@@ -2446,6 +2398,10 @@ pub fn restore_page_at(root: &Path, id: &str) -> Result<(), String> {
 pub fn list_trash_at(root: &Path) -> Result<Vec<TrashEntryDto>, String> {
     let mut connection = database::open(&root.join("note.db"))?;
     database::migrate(&mut connection)?;
+    list_trash_from_connection(&connection)
+}
+
+fn list_trash_from_connection(connection: &rusqlite::Connection) -> Result<Vec<TrashEntryDto>, String> {
     let mut statement = connection
         .prepare(
             r#"
@@ -2484,6 +2440,7 @@ SELECT
   (SELECT count(*) FROM elements WHERE page_id IN purged_pages)
 "#, [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).map_err(|error| error.to_string())?;
     Ok(TrashPurgePreview {
+        confirmation_token: String::new(),
         folder_count,
         page_count,
         element_count,
@@ -2493,14 +2450,21 @@ SELECT
 pub fn trash_purge_preview_at(root: &Path) -> Result<TrashPurgePreview, String> {
     let mut connection = database::open(&root.join("note.db"))?;
     database::migrate(&mut connection)?;
-    trash_purge_preview(&connection)
+    let mut preview = trash_purge_preview(&connection)?;
+    let entries = list_trash_from_connection(&connection)?;
+    let snapshot = serde_json::to_string(&(entries, preview.folder_count, preview.page_count, preview.element_count)).map_err(|e| e.to_string())?;
+    let token = uuid::Uuid::new_v4().to_string();
+    connection.execute("DELETE FROM trash_purge_snapshots WHERE expires_at<?", [now_ms()]).map_err(|e| e.to_string())?;
+    connection.execute("INSERT INTO trash_purge_snapshots(token,snapshot_json,expires_at) VALUES(?,?,?)", params![token, snapshot, now_ms() + 300_000]).map_err(|e| e.to_string())?;
+    preview.confirmation_token = token;
+    Ok(preview)
 }
 
 pub fn purge_trash_at(
     root: &Path,
     request: TrashPurgeRequest,
 ) -> Result<TrashPurgePreview, String> {
-    if request.expected_page_count < 0 || request.expected_element_count < 0 {
+    if request.confirmation_token.is_empty() || request.expected_folder_count < 0 || request.expected_page_count < 0 || request.expected_element_count < 0 {
         return Err("purge confirmation counts must be non-negative".into());
     }
     let mut connection = database::open(&root.join("note.db"))?;
@@ -2508,8 +2472,14 @@ pub fn purge_trash_at(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
-    let preview = trash_purge_preview(&transaction)?;
-    if preview.page_count != request.expected_page_count
+    let snapshot: Option<(String, i64)> = transaction.query_row("SELECT snapshot_json,expires_at FROM trash_purge_snapshots WHERE token=?", [&request.confirmation_token], |row| Ok((row.get(0)?,row.get(1)?))).optional().map_err(|e| e.to_string())?;
+    transaction.execute("DELETE FROM trash_purge_snapshots WHERE token=?", [&request.confirmation_token]).map_err(|e| e.to_string())?;
+    let (snapshot, expires_at) = snapshot.ok_or("invalid or already-used Trash confirmation")?;
+    if expires_at < now_ms() { return Err("Trash confirmation expired; review and confirm again".into()); }
+    let mut preview = trash_purge_preview(&transaction)?;
+    let entries = list_trash_from_connection(&transaction)?;
+    let current_snapshot = serde_json::to_string(&(entries, preview.folder_count, preview.page_count, preview.element_count)).map_err(|e| e.to_string())?;
+    if snapshot != current_snapshot || preview.folder_count != request.expected_folder_count || preview.page_count != request.expected_page_count
         || preview.element_count != request.expected_element_count
     {
         return Err("Trash changed; review the affected counts and confirm again".into());
@@ -2524,6 +2494,7 @@ pub fn purge_trash_at(
         .execute("DELETE FROM pages WHERE lifecycle='trashed'", [])
         .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())?;
+    preview.confirmation_token = request.confirmation_token;
     Ok(preview)
 }
 pub fn apply_scene_changes_at(
@@ -2541,7 +2512,7 @@ pub fn apply_scene_changes_at(
         .map_err(|e| e.to_string())?;
     let revision: Option<i64> = tx
         .query_row(
-            "SELECT revision FROM pages WHERE id=?",
+            "SELECT p.revision FROM pages p JOIN folders f ON f.id=p.folder_id WHERE p.id=? AND p.lifecycle='active' AND f.lifecycle='active'",
             [&batch.page_id],
             |r| r.get(0),
         )
@@ -2590,7 +2561,7 @@ pub fn apply_scene_changes_at(
     validate_final_connector_bindings(&tx, &batch.page_id)?;
     let next = revision + 1;
     tx.execute(
-        "UPDATE pages SET revision=? WHERE id=?",
+        "UPDATE pages SET revision=? WHERE id=? AND lifecycle='active' AND (SELECT lifecycle FROM folders WHERE id=pages.folder_id)='active'",
         params![next, batch.page_id],
     )
     .map_err(|e| e.to_string())?;
@@ -4970,6 +4941,8 @@ mod tests {
         assert!(purge_trash_at(
             directory.path(),
             TrashPurgeRequest {
+                confirmation_token: "forged".into(),
+                expected_folder_count: 1,
                 expected_page_count: 1,
                 expected_element_count: 2
             }
@@ -4978,6 +4951,8 @@ mod tests {
         purge_trash_at(
             directory.path(),
             TrashPurgeRequest {
+                confirmation_token: preview.confirmation_token.clone(),
+                expected_folder_count: preview.folder_count,
                 expected_page_count: preview.page_count,
                 expected_element_count: preview.element_count,
             },

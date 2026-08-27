@@ -1,7 +1,7 @@
 use rusqlite::{Connection, OpenFlags};
 use std::{path::Path, time::Duration};
 
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 pub fn open(path: &Path) -> Result<Connection, String> {
     if let Some(parent) = path.parent() {
@@ -82,6 +82,19 @@ PRAGMA user_version=3;
         tx.commit()
             .map_err(|e| format!("commit migration 3: {e}"))?;
     }
+    if current < 4 {
+        let tx = connection.transaction().map_err(|e| e.to_string())?;
+        tx.execute_batch(r#"
+CREATE TABLE trash_purge_snapshots(token TEXT PRIMARY KEY NOT NULL, snapshot_json TEXT NOT NULL, expires_at INTEGER NOT NULL);
+CREATE TRIGGER folders_lifecycle_invariant_insert BEFORE INSERT ON folders WHEN (NEW.lifecycle='active' AND NEW.trashed_at IS NOT NULL) OR (NEW.lifecycle='trashed' AND NEW.trashed_at IS NULL) BEGIN SELECT RAISE(ABORT,'invalid folder lifecycle timestamp'); END;
+CREATE TRIGGER folders_lifecycle_invariant_update BEFORE UPDATE OF lifecycle,trashed_at ON folders WHEN (NEW.lifecycle='active' AND NEW.trashed_at IS NOT NULL) OR (NEW.lifecycle='trashed' AND NEW.trashed_at IS NULL) BEGIN SELECT RAISE(ABORT,'invalid folder lifecycle timestamp'); END;
+CREATE TRIGGER pages_lifecycle_invariant_insert BEFORE INSERT ON pages WHEN (NEW.lifecycle='active' AND NEW.trashed_at IS NOT NULL) OR (NEW.lifecycle='trashed' AND NEW.trashed_at IS NULL) BEGIN SELECT RAISE(ABORT,'invalid page lifecycle timestamp'); END;
+CREATE TRIGGER pages_lifecycle_invariant_update BEFORE UPDATE OF lifecycle,trashed_at ON pages WHEN (NEW.lifecycle='active' AND NEW.trashed_at IS NOT NULL) OR (NEW.lifecycle='trashed' AND NEW.trashed_at IS NULL) BEGIN SELECT RAISE(ABORT,'invalid page lifecycle timestamp'); END;
+INSERT INTO schema_migrations(version,applied_at) VALUES(4,unixepoch('subsec')*1000);
+PRAGMA user_version=4;
+"#).map_err(|e| format!("apply migration 4: {e}"))?;
+        tx.commit().map_err(|e| format!("commit migration 4: {e}"))?;
+    }
     Ok(SCHEMA_VERSION)
 }
 
@@ -127,7 +140,7 @@ PRAGMA user_version=1;
             connection
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            3,
+            4,
         );
     }
 

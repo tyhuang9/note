@@ -23,7 +23,7 @@ Published filenames are deliberately version-independent:
 
 | Platform | Asset | Notes |
 | --- | --- | --- |
-| Windows | `Note-Setup.exe` | NSIS installer for the current user; no administrator installation is required. |
+| Windows | `Note-Setup.exe` | NSIS installer for the current user; no administrator installation is required. Existing installs offer Update, Repair, or Remove as appropriate; Remove exits setup after uninstalling. |
 | macOS | `Note.dmg` | Disk image from the macOS runner. |
 | Debian/Ubuntu | `Note.deb` | Required Linux release asset. |
 | Linux, when available | `Note.AppImage` | Optional: AppImage packaging can fail on hosted runners. |
@@ -88,6 +88,14 @@ APPIMAGE_EXTRACT_AND_RUN=1 npm run tauri:build -- --bundles deb
 
 Generated local bundles are under `backend/src-tauri/target/release/bundle/`.
 Do not commit them.
+
+### Windows maintenance lifecycle (manual)
+
+On a disposable Windows user profile, install Note to a fixed custom directory
+such as `D:\Apps\Note`. Run the same installer to verify detection and Repair,
+then a newer installer to verify Update, and finally choose Remove to verify it
+uninstalls and exits setup without reinstalling. Confirm notes and preferences
+are preserved throughout.
 
 ## Common failures
 

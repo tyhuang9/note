@@ -9,6 +9,7 @@
     "qa:capture-excalidraw-reference": "node scripts/capture-excalidraw-reference.mjs",
     "test:e2e": "playwright test",
     "test:branding": "node scripts/check-branding.mjs",
+    "test:installer-contract": "node scripts/check-nsis-installer-contract.mjs",
     "test:tauri-config": "node scripts/check-tauri-drag-drop-config.mjs",
     "test:unit": "tsc -p tsconfig.test.json --noEmit && vitest run",
     "preview": "vite preview",

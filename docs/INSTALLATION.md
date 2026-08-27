@@ -21,6 +21,18 @@ The release page also includes `SHA256SUMS` for checking downloaded files.
    administrator privileges are not required.
 3. Start **Note** from the Start menu.
 
+When Note is already installed, a newer installer offers **Update** and
+**Remove Note**. Running the same version offers **Repair Note** and
+**Remove Note**. Choosing Remove runs the existing uninstaller and closes the
+setup program; it does not reinstall Note. If the installed version is newer,
+setup blocks a downgrade and offers only Remove or Cancel. Updates and repairs
+preserve local app data. Removing Note also preserves notes, assets, and local
+preferences; the uninstaller does not offer an application-data deletion option.
+You can choose a fixed local-drive directory such as `D:\Apps\Note`. Future
+setup runs verify both stored install-location records agree before offering
+maintenance actions; if either record is unsafe or mismatched, setup stops
+instead of installing a second copy.
+
 The installer is unsigned for now. SmartScreen may warn before it starts. Only
 continue after verifying that the file came from the official release page.
 
@@ -69,8 +81,9 @@ automatic backup, so preserve your own copy before clearing app data, moving to
 another device, or performing a risky upgrade.
 
 There is no built-in automatic updater in the current app. To update, download
-a newer package from GitHub Releases and install it over the existing app. Back
-up important local data first.
+a newer package from GitHub Releases and run it; the Windows installer presents
+an Update action for an older installed version. Back up important local data
+before any upgrade.
 
 ## Build from source
 

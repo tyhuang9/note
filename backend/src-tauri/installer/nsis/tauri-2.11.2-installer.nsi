@@ -304,20 +304,57 @@ Function PageReinstallUpdateSelection
   ${EndIf}
 FunctionEnd
 Function PageLeaveReinstall
-  ${NSD_GetState} $R2 $R1
-
   ; In update mode, always proceeds without uninstalling
   ${If} $UpdateMode = 1
     Goto reinst_done
   ${EndIf}
 
+  ; Passive mode has no radio controls. Choose only safe primary actions:
+  ; repair the same version, update an older version, and cancel a downgrade.
+  ; Remove is never selected implicitly.
+  ${If} $PassiveMode = 1
+    ${If} $R0 = 0
+      StrCpy $R1 1
+    ${ElseIf} $R0 = 1
+      StrCpy $R1 1
+    ${ElseIf} $R0 = -1
+      StrCpy $R1 0
+    ${Else}
+      Abort
+    ${EndIf}
+  ${Else}
+    ${NSD_GetState} $R2 $R1
+  ${EndIf}
+
   ; NOTE MAINTENANCE PATCH: $R0 holds same(0)/upgrade(1)/downgrade(-1).
   ; Remove always runs the existing uninstaller without /UPDATE and exits
-  ; this setup after a successful uninstall. Update uses /UPDATE so the
-  ; existing uninstaller preserves shortcuts and app data before installing.
+  ; this setup after a successful uninstall. An NSIS Update uses /UPDATE so
+  ; its existing uninstaller preserves shortcuts and app data before installing.
   ; $R1 holds the radio buttons state:
   ;   1 => first choice was selected
   ;   0 => second choice was selected
+  ; A legacy WiX product must be removed before either a repair or update
+  ; continues as an NSIS installation; otherwise its files and ARP entry
+  ; would remain. Its Remove action must still terminate this setup, and a
+  ; downgrade must remain Remove-or-Cancel only.
+  ${If} $WixMode = 1
+    ${If} $R0 = -1
+      ${If} $R1 = 1            ; User chose to remove
+        StrCpy $RemoveOnlyMode 1
+        Goto reinst_uninstall
+      ${Else}
+        Quit                   ; User chose to cancel setup
+      ${EndIf}
+    ${Else}
+      ${If} $R1 = 1            ; User chose to repair or update
+        Goto reinst_uninstall
+      ${Else}                  ; User chose to remove
+        StrCpy $RemoveOnlyMode 1
+        Goto reinst_uninstall
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+
   ${If} $R0 = 0 ; Same version
     ${If} $R1 = 1              ; User chose to repair
       Goto reinst_done

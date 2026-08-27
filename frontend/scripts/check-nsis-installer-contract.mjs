@@ -20,6 +20,9 @@ const [configText, packageLockText, template, releaseWorkflow] = await Promise.a
 
 const config = JSON.parse(configText);
 const nsis = config.bundle?.windows?.nsis;
+const pageLeaveReinstall = template.match(/Function PageLeaveReinstall([\s\S]*?)FunctionEnd/)?.[1];
+
+assert.ok(pageLeaveReinstall, "the vendored template must define PageLeaveReinstall");
 
 assert.equal(config.productName, "Note", "installer product identity must remain stable");
 assert.equal(config.identifier, "com.tyhuang.note", "installer bundle identity must remain stable");
@@ -43,11 +46,16 @@ assert.match(template, /StrCpy \$R2 "Update \$\{PRODUCTNAME\}"/);
 assert.match(template, /StrCpy \$R2 "Remove \$\{PRODUCTNAME\}"[\s\S]*StrCpy \$R3 "Cancel setup"/);
 assert.match(template, /StrCpy \$UpdateMode 1\s+Goto reinst_uninstall/, "an older install must use the safe update route");
 assert.match(template, /\$\{If\} \$0 <> 0\s+\$\{OrIf\} \$\{FileExists\}[\s\S]*?StrCpy \$UpdateMode 0/, "a cancelled or failed update must not bypass maintenance selection");
-assert.match(template, /\$\{If\} \$R0 = 0 ; Same version[\s\S]*?Goto reinst_done/, "a same-version install must offer repair without uninstalling first");
-assert.match(template, /StrCpy \$RemoveOnlyMode 1\s+Goto reinst_uninstall/, "remove must invoke the existing uninstaller");
-assert.match(template, /\$\{If\} \$RemoveOnlyMode = 1\s+Quit\s+\$\{EndIf\}\s+reinst_done:/, "remove-only must exit setup instead of reinstalling");
-assert.match(template, /\$\{Else\}\s+Quit\s+; User chose to cancel setup/, "newer installed versions must block an implicit downgrade");
-assert.doesNotMatch(template, /\$\{If\} \$WixMode = 1\s+Goto reinst_uninstall/, "legacy WiX detection must not bypass Remove or Cancel");
+assert.match(pageLeaveReinstall, /\$\{If\} \$R0 = 0 ; Same version[\s\S]*?Goto reinst_done/, "a same-version install must offer repair without uninstalling first");
+assert.match(pageLeaveReinstall, /StrCpy \$RemoveOnlyMode 1\s+Goto reinst_uninstall/, "remove must invoke the existing uninstaller");
+assert.match(pageLeaveReinstall, /\$\{If\} \$RemoveOnlyMode = 1\s+Quit\s+\$\{EndIf\}\s+reinst_done:/, "remove-only must exit setup instead of reinstalling");
+assert.match(pageLeaveReinstall, /\$\{Else\}\s+Quit\s+; User chose to cancel setup/, "newer installed versions must block an implicit downgrade");
+assert.match(pageLeaveReinstall, /\$\{If\} \$WixMode = 1[\s\S]*?\$\{Else\}[\s\S]*?\$\{If\} \$R1 = 1[^\n]*\s+Goto reinst_uninstall/, "a same-version WiX repair and WiX update must uninstall WiX before NSIS installation");
+assert.match(pageLeaveReinstall, /\$\{If\} \$WixMode = 1[\s\S]*?StrCpy \$RemoveOnlyMode 1\s+Goto reinst_uninstall/, "a WiX Remove action must run the existing WiX uninstaller");
+assert.match(pageLeaveReinstall, /\$\{If\} \$WixMode = 1[\s\S]*?\$\{If\} \$R0 = -1[\s\S]*?\$\{Else\}\s+Quit\s+; User chose to cancel setup/, "a WiX downgrade must allow only terminal Remove or Cancel");
+assert.match(pageLeaveReinstall, /\$\{If\} \$WixMode = 1\s+ReadRegStr \$R1 HKLM "\$R6" "UninstallString"\s+ExecWait '\$R1' \$0/, "WiX maintenance actions must execute the stored WiX uninstaller");
+assert.match(pageLeaveReinstall, /\$\{If\} \$UpdateMode = 1\s+Goto reinst_done[\s\S]*?\$\{If\} \$PassiveMode = 1/, "the existing /UPDATE bypass must remain before passive maintenance routing");
+assert.match(pageLeaveReinstall, /\$\{If\} \$PassiveMode = 1[\s\S]*?\$\{If\} \$R0 = 0\s+StrCpy \$R1 1[\s\S]*?\$\{ElseIf\} \$R0 = 1\s+StrCpy \$R1 1[\s\S]*?\$\{ElseIf\} \$R0 = -1\s+StrCpy \$R1 0[\s\S]*?\$\{Else\}\s+\$\{NSD_GetState\} \$R2 \$R1/, "passive mode must default to Repair, Update, or Cancel before reading dialog controls");
 assert.match(
   releaseWorkflow,
   /- name: Verify Windows NSIS installer contract[\s\S]*?run: npm run test:installer-contract[\s\S]*?- name: Build Windows installer/s,

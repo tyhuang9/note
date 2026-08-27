@@ -5797,6 +5797,7 @@ function App() {
     if (!beginTrashMutation(action, `Restoring ${entry.name}…`)) {
       return;
     }
+    let shouldRestoreTrashFocus = false;
     try {
       await flushPendingPersistence();
       if (entry.kind === "folder") {
@@ -5804,6 +5805,9 @@ function App() {
       } else {
         await repository.restorePageFromTrash(entry.id);
       }
+      setTrashEntries((entries) => entries.filter(
+        (candidate) => candidate.id !== entry.id || candidate.kind !== entry.kind,
+      ));
       const workspace = await repository.loadWorkspace();
       const nextData: AppData = {
         elements: workspace.elements,
@@ -5855,15 +5859,7 @@ function App() {
       setSelectedFolderId(selectedFolderIdRef.current);
       setSelectedPageId(selectedPageIdRef.current);
       setSidebarPageSelection(selectedPageIdRef.current ? [selectedPageIdRef.current] : []);
-      window.requestAnimationFrame(() => {
-        const remainingRestoreButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-trash-restore]"))
-          .filter((button) => button.isConnected && button.getClientRects().length > 0);
-        const nextRestore = remainingRestoreButtons[
-          Math.min(restoreIndex, Math.max(remainingRestoreButtons.length - 1, 0))
-        ];
-        const emptyTrash = document.querySelector<HTMLButtonElement>("[data-empty-trash]");
-        (nextRestore ?? (emptyTrash?.disabled ? null : emptyTrash) ?? trashRailButtonRef.current ?? document.getElementById("trash-title"))?.focus();
-      });
+      shouldRestoreTrashFocus = true;
     } catch (error) {
       setPersistenceStatus({ kind: "failed", error: error instanceof Error ? error : new Error(String(error)) });
       const message = `Could not restore ${entry.name}.`;
@@ -5871,6 +5867,22 @@ function App() {
       setTrashFeedback(message);
     } finally {
       finishTrashMutation(action);
+      if (shouldRestoreTrashFocus) {
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(() => {
+            const remainingRestoreButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-trash-restore]"))
+              .filter((button) => button.isConnected && !button.disabled && button.getClientRects().length > 0);
+            const nextRestore = remainingRestoreButtons[
+              Math.min(restoreIndex, Math.max(remainingRestoreButtons.length - 1, 0))
+            ];
+            const emptyTrash = document.querySelector<HTMLButtonElement>("[data-empty-trash]");
+            const usableEmptyTrash = emptyTrash && !emptyTrash.disabled && emptyTrash.getClientRects().length > 0
+              ? emptyTrash
+              : null;
+            (nextRestore ?? usableEmptyTrash ?? trashRailButtonRef.current ?? document.getElementById("trash-title"))?.focus();
+          });
+        });
+      }
     }
   }
 
@@ -5884,21 +5896,24 @@ function App() {
     if (!beginTrashMutation(action, "Preparing Trash for permanent deletion…")) {
       return;
     }
+    let shouldRestoreEmptyTrashFocus = false;
     try {
       await flushPendingPersistence();
       const preview = await repository.getTrashPurgePreview();
       if (preview.pageCount === 0 && preview.folderCount === 0) {
         let message = "Trash is already empty.";
+        setTrashEntries([]);
+        setHasTrashMetadata(true);
         try {
           const nextTrashEntries = await repository.listTrash();
           setTrashEntries(nextTrashEntries);
           setHasTrashMetadata(true);
         } catch {
-          setHasTrashMetadata(false);
           message = "Trash is already empty. Trash could not refresh; it will update when reopened.";
         }
         setTrashAnnouncement(message);
         setTrashFeedback(message);
+        shouldRestoreEmptyTrashFocus = true;
         return;
       }
       const confirmed = window.confirm(
@@ -5910,17 +5925,21 @@ function App() {
       }
       setTrashFeedback("Permanently deleting Trash contents…");
       const purgeResult = await repository.purgeTrash(preview);
-      const nextTrashEntries = await repository.listTrash();
-      setTrashEntries(nextTrashEntries);
+      setTrashEntries([]);
       setHasTrashMetadata(true);
-      const message = purgeResult.cleanupWarning
+      let message = purgeResult.cleanupWarning
         ? `Permanently deleted ${formatTrashCount(preview.folderCount, "folder")}, ${formatTrashCount(preview.pageCount, "page")}, and ${formatTrashCount(preview.elementCount, "canvas element")}. Some purged assets will be cleaned up automatically.`
         : `Permanently deleted ${formatTrashCount(preview.folderCount, "folder")}, ${formatTrashCount(preview.pageCount, "page")}, and ${formatTrashCount(preview.elementCount, "canvas element")}.`;
+      try {
+        const nextTrashEntries = await repository.listTrash();
+        setTrashEntries(nextTrashEntries);
+        setHasTrashMetadata(true);
+      } catch {
+        message = `${message} Trash could not refresh; it will update when reopened.`;
+      }
       setTrashAnnouncement(message);
       setTrashFeedback(message);
-      window.requestAnimationFrame(() => {
-        (trashRailButtonRef.current ?? document.getElementById("trash-title"))?.focus();
-      });
+      shouldRestoreEmptyTrashFocus = true;
     } catch (error) {
       setPersistenceStatus({ kind: "failed", error: error instanceof Error ? error : new Error(String(error)) });
       const message = "Could not empty Trash.";
@@ -5928,6 +5947,11 @@ function App() {
       setTrashFeedback(message);
     } finally {
       finishTrashMutation(action);
+      if (shouldRestoreEmptyTrashFocus) {
+        window.requestAnimationFrame(() => {
+          (trashRailButtonRef.current ?? document.getElementById("trash-title"))?.focus();
+        });
+      }
     }
   }
 

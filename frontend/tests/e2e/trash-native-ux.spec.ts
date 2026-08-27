@@ -136,6 +136,9 @@ test("Trash shows safe metadata and restores a folder to its destination", async
   await page.evaluate(() => (window as typeof window & { __trashTest: { completeRestore(): void } }).__trashTest.completeRestore());
   await expect(page.locator(".trash-status")).toHaveText("Restored Duplicate. Trash could not refresh; it will update when reopened.");
   await expect(page.locator(".trash-status")).not.toHaveText("Could not restore Duplicate.");
+  await expect(trashedItems.getByRole("listitem")).toHaveCount(1);
+  await expect(trashedItems.getByRole("listitem").filter({ hasText: "Workspace" })).toHaveCount(0);
+  await expect(trashedItems.getByRole("listitem").filter({ hasText: "Root" }).getByRole("button")).toBeFocused();
   const restoreCompletionCommands = await page.evaluate(() => (window as typeof window & { __trashTest: { commandLog(): string[] } }).__trashTest.commandLog());
   expect(restoreCompletionCommands.indexOf("restore_folder_from_trash")).toBeLessThan(restoreCompletionCommands.lastIndexOf("load_workspace_data"));
 
@@ -151,7 +154,7 @@ test("Trash shows safe metadata and restores a folder to its destination", async
   });
   await expect(archiveChild).toBeDisabled();
   await expect(archiveChild).toHaveAttribute("aria-label", "Moving Restored child to Trash");
-  await page.getByRole("button", { name: "2 items in Trash" }).click();
+  await page.getByRole("button", { name: "1 item in Trash" }).click();
   await expect(page.getByRole("button", { name: "Empty Trash" })).toBeDisabled();
   await expect(page.locator(".trash-status")).toHaveText("Moving Restored child to Trash…");
   await expect.poll(() => page.evaluate(() => (window as typeof window & { __trashTest: { archiveCalls(): number } }).__trashTest.archiveCalls())).toBe(1);
@@ -209,7 +212,10 @@ test("Empty Trash flushes first, refreshes an empty preview, and reports deferre
             case "load_workspace_data":
               return workspace();
             case "list_trash":
-              return (mode === "empty" && refreshedEmptyPreview) || purged ? [] : trashEntries;
+              if ((mode === "empty" && refreshedEmptyPreview) || purged) {
+                throw new Error("test Trash refresh failure");
+              }
+              return trashEntries;
             case "get_trash_purge_preview":
               refreshedEmptyPreview = mode === "empty";
               return mode === "empty"
@@ -240,7 +246,7 @@ test("Empty Trash flushes first, refreshes an empty preview, and reports deferre
   await page.getByRole("button", { name: "1 item in Trash" }).click();
   await page.evaluate(() => (window as typeof window & { __trashCorrection: { clearCommandLog(): void } }).__trashCorrection.clearCommandLog());
   await page.getByRole("button", { name: "Empty Trash" }).click();
-  await expect(page.locator(".trash-status")).toHaveText("Trash is already empty.");
+  await expect(page.locator(".trash-status")).toHaveText("Trash is already empty. Trash could not refresh; it will update when reopened.");
   await expect(page.getByRole("list", { name: "Trashed items" }).getByRole("listitem")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Trash is empty" })).toBeDisabled();
   const emptyCommands = await page.evaluate(() => (window as typeof window & { __trashCorrection: { commandLog(): string[] } }).__trashCorrection.commandLog());
@@ -254,7 +260,11 @@ test("Empty Trash flushes first, refreshes an empty preview, and reports deferre
   await page.evaluate(() => (window as typeof window & { __trashCorrection: { clearCommandLog(): void } }).__trashCorrection.clearCommandLog());
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Empty Trash" }).click();
-  await expect(page.locator(".trash-status")).toHaveText("Permanently deleted 0 folders, 1 page, and 0 canvas elements. Some purged assets will be cleaned up automatically.");
+  await expect(page.locator(".trash-status")).toHaveText("Permanently deleted 0 folders, 1 page, and 0 canvas elements. Some purged assets will be cleaned up automatically. Trash could not refresh; it will update when reopened.");
+  await expect(page.locator(".trash-status")).not.toHaveText("Could not empty Trash.");
+  await expect(page.getByRole("list", { name: "Trashed items" }).getByRole("listitem")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Trash is empty" })).toBeDisabled();
+  await expect(page.locator(".persistence-status-failed")).toHaveCount(0);
   const purgeCommands = await page.evaluate(() => (window as typeof window & { __trashCorrection: { commandLog(): string[] } }).__trashCorrection.commandLog());
   expect(purgeCommands.indexOf("reconcile_workspace_structure")).toBeGreaterThanOrEqual(0);
   expect(purgeCommands.indexOf("reconcile_workspace_structure")).toBeLessThan(purgeCommands.indexOf("purge_trash"));

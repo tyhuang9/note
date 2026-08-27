@@ -830,6 +830,138 @@
       "outputSchema": {
         "additionalProperties": false,
         "properties": {
+          "approvalArtifact": {
+            "additionalProperties": false,
+            "properties": {
+              "approvalId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "expiresAtUnixMs": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "issuedAtUnixMs": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "pageId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "pageRevision": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "provider": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "maxLength": 120,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "normalizedEndpointIdentity": {
+                    "maxLength": 2048,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "providerId": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "transport": {
+                    "enum": [
+                      "local_http",
+                      "remote_https",
+                      "process"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "providerId",
+                  "displayName",
+                  "transport",
+                  "normalizedEndpointIdentity"
+                ],
+                "type": "object"
+              },
+              "runId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "scale": {
+                "maximum": 2.0,
+                "minimum": 0.5,
+                "type": "number"
+              },
+              "singleUse": {
+                "enum": [
+                  true
+                ],
+                "type": "boolean"
+              },
+              "toolCallId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "viewport": {
+                "additionalProperties": false,
+                "properties": {
+                  "height": {
+                    "maximum": 100000.0,
+                    "minimum": 1.0,
+                    "type": "number"
+                  },
+                  "width": {
+                    "maximum": 100000.0,
+                    "minimum": 1.0,
+                    "type": "number"
+                  },
+                  "x": {
+                    "maximum": 1000000.0,
+                    "minimum": -1000000.0,
+                    "type": "number"
+                  },
+                  "y": {
+                    "maximum": 1000000.0,
+                    "minimum": -1000000.0,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "x",
+                  "y",
+                  "width",
+                  "height"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "approvalId",
+              "runId",
+              "toolCallId",
+              "provider",
+              "pageId",
+              "pageRevision",
+              "viewport",
+              "scale",
+              "issuedAtUnixMs",
+              "expiresAtUnixMs",
+              "singleUse"
+            ],
+            "type": "object"
+          },
           "attachmentId": {
             "maxLength": 128,
             "minLength": 1,
@@ -841,79 +973,23 @@
             ],
             "type": "string"
           },
-          "normalizedEndpointIdentity": {
-            "maxLength": 2048,
-            "minLength": 1,
-            "type": "string"
-          },
-          "pageId": {
-            "maxLength": 128,
-            "minLength": 1,
-            "type": "string"
-          },
           "persisted": {
             "enum": [
               false
             ],
             "type": "boolean"
           },
-          "providerId": {
-            "maxLength": 128,
-            "minLength": 1,
-            "type": "string"
-          },
           "requiresApproval": {
             "enum": [
               true
             ],
             "type": "boolean"
-          },
-          "revision": {
-            "maximum": 9007199254740991,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "viewport": {
-            "additionalProperties": false,
-            "properties": {
-              "height": {
-                "maximum": 100000.0,
-                "minimum": 1.0,
-                "type": "number"
-              },
-              "width": {
-                "maximum": 100000.0,
-                "minimum": 1.0,
-                "type": "number"
-              },
-              "x": {
-                "maximum": 1000000.0,
-                "minimum": -1000000.0,
-                "type": "number"
-              },
-              "y": {
-                "maximum": 1000000.0,
-                "minimum": -1000000.0,
-                "type": "number"
-              }
-            },
-            "required": [
-              "x",
-              "y",
-              "width",
-              "height"
-            ],
-            "type": "object"
           }
         },
         "required": [
-          "pageId",
-          "revision",
+          "approvalArtifact",
           "attachmentId",
           "mediaType",
-          "viewport",
-          "providerId",
-          "normalizedEndpointIdentity",
           "requiresApproval",
           "persisted"
         ],
@@ -975,6 +1051,7 @@
                     },
                     "kind": {
                       "enum": [
+                        "workspace",
                         "folder",
                         "page",
                         "canvas_element",
@@ -1015,6 +1092,7 @@
                             },
                             "kind": {
                               "enum": [
+                                "workspace",
                                 "folder",
                                 "page",
                                 "canvas_element",
@@ -1363,6 +1441,7 @@
                     },
                     "kind": {
                       "enum": [
+                        "workspace",
                         "folder",
                         "page",
                         "canvas_element",
@@ -1403,6 +1482,7 @@
                             },
                             "kind": {
                               "enum": [
+                                "workspace",
                                 "folder",
                                 "page",
                                 "canvas_element",
@@ -1751,6 +1831,7 @@
                     },
                     "kind": {
                       "enum": [
+                        "workspace",
                         "folder",
                         "page",
                         "canvas_element",
@@ -1791,6 +1872,7 @@
                             },
                             "kind": {
                               "enum": [
+                                "workspace",
                                 "folder",
                                 "page",
                                 "canvas_element",
@@ -2139,6 +2221,7 @@
                     },
                     "kind": {
                       "enum": [
+                        "workspace",
                         "folder",
                         "page",
                         "canvas_element",
@@ -2179,6 +2262,7 @@
                             },
                             "kind": {
                               "enum": [
+                                "workspace",
                                 "folder",
                                 "page",
                                 "canvas_element",
@@ -2527,6 +2611,7 @@
                     },
                     "kind": {
                       "enum": [
+                        "workspace",
                         "folder",
                         "page",
                         "canvas_element",
@@ -2567,6 +2652,7 @@
                             },
                             "kind": {
                               "enum": [
+                                "workspace",
                                 "folder",
                                 "page",
                                 "canvas_element",
@@ -2913,6 +2999,7 @@
                     },
                     "kind": {
                       "enum": [
+                        "workspace",
                         "folder",
                         "page",
                         "canvas_element",
@@ -2953,6 +3040,7 @@
                             },
                             "kind": {
                               "enum": [
+                                "workspace",
                                 "folder",
                                 "page",
                                 "canvas_element",
@@ -3317,6 +3405,7 @@
                     },
                     "kind": {
                       "enum": [
+                        "workspace",
                         "folder",
                         "page",
                         "canvas_element",
@@ -3357,6 +3446,7 @@
                             },
                             "kind": {
                               "enum": [
+                                "workspace",
                                 "folder",
                                 "page",
                                 "canvas_element",
@@ -3721,6 +3811,7 @@
                     },
                     "kind": {
                       "enum": [
+                        "workspace",
                         "folder",
                         "page",
                         "canvas_element",
@@ -3761,6 +3852,7 @@
                             },
                             "kind": {
                               "enum": [
+                                "workspace",
                                 "folder",
                                 "page",
                                 "canvas_element",
@@ -5170,6 +5262,7 @@
                     },
                     "kind": {
                       "enum": [
+                        "workspace",
                         "folder",
                         "page",
                         "canvas_element",
@@ -5210,6 +5303,7 @@
                             },
                             "kind": {
                               "enum": [
+                                "workspace",
                                 "folder",
                                 "page",
                                 "canvas_element",

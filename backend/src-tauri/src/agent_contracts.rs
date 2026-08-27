@@ -14,6 +14,10 @@ pub const CAPABILITY_SCHEMA_VERSION: &str = "1.0.0";
 pub const MAX_TOOL_INPUT_BYTES: u64 = 64 * 1024;
 pub const MAX_TOOL_RESULT_BYTES: u64 = 64 * 1024;
 pub const MAX_JSON_SAFE_REVISION: i64 = 9_007_199_254_740_991;
+pub const MAX_SCREENSHOT_APPROVAL_LIFETIME_MS: u64 = 5 * 60 * 1_000;
+pub const MAX_AGENT_PROMPT_BYTES: usize = 32 * 1024;
+pub const MAX_AGENT_DESCRIPTORS: usize = 64;
+pub const MAX_ADAPTER_MESSAGE_BYTES: usize = 1_024;
 pub const MAX_INVERSE_CHANGES: usize = 128;
 pub const MAX_INVERSE_CHANGESET_BYTES: u64 = 256 * 1024;
 
@@ -431,6 +435,13 @@ fn map_schema(value_schema: Value) -> Value {
 fn id_schema() -> Value {
     string_schema(1, 128)
 }
+fn valid_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+}
 fn nullable_id_schema() -> Value {
     json!({"oneOf":[id_schema(), {"type":"null"}]})
 }
@@ -537,26 +548,64 @@ fn elements_output_schema() -> Value {
 fn screenshot_output_schema() -> Value {
     object_schema(
         &[
-            "pageId",
-            "revision",
+            "approvalArtifact",
             "attachmentId",
             "mediaType",
-            "viewport",
-            "providerId",
-            "normalizedEndpointIdentity",
             "requiresApproval",
             "persisted",
         ],
         json!({
-            "pageId":id_schema(),
-            "revision":revision_schema(),
+            "approvalArtifact":screenshot_approval_artifact_schema(),
             "attachmentId":id_schema(),
             "mediaType":enum_schema(&["image/png"]),
-            "viewport":viewport_schema(),
-            "providerId":id_schema(),
-            "normalizedEndpointIdentity":string_schema(1, 2_048),
             "requiresApproval":json!({"type":"boolean", "enum":[true]}),
             "persisted":json!({"type":"boolean", "enum":[false]})
+        }),
+    )
+}
+fn provider_endpoint_schema() -> Value {
+    object_schema(
+        &[
+            "providerId",
+            "displayName",
+            "transport",
+            "normalizedEndpointIdentity",
+        ],
+        json!({
+            "providerId":id_schema(),
+            "displayName":string_schema(1,120),
+            "transport":enum_schema(&["local_http", "remote_https", "process"]),
+            "normalizedEndpointIdentity":string_schema(1,2_048)
+        }),
+    )
+}
+fn screenshot_approval_artifact_schema() -> Value {
+    object_schema(
+        &[
+            "approvalId",
+            "runId",
+            "toolCallId",
+            "provider",
+            "pageId",
+            "pageRevision",
+            "viewport",
+            "scale",
+            "issuedAtUnixMs",
+            "expiresAtUnixMs",
+            "singleUse",
+        ],
+        json!({
+            "approvalId":id_schema(),
+            "runId":id_schema(),
+            "toolCallId":id_schema(),
+            "provider":provider_endpoint_schema(),
+            "pageId":id_schema(),
+            "pageRevision":revision_schema(),
+            "viewport":viewport_schema(),
+            "scale":number_schema(0.5,2.0),
+            "issuedAtUnixMs":revision_schema(),
+            "expiresAtUnixMs":revision_schema(),
+            "singleUse":json!({"type":"boolean", "enum":[true]})
         }),
     )
 }
@@ -611,7 +660,7 @@ fn inverse_change_set_schema() -> Value {
         json!({
             "inverseChangeSetId":id_schema(),
             "changes":array_schema(json!({"oneOf":[
-                object_schema(&["type", "kind", "id"], json!({"type":enum_schema(&["restore_resource"]), "kind":enum_schema(&["folder", "page", "canvas_element", "archive_item"]), "id":id_schema()})),
+                object_schema(&["type", "kind", "id"], json!({"type":enum_schema(&["restore_resource"]), "kind":enum_schema(&["workspace", "folder", "page", "canvas_element", "archive_item"]), "id":id_schema()})),
                 object_schema(&["type", "operation"], json!({"type":enum_schema(&["reapply_workspace_operation"]), "operation":workspace_operation_schema()}))
             ]}), 0, MAX_INVERSE_CHANGES as u64)
         }),
@@ -649,7 +698,7 @@ fn workspace_operation_schema() -> Value {
 fn changed_resource_schema() -> Value {
     object_schema(
         &["kind", "id", "newRevision"],
-        json!({"kind":enum_schema(&["folder", "page", "canvas_element", "archive_item"]), "id":id_schema(), "newRevision":revision_schema()}),
+        json!({"kind":enum_schema(&["workspace", "folder", "page", "canvas_element", "archive_item"]), "id":id_schema(), "newRevision":revision_schema()}),
     )
 }
 fn canvas_element_schema() -> Value {
@@ -787,6 +836,9 @@ fn element_anchor_schema() -> Value {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ToolInvocation {
+    pub run_id: String,
+    pub tool_call_id: String,
+    pub provider: ProviderEndpointIdentity,
     pub capability_id: CapabilityId,
     pub schema_version: String,
     pub asserted_risk: CapabilityRisk,
@@ -825,6 +877,12 @@ pub enum ContractValidationError {
     ContextBoundsExceeded,
     #[error("run and tool-call identifiers must both be non-empty")]
     InvalidIdempotencyKey,
+    #[error("provider endpoint identity is not canonical or safe")]
+    InvalidProviderEndpoint,
+    #[error("adapter DTO exceeds V1 bounds")]
+    AdapterBoundsExceeded,
+    #[error("screenshot approval artifact is invalid or does not match the request")]
+    InvalidScreenshotApproval,
 }
 
 /// Parses untrusted JSON and rejects unknown DTO fields before it reaches a host.
@@ -848,6 +906,13 @@ pub fn validate_manifest(manifest: &AgentManifest) -> Result<(), ContractValidat
 pub fn validate_tool_invocation(
     invocation: &ToolInvocation,
 ) -> Result<CapabilityContract, ContractValidationError> {
+    ToolCallIdempotencyKey {
+        run_id: invocation.run_id.clone(),
+        tool_call_id: invocation.tool_call_id.clone(),
+    }
+    .validate()?;
+    invocation.provider.validate()?;
+    check_serialized_size(invocation, MAX_TOOL_INPUT_BYTES)?;
     let manifest = canonical_manifest();
     let capability = manifest
         .capabilities
@@ -895,6 +960,25 @@ pub fn check_payload_size(value: &Value, limit: u64) -> Result<(), ContractValid
         return Err(ContractValidationError::PayloadTooLarge { limit });
     }
     Ok(())
+}
+
+fn check_serialized_size<T: Serialize>(
+    value: &T,
+    limit: u64,
+) -> Result<(), ContractValidationError> {
+    let value = serde_json::to_value(value).map_err(|error| violation("$", error.to_string()))?;
+    check_payload_size(&value, limit)
+}
+
+fn viewport_is_valid(viewport: &ViewportContext) -> bool {
+    viewport.x.is_finite()
+        && viewport.y.is_finite()
+        && viewport.width.is_finite()
+        && viewport.height.is_finite()
+        && (-1_000_000.0..=1_000_000.0).contains(&viewport.x)
+        && (-1_000_000.0..=1_000_000.0).contains(&viewport.y)
+        && (1.0..=100_000.0).contains(&viewport.width)
+        && (1.0..=100_000.0).contains(&viewport.height)
 }
 
 /// Supports the intentionally small JSON Schema subset used by this manifest.
@@ -1049,6 +1133,18 @@ pub struct AgentAdapterStatusRequest {
     pub manifest_id: String,
     pub manifest_schema_version: String,
 }
+impl AgentAdapterStatusRequest {
+    pub fn validate(&self) -> Result<(), ContractValidationError> {
+        if self.manifest_id != MANIFEST_ID
+            || self.manifest_schema_version != MANIFEST_SCHEMA_VERSION
+        {
+            return Err(ContractValidationError::UnsupportedSchemaVersion(
+                self.manifest_schema_version.clone(),
+            ));
+        }
+        check_serialized_size(self, MAX_TOOL_INPUT_BYTES)
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentAdapterStatus {
@@ -1056,11 +1152,33 @@ pub struct AgentAdapterStatus {
     pub provider: ProviderEndpointIdentity,
     pub reason: Option<String>,
 }
+impl AgentAdapterStatus {
+    pub fn validate(&self) -> Result<(), ContractValidationError> {
+        self.provider.validate()?;
+        if self
+            .reason
+            .as_ref()
+            .is_some_and(|reason| reason.len() > MAX_ADAPTER_MESSAGE_BYTES)
+        {
+            return Err(ContractValidationError::AdapterBoundsExceeded);
+        }
+        check_serialized_size(self, MAX_TOOL_RESULT_BYTES)
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListAgentsRequest {
     pub manifest_id: String,
     pub manifest_schema_version: String,
+}
+impl ListAgentsRequest {
+    pub fn validate(&self) -> Result<(), ContractValidationError> {
+        AgentAdapterStatusRequest {
+            manifest_id: self.manifest_id.clone(),
+            manifest_schema_version: self.manifest_schema_version.clone(),
+        }
+        .validate()
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1068,6 +1186,35 @@ pub struct AgentDescriptor {
     pub agent_id: String,
     pub display_name: String,
     pub capabilities: Vec<CapabilityId>,
+}
+impl AgentDescriptor {
+    pub fn validate(&self) -> Result<(), ContractValidationError> {
+        let capabilities: BTreeSet<_> = self.capabilities.iter().copied().collect();
+        if !valid_identifier(&self.agent_id)
+            || self.display_name.trim().is_empty()
+            || self.display_name.chars().count() > 120
+            || self.capabilities.len() > CapabilityId::ALL.len()
+            || capabilities.len() != self.capabilities.len()
+        {
+            return Err(ContractValidationError::AdapterBoundsExceeded);
+        }
+        check_serialized_size(self, MAX_TOOL_RESULT_BYTES)
+    }
+}
+pub fn validate_agent_descriptors(
+    descriptors: &[AgentDescriptor],
+) -> Result<(), ContractValidationError> {
+    if descriptors.len() > MAX_AGENT_DESCRIPTORS {
+        return Err(ContractValidationError::AdapterBoundsExceeded);
+    }
+    let mut ids = BTreeSet::new();
+    for descriptor in descriptors {
+        descriptor.validate()?;
+        if !ids.insert(descriptor.agent_id.as_str()) {
+            return Err(ContractValidationError::AdapterBoundsExceeded);
+        }
+    }
+    check_serialized_size(&descriptors, MAX_TOOL_RESULT_BYTES)
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1078,6 +1225,19 @@ pub struct StartRunRequest {
     pub permission_grant: PermissionGrant,
     pub provider_consent: ProviderConsent,
 }
+impl StartRunRequest {
+    pub fn validate(&self) -> Result<(), ContractValidationError> {
+        if !valid_identifier(&self.agent_id)
+            || self.prompt.trim().is_empty()
+            || self.prompt.len() > MAX_AGENT_PROMPT_BYTES
+        {
+            return Err(ContractValidationError::AdapterBoundsExceeded);
+        }
+        self.context.validate_bounds()?;
+        self.provider_consent.validate()?;
+        check_serialized_size(self, MAX_TOOL_INPUT_BYTES)
+    }
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ContinueRunRequest {
@@ -1086,11 +1246,34 @@ pub struct ContinueRunRequest {
     pub context: AgentContextEnvelope,
     pub permission_grant: PermissionGrant,
 }
+impl ContinueRunRequest {
+    pub fn validate(&self) -> Result<(), ContractValidationError> {
+        if !valid_identifier(&self.run_id) {
+            return Err(ContractValidationError::AdapterBoundsExceeded);
+        }
+        check_payload_size(&self.response, MAX_TOOL_RESULT_BYTES)?;
+        self.context.validate_bounds()?;
+        check_serialized_size(self, MAX_TOOL_INPUT_BYTES)
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CancelRunRequest {
     pub run_id: String,
     pub reason: Option<String>,
+}
+impl CancelRunRequest {
+    pub fn validate(&self) -> Result<(), ContractValidationError> {
+        if !valid_identifier(&self.run_id)
+            || self
+                .reason
+                .as_ref()
+                .is_some_and(|reason| reason.len() > MAX_ADAPTER_MESSAGE_BYTES)
+        {
+            return Err(ContractValidationError::AdapterBoundsExceeded);
+        }
+        check_serialized_size(self, MAX_TOOL_INPUT_BYTES)
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1098,6 +1281,14 @@ pub struct AgentRun {
     pub run_id: String,
     pub state: AgentHostState,
     pub audit_id: String,
+}
+impl AgentRun {
+    pub fn validate(&self) -> Result<(), ContractValidationError> {
+        if !valid_identifier(&self.run_id) || !valid_identifier(&self.audit_id) {
+            return Err(ContractValidationError::AdapterBoundsExceeded);
+        }
+        check_serialized_size(self, MAX_TOOL_RESULT_BYTES)
+    }
 }
 
 /// Provider adapters are transport-only. The host owns validation, permissions,
@@ -1154,9 +1345,10 @@ impl PermissionProfile {
             .collect();
         match self {
             Self::ReadOnly => reads,
-            Self::AskBeforeChanges | Self::FullNoteAccess | Self::Custom => {
+            Self::AskBeforeChanges | Self::FullNoteAccess => {
                 CapabilityId::ALL.into_iter().collect()
             }
+            Self::Custom => BTreeSet::new(),
         }
     }
 
@@ -1185,6 +1377,24 @@ pub struct GlobalAgentPermissionSettings {
     pub default_profile: PermissionProfile,
     pub custom_capability_ids: BTreeSet<CapabilityId>,
 }
+impl GlobalAgentPermissionSettings {
+    pub fn allowed_capabilities(&self) -> BTreeSet<CapabilityId> {
+        if self.default_profile == PermissionProfile::Custom {
+            self.custom_capability_ids.clone()
+        } else {
+            self.default_profile.capabilities()
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), ContractValidationError> {
+        if self.default_profile != PermissionProfile::Custom
+            && !self.custom_capability_ids.is_empty()
+        {
+            return Err(ContractValidationError::PermissionEscalation);
+        }
+        check_serialized_size(self, MAX_TOOL_INPUT_BYTES)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1199,6 +1409,17 @@ impl WorkspaceAgentPause {
             PermissionProfile::ReadOnly
         } else {
             global.default_profile
+        }
+    }
+
+    pub fn allowed_capabilities(
+        &self,
+        global: &GlobalAgentPermissionSettings,
+    ) -> BTreeSet<CapabilityId> {
+        if self.actions_paused {
+            PermissionProfile::ReadOnly.capabilities()
+        } else {
+            global.allowed_capabilities()
         }
     }
 }
@@ -1226,16 +1447,28 @@ pub struct PermissionGrant {
     pub granted_at_unix_ms: u64,
 }
 impl PermissionGrant {
-    pub fn validate(&self) -> Result<(), ContractValidationError> {
-        if self.scope.workspace_id.is_empty()
+    pub fn validate_for(
+        &self,
+        global: &GlobalAgentPermissionSettings,
+        pause: &WorkspaceAgentPause,
+    ) -> Result<(), ContractValidationError> {
+        global.validate()?;
+        if !valid_identifier(&self.scope.workspace_id)
+            || self.scope.workspace_id != pause.workspace_id
+            || self.profile != pause.effective_profile(global)
+            || self.scope.page_ids.as_ref().is_some_and(|page_ids| {
+                page_ids.len() > DEFAULT_LIMITS.max_read_summaries as usize
+                    || page_ids.iter().any(|id| !valid_identifier(id))
+            })
+            || self.granted_at_unix_ms > MAX_JSON_SAFE_REVISION as u64
             || !self
                 .scope
                 .capability_ids
-                .is_subset(&self.profile.capabilities())
+                .is_subset(&pause.allowed_capabilities(global))
         {
             return Err(ContractValidationError::PermissionEscalation);
         }
-        Ok(())
+        check_serialized_size(self, MAX_TOOL_INPUT_BYTES)
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1252,6 +1485,58 @@ pub struct ProviderEndpointIdentity {
     pub display_name: String,
     pub transport: ProviderTransport,
     pub normalized_endpoint_identity: String,
+}
+impl ProviderEndpointIdentity {
+    pub fn validate(&self) -> Result<(), ContractValidationError> {
+        if !valid_identifier(&self.provider_id)
+            || self.display_name.trim().is_empty()
+            || self.display_name.chars().count() > 120
+            || self.normalized_endpoint_identity.len() > 2_048
+        {
+            return Err(ContractValidationError::InvalidProviderEndpoint);
+        }
+        let endpoint = url::Url::parse(&self.normalized_endpoint_identity)
+            .map_err(|_| ContractValidationError::InvalidProviderEndpoint)?;
+        if !endpoint.username().is_empty()
+            || endpoint.password().is_some()
+            || endpoint.query().is_some()
+            || endpoint.fragment().is_some()
+            || endpoint.path() != "/"
+        {
+            return Err(ContractValidationError::InvalidProviderEndpoint);
+        }
+        let host = endpoint
+            .host_str()
+            .ok_or(ContractValidationError::InvalidProviderEndpoint)?;
+        let expected = match self.transport {
+            ProviderTransport::LocalHttp => {
+                let loopback = host.eq_ignore_ascii_case("localhost")
+                    || host
+                        .parse::<std::net::IpAddr>()
+                        .is_ok_and(|address| address.is_loopback());
+                if endpoint.scheme() != "http" || !loopback {
+                    return Err(ContractValidationError::InvalidProviderEndpoint);
+                }
+                endpoint.origin().ascii_serialization()
+            }
+            ProviderTransport::RemoteHttps => {
+                if endpoint.scheme() != "https" {
+                    return Err(ContractValidationError::InvalidProviderEndpoint);
+                }
+                endpoint.origin().ascii_serialization()
+            }
+            ProviderTransport::Process => {
+                if endpoint.scheme() != "process" || endpoint.port().is_some() {
+                    return Err(ContractValidationError::InvalidProviderEndpoint);
+                }
+                format!("process://{host}")
+            }
+        };
+        if self.normalized_endpoint_identity != expected {
+            return Err(ContractValidationError::InvalidProviderEndpoint);
+        }
+        Ok(())
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1271,8 +1556,21 @@ pub struct ProviderConsent {
 }
 
 impl ProviderConsent {
+    pub fn validate(&self) -> Result<(), ContractValidationError> {
+        self.endpoint.validate()?;
+        if self.scopes.is_empty()
+            || self.scopes.len() > 4
+            || self.accepted_at_unix_ms > MAX_JSON_SAFE_REVISION as u64
+            || (self.endpoint.transport == ProviderTransport::RemoteHttps
+                && !self.data_may_leave_device)
+        {
+            return Err(ContractValidationError::InvalidProviderEndpoint);
+        }
+        Ok(())
+    }
+
     pub fn permits(&self, endpoint: &ProviderEndpointIdentity, scope: ContentSharingScope) -> bool {
-        &self.endpoint == endpoint && self.scopes.contains(&scope)
+        self.validate().is_ok() && &self.endpoint == endpoint && self.scopes.contains(&scope)
     }
 }
 
@@ -1297,28 +1595,28 @@ impl AgentContextEnvelope {
                 self.schema_version.clone(),
             ));
         }
-        if self.workspace_id.is_empty()
+        if !valid_identifier(&self.workspace_id)
             || self.workspace_revision > MAX_JSON_SAFE_REVISION as u64
             || self.selection.len() > DEFAULT_LIMITS.max_selected_descriptors as usize
             || self.active_page.as_ref().is_some_and(|page| {
-                page.page_id.is_empty() || page.page_revision > MAX_JSON_SAFE_REVISION as u64
+                !valid_identifier(&page.page_id)
+                    || page.title.chars().count() > 240
+                    || page.page_revision > MAX_JSON_SAFE_REVISION as u64
             })
             || self.selection.iter().any(|descriptor| {
-                descriptor.element_id.is_empty()
+                !valid_identifier(&descriptor.element_id)
                     || descriptor.fingerprint.is_empty()
+                    || descriptor.fingerprint.len() > 256
                     || descriptor.summary.chars().count() > 2_000
             })
-            || self.viewport.as_ref().is_some_and(|viewport| {
-                !viewport.x.is_finite()
-                    || !viewport.y.is_finite()
-                    || !viewport.width.is_finite()
-                    || !viewport.height.is_finite()
-                    || viewport.width <= 0.0
-                    || viewport.height <= 0.0
-            })
+            || self
+                .viewport
+                .as_ref()
+                .is_some_and(|viewport| !viewport_is_valid(viewport))
         {
             return Err(ContractValidationError::ContextBoundsExceeded);
         }
+        check_serialized_size(self, MAX_TOOL_INPUT_BYTES)?;
         Ok(())
     }
 }
@@ -1347,6 +1645,66 @@ pub struct ViewportContext {
     pub y: f64,
     pub width: f64,
     pub height: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ScreenshotApprovalArtifact {
+    pub approval_id: String,
+    pub run_id: String,
+    pub tool_call_id: String,
+    pub provider: ProviderEndpointIdentity,
+    pub page_id: String,
+    pub page_revision: u64,
+    pub viewport: ViewportContext,
+    pub scale: f64,
+    pub issued_at_unix_ms: u64,
+    pub expires_at_unix_ms: u64,
+    pub single_use: bool,
+}
+
+impl ScreenshotApprovalArtifact {
+    #[allow(clippy::too_many_arguments)]
+    pub fn validate_for(
+        &self,
+        key: &ToolCallIdempotencyKey,
+        provider: &ProviderEndpointIdentity,
+        page_id: &str,
+        page_revision: u64,
+        viewport: &ViewportContext,
+        scale: f64,
+        now_unix_ms: u64,
+    ) -> Result<(), ContractValidationError> {
+        key.validate()?;
+        provider.validate()?;
+        self.provider.validate()?;
+        if !valid_identifier(&self.approval_id)
+            || self.run_id != key.run_id
+            || self.tool_call_id != key.tool_call_id
+            || &self.provider != provider
+            || self.page_id != page_id
+            || !valid_identifier(page_id)
+            || self.page_revision != page_revision
+            || page_revision > MAX_JSON_SAFE_REVISION as u64
+            || &self.viewport != viewport
+            || self.scale != scale
+            || !scale.is_finite()
+            || !self.single_use
+            || !(0.5..=2.0).contains(&self.scale)
+            || self.page_revision > MAX_JSON_SAFE_REVISION as u64
+            || self.issued_at_unix_ms > MAX_JSON_SAFE_REVISION as u64
+            || self.expires_at_unix_ms > MAX_JSON_SAFE_REVISION as u64
+            || self.expires_at_unix_ms <= self.issued_at_unix_ms
+            || self.expires_at_unix_ms - self.issued_at_unix_ms
+                > MAX_SCREENSHOT_APPROVAL_LIFETIME_MS
+            || now_unix_ms > self.expires_at_unix_ms
+            || !viewport_is_valid(&self.viewport)
+        {
+            return Err(ContractValidationError::InvalidScreenshotApproval);
+        }
+        check_serialized_size(self, MAX_TOOL_RESULT_BYTES)?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1399,6 +1757,31 @@ pub enum SceneReadRequest {
         element_ids: Vec<String>,
     },
 }
+impl SceneReadRequest {
+    pub fn validate(&self) -> Result<(), ContractValidationError> {
+        let valid = match self {
+            Self::ActivePage { page_id } => valid_identifier(page_id),
+            Self::Viewport { page_id, viewport } => {
+                valid_identifier(page_id) && viewport_is_valid(viewport)
+            }
+            Self::Selection {
+                page_id,
+                element_ids,
+            } => {
+                let unique: BTreeSet<_> = element_ids.iter().collect();
+                valid_identifier(page_id)
+                    && !element_ids.is_empty()
+                    && element_ids.len() <= DEFAULT_LIMITS.max_selected_descriptors as usize
+                    && unique.len() == element_ids.len()
+                    && element_ids.iter().all(|id| valid_identifier(id))
+            }
+        };
+        if !valid {
+            return Err(ContractValidationError::ContextBoundsExceeded);
+        }
+        check_serialized_size(self, MAX_TOOL_INPUT_BYTES)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1443,6 +1826,7 @@ pub enum WorkspaceChangeSet {
         change_set_id: String,
         run_id: String,
         tool_call_id: String,
+        workspace_id: String,
         expected_workspace_revision: u64,
         target_fingerprints: Vec<TargetFingerprint>,
         operations: Vec<WorkspaceOperation>,
@@ -1461,8 +1845,10 @@ impl WorkspaceChangeSet {
     pub fn validate_bounds(&self) -> Result<(), ContractValidationError> {
         match self {
             Self::Workspace {
+                change_set_id,
                 run_id,
                 tool_call_id,
+                workspace_id,
                 expected_workspace_revision,
                 target_fingerprints,
                 operations,
@@ -1473,7 +1859,9 @@ impl WorkspaceChangeSet {
                     tool_call_id: tool_call_id.clone(),
                 }
                 .validate()?;
-                if operations.is_empty()
+                if !valid_identifier(change_set_id)
+                    || !valid_identifier(workspace_id)
+                    || operations.is_empty()
                     || operations.len() > DEFAULT_LIMITS.max_workspace_items as usize
                     || operations
                         .iter()
@@ -1481,16 +1869,42 @@ impl WorkspaceChangeSet {
                         .sum::<usize>()
                         > DEFAULT_LIMITS.max_workspace_items as usize
                     || *expected_workspace_revision > MAX_JSON_SAFE_REVISION as u64
-                    || target_fingerprints.len() > DEFAULT_LIMITS.max_workspace_items as usize
+                    || target_fingerprints.len()
+                        > DEFAULT_LIMITS.max_workspace_items as usize * 2 + 1
                     || !fingerprints_are_valid(target_fingerprints)
                     || target_fingerprints.iter().any(|fingerprint| {
                         fingerprint.resource_kind == ChangedResourceKind::CanvasElement
                     })
+                    || !target_fingerprints.iter().any(|fingerprint| {
+                        fingerprint.resource_kind == ChangedResourceKind::Workspace
+                            && fingerprint.resource_id == *workspace_id
+                            && fingerprint.expected_revision == *expected_workspace_revision
+                    })
                 {
                     return Err(ContractValidationError::InvalidWorkspaceChangeSet);
                 }
+                let required_targets: BTreeSet<_> = operations
+                    .iter()
+                    .flat_map(WorkspaceOperation::target_identities)
+                    .chain([(ChangedResourceKind::Workspace, workspace_id.as_str())])
+                    .collect();
+                let provided_targets: BTreeSet<_> = target_fingerprints
+                    .iter()
+                    .map(|fingerprint| {
+                        (fingerprint.resource_kind, fingerprint.resource_id.as_str())
+                    })
+                    .collect();
+                if provided_targets != required_targets {
+                    return Err(ContractValidationError::InvalidWorkspaceChangeSet);
+                }
+                for operation in operations {
+                    let value = serde_json::to_value(operation)
+                        .map_err(|error| violation("$", error.to_string()))?;
+                    validate_json_schema(&workspace_operation_schema(), &value, "$.operations")?;
+                }
             }
             Self::Canvas {
+                change_set_id,
                 run_id,
                 tool_call_id,
                 page_id,
@@ -1504,11 +1918,11 @@ impl WorkspaceChangeSet {
                     tool_call_id: tool_call_id.clone(),
                 }
                 .validate()?;
-                if page_id.is_empty()
+                if !valid_identifier(change_set_id)
+                    || !valid_identifier(page_id)
                     || operations.is_empty()
                     || operations.len() > DEFAULT_LIMITS.max_operations_per_change_set as usize
                     || *expected_page_revision > MAX_JSON_SAFE_REVISION as u64
-                    || target_fingerprints.len() > DEFAULT_LIMITS.max_touched_elements as usize
                     || !fingerprints_are_valid(target_fingerprints)
                 {
                     return Err(ContractValidationError::InvalidCanvasChangeSet);
@@ -1520,7 +1934,9 @@ impl WorkspaceChangeSet {
                 }) || target_fingerprints.iter().any(|fingerprint| {
                     matches!(
                         fingerprint.resource_kind,
-                        ChangedResourceKind::Folder | ChangedResourceKind::ArchiveItem
+                        ChangedResourceKind::Workspace
+                            | ChangedResourceKind::Folder
+                            | ChangedResourceKind::ArchiveItem
                     ) || (fingerprint.resource_kind == ChangedResourceKind::Page
                         && fingerprint.resource_id != *page_id)
                 }) {
@@ -1539,8 +1955,29 @@ impl WorkspaceChangeSet {
                 {
                     return Err(ContractValidationError::CanvasBudgetExceeded);
                 }
+                if target_fingerprints.len() > DEFAULT_LIMITS.max_touched_elements as usize + 1 {
+                    return Err(ContractValidationError::InvalidCanvasChangeSet);
+                }
+                let required_targets: BTreeSet<_> = operations
+                    .iter()
+                    .flat_map(SemanticCanvasOperation::existing_target_ids)
+                    .collect();
+                let provided_targets: BTreeSet<_> = target_fingerprints
+                    .iter()
+                    .filter(|fingerprint| {
+                        fingerprint.resource_kind == ChangedResourceKind::CanvasElement
+                    })
+                    .map(|fingerprint| fingerprint.resource_id.as_str())
+                    .collect();
+                if provided_targets != required_targets {
+                    return Err(ContractValidationError::InvalidCanvasChangeSet);
+                }
+                let value = serde_json::to_value(operations)
+                    .map_err(|error| violation("$", error.to_string()))?;
+                validate_json_schema(&semantic_operations_schema(), &value, "$.operations")?;
             }
         }
+        check_serialized_size(self, MAX_TOOL_INPUT_BYTES)?;
         Ok(())
     }
 }
@@ -1555,7 +1992,7 @@ pub struct TargetFingerprint {
 fn fingerprints_are_valid(fingerprints: &[TargetFingerprint]) -> bool {
     let mut identities = BTreeSet::new();
     fingerprints.iter().all(|fingerprint| {
-        !fingerprint.resource_id.is_empty()
+        valid_identifier(&fingerprint.resource_id)
             && !fingerprint.content_hash.is_empty()
             && fingerprint.content_hash.len() <= 256
             && fingerprint.expected_revision <= MAX_JSON_SAFE_REVISION as u64
@@ -1566,6 +2003,7 @@ fn fingerprints_are_valid(fingerprints: &[TargetFingerprint]) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChangedResourceKind {
+    Workspace,
     Folder,
     Page,
     CanvasElement,
@@ -1617,6 +2055,37 @@ impl WorkspaceOperation {
         match self {
             Self::ArchiveItems { items } | Self::RestoreItems { items } => items.len(),
             _ => 1,
+        }
+    }
+
+    fn target_identities(&self) -> Vec<(ChangedResourceKind, &str)> {
+        match self {
+            Self::CreateFolder { .. } => vec![],
+            Self::RenameFolder { folder_id, .. } => {
+                vec![(ChangedResourceKind::Folder, folder_id)]
+            }
+            Self::CreatePage { folder_id, .. } => {
+                vec![(ChangedResourceKind::Folder, folder_id)]
+            }
+            Self::RenamePage { page_id, .. } | Self::BookmarkPage { page_id, .. } => {
+                vec![(ChangedResourceKind::Page, page_id)]
+            }
+            Self::MovePage { page_id, folder_id } => vec![
+                (ChangedResourceKind::Page, page_id),
+                (ChangedResourceKind::Folder, folder_id),
+            ],
+            Self::ArchiveItems { items } | Self::RestoreItems { items } => items
+                .iter()
+                .map(|item| {
+                    (
+                        match item.kind {
+                            ArchiveItemKind::Folder => ChangedResourceKind::Folder,
+                            ArchiveItemKind::Page => ChangedResourceKind::Page,
+                        },
+                        item.id.as_str(),
+                    )
+                })
+                .collect(),
         }
     }
 }
@@ -1758,6 +2227,30 @@ impl SemanticCanvasOperation {
             | Self::SetConnectorLabel { element_id, .. }
             | Self::SetArrowheads { element_id, .. }
             | Self::CreateLine { element_id, .. }
+            | Self::SetShapeText { element_id, .. } => vec![element_id.as_str()],
+        }
+    }
+
+    fn existing_target_ids(&self) -> Vec<&str> {
+        match self {
+            Self::CreateText { .. } | Self::CreateShape { .. } | Self::CreateLine { .. } => vec![],
+            Self::CreateConnector { start, end, .. } | Self::CreateArrow { start, end, .. } => {
+                vec![start.element_id.as_str(), end.element_id.as_str()]
+            }
+            Self::MoveElements { targets, .. }
+            | Self::DuplicateElements { targets, .. }
+            | Self::AlignElements { targets, .. }
+            | Self::DistributeElements { targets, .. }
+            | Self::ReorderElements { targets, .. } => targets
+                .iter()
+                .map(|target| target.element_id.as_str())
+                .collect(),
+            Self::ReplaceText { element_id, .. }
+            | Self::ResizeElement { element_id, .. }
+            | Self::SetStyle { element_id, .. }
+            | Self::SetTextStyle { element_id, .. }
+            | Self::SetConnectorLabel { element_id, .. }
+            | Self::SetArrowheads { element_id, .. }
             | Self::SetShapeText { element_id, .. } => vec![element_id.as_str()],
         }
     }
@@ -1961,6 +2454,67 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn provider_identity() -> ProviderEndpointIdentity {
+        ProviderEndpointIdentity {
+            provider_id: "provider".into(),
+            display_name: "Provider".into(),
+            transport: ProviderTransport::RemoteHttps,
+            normalized_endpoint_identity: "https://provider.example".into(),
+        }
+    }
+
+    fn permission_context(
+        profile: PermissionProfile,
+        custom_capability_ids: BTreeSet<CapabilityId>,
+    ) -> (GlobalAgentPermissionSettings, WorkspaceAgentPause) {
+        (
+            GlobalAgentPermissionSettings {
+                default_profile: profile,
+                custom_capability_ids,
+            },
+            WorkspaceAgentPause {
+                workspace_id: "workspace".into(),
+                actions_paused: false,
+            },
+        )
+    }
+
+    fn screenshot_artifact() -> ScreenshotApprovalArtifact {
+        ScreenshotApprovalArtifact {
+            approval_id: "approval".into(),
+            run_id: "run".into(),
+            tool_call_id: "call".into(),
+            provider: provider_identity(),
+            page_id: "page".into(),
+            page_revision: 0,
+            viewport: ViewportContext {
+                x: 0.0,
+                y: 0.0,
+                width: 640.0,
+                height: 480.0,
+            },
+            scale: 1.0,
+            issued_at_unix_ms: 1_000,
+            expires_at_unix_ms: 2_000,
+            single_use: true,
+        }
+    }
+
+    fn context_envelope() -> AgentContextEnvelope {
+        AgentContextEnvelope {
+            schema_version: CAPABILITY_SCHEMA_VERSION.into(),
+            workspace_id: "workspace".into(),
+            workspace_revision: 0,
+            active_page: Some(ActivePageContext {
+                page_id: "page".into(),
+                title: "Page".into(),
+                page_revision: 0,
+            }),
+            selection: vec![],
+            viewport: None,
+        }
+    }
+
     #[test]
     fn registry_is_complete_and_read_only_is_non_mutating() {
         let manifest = canonical_manifest();
@@ -2076,10 +2630,10 @@ mod tests {
     fn receipts_maps_screenshots_and_json_safe_revisions_validate() {
         let receipt = json!({"receipt": serde_json::to_value(MutationReceipt { audit_id: "audit".into(), change_set_id: "change".into(), run_id: "run".into(), tool_call_id: "call".into(), changed_resources: vec![], workspace_revision: MAX_JSON_SAFE_REVISION as u64, page_revisions: BTreeMap::from([("page".into(), MAX_JSON_SAFE_REVISION as u64)]), inverse_change_set: BoundedInverseChangeSet { inverse_change_set_id: "undo".into(), changes: vec![InverseChange::RestoreResource { kind: ChangedResourceKind::Page, id: "page".into() }] } }).unwrap()});
         assert!(validate_tool_result(CapabilityId::WorkspaceCreatePage, &receipt).is_ok());
-        let screenshot = json!({"pageId":"page","revision":0,"attachmentId":"attachment","mediaType":"image/png","viewport":{"x":0,"y":0,"width":640,"height":480},"providerId":"provider","normalizedEndpointIdentity":"https://provider.example","requiresApproval":true,"persisted":false});
+        let screenshot = json!({"approvalArtifact":serde_json::to_value(screenshot_artifact()).unwrap(),"attachmentId":"attachment","mediaType":"image/png","requiresApproval":true,"persisted":false});
         assert!(validate_tool_result(CapabilityId::CanvasRequestScreenshot, &screenshot).is_ok());
         let mut invalid_screenshot = screenshot;
-        invalid_screenshot["revision"] = json!(MAX_JSON_SAFE_REVISION + 1);
+        invalid_screenshot["approvalArtifact"]["pageRevision"] = json!(MAX_JSON_SAFE_REVISION + 1);
         assert!(matches!(
             validate_tool_result(CapabilityId::CanvasRequestScreenshot, &invalid_screenshot),
             Err(ContractValidationError::SchemaViolation { .. })
@@ -2098,8 +2652,9 @@ mod tests {
             duration: GrantDuration::ThisRun,
             granted_at_unix_ms: 0,
         };
+        let (global, pause) = permission_context(PermissionProfile::ReadOnly, BTreeSet::new());
         assert_eq!(
-            grant.validate(),
+            grant.validate_for(&global, &pause),
             Err(ContractValidationError::PermissionEscalation)
         );
     }
@@ -2119,7 +2674,9 @@ mod tests {
             duration: GrantDuration::ThisRun,
             granted_at_unix_ms: 0,
         };
-        assert!(grant.validate().is_ok());
+        let (global, pause) =
+            permission_context(PermissionProfile::AskBeforeChanges, BTreeSet::new());
+        assert!(grant.validate_for(&global, &pause).is_ok());
         assert_eq!(
             PermissionProfile::AskBeforeChanges.mutation_approval_policy(),
             MutationApprovalPolicy::EveryChange
@@ -2127,6 +2684,31 @@ mod tests {
         assert_eq!(
             PermissionProfile::FullNoteAccess.mutation_approval_policy(),
             MutationApprovalPolicy::Automatic
+        );
+    }
+
+    #[test]
+    fn custom_permission_grants_are_limited_to_saved_allowlist() {
+        let (global, pause) = permission_context(
+            PermissionProfile::Custom,
+            BTreeSet::from([CapabilityId::CanvasReadScene]),
+        );
+        let grant = |capability_id| PermissionGrant {
+            profile: PermissionProfile::Custom,
+            scope: PermissionScope {
+                workspace_id: "workspace".into(),
+                page_ids: None,
+                capability_ids: BTreeSet::from([capability_id]),
+            },
+            duration: GrantDuration::ThisSession,
+            granted_at_unix_ms: 0,
+        };
+        assert!(grant(CapabilityId::CanvasReadScene)
+            .validate_for(&global, &pause)
+            .is_ok());
+        assert_eq!(
+            grant(CapabilityId::CanvasApplyOperations).validate_for(&global, &pause),
+            Err(ContractValidationError::PermissionEscalation)
         );
     }
 
@@ -2156,8 +2738,84 @@ mod tests {
     }
 
     #[test]
+    fn provider_endpoints_reject_credentials_and_noncanonical_origins() {
+        assert!(provider_identity().validate().is_ok());
+        for invalid in [
+            "https://user:secret@provider.example",
+            "https://provider.example/path",
+            "https://provider.example?token=secret",
+            "https://PROVIDER.example",
+        ] {
+            assert_eq!(
+                ProviderEndpointIdentity {
+                    normalized_endpoint_identity: invalid.into(),
+                    ..provider_identity()
+                }
+                .validate(),
+                Err(ContractValidationError::InvalidProviderEndpoint)
+            );
+        }
+        assert_eq!(
+            ProviderEndpointIdentity {
+                transport: ProviderTransport::LocalHttp,
+                normalized_endpoint_identity: "http://example.com".into(),
+                ..provider_identity()
+            }
+            .validate(),
+            Err(ContractValidationError::InvalidProviderEndpoint)
+        );
+    }
+
+    #[test]
+    fn screenshot_approval_is_expiring_single_use_and_request_bound() {
+        let artifact = screenshot_artifact();
+        let key = ToolCallIdempotencyKey {
+            run_id: "run".into(),
+            tool_call_id: "call".into(),
+        };
+        assert!(artifact
+            .validate_for(
+                &key,
+                &provider_identity(),
+                "page",
+                0,
+                &artifact.viewport,
+                1.0,
+                1_500,
+            )
+            .is_ok());
+        assert_eq!(
+            artifact.validate_for(
+                &key,
+                &provider_identity(),
+                "other-page",
+                0,
+                &artifact.viewport,
+                1.0,
+                1_500,
+            ),
+            Err(ContractValidationError::InvalidScreenshotApproval)
+        );
+        assert_eq!(
+            artifact.validate_for(
+                &key,
+                &provider_identity(),
+                "page",
+                0,
+                &artifact.viewport,
+                1.0,
+                2_001,
+            ),
+            Err(ContractValidationError::InvalidScreenshotApproval)
+        );
+    }
+
+    #[test]
     fn restore_invocation_uses_typed_items_and_workspace_revision() {
         let invocation = ToolInvocation {
+            run_id: "run".into(),
+            tool_call_id: "call".into(),
+            provider: provider_identity(),
             capability_id: CapabilityId::WorkspaceRestoreItems,
             schema_version: CAPABILITY_SCHEMA_VERSION.into(),
             asserted_risk: CapabilityRisk::Destructive,
@@ -2252,6 +2910,9 @@ mod tests {
     #[test]
     fn invocation_validation_fails_closed() {
         let valid = ToolInvocation {
+            run_id: "run".into(),
+            tool_call_id: "call".into(),
+            provider: provider_identity(),
             capability_id: CapabilityId::WorkspaceSearch,
             schema_version: "1.0.0".into(),
             asserted_risk: CapabilityRisk::Read,
@@ -2443,11 +3104,86 @@ mod tests {
     }
 
     #[test]
+    fn change_sets_require_exact_fingerprints_and_canonical_operation_bounds() {
+        let workspace = |target_fingerprints, operations| WorkspaceChangeSet::Workspace {
+            change_set_id: "change".into(),
+            run_id: "run".into(),
+            tool_call_id: "call".into(),
+            workspace_id: "workspace".into(),
+            expected_workspace_revision: 4,
+            target_fingerprints,
+            operations,
+        };
+        let workspace_fingerprint = TargetFingerprint {
+            resource_kind: ChangedResourceKind::Workspace,
+            resource_id: "workspace".into(),
+            expected_revision: 4,
+            content_hash: "workspace-fingerprint".into(),
+        };
+        assert!(workspace(
+            vec![workspace_fingerprint.clone()],
+            vec![WorkspaceOperation::CreateFolder {
+                folder_id: "folder".into(),
+                name: "Folder".into(),
+            }],
+        )
+        .validate_bounds()
+        .is_ok());
+        assert_eq!(
+            workspace(
+                vec![],
+                vec![WorkspaceOperation::CreateFolder {
+                    folder_id: "folder".into(),
+                    name: "Folder".into(),
+                }],
+            )
+            .validate_bounds(),
+            Err(ContractValidationError::InvalidWorkspaceChangeSet)
+        );
+        assert!(matches!(
+            workspace(
+                vec![workspace_fingerprint],
+                vec![WorkspaceOperation::CreateFolder {
+                    folder_id: "folder".into(),
+                    name: String::new(),
+                }],
+            )
+            .validate_bounds(),
+            Err(ContractValidationError::SchemaViolation { .. })
+        ));
+
+        let missing_element_fingerprint = WorkspaceChangeSet::Canvas {
+            change_set_id: "change".into(),
+            run_id: "run".into(),
+            tool_call_id: "call".into(),
+            page_id: "page".into(),
+            expected_page_revision: 0,
+            target_fingerprints: vec![TargetFingerprint {
+                resource_kind: ChangedResourceKind::Page,
+                resource_id: "page".into(),
+                expected_revision: 0,
+                content_hash: "page-fingerprint".into(),
+            }],
+            operations: vec![SemanticCanvasOperation::ReplaceText {
+                element_id: "text".into(),
+                text: "updated".into(),
+            }],
+        };
+        assert_eq!(
+            missing_element_fingerprint.validate_bounds(),
+            Err(ContractValidationError::InvalidCanvasChangeSet)
+        );
+    }
+
+    #[test]
     fn v1_detailed_touched_and_created_boundaries_are_enforced() {
         let detailed_ids: Vec<_> = (0..DEFAULT_LIMITS.max_detailed_elements)
             .map(|index| format!("element-{index}"))
             .collect();
         let detailed = ToolInvocation {
+            run_id: "run".into(),
+            tool_call_id: "call".into(),
+            provider: provider_identity(),
             capability_id: CapabilityId::CanvasReadElements,
             schema_version: CAPABILITY_SCHEMA_VERSION.into(),
             asserted_risk: CapabilityRisk::Read,
@@ -2469,19 +3205,35 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         };
-        let canvas = |operations| WorkspaceChangeSet::Canvas {
-            change_set_id: "change".into(),
-            run_id: "run".into(),
-            tool_call_id: "call".into(),
-            page_id: "page".into(),
-            expected_page_revision: 0,
-            target_fingerprints: vec![TargetFingerprint {
+        let canvas = |operations: Vec<SemanticCanvasOperation>| {
+            let mut target_fingerprints = vec![TargetFingerprint {
                 resource_kind: ChangedResourceKind::Page,
                 resource_id: "page".into(),
                 expected_revision: 0,
                 content_hash: "page-fingerprint".into(),
-            }],
-            operations,
+            }];
+            target_fingerprints.extend(
+                operations
+                    .iter()
+                    .flat_map(SemanticCanvasOperation::existing_target_ids)
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .map(|element_id| TargetFingerprint {
+                        resource_kind: ChangedResourceKind::CanvasElement,
+                        resource_id: element_id.into(),
+                        expected_revision: 0,
+                        content_hash: format!("fingerprint-{element_id}"),
+                    }),
+            );
+            WorkspaceChangeSet::Canvas {
+                change_set_id: "change".into(),
+                run_id: "run".into(),
+                tool_call_id: "call".into(),
+                page_id: "page".into(),
+                expected_page_revision: 0,
+                target_fingerprints,
+                operations,
+            }
         };
 
         assert!(canvas(vec![SemanticCanvasOperation::MoveElements {
@@ -2553,6 +3305,65 @@ mod tests {
             }
             .validate(),
             Err(ContractValidationError::InvalidIdempotencyKey)
+        );
+    }
+
+    #[test]
+    fn adapter_dtos_bound_identifiers_vectors_values_and_total_bytes() {
+        let descriptor = AgentDescriptor {
+            agent_id: "agent".into(),
+            display_name: "Agent".into(),
+            capabilities: vec![CapabilityId::WorkspaceSearch],
+        };
+        assert!(validate_agent_descriptors(&[descriptor.clone()]).is_ok());
+        let mut duplicate_capabilities = descriptor.clone();
+        duplicate_capabilities
+            .capabilities
+            .push(CapabilityId::WorkspaceSearch);
+        assert_eq!(
+            duplicate_capabilities.validate(),
+            Err(ContractValidationError::AdapterBoundsExceeded)
+        );
+        assert_eq!(
+            validate_agent_descriptors(&vec![descriptor; MAX_AGENT_DESCRIPTORS + 1]),
+            Err(ContractValidationError::AdapterBoundsExceeded)
+        );
+
+        let continue_request = ContinueRunRequest {
+            run_id: "run".into(),
+            response: json!("x".repeat(MAX_TOOL_RESULT_BYTES as usize)),
+            context: context_envelope(),
+            permission_grant: PermissionGrant {
+                profile: PermissionProfile::ReadOnly,
+                scope: PermissionScope {
+                    workspace_id: "workspace".into(),
+                    page_ids: None,
+                    capability_ids: BTreeSet::from([CapabilityId::WorkspaceSearch]),
+                },
+                duration: GrantDuration::ThisRun,
+                granted_at_unix_ms: 0,
+            },
+        };
+        assert!(matches!(
+            continue_request.validate(),
+            Err(ContractValidationError::PayloadTooLarge { .. })
+        ));
+
+        let start_request = StartRunRequest {
+            agent_id: "agent".into(),
+            prompt: "x".repeat(MAX_AGENT_PROMPT_BYTES + 1),
+            context: context_envelope(),
+            permission_grant: continue_request.permission_grant,
+            provider_consent: ProviderConsent {
+                endpoint: provider_identity(),
+                scopes: BTreeSet::from([ContentSharingScope::ActivePageScene]),
+                accepted_at_unix_ms: 0,
+                data_may_leave_device: true,
+            },
+        };
+        assert_eq!(
+            start_request.validate(),
+            Err(ContractValidationError::AdapterBoundsExceeded)
         );
     }
 }

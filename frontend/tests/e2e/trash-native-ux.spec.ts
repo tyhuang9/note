@@ -158,6 +158,14 @@ test("Trash shows safe metadata and restores a folder to its destination", async
   await page.evaluate(() => (window as typeof window & { __trashTest: { completeArchive(): void } }).__trashTest.completeArchive());
   await expect(page.locator('[data-page-trash-action="restored-child"]')).toHaveCount(0);
   await expect(page.locator(".trash-status")).toHaveText("Moved Restored child to Trash. Trash could not refresh; it will update when reopened.");
+  await expect(page.locator("#workspace-explorer-panel")).toBeFocused();
+
+  await page.getByRole("button", { name: "File explorer" }).click();
+  await page.locator('.folder-menu-trigger[data-folder-id="restored-folder"]').focus();
+  await page.keyboard.press("Enter");
+  await page.getByRole("menuitem", { name: "Move to Trash" }).click();
+  await expect(page.locator('.folder-menu-trigger[data-folder-id="restored-folder"]')).toHaveCount(0);
+  await expect(page.locator("#workspace-explorer-panel")).toBeFocused();
 });
 
 test("Empty Trash flushes first, refreshes an empty preview, and reports deferred asset cleanup", async ({ page }) => {
@@ -245,4 +253,64 @@ test("Empty Trash flushes first, refreshes an empty preview, and reports deferre
   const purgeCommands = await page.evaluate(() => (window as typeof window & { __trashCorrection: { commandLog(): string[] } }).__trashCorrection.commandLog());
   expect(purgeCommands.indexOf("reconcile_workspace_structure")).toBeGreaterThanOrEqual(0);
   expect(purgeCommands.indexOf("reconcile_workspace_structure")).toBeLessThan(purgeCommands.indexOf("purge_trash"));
+});
+
+test("Trash metadata startup failure keeps native persistence active", async ({ page }) => {
+  await page.addInitScript(() => {
+    let archiveCalls = 0;
+    let legacyLoadCalls = 0;
+    const workspace = {
+      elements: [],
+      folders: [{ id: "folder", name: "Stored folder", isBookmarked: false }],
+      isDarkMode: false,
+      pages: [{ id: "stored-page", folderId: "folder", title: "Stored page", isBookmarked: false, revision: 0 }],
+      sessionState: {},
+      warnings: [],
+    };
+    Object.assign(window, {
+      isTauri: true,
+      __trashStartup: {
+        archiveCalls: () => archiveCalls,
+        legacyLoadCalls: () => legacyLoadCalls,
+      },
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args?: { structure?: { pages: Array<Record<string, unknown>> } }) => {
+          switch (command) {
+            case "initialize_storage":
+              return { databasePath: "startup.db", importedLegacyData: false, schemaVersion: 5, warnings: [] };
+            case "load_workspace_data":
+              return workspace;
+            case "list_trash":
+              throw new Error("temporary Trash metadata failure");
+            case "move_page_to_trash":
+              archiveCalls += 1;
+              return undefined;
+            case "load_app_data":
+              legacyLoadCalls += 1;
+              throw new Error("legacy fallback should not run");
+            case "reconcile_workspace_structure":
+              return { pages: (args?.structure?.pages ?? []).map((entry) => ({ ...entry, revision: 0 })) };
+            case "apply_scene_changes":
+              return { newRevision: 0, pageId: "stored-page" };
+            default:
+              return undefined;
+          }
+        },
+      },
+    });
+  });
+
+  await page.goto("/");
+  await expect(page.locator('[data-page-trash-action="stored-page"]')).toBeVisible();
+  await expect(page.locator("[data-trash-announcement]")).toHaveText("Trash could not load; it will refresh when reopened.");
+  await expect(page.locator("[data-trash-announcement][role=status]")).toHaveCount(1);
+  await page.getByRole("button", { name: "0 items in Trash" }).click();
+  await expect(page.locator(".trash-status")).toHaveText("Trash could not load; it will refresh when reopened.");
+  await expect(page.locator(".trash-status[role=status]")).toHaveCount(0);
+  await page.getByRole("button", { name: "File explorer" }).click();
+  await page.locator('[data-page-trash-action="stored-page"]').focus();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => page.evaluate(() => (window as typeof window & { __trashStartup: { archiveCalls(): number; legacyLoadCalls(): number } }).__trashStartup.archiveCalls())).toBe(1);
+  await expect(page.locator('[data-page-trash-action="stored-page"]')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => (window as typeof window & { __trashStartup: { legacyLoadCalls(): number } }).__trashStartup.legacyLoadCalls())).toBe(0);
 });

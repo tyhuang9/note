@@ -297,6 +297,7 @@ type SidebarProps = {
   isNarrowWorkbench: boolean;
   pageSearchFocusRequest: number;
   pageTemplates: AppData["pages"];
+  isTrashRestoreAvailable: boolean;
   trashEntries: readonly TrashEntry[];
   trashFeedback: string;
   pendingTrashAction: string | null;
@@ -2334,7 +2335,14 @@ function App() {
         const repository = createSceneRepository();
         const diagnostics = await repository.initializeStorage();
         const workspace = await repository.loadWorkspace();
-        const loadedTrashEntries = await repository.listTrash();
+        let loadedTrashEntries: TrashEntry[] = [];
+        let trashLoadWarning = "";
+        try {
+          loadedTrashEntries = await repository.listTrash();
+        } catch (error) {
+          console.warn("Could not load Trash metadata; workspace storage remains available.", error);
+          trashLoadWarning = "Trash could not load; it will refresh when reopened.";
+        }
         const savedData: AppData = {
           elements: workspace.elements,
           folders: workspace.folders,
@@ -2439,6 +2447,8 @@ function App() {
         sceneChangeQueueRef.current = queue;
         setData(savedData);
         setTrashEntries(loadedTrashEntries);
+        setTrashAnnouncement(trashLoadWarning);
+        setTrashFeedback(trashLoadWarning);
         setIsDarkMode(savedData.isDarkMode ?? true);
         setIsSidebarCollapsed(savedSessionState?.isExplorerCollapsed ?? false);
         setIsAssistantOpen(savedSessionState?.isAssistantOpen ?? false);
@@ -4363,11 +4373,13 @@ function App() {
     if (!beginTrashMutation(action, `Moving ${folderName} to Trash…`)) {
       return;
     }
+    let shouldRestoreFolderFocus = false;
     try {
       await flushPendingPersistence();
       const repository = repositoryRef.current;
       if (repository) {
         await repository.moveFolderToTrash(folderId);
+        shouldRestoreFolderFocus = true;
         let message: string;
         try {
           const nextTrashEntries = await repository.listTrash();
@@ -4438,6 +4450,11 @@ function App() {
       setTrashFeedback(message);
     } finally {
       finishTrashMutation(action);
+      if (shouldRestoreFolderFocus) {
+        window.requestAnimationFrame(() => {
+          explorerPanelRef.current?.focus();
+        });
+      }
     }
   }
 
@@ -6018,6 +6035,7 @@ function App() {
     if (!beginTrashMutation(action, `Moving ${pageName} to Trash…`)) {
       return;
     }
+    let shouldRestorePageFocus = false;
     try {
       await flushPendingPersistence();
       const repository = repositoryRef.current;
@@ -6081,16 +6099,7 @@ function App() {
         elements: currentData.elements.filter((block) => block.pageId !== pageId),
       };
     });
-    window.requestAnimationFrame(() => {
-      const successorAction = successorPageId
-        ? Array.from(document.querySelectorAll<HTMLButtonElement>("[data-page-trash-action]"))
-          .find((button) => button.dataset.pageTrashAction === successorPageId && button.getClientRects().length > 0)
-        : null;
-      const parentControl = parentFolderId
-        ? document.querySelector<HTMLButtonElement>(`.folder-menu-trigger[data-folder-id="${CSS.escape(parentFolderId)}"]`)
-        : null;
-      (successorAction ?? parentControl ?? explorerPanelRef.current)?.focus();
-    });
+    shouldRestorePageFocus = true;
     } catch (error) {
       setPersistenceStatus({ kind: "failed", error: error instanceof Error ? error : new Error(String(error)) });
       const message = `Could not move ${pageName} to Trash.`;
@@ -6098,6 +6107,19 @@ function App() {
       setTrashFeedback(message);
     } finally {
       finishTrashMutation(action);
+      if (shouldRestorePageFocus) {
+        window.requestAnimationFrame(() => {
+          const successorAction = successorPageId
+            ? Array.from(document.querySelectorAll<HTMLButtonElement>("[data-page-trash-action]"))
+              .find((button) => button.dataset.pageTrashAction === successorPageId && !button.disabled && button.getClientRects().length > 0)
+            : null;
+          const parentControl = parentFolderId
+            ? document.querySelector<HTMLButtonElement>(`.folder-menu-trigger[data-folder-id="${CSS.escape(parentFolderId)}"]`)
+            : null;
+          const enabledParentControl = parentControl && !parentControl.disabled ? parentControl : null;
+          (successorAction ?? enabledParentControl ?? explorerPanelRef.current)?.focus();
+        });
+      }
     }
   }
 
@@ -9334,6 +9356,7 @@ function App() {
         isNarrowWorkbench={isNarrowWorkbench}
         pageSearchFocusRequest={pageSearchFocusRequest}
         pageTemplates={pageTemplates}
+        isTrashRestoreAvailable={persistenceAvailable}
         trashEntries={trashEntries}
         trashFeedback={trashFeedback}
         pendingTrashAction={pendingTrashAction}
@@ -10140,6 +10163,7 @@ const Sidebar = memo(function Sidebar({
   isDarkMode,
   pageSearchFocusRequest,
   pageTemplates,
+  isTrashRestoreAvailable,
   trashEntries,
   trashFeedback,
   pendingTrashAction,
@@ -11776,7 +11800,7 @@ const Sidebar = memo(function Sidebar({
                   <HeroIcon name="trash" />
                 </button>
               </div>
-              {trashFeedback ? <p className="trash-status" role="status">{trashFeedback}</p> : null}
+              {trashFeedback ? <p className="trash-status">{trashFeedback}</p> : null}
               {trashEntries.length > 0 ? (
                 <ul className="nav-list trash-list" aria-label="Trashed items">
                   {trashEntries.map((entry, restoreIndex) => (
@@ -11793,11 +11817,11 @@ const Sidebar = memo(function Sidebar({
                       <span className="file-kind">{entry.kind.toUpperCase()}</span>
                       <span className="nav-actions">
                         <button
-                          aria-label={pendingTrashAction === `restore:${entry.id}` ? `Restoring ${entry.name}` : `Restore ${entry.name}`}
+                          aria-label={!isTrashRestoreAvailable ? `Restore ${entry.name} unavailable until storage reconnects` : pendingTrashAction === `restore:${entry.id}` ? `Restoring ${entry.name}` : `Restore ${entry.name}`}
                           data-trash-restore
-                          disabled={pendingTrashAction !== null}
+                          disabled={!isTrashRestoreAvailable || pendingTrashAction !== null}
                           onClick={() => onRestoreTrashEntry(entry, restoreIndex)}
-                          title={pendingTrashAction === `restore:${entry.id}` ? `Restoring ${entry.name}` : `Restore ${entry.name}`}
+                          title={!isTrashRestoreAvailable ? "Restore unavailable until storage reconnects" : pendingTrashAction === `restore:${entry.id}` ? `Restoring ${entry.name}` : `Restore ${entry.name}`}
                           type="button"
                         >
                           <HeroIcon name="check" />
@@ -11879,6 +11903,7 @@ function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps) {
     previous.isNarrowWorkbench === next.isNarrowWorkbench &&
     previous.pageSearchFocusRequest === next.pageSearchFocusRequest &&
     previous.pageTemplates === next.pageTemplates &&
+    previous.isTrashRestoreAvailable === next.isTrashRestoreAvailable &&
     previous.trashEntries === next.trashEntries &&
     previous.trashFeedback === next.trashFeedback &&
     previous.pendingTrashAction === next.pendingTrashAction &&

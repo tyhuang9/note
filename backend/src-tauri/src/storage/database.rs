@@ -93,7 +93,8 @@ CREATE TRIGGER pages_lifecycle_invariant_update BEFORE UPDATE OF lifecycle,trash
 INSERT INTO schema_migrations(version,applied_at) VALUES(4,unixepoch('subsec')*1000);
 PRAGMA user_version=4;
 "#).map_err(|e| format!("apply migration 4: {e}"))?;
-        tx.commit().map_err(|e| format!("commit migration 4: {e}"))?;
+        tx.commit()
+            .map_err(|e| format!("commit migration 4: {e}"))?;
     }
     if current < 5 {
         connection.execute_batch(r#"

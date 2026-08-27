@@ -602,7 +602,8 @@ Function NormalizeMaintenanceInstallPath
     StrCpy $0 ""
     Return
   ${EndIf}
-  StrCpy $1 $0 3
+  ; The remainder is empty for C:\ and paths that canonicalize to a drive root.
+  StrCpy $1 $0 "" 3
   ${If} $1 == ""
     ; A drive root is never an application directory.
     StrCpy $0 ""

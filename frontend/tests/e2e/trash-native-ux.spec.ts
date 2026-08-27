@@ -132,8 +132,12 @@ test("Trash shows safe metadata and restores a folder to its destination", async
   const restoreCommands = await page.evaluate(() => (window as typeof window & { __trashTest: { commandLog(): string[] } }).__trashTest.commandLog());
   expect(restoreCommands.indexOf("reconcile_workspace_structure")).toBeGreaterThanOrEqual(0);
   expect(restoreCommands.indexOf("reconcile_workspace_structure")).toBeLessThan(restoreCommands.indexOf("restore_folder_from_trash"));
+  await page.evaluate(() => (window as typeof window & { __trashTest: { failNextTrashList(): void } }).__trashTest.failNextTrashList());
   await page.evaluate(() => (window as typeof window & { __trashTest: { completeRestore(): void } }).__trashTest.completeRestore());
-  await expect(page.locator(".trash-status")).toHaveText("Restored Duplicate. 1 item remains in Trash.");
+  await expect(page.locator(".trash-status")).toHaveText("Restored Duplicate. Trash could not refresh; it will update when reopened.");
+  await expect(page.locator(".trash-status")).not.toHaveText("Could not restore Duplicate.");
+  const restoreCompletionCommands = await page.evaluate(() => (window as typeof window & { __trashTest: { commandLog(): string[] } }).__trashTest.commandLog());
+  expect(restoreCompletionCommands.indexOf("restore_folder_from_trash")).toBeLessThan(restoreCompletionCommands.lastIndexOf("load_workspace_data"));
 
   await page.getByRole("button", { name: "File explorer" }).click();
   await expect(page.locator(".nav-item-folder.is-active").filter({ hasText: "Restored folder" })).toBeVisible();
@@ -147,7 +151,7 @@ test("Trash shows safe metadata and restores a folder to its destination", async
   });
   await expect(archiveChild).toBeDisabled();
   await expect(archiveChild).toHaveAttribute("aria-label", "Moving Restored child to Trash");
-  await page.getByRole("button", { name: "1 item in Trash" }).click();
+  await page.getByRole("button", { name: "2 items in Trash" }).click();
   await expect(page.getByRole("button", { name: "Empty Trash" })).toBeDisabled();
   await expect(page.locator(".trash-status")).toHaveText("Moving Restored child to Trash…");
   await expect.poll(() => page.evaluate(() => (window as typeof window & { __trashTest: { archiveCalls(): number } }).__trashTest.archiveCalls())).toBe(1);
@@ -238,6 +242,7 @@ test("Empty Trash flushes first, refreshes an empty preview, and reports deferre
   await page.getByRole("button", { name: "Empty Trash" }).click();
   await expect(page.locator(".trash-status")).toHaveText("Trash is already empty.");
   await expect(page.getByRole("list", { name: "Trashed items" }).getByRole("listitem")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Trash is empty" })).toBeDisabled();
   const emptyCommands = await page.evaluate(() => (window as typeof window & { __trashCorrection: { commandLog(): string[] } }).__trashCorrection.commandLog());
   expect(emptyCommands.indexOf("reconcile_workspace_structure")).toBeGreaterThanOrEqual(0);
   expect(emptyCommands.indexOf("reconcile_workspace_structure")).toBeLessThan(emptyCommands.indexOf("get_trash_purge_preview"));
@@ -259,6 +264,7 @@ test("Trash metadata startup failure keeps native persistence active", async ({ 
   await page.addInitScript(() => {
     let archiveCalls = 0;
     let legacyLoadCalls = 0;
+    let previewCalls = 0;
     const workspace = {
       elements: [],
       folders: [{ id: "folder", name: "Stored folder", isBookmarked: false }],
@@ -272,6 +278,7 @@ test("Trash metadata startup failure keeps native persistence active", async ({ 
       __trashStartup: {
         archiveCalls: () => archiveCalls,
         legacyLoadCalls: () => legacyLoadCalls,
+        previewCalls: () => previewCalls,
       },
       __TAURI_INTERNALS__: {
         invoke: async (command: string, args?: { structure?: { pages: Array<Record<string, unknown>> } }) => {
@@ -282,6 +289,9 @@ test("Trash metadata startup failure keeps native persistence active", async ({ 
               return workspace;
             case "list_trash":
               throw new Error("temporary Trash metadata failure");
+            case "get_trash_purge_preview":
+              previewCalls += 1;
+              return { confirmationToken: "empty", folderCount: 0, pageCount: 0, elementCount: 0 };
             case "move_page_to_trash":
               archiveCalls += 1;
               return undefined;
@@ -307,6 +317,11 @@ test("Trash metadata startup failure keeps native persistence active", async ({ 
   await page.getByRole("button", { name: "0 items in Trash" }).click();
   await expect(page.locator(".trash-status")).toHaveText("Trash could not load; it will refresh when reopened.");
   await expect(page.locator(".trash-status[role=status]")).toHaveCount(0);
+  const emptyTrash = page.getByRole("button", { name: "Empty Trash" });
+  await expect(emptyTrash).toBeEnabled();
+  await emptyTrash.click();
+  await expect(page.locator(".trash-status")).toHaveText("Trash is already empty. Trash could not refresh; it will update when reopened.");
+  await expect.poll(() => page.evaluate(() => (window as typeof window & { __trashStartup: { previewCalls(): number } }).__trashStartup.previewCalls())).toBe(1);
   await page.getByRole("button", { name: "File explorer" }).click();
   await page.locator('[data-page-trash-action="stored-page"]').focus();
   await page.keyboard.press("Enter");

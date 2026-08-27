@@ -297,6 +297,7 @@ type SidebarProps = {
   isNarrowWorkbench: boolean;
   pageSearchFocusRequest: number;
   pageTemplates: AppData["pages"];
+  hasTrashMetadata: boolean;
   isTrashRestoreAvailable: boolean;
   trashEntries: readonly TrashEntry[];
   trashFeedback: string;
@@ -1382,6 +1383,7 @@ function applyFormatStateToBlock(
 function App() {
   const [data, setData] = useState<AppData>(emptyData);
   const [trashEntries, setTrashEntries] = useState<TrashEntry[]>([]);
+  const [hasTrashMetadata, setHasTrashMetadata] = useState(false);
   const [trashAnnouncement, setTrashAnnouncement] = useState("");
   const [trashFeedback, setTrashFeedback] = useState("");
   const [pendingTrashAction, setPendingTrashAction] = useState<string | null>(null);
@@ -2331,14 +2333,17 @@ function App() {
     let isMounted = true;
 
     async function loadData() {
+      setHasTrashMetadata(false);
       try {
         const repository = createSceneRepository();
         const diagnostics = await repository.initializeStorage();
         const workspace = await repository.loadWorkspace();
         let loadedTrashEntries: TrashEntry[] = [];
+        let didLoadTrashMetadata = false;
         let trashLoadWarning = "";
         try {
           loadedTrashEntries = await repository.listTrash();
+          didLoadTrashMetadata = true;
         } catch (error) {
           console.warn("Could not load Trash metadata; workspace storage remains available.", error);
           trashLoadWarning = "Trash could not load; it will refresh when reopened.";
@@ -2447,6 +2452,7 @@ function App() {
         sceneChangeQueueRef.current = queue;
         setData(savedData);
         setTrashEntries(loadedTrashEntries);
+        setHasTrashMetadata(didLoadTrashMetadata);
         setTrashAnnouncement(trashLoadWarning);
         setTrashFeedback(trashLoadWarning);
         setIsDarkMode(savedData.isDarkMode ?? true);
@@ -4384,8 +4390,10 @@ function App() {
         try {
           const nextTrashEntries = await repository.listTrash();
           setTrashEntries(nextTrashEntries);
+          setHasTrashMetadata(true);
           message = `Moved ${folderName} to Trash. ${formatTrashRemaining(nextTrashEntries.length)}`;
         } catch {
+          setHasTrashMetadata(false);
           message = `Moved ${folderName} to Trash. Trash could not refresh; it will update when reopened.`;
         }
         setTrashAnnouncement(message);
@@ -5820,9 +5828,16 @@ function App() {
       }
       dataRef.current = nextData;
       setData(nextData);
-      const nextTrashEntries = await repository.listTrash();
-      setTrashEntries(nextTrashEntries);
-      const message = `Restored ${entry.name}. ${formatTrashRemaining(nextTrashEntries.length)}`;
+      let message: string;
+      try {
+        const nextTrashEntries = await repository.listTrash();
+        setTrashEntries(nextTrashEntries);
+        setHasTrashMetadata(true);
+        message = `Restored ${entry.name}. ${formatTrashRemaining(nextTrashEntries.length)}`;
+      } catch {
+        setHasTrashMetadata(false);
+        message = `Restored ${entry.name}. Trash could not refresh; it will update when reopened.`;
+      }
       setTrashAnnouncement(message);
       setTrashFeedback(message);
 
@@ -5873,9 +5888,15 @@ function App() {
       await flushPendingPersistence();
       const preview = await repository.getTrashPurgePreview();
       if (preview.pageCount === 0 && preview.folderCount === 0) {
-        const nextTrashEntries = await repository.listTrash();
-        setTrashEntries(nextTrashEntries);
-        const message = "Trash is already empty.";
+        let message = "Trash is already empty.";
+        try {
+          const nextTrashEntries = await repository.listTrash();
+          setTrashEntries(nextTrashEntries);
+          setHasTrashMetadata(true);
+        } catch {
+          setHasTrashMetadata(false);
+          message = "Trash is already empty. Trash could not refresh; it will update when reopened.";
+        }
         setTrashAnnouncement(message);
         setTrashFeedback(message);
         return;
@@ -5889,7 +5910,9 @@ function App() {
       }
       setTrashFeedback("Permanently deleting Trash contents…");
       const purgeResult = await repository.purgeTrash(preview);
-      setTrashEntries(await repository.listTrash());
+      const nextTrashEntries = await repository.listTrash();
+      setTrashEntries(nextTrashEntries);
+      setHasTrashMetadata(true);
       const message = purgeResult.cleanupWarning
         ? `Permanently deleted ${formatTrashCount(preview.folderCount, "folder")}, ${formatTrashCount(preview.pageCount, "page")}, and ${formatTrashCount(preview.elementCount, "canvas element")}. Some purged assets will be cleaned up automatically.`
         : `Permanently deleted ${formatTrashCount(preview.folderCount, "folder")}, ${formatTrashCount(preview.pageCount, "page")}, and ${formatTrashCount(preview.elementCount, "canvas element")}.`;
@@ -6045,8 +6068,10 @@ function App() {
         try {
           const nextTrashEntries = await repository.listTrash();
           setTrashEntries(nextTrashEntries);
+          setHasTrashMetadata(true);
           message = `Moved ${pageName} to Trash. ${formatTrashRemaining(nextTrashEntries.length)}`;
         } catch {
+          setHasTrashMetadata(false);
           message = `Moved ${pageName} to Trash. Trash could not refresh; it will update when reopened.`;
         }
         setTrashAnnouncement(message);
@@ -9356,6 +9381,7 @@ function App() {
         isNarrowWorkbench={isNarrowWorkbench}
         pageSearchFocusRequest={pageSearchFocusRequest}
         pageTemplates={pageTemplates}
+        hasTrashMetadata={hasTrashMetadata}
         isTrashRestoreAvailable={persistenceAvailable}
         trashEntries={trashEntries}
         trashFeedback={trashFeedback}
@@ -10163,6 +10189,7 @@ const Sidebar = memo(function Sidebar({
   isDarkMode,
   pageSearchFocusRequest,
   pageTemplates,
+  hasTrashMetadata,
   isTrashRestoreAvailable,
   trashEntries,
   trashFeedback,
@@ -10255,6 +10282,7 @@ const Sidebar = memo(function Sidebar({
     null,
   );
   const isTrashMutationPending = pendingTrashAction !== null;
+  const canEmptyTrash = isTrashRestoreAvailable && (!hasTrashMetadata || trashEntries.length > 0);
   useEffect(() => {
     const folderIdAtPoint = (clientX: number, clientY: number) => {
       const target = document
@@ -11789,12 +11817,12 @@ const Sidebar = memo(function Sidebar({
               <div className="section-header">
                 <h2 id="trash-title" tabIndex={-1}>Trash</h2>
                 <button
-                  aria-label={pendingTrashAction === "empty" ? "Emptying Trash" : "Empty Trash"}
+                  aria-label={pendingTrashAction === "empty" ? "Emptying Trash" : !isTrashRestoreAvailable ? "Empty Trash unavailable until storage reconnects" : hasTrashMetadata && trashEntries.length === 0 ? "Trash is empty" : "Empty Trash"}
                   className="section-action"
                   data-empty-trash
-                  disabled={trashEntries.length === 0 || isTrashMutationPending}
+                  disabled={!canEmptyTrash || isTrashMutationPending}
                   onClick={onEmptyTrash}
-                  title={pendingTrashAction === "empty" ? "Emptying Trash" : "Permanently delete everything in Trash"}
+                  title={pendingTrashAction === "empty" ? "Emptying Trash" : !isTrashRestoreAvailable ? "Empty Trash unavailable until storage reconnects" : hasTrashMetadata && trashEntries.length === 0 ? "Trash is empty" : "Permanently delete everything in Trash"}
                   type="button"
                 >
                   <HeroIcon name="trash" />
@@ -11903,6 +11931,7 @@ function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps) {
     previous.isNarrowWorkbench === next.isNarrowWorkbench &&
     previous.pageSearchFocusRequest === next.pageSearchFocusRequest &&
     previous.pageTemplates === next.pageTemplates &&
+    previous.hasTrashMetadata === next.hasTrashMetadata &&
     previous.isTrashRestoreAvailable === next.isTrashRestoreAvailable &&
     previous.trashEntries === next.trashEntries &&
     previous.trashFeedback === next.trashFeedback &&

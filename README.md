@@ -14,6 +14,10 @@
   <a href="https://github.com/tyhuang9/note/releases/latest/download/Note.deb"><img alt="Download for Debian and Ubuntu" src="https://img.shields.io/badge/Linux-Download-D4A128?style=for-the-badge&labelColor=1F1F1F&logo=linux&logoColor=FAF8F4" /></a>
 </p>
 
+<p align="center">
+  <a href="https://tyhuang9.github.io/note/"><strong>Read the documentation →</strong></a>
+</p>
+
 Note is a local-first desktop workspace for arranging ideas without leaving
 your device. Create pages, place text, images, and drawing elements, and connect
 them on an open canvas that stays yours.

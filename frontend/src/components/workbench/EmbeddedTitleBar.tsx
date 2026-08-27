@@ -1,11 +1,13 @@
-import type { Ref } from "react";
-import noteAppIcon from "../../../../backend/src-tauri/icons/32x32.png";
+import { useEffect, type Ref } from "react";
+import noteAppIconDark from "../../../../docs/assets/note-mark-dark-32.png";
+import noteAppIconLight from "../../../../docs/assets/note-mark-32.png";
 import type { WorkbenchIconComponent } from "./icons";
 import { WorkspaceTabs, type WorkspaceTab, type WorkspaceTabDropPlacement } from "./WorkspaceTabs";
 import { WindowControls, type DesktopPlatform } from "./WindowControls";
 
 export interface EmbeddedTitleBarProps {
   readonly Icon: WorkbenchIconComponent;
+  readonly isDarkMode: boolean;
   readonly isEditingActiveTab: boolean;
   readonly isExplorerCollapsed: boolean;
   readonly onCloseTab: (pageId: string) => void;
@@ -22,14 +24,30 @@ export interface EmbeddedTitleBarProps {
   readonly toggleButtonRef: Ref<HTMLButtonElement>;
 }
 
-export function EmbeddedTitleBar({ Icon, isEditingActiveTab, isExplorerCollapsed, onCloseTab, onCreatePage, onRenamePage, onReorderTab, onSelectTab, onSetEditingActiveTab, onToggleExplorer, platform, selectedPageId, tabs, titleSearch, toggleButtonRef }: Readonly<EmbeddedTitleBarProps>) {
+export function EmbeddedTitleBar({ Icon, isDarkMode, isEditingActiveTab, isExplorerCollapsed, onCloseTab, onCreatePage, onRenamePage, onReorderTab, onSelectTab, onSetEditingActiveTab, onToggleExplorer, platform, selectedPageId, tabs, titleSearch, toggleButtonRef }: Readonly<EmbeddedTitleBarProps>) {
   const hasCustomWindowControls = platform === "windows" || platform === "linux";
+
+  useEffect(() => {
+    const favicon = document.querySelector<HTMLLinkElement>(
+      'link[data-note-favicon="app"]',
+    );
+
+    if (favicon) {
+      favicon.href = isDarkMode ? noteAppIconDark : noteAppIconLight;
+    }
+  }, [isDarkMode]);
 
   return (
     <header className={`window-titlebar ${platform ? `is-${platform}` : ""}`}>
       {platform === "macos" ? <div aria-hidden="true" className="window-titlebar-macos-inset" /> : null}
       <div className="window-titlebar-brand">
-        <img alt="" className="window-titlebar-app-icon" src={noteAppIcon} />
+        <img
+          alt=""
+          aria-hidden="true"
+          className="window-titlebar-app-icon"
+          data-theme-variant={isDarkMode ? "dark" : "light"}
+          src={isDarkMode ? noteAppIconDark : noteAppIconLight}
+        />
         <span>Note</span>
       </div>
       <button aria-controls="workspace-explorer-panel" aria-expanded={!isExplorerCollapsed} aria-label={isExplorerCollapsed ? "Expand sidebar" : "Collapse sidebar"} className="window-titlebar-sidebar-toggle" onClick={(event) => onToggleExplorer(event.currentTarget)} ref={toggleButtonRef} title={isExplorerCollapsed ? "Expand sidebar" : "Collapse sidebar"} type="button">

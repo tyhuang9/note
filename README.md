@@ -1,14 +1,27 @@
-# Note
+<p align="center">
+  <img src="docs/assets/note-mark.png" alt="Note app icon" width="160" height="160" />
+</p>
 
-[![Download for Windows](https://img.shields.io/badge/Windows-Download-0078D4?logo=windows&logoColor=white)](https://github.com/tyhuang9/note/releases/latest/download/Note-Setup.exe)
-[![Download for macOS](https://img.shields.io/badge/macOS-Download-000000?logo=apple&logoColor=white)](https://github.com/tyhuang9/note/releases/latest/download/Note.dmg)
-[![Download for Debian and Ubuntu](https://img.shields.io/badge/Linux-Download-FCC624?logo=linux&logoColor=black)](https://github.com/tyhuang9/note/releases/latest/download/Note.deb)
+<h1 align="center">Note</h1>
 
-Note is a local-first desktop workspace for arranging ideas on a freeform canvas.
-Create pages, place text, images, and drawing elements, then keep working without
-leaving your device.
+<p align="center"><strong>Think. Capture. Connect.</strong></p>
 
-![A short walkthrough of creating a note page and connecting a simple diagram](docs/assets/note-demo.gif)
+<p align="center">A freeform canvas for notes, ideas, and everything in between.</p>
+
+<p align="center">
+  <a href="https://github.com/tyhuang9/note/releases/latest/download/Note-Setup.exe"><img alt="Download for Windows" src="https://img.shields.io/badge/Windows-Download-D4A128?style=for-the-badge&labelColor=1F1F1F&logo=windows&logoColor=FAF8F4" /></a>
+  <a href="https://github.com/tyhuang9/note/releases/latest/download/Note.dmg"><img alt="Download for macOS" src="https://img.shields.io/badge/macOS-Download-D4A128?style=for-the-badge&labelColor=1F1F1F&logo=apple&logoColor=FAF8F4" /></a>
+  <a href="https://github.com/tyhuang9/note/releases/latest/download/Note.deb"><img alt="Download for Debian and Ubuntu" src="https://img.shields.io/badge/Linux-Download-D4A128?style=for-the-badge&labelColor=1F1F1F&logo=linux&logoColor=FAF8F4" /></a>
+</p>
+
+Note is a local-first desktop workspace for arranging ideas without leaving
+your device. Create pages, place text, images, and drawing elements, and connect
+them on an open canvas that stays yours.
+
+<picture>
+  <source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/note-demo-static.png" type="image/png" />
+  <img src="docs/assets/note-demo.gif" alt="Note's Pen tool drawing an upward-looking face stroke by stroke" width="900" height="454" />
+</picture>
 
 ## Install
 

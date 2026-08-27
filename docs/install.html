@@ -5,15 +5,25 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="Platform-specific instructions for installing and updating Note."
+      content="Install Note, a freeform canvas for notes, ideas, and everything in between."
     />
-    <title>Install Note</title>
+    <meta name="theme-color" content="#FAF8F4" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#1F1F1F" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" href="assets/note-mark-32.png" media="(prefers-color-scheme: light)" type="image/png" />
+    <link rel="icon" href="assets/note-mark-dark-32.png" media="(prefers-color-scheme: dark)" type="image/png" />
+    <title>Install Note — Think. Capture. Connect.</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
     <header class="site-header">
-      <a class="brand" href="index.html" aria-label="Note documentation home">Note</a>
+      <a class="brand" href="index.html" aria-label="Note documentation home">
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="assets/note-mark-dark-48.png" />
+          <img class="brand-mark" src="assets/note-mark-48.png" width="38" height="38" alt="" />
+        </picture>
+        <span>Note</span>
+      </a>
       <nav aria-label="Primary navigation">
         <a href="index.html">Overview</a>
         <a aria-current="page" href="install.html">Install guide</a>
@@ -24,7 +34,11 @@
     <main id="main" class="guide">
       <p class="eyebrow">Installation guide</p>
       <h1>Install Note on your desktop.</h1>
-      <p class="lede">Choose the package for your platform from the official GitHub Release.</p>
+      <p class="tagline">Think. Capture. Connect.</p>
+      <p class="lede">
+        A freeform canvas for notes, ideas, and everything in between. Choose
+        the package for your platform from the official GitHub Release.
+      </p>
 
       <section aria-labelledby="windows-title">
         <h2 id="windows-title">Windows</h2>
@@ -92,7 +106,7 @@ npm run dev</code></pre>
     </main>
 
     <footer>
-      <p><a href="index.html">Back to Note documentation</a></p>
+      <p>Think. Capture. Connect. · <a href="index.html">Back to Note documentation</a></p>
       <p><a href="https://github.com/tyhuang9/note/releases">All releases</a></p>
     </footer>
   </body>

@@ -1,4 +1,5 @@
 import { memo } from "react";
+import type { Ref } from "react";
 import type { WorkbenchIconComponent } from "./icons";
 
 export type ActivityRailTabId =
@@ -9,22 +10,36 @@ export type ActivityRailTabId =
 
 export interface ActivityRailProps {
   readonly activeTab: ActivityRailTabId;
+  readonly assistantToggleButtonRef: Ref<HTMLButtonElement>;
   readonly bookmarkedPageCount: number;
   readonly Icon: WorkbenchIconComponent;
+  readonly isAssistantOpen: boolean;
+  readonly isDarkMode: boolean;
   readonly onSelectTab: (
     tabId: ActivityRailTabId,
     trigger: HTMLButtonElement,
   ) => void;
+  readonly onToggleAssistant: (trigger: HTMLButtonElement) => void;
+  readonly onToggleDarkMode: () => void;
   readonly templatePageCount: number;
 }
 
 export const ActivityRail = memo(function ActivityRail({
   activeTab,
+  assistantToggleButtonRef,
   bookmarkedPageCount,
   Icon,
+  isAssistantOpen,
+  isDarkMode,
   onSelectTab,
+  onToggleAssistant,
+  onToggleDarkMode,
   templatePageCount,
 }: Readonly<ActivityRailProps>) {
+  const themeToggleTitle = isDarkMode
+    ? "Switch to light mode"
+    : "Switch to dark mode";
+
   return (
     <nav className="activity-rail" aria-label="Primary workspace tools">
       <div className="rail-tabs" aria-label="Workspace views" role="group">
@@ -75,6 +90,31 @@ export const ActivityRail = memo(function ActivityRail({
           title="Templates"
         >
           <Icon name="rectangle-stack" />
+        </button>
+      </div>
+      <div className="rail-utilities" aria-label="Global utilities" role="group">
+        <span className="rail-divider" aria-hidden="true" />
+        <button
+          aria-controls={isAssistantOpen ? "workspace-assistant-panel" : undefined}
+          aria-expanded={isAssistantOpen}
+          aria-label="AI assistant"
+          className={`rail-button ${isAssistantOpen ? "is-active" : ""}`}
+          onClick={(event) => onToggleAssistant(event.currentTarget)}
+          ref={assistantToggleButtonRef}
+          title="AI assistant"
+          type="button"
+        >
+          <Icon name="sparkles" />
+        </button>
+        <button
+          aria-label="Dark mode"
+          aria-pressed={isDarkMode}
+          className="rail-button theme-toggle"
+          onClick={onToggleDarkMode}
+          title={themeToggleTitle}
+          type="button"
+        >
+          <Icon name={isDarkMode ? "sun" : "moon"} />
         </button>
       </div>
     </nav>

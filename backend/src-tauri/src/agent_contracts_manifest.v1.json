@@ -8,7 +8,19 @@
     "maxInverseChanges": 128,
     "maxInverseChangeSetBytes": 262144,
     "defaultReadTimeoutMs": 5000,
-    "defaultMutationTimeoutMs": 10000
+    "defaultMutationTimeoutMs": 10000,
+    "maxRounds": 5,
+    "maxCallsPerRound": 8,
+    "maxCallsPerRun": 24,
+    "maxSelectedDescriptors": 25,
+    "maxViewportSummaries": 120,
+    "maxReadSummaries": 200,
+    "maxDetailedElements": 50,
+    "maxTouchedElements": 50,
+    "maxCreatedElements": 25,
+    "maxWorkspaceItems": 10,
+    "maxToolResultBytes": 65536,
+    "maxScreenshotTransportBytes": 49152
   },
   "capabilities": [
     {
@@ -70,7 +82,7 @@
                   "type": "boolean"
                 },
                 "revision": {
-                  "maximum": 9223372036854775807,
+                  "maximum": 9007199254740991,
                   "minimum": 0,
                   "type": "integer"
                 },
@@ -94,7 +106,7 @@
             "type": "array"
           },
           "workspaceRevision": {
-            "maximum": 9223372036854775807,
+            "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
           }
@@ -109,7 +121,7 @@
       "dataScope": "workspace_structure",
       "risk": "read",
       "timeoutMs": 5000,
-      "resultByteLimit": 131072,
+      "resultByteLimit": 65536,
       "previewType": "none"
     },
     {
@@ -176,7 +188,7 @@
               ],
               "type": "object"
             },
-            "maxItems": 100,
+            "maxItems": 200,
             "minItems": 0,
             "type": "array"
           }
@@ -189,7 +201,7 @@
       "dataScope": "workspace_content",
       "risk": "read",
       "timeoutMs": 5000,
-      "resultByteLimit": 262144,
+      "resultByteLimit": 65536,
       "previewType": "none"
     },
     {
@@ -229,7 +241,7 @@
                 "type": "boolean"
               },
               "revision": {
-                "maximum": 9223372036854775807,
+                "maximum": 9007199254740991,
                 "minimum": 0,
                 "type": "integer"
               },
@@ -257,7 +269,7 @@
       "dataScope": "page",
       "risk": "read",
       "timeoutMs": 5000,
-      "resultByteLimit": 131072,
+      "resultByteLimit": 65536,
       "previewType": "navigation"
     },
     {
@@ -331,7 +343,7 @@
               ],
               "type": "object"
             },
-            "maxItems": 10000,
+            "maxItems": 120,
             "minItems": 0,
             "type": "array"
           },
@@ -341,7 +353,7 @@
             "type": "string"
           },
           "revision": {
-            "maximum": 9223372036854775807,
+            "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
           }
@@ -356,7 +368,7 @@
       "dataScope": "canvas_scene",
       "risk": "read",
       "timeoutMs": 5000,
-      "resultByteLimit": 524288,
+      "resultByteLimit": 65536,
       "previewType": "none"
     },
     {
@@ -438,7 +450,7 @@
               ],
               "type": "object"
             },
-            "maxItems": 100,
+            "maxItems": 50,
             "minItems": 0,
             "type": "array"
           },
@@ -448,7 +460,7 @@
             "type": "string"
           },
           "revision": {
-            "maximum": 9223372036854775807,
+            "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
           }
@@ -463,7 +475,7 @@
       "dataScope": "canvas_elements",
       "risk": "read",
       "timeoutMs": 5000,
-      "resultByteLimit": 262144,
+      "resultByteLimit": 65536,
       "previewType": "none"
     },
     {
@@ -524,7 +536,7 @@
         "additionalProperties": false,
         "properties": {
           "dataBase64": {
-            "maxLength": 524288,
+            "maxLength": 49152,
             "minLength": 1,
             "type": "string"
           },
@@ -539,8 +551,17 @@
             "minLength": 1,
             "type": "string"
           },
+          "persisted": {
+            "enum": [
+              false
+            ],
+            "type": "boolean"
+          },
+          "requiresApproval": {
+            "type": "boolean"
+          },
           "revision": {
-            "maximum": 9223372036854775807,
+            "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
           }
@@ -549,14 +570,16 @@
           "pageId",
           "revision",
           "mediaType",
-          "dataBase64"
+          "dataBase64",
+          "requiresApproval",
+          "persisted"
         ],
         "type": "object"
       },
       "dataScope": "screenshot",
       "risk": "read",
       "timeoutMs": 15000,
-      "resultByteLimit": 524288,
+      "resultByteLimit": 65536,
       "previewType": "none"
     },
     {
@@ -611,7 +634,7 @@
                       "type": "string"
                     },
                     "newRevision": {
-                      "maximum": 9223372036854775807,
+                      "maximum": 9007199254740991,
                       "minimum": 0,
                       "type": "integer"
                     }
@@ -623,13 +646,105 @@
                   ],
                   "type": "object"
                 },
-                "maxItems": 256,
+                "maxItems": 10,
                 "minItems": 0,
                 "type": "array"
               },
+              "inverseChangeSet": {
+                "additionalProperties": false,
+                "properties": {
+                  "changes": {
+                    "items": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "folder",
+                                "page",
+                                "canvas_element",
+                                "archive_item"
+                              ],
+                              "type": "string"
+                            },
+                            "type": {
+                              "enum": [
+                                "restore_resource"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "operation": {
+                              "properties": {
+                                "type": {
+                                  "enum": [
+                                    "create_folder",
+                                    "rename_folder",
+                                    "create_page",
+                                    "rename_page",
+                                    "move_page",
+                                    "bookmark_page",
+                                    "archive_items",
+                                    "restore_items"
+                                  ],
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "type": "object"
+                            },
+                            "type": {
+                              "enum": [
+                                "reapply_workspace_operation"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "operation"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "maxItems": 128,
+                    "minItems": 0,
+                    "type": "array"
+                  },
+                  "inverseChangeSetId": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "inverseChangeSetId",
+                  "changes"
+                ],
+                "type": "object"
+              },
               "pageRevisions": {
                 "additionalProperties": {
-                  "maximum": 9223372036854775807,
+                  "maximum": 9007199254740991,
                   "minimum": 0,
                   "type": "integer"
                 },
@@ -637,7 +752,7 @@
                 "type": "object"
               },
               "workspaceRevision": {
-                "maximum": 9223372036854775807,
+                "maximum": 9007199254740991,
                 "minimum": 0,
                 "type": "integer"
               }
@@ -647,7 +762,8 @@
               "changeSetId",
               "changedResources",
               "workspaceRevision",
-              "pageRevisions"
+              "pageRevisions",
+              "inverseChangeSet"
             ],
             "type": "object"
           }
@@ -660,7 +776,7 @@
       "dataScope": "workspace_mutation",
       "risk": "write",
       "timeoutMs": 10000,
-      "resultByteLimit": 131072,
+      "resultByteLimit": 65536,
       "previewType": "diff"
     },
     {
@@ -670,7 +786,7 @@
         "additionalProperties": false,
         "properties": {
           "expectedWorkspaceRevision": {
-            "maximum": 9223372036854775807,
+            "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
           },
@@ -727,7 +843,7 @@
                       "type": "string"
                     },
                     "newRevision": {
-                      "maximum": 9223372036854775807,
+                      "maximum": 9007199254740991,
                       "minimum": 0,
                       "type": "integer"
                     }
@@ -739,13 +855,105 @@
                   ],
                   "type": "object"
                 },
-                "maxItems": 256,
+                "maxItems": 10,
                 "minItems": 0,
                 "type": "array"
               },
+              "inverseChangeSet": {
+                "additionalProperties": false,
+                "properties": {
+                  "changes": {
+                    "items": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "folder",
+                                "page",
+                                "canvas_element",
+                                "archive_item"
+                              ],
+                              "type": "string"
+                            },
+                            "type": {
+                              "enum": [
+                                "restore_resource"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "operation": {
+                              "properties": {
+                                "type": {
+                                  "enum": [
+                                    "create_folder",
+                                    "rename_folder",
+                                    "create_page",
+                                    "rename_page",
+                                    "move_page",
+                                    "bookmark_page",
+                                    "archive_items",
+                                    "restore_items"
+                                  ],
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "type": "object"
+                            },
+                            "type": {
+                              "enum": [
+                                "reapply_workspace_operation"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "operation"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "maxItems": 128,
+                    "minItems": 0,
+                    "type": "array"
+                  },
+                  "inverseChangeSetId": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "inverseChangeSetId",
+                  "changes"
+                ],
+                "type": "object"
+              },
               "pageRevisions": {
                 "additionalProperties": {
-                  "maximum": 9223372036854775807,
+                  "maximum": 9007199254740991,
                   "minimum": 0,
                   "type": "integer"
                 },
@@ -753,7 +961,7 @@
                 "type": "object"
               },
               "workspaceRevision": {
-                "maximum": 9223372036854775807,
+                "maximum": 9007199254740991,
                 "minimum": 0,
                 "type": "integer"
               }
@@ -763,7 +971,8 @@
               "changeSetId",
               "changedResources",
               "workspaceRevision",
-              "pageRevisions"
+              "pageRevisions",
+              "inverseChangeSet"
             ],
             "type": "object"
           }
@@ -776,7 +985,7 @@
       "dataScope": "workspace_mutation",
       "risk": "write",
       "timeoutMs": 10000,
-      "resultByteLimit": 131072,
+      "resultByteLimit": 65536,
       "previewType": "diff"
     },
     {
@@ -837,7 +1046,7 @@
                       "type": "string"
                     },
                     "newRevision": {
-                      "maximum": 9223372036854775807,
+                      "maximum": 9007199254740991,
                       "minimum": 0,
                       "type": "integer"
                     }
@@ -849,13 +1058,105 @@
                   ],
                   "type": "object"
                 },
-                "maxItems": 256,
+                "maxItems": 10,
                 "minItems": 0,
                 "type": "array"
               },
+              "inverseChangeSet": {
+                "additionalProperties": false,
+                "properties": {
+                  "changes": {
+                    "items": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "folder",
+                                "page",
+                                "canvas_element",
+                                "archive_item"
+                              ],
+                              "type": "string"
+                            },
+                            "type": {
+                              "enum": [
+                                "restore_resource"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "operation": {
+                              "properties": {
+                                "type": {
+                                  "enum": [
+                                    "create_folder",
+                                    "rename_folder",
+                                    "create_page",
+                                    "rename_page",
+                                    "move_page",
+                                    "bookmark_page",
+                                    "archive_items",
+                                    "restore_items"
+                                  ],
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "type": "object"
+                            },
+                            "type": {
+                              "enum": [
+                                "reapply_workspace_operation"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "operation"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "maxItems": 128,
+                    "minItems": 0,
+                    "type": "array"
+                  },
+                  "inverseChangeSetId": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "inverseChangeSetId",
+                  "changes"
+                ],
+                "type": "object"
+              },
               "pageRevisions": {
                 "additionalProperties": {
-                  "maximum": 9223372036854775807,
+                  "maximum": 9007199254740991,
                   "minimum": 0,
                   "type": "integer"
                 },
@@ -863,7 +1164,7 @@
                 "type": "object"
               },
               "workspaceRevision": {
-                "maximum": 9223372036854775807,
+                "maximum": 9007199254740991,
                 "minimum": 0,
                 "type": "integer"
               }
@@ -873,7 +1174,8 @@
               "changeSetId",
               "changedResources",
               "workspaceRevision",
-              "pageRevisions"
+              "pageRevisions",
+              "inverseChangeSet"
             ],
             "type": "object"
           }
@@ -886,7 +1188,7 @@
       "dataScope": "workspace_mutation",
       "risk": "write",
       "timeoutMs": 10000,
-      "resultByteLimit": 131072,
+      "resultByteLimit": 65536,
       "previewType": "diff"
     },
     {
@@ -896,7 +1198,7 @@
         "additionalProperties": false,
         "properties": {
           "expectedPageRevision": {
-            "maximum": 9223372036854775807,
+            "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
           },
@@ -953,7 +1255,7 @@
                       "type": "string"
                     },
                     "newRevision": {
-                      "maximum": 9223372036854775807,
+                      "maximum": 9007199254740991,
                       "minimum": 0,
                       "type": "integer"
                     }
@@ -965,13 +1267,105 @@
                   ],
                   "type": "object"
                 },
-                "maxItems": 256,
+                "maxItems": 10,
                 "minItems": 0,
                 "type": "array"
               },
+              "inverseChangeSet": {
+                "additionalProperties": false,
+                "properties": {
+                  "changes": {
+                    "items": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "folder",
+                                "page",
+                                "canvas_element",
+                                "archive_item"
+                              ],
+                              "type": "string"
+                            },
+                            "type": {
+                              "enum": [
+                                "restore_resource"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "operation": {
+                              "properties": {
+                                "type": {
+                                  "enum": [
+                                    "create_folder",
+                                    "rename_folder",
+                                    "create_page",
+                                    "rename_page",
+                                    "move_page",
+                                    "bookmark_page",
+                                    "archive_items",
+                                    "restore_items"
+                                  ],
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "type": "object"
+                            },
+                            "type": {
+                              "enum": [
+                                "reapply_workspace_operation"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "operation"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "maxItems": 128,
+                    "minItems": 0,
+                    "type": "array"
+                  },
+                  "inverseChangeSetId": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "inverseChangeSetId",
+                  "changes"
+                ],
+                "type": "object"
+              },
               "pageRevisions": {
                 "additionalProperties": {
-                  "maximum": 9223372036854775807,
+                  "maximum": 9007199254740991,
                   "minimum": 0,
                   "type": "integer"
                 },
@@ -979,7 +1373,7 @@
                 "type": "object"
               },
               "workspaceRevision": {
-                "maximum": 9223372036854775807,
+                "maximum": 9007199254740991,
                 "minimum": 0,
                 "type": "integer"
               }
@@ -989,7 +1383,8 @@
               "changeSetId",
               "changedResources",
               "workspaceRevision",
-              "pageRevisions"
+              "pageRevisions",
+              "inverseChangeSet"
             ],
             "type": "object"
           }
@@ -1002,7 +1397,7 @@
       "dataScope": "workspace_mutation",
       "risk": "write",
       "timeoutMs": 10000,
-      "resultByteLimit": 131072,
+      "resultByteLimit": 65536,
       "previewType": "diff"
     },
     {
@@ -1012,7 +1407,7 @@
         "additionalProperties": false,
         "properties": {
           "expectedPageRevision": {
-            "maximum": 9223372036854775807,
+            "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
           },
@@ -1069,7 +1464,7 @@
                       "type": "string"
                     },
                     "newRevision": {
-                      "maximum": 9223372036854775807,
+                      "maximum": 9007199254740991,
                       "minimum": 0,
                       "type": "integer"
                     }
@@ -1081,13 +1476,105 @@
                   ],
                   "type": "object"
                 },
-                "maxItems": 256,
+                "maxItems": 10,
                 "minItems": 0,
                 "type": "array"
               },
+              "inverseChangeSet": {
+                "additionalProperties": false,
+                "properties": {
+                  "changes": {
+                    "items": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "folder",
+                                "page",
+                                "canvas_element",
+                                "archive_item"
+                              ],
+                              "type": "string"
+                            },
+                            "type": {
+                              "enum": [
+                                "restore_resource"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "operation": {
+                              "properties": {
+                                "type": {
+                                  "enum": [
+                                    "create_folder",
+                                    "rename_folder",
+                                    "create_page",
+                                    "rename_page",
+                                    "move_page",
+                                    "bookmark_page",
+                                    "archive_items",
+                                    "restore_items"
+                                  ],
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "type": "object"
+                            },
+                            "type": {
+                              "enum": [
+                                "reapply_workspace_operation"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "operation"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "maxItems": 128,
+                    "minItems": 0,
+                    "type": "array"
+                  },
+                  "inverseChangeSetId": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "inverseChangeSetId",
+                  "changes"
+                ],
+                "type": "object"
+              },
               "pageRevisions": {
                 "additionalProperties": {
-                  "maximum": 9223372036854775807,
+                  "maximum": 9007199254740991,
                   "minimum": 0,
                   "type": "integer"
                 },
@@ -1095,7 +1582,7 @@
                 "type": "object"
               },
               "workspaceRevision": {
-                "maximum": 9223372036854775807,
+                "maximum": 9007199254740991,
                 "minimum": 0,
                 "type": "integer"
               }
@@ -1105,7 +1592,8 @@
               "changeSetId",
               "changedResources",
               "workspaceRevision",
-              "pageRevisions"
+              "pageRevisions",
+              "inverseChangeSet"
             ],
             "type": "object"
           }
@@ -1118,7 +1606,7 @@
       "dataScope": "workspace_mutation",
       "risk": "write",
       "timeoutMs": 10000,
-      "resultByteLimit": 131072,
+      "resultByteLimit": 65536,
       "previewType": "diff"
     },
     {
@@ -1131,7 +1619,7 @@
             "type": "boolean"
           },
           "expectedPageRevision": {
-            "maximum": 9223372036854775807,
+            "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
           },
@@ -1183,7 +1671,7 @@
                       "type": "string"
                     },
                     "newRevision": {
-                      "maximum": 9223372036854775807,
+                      "maximum": 9007199254740991,
                       "minimum": 0,
                       "type": "integer"
                     }
@@ -1195,13 +1683,105 @@
                   ],
                   "type": "object"
                 },
-                "maxItems": 256,
+                "maxItems": 10,
                 "minItems": 0,
                 "type": "array"
               },
+              "inverseChangeSet": {
+                "additionalProperties": false,
+                "properties": {
+                  "changes": {
+                    "items": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "folder",
+                                "page",
+                                "canvas_element",
+                                "archive_item"
+                              ],
+                              "type": "string"
+                            },
+                            "type": {
+                              "enum": [
+                                "restore_resource"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "operation": {
+                              "properties": {
+                                "type": {
+                                  "enum": [
+                                    "create_folder",
+                                    "rename_folder",
+                                    "create_page",
+                                    "rename_page",
+                                    "move_page",
+                                    "bookmark_page",
+                                    "archive_items",
+                                    "restore_items"
+                                  ],
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "type": "object"
+                            },
+                            "type": {
+                              "enum": [
+                                "reapply_workspace_operation"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "operation"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "maxItems": 128,
+                    "minItems": 0,
+                    "type": "array"
+                  },
+                  "inverseChangeSetId": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "inverseChangeSetId",
+                  "changes"
+                ],
+                "type": "object"
+              },
               "pageRevisions": {
                 "additionalProperties": {
-                  "maximum": 9223372036854775807,
+                  "maximum": 9007199254740991,
                   "minimum": 0,
                   "type": "integer"
                 },
@@ -1209,7 +1789,7 @@
                 "type": "object"
               },
               "workspaceRevision": {
-                "maximum": 9223372036854775807,
+                "maximum": 9007199254740991,
                 "minimum": 0,
                 "type": "integer"
               }
@@ -1219,7 +1799,8 @@
               "changeSetId",
               "changedResources",
               "workspaceRevision",
-              "pageRevisions"
+              "pageRevisions",
+              "inverseChangeSet"
             ],
             "type": "object"
           }
@@ -1232,7 +1813,7 @@
       "dataScope": "workspace_mutation",
       "risk": "write",
       "timeoutMs": 10000,
-      "resultByteLimit": 131072,
+      "resultByteLimit": 65536,
       "previewType": "diff"
     },
     {
@@ -1242,7 +1823,7 @@
         "additionalProperties": false,
         "properties": {
           "expectedWorkspaceRevision": {
-            "maximum": 9223372036854775807,
+            "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
           },
@@ -1269,7 +1850,7 @@
               ],
               "type": "object"
             },
-            "maxItems": 100,
+            "maxItems": 10,
             "minItems": 1,
             "type": "array"
           }
@@ -1315,7 +1896,7 @@
                       "type": "string"
                     },
                     "newRevision": {
-                      "maximum": 9223372036854775807,
+                      "maximum": 9007199254740991,
                       "minimum": 0,
                       "type": "integer"
                     }
@@ -1327,13 +1908,105 @@
                   ],
                   "type": "object"
                 },
-                "maxItems": 256,
+                "maxItems": 10,
                 "minItems": 0,
                 "type": "array"
               },
+              "inverseChangeSet": {
+                "additionalProperties": false,
+                "properties": {
+                  "changes": {
+                    "items": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "folder",
+                                "page",
+                                "canvas_element",
+                                "archive_item"
+                              ],
+                              "type": "string"
+                            },
+                            "type": {
+                              "enum": [
+                                "restore_resource"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "operation": {
+                              "properties": {
+                                "type": {
+                                  "enum": [
+                                    "create_folder",
+                                    "rename_folder",
+                                    "create_page",
+                                    "rename_page",
+                                    "move_page",
+                                    "bookmark_page",
+                                    "archive_items",
+                                    "restore_items"
+                                  ],
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "type": "object"
+                            },
+                            "type": {
+                              "enum": [
+                                "reapply_workspace_operation"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "operation"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "maxItems": 128,
+                    "minItems": 0,
+                    "type": "array"
+                  },
+                  "inverseChangeSetId": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "inverseChangeSetId",
+                  "changes"
+                ],
+                "type": "object"
+              },
               "pageRevisions": {
                 "additionalProperties": {
-                  "maximum": 9223372036854775807,
+                  "maximum": 9007199254740991,
                   "minimum": 0,
                   "type": "integer"
                 },
@@ -1341,7 +2014,7 @@
                 "type": "object"
               },
               "workspaceRevision": {
-                "maximum": 9223372036854775807,
+                "maximum": 9007199254740991,
                 "minimum": 0,
                 "type": "integer"
               }
@@ -1351,7 +2024,8 @@
               "changeSetId",
               "changedResources",
               "workspaceRevision",
-              "pageRevisions"
+              "pageRevisions",
+              "inverseChangeSet"
             ],
             "type": "object"
           }
@@ -1364,7 +2038,7 @@
       "dataScope": "workspace_mutation",
       "risk": "destructive",
       "timeoutMs": 10000,
-      "resultByteLimit": 131072,
+      "resultByteLimit": 65536,
       "previewType": "archive_summary"
     },
     {
@@ -1373,20 +2047,37 @@
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
-          "archiveIds": {
-            "items": {
-              "maxLength": 128,
-              "minLength": 1,
-              "type": "string"
-            },
-            "maxItems": 100,
-            "minItems": 1,
-            "type": "array"
-          },
           "expectedWorkspaceRevision": {
-            "maximum": 9223372036854775807,
+            "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
+          },
+          "items": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "folder",
+                    "page"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "type": "object"
+            },
+            "maxItems": 10,
+            "minItems": 1,
+            "type": "array"
           }
         },
         "required": [
@@ -1430,7 +2121,7 @@
                       "type": "string"
                     },
                     "newRevision": {
-                      "maximum": 9223372036854775807,
+                      "maximum": 9007199254740991,
                       "minimum": 0,
                       "type": "integer"
                     }
@@ -1442,13 +2133,105 @@
                   ],
                   "type": "object"
                 },
-                "maxItems": 256,
+                "maxItems": 10,
                 "minItems": 0,
                 "type": "array"
               },
+              "inverseChangeSet": {
+                "additionalProperties": false,
+                "properties": {
+                  "changes": {
+                    "items": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "folder",
+                                "page",
+                                "canvas_element",
+                                "archive_item"
+                              ],
+                              "type": "string"
+                            },
+                            "type": {
+                              "enum": [
+                                "restore_resource"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "operation": {
+                              "properties": {
+                                "type": {
+                                  "enum": [
+                                    "create_folder",
+                                    "rename_folder",
+                                    "create_page",
+                                    "rename_page",
+                                    "move_page",
+                                    "bookmark_page",
+                                    "archive_items",
+                                    "restore_items"
+                                  ],
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "type": "object"
+                            },
+                            "type": {
+                              "enum": [
+                                "reapply_workspace_operation"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "operation"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "maxItems": 128,
+                    "minItems": 0,
+                    "type": "array"
+                  },
+                  "inverseChangeSetId": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "inverseChangeSetId",
+                  "changes"
+                ],
+                "type": "object"
+              },
               "pageRevisions": {
                 "additionalProperties": {
-                  "maximum": 9223372036854775807,
+                  "maximum": 9007199254740991,
                   "minimum": 0,
                   "type": "integer"
                 },
@@ -1456,7 +2239,7 @@
                 "type": "object"
               },
               "workspaceRevision": {
-                "maximum": 9223372036854775807,
+                "maximum": 9007199254740991,
                 "minimum": 0,
                 "type": "integer"
               }
@@ -1466,7 +2249,8 @@
               "changeSetId",
               "changedResources",
               "workspaceRevision",
-              "pageRevisions"
+              "pageRevisions",
+              "inverseChangeSet"
             ],
             "type": "object"
           }
@@ -1479,7 +2263,7 @@
       "dataScope": "workspace_mutation",
       "risk": "destructive",
       "timeoutMs": 10000,
-      "resultByteLimit": 131072,
+      "resultByteLimit": 65536,
       "previewType": "archive_summary"
     },
     {
@@ -1489,7 +2273,7 @@
         "additionalProperties": false,
         "properties": {
           "expectedPageRevision": {
-            "maximum": 9223372036854775807,
+            "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
           },
@@ -1884,6 +2668,516 @@
                     "label"
                   ],
                   "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "elementId": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "endX": {
+                      "maximum": 1000000.0,
+                      "minimum": -1000000.0,
+                      "type": "number"
+                    },
+                    "endY": {
+                      "maximum": 1000000.0,
+                      "minimum": -1000000.0,
+                      "type": "number"
+                    },
+                    "startX": {
+                      "maximum": 1000000.0,
+                      "minimum": -1000000.0,
+                      "type": "number"
+                    },
+                    "startY": {
+                      "maximum": 1000000.0,
+                      "minimum": -1000000.0,
+                      "type": "number"
+                    },
+                    "style": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "dash": {
+                          "enum": [
+                            "solid",
+                            "dashed"
+                          ],
+                          "type": "string"
+                        },
+                        "stroke": {
+                          "maxLength": 32,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "strokeWidth": {
+                          "maximum": 32.0,
+                          "minimum": 0.5,
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "stroke",
+                        "strokeWidth"
+                      ],
+                      "type": "object"
+                    },
+                    "type": {
+                      "enum": [
+                        "create_line"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "elementId",
+                    "startX",
+                    "startY",
+                    "endX",
+                    "endY",
+                    "style"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "elementId": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "end": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "anchor": {
+                          "enum": [
+                            "top",
+                            "right",
+                            "bottom",
+                            "left",
+                            "center"
+                          ],
+                          "type": "string"
+                        },
+                        "elementId": {
+                          "maxLength": 128,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "targetKind": {
+                          "enum": [
+                            "text",
+                            "shape"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "elementId",
+                        "targetKind",
+                        "anchor"
+                      ],
+                      "type": "object"
+                    },
+                    "labelStyle": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "alignment": {
+                          "enum": [
+                            "left",
+                            "center",
+                            "right"
+                          ],
+                          "type": "string"
+                        },
+                        "color": {
+                          "maxLength": 32,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "fontSize": {
+                          "maximum": 96.0,
+                          "minimum": 8.0,
+                          "type": "number"
+                        },
+                        "fontWeight": {
+                          "enum": [
+                            "normal",
+                            "bold"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [],
+                      "type": "object"
+                    },
+                    "start": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "anchor": {
+                          "enum": [
+                            "top",
+                            "right",
+                            "bottom",
+                            "left",
+                            "center"
+                          ],
+                          "type": "string"
+                        },
+                        "elementId": {
+                          "maxLength": 128,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "targetKind": {
+                          "enum": [
+                            "text",
+                            "shape"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "elementId",
+                        "targetKind",
+                        "anchor"
+                      ],
+                      "type": "object"
+                    },
+                    "style": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "endArrowhead": {
+                          "enum": [
+                            "none",
+                            "triangle",
+                            "arrow",
+                            "diamond"
+                          ],
+                          "type": "string"
+                        },
+                        "startArrowhead": {
+                          "enum": [
+                            "none",
+                            "triangle",
+                            "arrow",
+                            "diamond"
+                          ],
+                          "type": "string"
+                        },
+                        "stroke": {
+                          "maxLength": 32,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "strokeWidth": {
+                          "maximum": 32.0,
+                          "minimum": 0.5,
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "stroke",
+                        "strokeWidth",
+                        "startArrowhead",
+                        "endArrowhead"
+                      ],
+                      "type": "object"
+                    },
+                    "type": {
+                      "enum": [
+                        "create_arrow"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "elementId",
+                    "start",
+                    "end",
+                    "style",
+                    "labelStyle"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "elementId": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "text": {
+                      "maxLength": 10000,
+                      "minLength": 0,
+                      "type": "string"
+                    },
+                    "textStyle": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "alignment": {
+                          "enum": [
+                            "left",
+                            "center",
+                            "right"
+                          ],
+                          "type": "string"
+                        },
+                        "color": {
+                          "maxLength": 32,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "fontSize": {
+                          "maximum": 96.0,
+                          "minimum": 8.0,
+                          "type": "number"
+                        },
+                        "fontWeight": {
+                          "enum": [
+                            "normal",
+                            "bold"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [],
+                      "type": "object"
+                    },
+                    "type": {
+                      "enum": [
+                        "set_shape_text"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "elementId",
+                    "text",
+                    "textStyle"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "deltaX": {
+                      "maximum": 1000000.0,
+                      "minimum": -1000000.0,
+                      "type": "number"
+                    },
+                    "deltaY": {
+                      "maximum": 1000000.0,
+                      "minimum": -1000000.0,
+                      "type": "number"
+                    },
+                    "targets": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "elementId": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "targetKind": {
+                            "enum": [
+                              "text",
+                              "shape"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "elementId",
+                          "targetKind"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 50,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "type": {
+                      "enum": [
+                        "duplicate_elements"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "targets",
+                    "deltaX",
+                    "deltaY"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "alignment": {
+                      "enum": [
+                        "left",
+                        "center",
+                        "right",
+                        "top",
+                        "middle",
+                        "bottom"
+                      ],
+                      "type": "string"
+                    },
+                    "targets": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "elementId": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "targetKind": {
+                            "enum": [
+                              "text",
+                              "shape"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "elementId",
+                          "targetKind"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 50,
+                      "minItems": 2,
+                      "type": "array"
+                    },
+                    "type": {
+                      "enum": [
+                        "align_elements"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "targets",
+                    "alignment"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "axis": {
+                      "enum": [
+                        "horizontal",
+                        "vertical"
+                      ],
+                      "type": "string"
+                    },
+                    "targets": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "elementId": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "targetKind": {
+                            "enum": [
+                              "text",
+                              "shape"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "elementId",
+                          "targetKind"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 50,
+                      "minItems": 3,
+                      "type": "array"
+                    },
+                    "type": {
+                      "enum": [
+                        "distribute_elements"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "targets",
+                    "axis"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "placement": {
+                      "enum": [
+                        "bring_to_front",
+                        "bring_forward",
+                        "send_backward",
+                        "send_to_back"
+                      ],
+                      "type": "string"
+                    },
+                    "targets": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "elementId": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "targetKind": {
+                            "enum": [
+                              "text",
+                              "shape"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "elementId",
+                          "targetKind"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 50,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "type": {
+                      "enum": [
+                        "reorder_elements"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "targets",
+                    "placement"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -1939,7 +3233,7 @@
                       "type": "string"
                     },
                     "newRevision": {
-                      "maximum": 9223372036854775807,
+                      "maximum": 9007199254740991,
                       "minimum": 0,
                       "type": "integer"
                     }
@@ -1951,13 +3245,105 @@
                   ],
                   "type": "object"
                 },
-                "maxItems": 256,
+                "maxItems": 10,
                 "minItems": 0,
                 "type": "array"
               },
+              "inverseChangeSet": {
+                "additionalProperties": false,
+                "properties": {
+                  "changes": {
+                    "items": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "folder",
+                                "page",
+                                "canvas_element",
+                                "archive_item"
+                              ],
+                              "type": "string"
+                            },
+                            "type": {
+                              "enum": [
+                                "restore_resource"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "operation": {
+                              "properties": {
+                                "type": {
+                                  "enum": [
+                                    "create_folder",
+                                    "rename_folder",
+                                    "create_page",
+                                    "rename_page",
+                                    "move_page",
+                                    "bookmark_page",
+                                    "archive_items",
+                                    "restore_items"
+                                  ],
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "type": "object"
+                            },
+                            "type": {
+                              "enum": [
+                                "reapply_workspace_operation"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "operation"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "maxItems": 128,
+                    "minItems": 0,
+                    "type": "array"
+                  },
+                  "inverseChangeSetId": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "inverseChangeSetId",
+                  "changes"
+                ],
+                "type": "object"
+              },
               "pageRevisions": {
                 "additionalProperties": {
-                  "maximum": 9223372036854775807,
+                  "maximum": 9007199254740991,
                   "minimum": 0,
                   "type": "integer"
                 },
@@ -1965,7 +3351,7 @@
                 "type": "object"
               },
               "workspaceRevision": {
-                "maximum": 9223372036854775807,
+                "maximum": 9007199254740991,
                 "minimum": 0,
                 "type": "integer"
               }
@@ -1975,7 +3361,8 @@
               "changeSetId",
               "changedResources",
               "workspaceRevision",
-              "pageRevisions"
+              "pageRevisions",
+              "inverseChangeSet"
             ],
             "type": "object"
           }
@@ -1988,7 +3375,7 @@
       "dataScope": "canvas_mutation",
       "risk": "write",
       "timeoutMs": 10000,
-      "resultByteLimit": 262144,
+      "resultByteLimit": 65536,
       "previewType": "canvas_overlay"
     }
   ]

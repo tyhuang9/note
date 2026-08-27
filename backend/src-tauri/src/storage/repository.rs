@@ -2489,6 +2489,28 @@ fn cleanup_path_component(value: &str, label: &str) -> Result<String, String> {
     }
 }
 
+fn validate_managed_cleanup_path(
+    parsed_id: uuid::Uuid,
+    relative_path: &str,
+    media_type: &str,
+) -> Result<(), String> {
+    let path = Path::new(relative_path);
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "invalid asset cleanup relative path".to_owned())?;
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "invalid asset cleanup relative path".to_owned())?;
+    let expected_extension = assets::managed_extension(media_type)
+        .ok_or_else(|| "invalid asset cleanup media type".to_owned())?;
+    if stem != parsed_id.to_string() || !extension.eq_ignore_ascii_case(expected_extension) {
+        return Err("asset cleanup path does not match authoritative asset metadata".into());
+    }
+    Ok(())
+}
+
 fn retry_asset_cleanup(root: &Path) -> Result<(), String> {
     let mut connection = database::open(&root.join("note.db"))?;
     database::migrate(&mut connection)?;
@@ -2528,6 +2550,20 @@ fn retry_asset_cleanup(root: &Path) -> Result<(), String> {
         if staged != format!(".purging-{parsed_id}") {
             return Err("invalid asset cleanup staged path".into());
         }
+        let authoritative: Option<(String, String)> = transaction
+            .query_row(
+                "SELECT relative_path,media_type FROM assets WHERE id=?",
+                [&id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        let (authoritative_relative, media_type) =
+            authoritative.ok_or_else(|| "asset cleanup metadata is unavailable".to_owned())?;
+        if relative != authoritative_relative {
+            return Err("asset cleanup path does not match authoritative asset metadata".into());
+        }
+        validate_managed_cleanup_path(parsed_id, &relative, &media_type)?;
         if live.contains(&id) {
             let source = assets_dir.join(&relative);
             let staged_path = assets_dir.join(&staged);
@@ -2612,19 +2648,14 @@ pub fn purge_trash_at(
     root: &Path,
     request: TrashPurgeRequest,
 ) -> Result<TrashPurgePreview, String> {
-    if request.confirmation_token.is_empty()
-        || request.expected_folder_count < 0
-        || request.expected_page_count < 0
-        || request.expected_element_count < 0
-    {
-        return Err("purge confirmation counts must be non-negative".into());
+    if request.confirmation_token.is_empty() {
+        return Err("Trash confirmation token is required".into());
     }
     let mut connection = database::open(&root.join("note.db"))?;
     database::migrate(&mut connection)?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
-    let asset_ids = asset_ids_for_purged_pages(&transaction)?;
     let snapshot: Option<(String, i64)> = transaction
         .query_row(
             "SELECT snapshot_json,expires_at FROM trash_purge_snapshots WHERE token=?",
@@ -2640,6 +2671,13 @@ pub fn purge_trash_at(
         )
         .map_err(|e| e.to_string())?;
     let (snapshot, expires_at) = snapshot.ok_or("invalid or already-used Trash confirmation")?;
+    if request.expected_folder_count < 0
+        || request.expected_page_count < 0
+        || request.expected_element_count < 0
+    {
+        transaction.commit().map_err(|error| error.to_string())?;
+        return Err("purge confirmation counts must be non-negative".into());
+    }
     if expires_at < now_ms() {
         transaction.commit().map_err(|error| error.to_string())?;
         return Err("Trash confirmation expired; review and confirm again".into());
@@ -2661,6 +2699,7 @@ pub fn purge_trash_at(
         transaction.commit().map_err(|error| error.to_string())?;
         return Err("Trash changed; review the affected counts and confirm again".into());
     }
+    let asset_ids = asset_ids_for_purged_pages(&transaction)?;
     transaction
         .execute(
             "DELETE FROM folders WHERE lifecycle='trashed' AND id NOT IN (?,?)",
@@ -5271,6 +5310,17 @@ mod tests {
         let directory = root();
         seed_page(directory.path());
         trash_page_at(directory.path(), "p").unwrap();
+        let negative_preview = trash_purge_preview_at(directory.path()).unwrap();
+        let mut negative_request = purge_request(&negative_preview);
+        negative_request.expected_element_count = -1;
+        assert!(purge_trash_at(directory.path(), negative_request)
+            .unwrap_err()
+            .contains("non-negative"));
+        assert!(
+            purge_trash_at(directory.path(), purge_request(&negative_preview))
+                .unwrap_err()
+                .contains("invalid or already-used")
+        );
         let preview = trash_purge_preview_at(directory.path()).unwrap();
         let request = TrashPurgeRequest {
             confirmation_token: preview.confirmation_token.clone(),
@@ -5527,5 +5577,65 @@ mod tests {
             .unwrap_err()
             .contains("relative path"));
         assert!(asset_file(directory.path(), &asset.id).exists());
+    }
+
+    #[test]
+    fn deferred_cleanup_refuses_cross_asset_path_substitution() {
+        let directory = root();
+        seed_page(directory.path());
+        let unused_asset = save_test_asset(directory.path(), "unused.png");
+        let live_asset = save_test_asset(directory.path(), "live.png");
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![image_element("live-image", &live_asset.id)],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+        let unused_file = asset_file(directory.path(), &unused_asset.id);
+        let live_file = asset_file(directory.path(), &live_asset.id);
+        let live_relative = live_file
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO asset_cleanup_journal(asset_id,relative_path,staged_path) VALUES(?,?,?)",
+                params![
+                    &unused_asset.id,
+                    live_relative,
+                    format!(".purging-{}", unused_asset.id)
+                ],
+            )
+            .unwrap();
+        drop(connection);
+
+        assert!(retry_asset_cleanup(directory.path())
+            .unwrap_err()
+            .contains("authoritative asset metadata"));
+        assert!(unused_file.exists());
+        assert!(live_file.exists());
+        assert_eq!(
+            load_asset_at(directory.path(), &unused_asset.id)
+                .unwrap()
+                .id,
+            unused_asset.id
+        );
+        assert_eq!(
+            load_asset_at(directory.path(), &live_asset.id).unwrap().id,
+            live_asset.id
+        );
+        assert_eq!(
+            load_workspace_data_at(directory.path())
+                .unwrap()
+                .elements
+                .len(),
+            1
+        );
     }
 }

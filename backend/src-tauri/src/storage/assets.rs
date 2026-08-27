@@ -19,7 +19,7 @@ fn now_ms() -> i64 {
         .as_millis()
         .min(i64::MAX as u128) as i64
 }
-fn extension(media_type: &str) -> Option<&'static str> {
+pub(crate) fn managed_extension(media_type: &str) -> Option<&'static str> {
     match media_type.to_ascii_lowercase().as_str() {
         "image/png" => Some("png"),
         "image/jpeg" => Some("jpg"),
@@ -39,7 +39,7 @@ pub(crate) fn write_bytes(
     natural_width: Option<u32>,
     natural_height: Option<u32>,
 ) -> Result<(AssetDto, std::path::PathBuf), String> {
-    let ext = extension(media_type)
+    let ext = managed_extension(media_type)
         .ok_or_else(|| format!("unsupported asset media type: {media_type}"))?;
     if bytes.is_empty() {
         return Err("asset payload is empty".into());

@@ -5005,4 +5005,53 @@ mod tests {
         );
         assert!(list_trash_at(directory.path()).unwrap().is_empty());
     }
+
+    #[test]
+    fn reconcile_omission_preserves_existing_active_scene() {
+        let directory = root(); seed_page(directory.path());
+        apply_scene_changes_at(directory.path(), SceneChangeBatch { page_id:"p".into(), base_revision:0, upserts:vec![element("e",1)], deleted_element_ids:vec![] }).unwrap();
+        reconcile_workspace_structure_at(directory.path(), WorkspaceStructure { folders: vec![], pages: vec![], is_dark_mode: None }).unwrap();
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        assert_eq!(connection.query_row("SELECT count(*) FROM pages WHERE id='p'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+        assert_eq!(connection.query_row("SELECT count(*) FROM elements WHERE page_id='p'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+    }
+
+    #[test]
+    fn scene_writes_reject_trashed_pages_and_inherited_trashed_folders() {
+        let directory = root(); seed_page(directory.path());
+        trash_page_at(directory.path(), "p").unwrap();
+        assert!(apply_scene_changes_at(directory.path(), SceneChangeBatch { page_id:"p".into(),base_revision:0,upserts:vec![element("e",1)],deleted_element_ids:vec![] }).unwrap_err().contains("page not found"));
+        restore_page_at(directory.path(), "p").unwrap(); trash_folder_at(directory.path(), "f").unwrap();
+        assert!(apply_scene_changes_at(directory.path(), SceneChangeBatch { page_id:"p".into(),base_revision:0,upserts:vec![element("e",1)],deleted_element_ids:vec![] }).is_err());
+    }
+
+    #[test]
+    fn purge_confirmation_is_expiring_single_use_and_snapshot_exact() {
+        let directory = root(); seed_page(directory.path()); trash_page_at(directory.path(), "p").unwrap();
+        let preview = trash_purge_preview_at(directory.path()).unwrap();
+        let request = TrashPurgeRequest { confirmation_token: preview.confirmation_token.clone(), expected_folder_count: preview.folder_count, expected_page_count: preview.page_count, expected_element_count: preview.element_count };
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        connection.execute("UPDATE trash_purge_snapshots SET expires_at=0 WHERE token=?", [&preview.confirmation_token]).unwrap();
+        assert!(purge_trash_at(directory.path(), request.clone()).is_err());
+        let preview = trash_purge_preview_at(directory.path()).unwrap();
+        let request = TrashPurgeRequest { confirmation_token: preview.confirmation_token.clone(), expected_folder_count: preview.folder_count, expected_page_count: preview.page_count, expected_element_count: preview.element_count };
+        connection.execute("UPDATE pages SET trashed_at=trashed_at+1 WHERE id='p'",[]).unwrap();
+        assert!(purge_trash_at(directory.path(), request).is_err());
+        let preview = trash_purge_preview_at(directory.path()).unwrap();
+        let request = TrashPurgeRequest { confirmation_token: preview.confirmation_token.clone(), expected_folder_count: preview.folder_count, expected_page_count: preview.page_count, expected_element_count: preview.element_count };
+        purge_trash_at(directory.path(), request.clone()).unwrap();
+        assert!(purge_trash_at(directory.path(), request).is_err());
+    }
+
+    #[test]
+    fn lifecycle_triggers_and_missing_parent_restore_are_enforced() {
+        let directory = root(); seed_page(directory.path());
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        assert!(connection.execute("UPDATE pages SET trashed_at=1 WHERE id='p'", []).is_err());
+        assert!(connection.execute("UPDATE folders SET lifecycle='trashed' WHERE id='f'", []).is_err());
+        trash_page_at(directory.path(), "p").unwrap();
+        connection.execute_batch("PRAGMA foreign_keys=OFF; DELETE FROM folders WHERE id='f'; PRAGMA foreign_keys=ON;").unwrap();
+        restore_page_at(directory.path(), "p").unwrap();
+        assert_eq!(load_workspace_data_at(directory.path()).unwrap().pages[0].folder_id, ROOT_FOLDER_ID);
+    }
 }

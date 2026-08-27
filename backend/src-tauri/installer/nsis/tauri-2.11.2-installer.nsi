@@ -77,8 +77,10 @@ Var MaintenanceDetected
 Var MaintenanceInstalledVersion
 Var MaintenanceVersionComparison
 Var MaintenanceInstallPath
+Var MaintenanceArpInstallPath
 Var MaintenanceUninstallerPath
 Var MaintenanceUninstallerTrusted
+Var MaintenanceRegistrationInvalid
 
 Name "${PRODUCTNAME}"
 BrandingText "${COPYRIGHT}"
@@ -498,24 +500,37 @@ Function DetectExistingInstall
   StrCpy $MaintenanceInstalledVersion ""
   StrCpy $MaintenanceVersionComparison 2
   StrCpy $MaintenanceInstallPath ""
+  StrCpy $MaintenanceArpInstallPath ""
   StrCpy $MaintenanceUninstallerPath ""
   StrCpy $MaintenanceUninstallerTrusted 0
+  StrCpy $MaintenanceRegistrationInvalid 0
 
   ReadRegStr $0 SHCTX "${UNINSTKEY}" "DisplayName"
   ${IfThen} $0 != "${PRODUCTNAME}" ${|} Return ${|}
   ReadRegStr $0 SHCTX "${UNINSTKEY}" "Publisher"
   ${IfThen} $0 != "${MANUFACTURER}" ${|} Return ${|}
+  ; A stable Note registration with unsafe or conflicting location records
+  ; must stop setup rather than letting a fresh install create a second copy.
+  StrCpy $MaintenanceRegistrationInvalid 1
 
   ReadRegStr $MaintenanceInstallPath SHCTX "${MANUPRODUCTKEY}" ""
   ${IfThen} $MaintenanceInstallPath == "" ${|} Return ${|}
-  GetFullPathName $MaintenanceInstallPath "$MaintenanceInstallPath"
-  ${StrCase} $0 $MaintenanceInstallPath "U"
-  ${StrCase} $1 "$LOCALAPPDATA\" "U"
-  StrLen $2 $1
-  StrCpy $3 $0 $2
-  ${IfThen} $3 != $1 ${|} Return ${|}
-  StrCpy $3 $0 1 $2
-  ${IfThen} $3 == "" ${|} Return ${|}
+  StrCpy $0 $MaintenanceInstallPath
+  Call NormalizeMaintenanceInstallPath
+  ${IfThen} $0 == "" ${|} Return ${|}
+  StrCpy $MaintenanceInstallPath $0
+
+  ReadRegStr $MaintenanceArpInstallPath SHCTX "${UNINSTKEY}" "InstallLocation"
+  ${IfThen} $MaintenanceArpInstallPath == "" ${|} Return ${|}
+  StrCpy $0 $MaintenanceArpInstallPath
+  Call NormalizeMaintenanceInstallPath
+  ${IfThen} $0 == "" ${|} Return ${|}
+  StrCpy $MaintenanceArpInstallPath $0
+  StrCmp $MaintenanceInstallPath $MaintenanceArpInstallPath maintenance_install_paths_valid
+  Return
+
+  maintenance_install_paths_valid:
+  StrCpy $MaintenanceRegistrationInvalid 0
 
   StrCpy $MaintenanceDetected 1
   ReadRegStr $MaintenanceInstalledVersion SHCTX "${UNINSTKEY}" "DisplayVersion"
@@ -532,7 +547,89 @@ Function DetectExistingInstall
   ${EndIf}
 FunctionEnd
 
+Function NormalizeMaintenanceInstallPath
+  ; Input/output $0. Accepts canonical fixed-drive paths such as D:\Apps\Note.
+  ; It rejects relative, root-only, UNC/device, removable, and network paths.
+  ; ARP InstallLocation is written with an outer quote pair by this template.
+  StrCpy $1 $0 1
+  ${If} $1 == "$\""
+    StrCpy $2 $0 1 -1
+    ${If} $2 != "$\""
+      StrCpy $0 ""
+      Return
+    ${EndIf}
+    StrCpy $0 $0 -1 1
+  ${EndIf}
+  ${If} $0 == ""
+    Return
+  ${EndIf}
+  ${StrLoc} $1 $0 "$\"" ">"
+  ${If} $1 != ""
+    StrCpy $0 ""
+    Return
+  ${EndIf}
+
+  ; Only an explicit local-drive path is accepted before canonicalization.
+  ; This excludes relative paths, UNC paths, and Win32 device namespaces.
+  StrCpy $1 $0 1 1
+  ${If} $1 != ":"
+    StrCpy $0 ""
+    Return
+  ${EndIf}
+  StrCpy $1 $0 1 2
+  ${If} $1 != "\"
+    StrCpy $0 ""
+    Return
+  ${EndIf}
+  StrCpy $1 $0 "" 3
+  ${StrLoc} $2 $1 ":" ">"
+  ${If} $2 != ""
+    StrCpy $0 ""
+    Return
+  ${EndIf}
+
+  GetFullPathName $0 "$0"
+  ${If} $0 == ""
+    Return
+  ${EndIf}
+  StrCpy $1 $0 1 1
+  ${If} $1 != ":"
+    StrCpy $0 ""
+    Return
+  ${EndIf}
+  StrCpy $1 $0 1 2
+  ${If} $1 != "\"
+    StrCpy $0 ""
+    Return
+  ${EndIf}
+  StrCpy $1 $0 3
+  ${If} $1 == ""
+    ; A drive root is never an application directory.
+    StrCpy $0 ""
+    Return
+  ${EndIf}
+
+  StrCpy $1 $0 3
+  System::Call 'kernel32::GetDriveType(t "$1") i .r2'
+  ${If} $2 != 3
+    ; DRIVE_FIXED is 3. Reject remote and all non-fixed drive types.
+    StrCpy $0 ""
+  ${EndIf}
+FunctionEnd
+
 Section EarlyChecks
+  ${If} $MaintenanceRegistrationInvalid = 1
+    ${If} ${Silent}
+      System::Call 'kernel32::AttachConsole(i -1)i.r0'
+      ${If} $0 <> 0
+        System::Call 'kernel32::GetStdHandle(i -11)i.r0'
+        FileWrite $0 "Cannot install Note because the existing installation has conflicting or unsafe install locations.$\r$\n"
+      ${EndIf}
+    ${Else}
+      MessageBox MB_ICONSTOP "Cannot install Note because an existing Note registration has conflicting or unsafe install locations. Repair or remove that registration through Windows, then run setup again."
+    ${EndIf}
+    Abort
+  ${EndIf}
   ${If} ${Silent}
     Call DetectExistingInstall
     ${If} $MaintenanceDetected = 1

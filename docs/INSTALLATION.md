@@ -28,6 +28,10 @@ setup program; it does not reinstall Note. If the installed version is newer,
 setup blocks a downgrade and offers only Remove or Cancel. Updates and repairs
 preserve local app data. Removing Note also preserves notes, assets, and local
 preferences; the uninstaller does not offer an application-data deletion option.
+You can choose a fixed local-drive directory such as `D:\Apps\Note`. Future
+setup runs verify both stored install-location records agree before offering
+maintenance actions; if either record is unsafe or mismatched, setup stops
+instead of installing a second copy.
 
 The installer is unsigned for now. SmartScreen may warn before it starts. Only
 continue after verifying that the file came from the official release page.

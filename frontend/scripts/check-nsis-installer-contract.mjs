@@ -21,8 +21,10 @@ const [configText, packageLockText, template, releaseWorkflow] = await Promise.a
 const config = JSON.parse(configText);
 const nsis = config.bundle?.windows?.nsis;
 const pageLeaveReinstall = template.match(/Function PageLeaveReinstall([\s\S]*?)FunctionEnd/)?.[1];
+const existingInstallDetection = template.match(/Function DetectExistingInstall([\s\S]*?)FunctionEnd/)?.[1];
 
 assert.ok(pageLeaveReinstall, "the vendored template must define PageLeaveReinstall");
+assert.ok(existingInstallDetection, "the vendored template must define shared existing-install detection");
 
 assert.equal(config.productName, "Note", "installer product identity must remain stable");
 assert.equal(config.identifier, "com.tyhuang.note", "installer bundle identity must remain stable");
@@ -44,7 +46,14 @@ assert.doesNotMatch(template, /WixMode|EnumRegKey .*CurrentVersion\\Uninstall|ms
 assert.match(template, /StrCpy \$R2 "Repair \$\{PRODUCTNAME\}"/);
 assert.match(template, /StrCpy \$R2 "Update \$\{PRODUCTNAME\}"/);
 assert.match(template, /StrCpy \$R2 "Remove \$\{PRODUCTNAME\}"[\s\S]*StrCpy \$R3 "Cancel setup"/);
-assert.match(template, /ReadRegStr \$0 SHCTX "\$\{UNINSTKEY\}" "DisplayName"[\s\S]*?\$0 != "\$\{PRODUCTNAME\}"[\s\S]*?ReadRegStr \$0 SHCTX "\$\{UNINSTKEY\}" "Publisher"[\s\S]*?\$0 != "\$\{MANUFACTURER\}"[\s\S]*?ReadRegStr \$MaintenanceInstallPath SHCTX "\$\{MANUPRODUCTKEY\}" ""[\s\S]*?GetFullPathName \$MaintenanceInstallPath "\$MaintenanceInstallPath"[\s\S]*?\$LOCALAPPDATA\\/, "existing-install detection must validate stable identity and a canonical current-user install path");
+assert.match(template, /ReadRegStr \$0 SHCTX "\$\{UNINSTKEY\}" "DisplayName"[\s\S]*?\$0 != "\$\{PRODUCTNAME\}"[\s\S]*?ReadRegStr \$0 SHCTX "\$\{UNINSTKEY\}" "Publisher"[\s\S]*?\$0 != "\$\{MANUFACTURER\}"[\s\S]*?ReadRegStr \$MaintenanceInstallPath SHCTX "\$\{MANUPRODUCTKEY\}" ""[\s\S]*?ReadRegStr \$MaintenanceArpInstallPath SHCTX "\$\{UNINSTKEY\}" "InstallLocation"[\s\S]*?StrCmp \$MaintenanceInstallPath \$MaintenanceArpInstallPath/, "existing-install detection must require matching manufacturer and ARP location records");
+assert.match(existingInstallDetection, /StrCmp \$MaintenanceInstallPath \$MaintenanceArpInstallPath maintenance_install_paths_valid\s+Return/, "mismatched registered install locations must not be treated as a fresh install");
+assert.doesNotMatch(existingInstallDetection, /\$LOCALAPPDATA\\/, "existing-install detection must not restrict valid custom paths to LocalAppData");
+assert.match(template, /Function NormalizeMaintenanceInstallPath[\s\S]*?Accepts canonical fixed-drive paths such as D:\\Apps\\Note[\s\S]*?GetFullPathName \$0 "\$0"[\s\S]*?GetDriveType\(t "\$1"\) i \.r2[\s\S]*?\$2 != 3/, "custom fixed-drive paths must be canonicalized while network drives are rejected");
+assert.match(template, /StrCpy \$1 \$0 3[\s\S]*?\$1 == ""[\s\S]*?drive root is never an application directory/, "root-only install locations must be rejected");
+assert.match(template, /Only an explicit local-drive path is accepted before canonicalization[\s\S]*?relative paths, UNC paths, and Win32 device namespaces/, "relative, UNC, and device install locations must be rejected");
+assert.match(template, /\$\{StrLoc\} \$1 \$0 "\$\\\"" ">"[\s\S]*?StrCpy \$1 \$0 "" 3[\s\S]*?\$\{StrLoc\} \$2 \$1 ":" ">"/, "malformed locations containing embedded quotes or alternate-stream colons must be rejected");
+assert.match(template, /StrCpy \$MaintenanceRegistrationInvalid 1[\s\S]*?maintenance_install_paths_valid:[\s\S]*?StrCpy \$MaintenanceRegistrationInvalid 0/, "a stable registration must remain invalid until both location records validate and agree");
 assert.match(template, /StrCpy \$MaintenanceDetected 1[\s\S]*?ReadRegStr \$MaintenanceInstalledVersion SHCTX "\$\{UNINSTKEY\}" "DisplayVersion"[\s\S]*?StrCpy \$MaintenanceUninstallerPath "\$MaintenanceInstallPath\\uninstall\.exe"[\s\S]*?ReadRegStr \$0 SHCTX "\$\{UNINSTKEY\}" "UninstallString"/, "existing-install detection must remain independent of uninstaller availability");
 assert.match(template, /\$\{If\} \$0 == "\$\\\"\$MaintenanceUninstallerPath\$\\\""[\s\S]*?\$\{AndIf\} \$\{FileExists\} "\$MaintenanceUninstallerPath"[\s\S]*?StrCpy \$MaintenanceUninstallerTrusted 1/, "Remove requires a matching registered uninstaller at the expected path");
 assert.match(template, /\$\{If\} \$0 <> 0\s+\$\{OrIf\} \$\{FileExists\}[\s\S]*?StrCpy \$UpdateMode 0/, "a cancelled or failed update must not bypass maintenance selection");
@@ -60,6 +69,7 @@ assert.match(pageLeaveReinstall, /\$\{Else\}\s+Quit\s+; User chose to cancel set
 assert.match(template, /Function \.onInit[\s\S]*?Call DetectExistingInstall[\s\S]*?FunctionEnd/, "detection must initialize outside maintenance page callbacks");
 assert.match(template, /ReadRegStr \$MaintenanceInstalledVersion SHCTX "\$\{UNINSTKEY\}" "DisplayVersion"[\s\S]*?nsis_tauri_utils::SemverCompare/, "shared detection must compare versions after stable identity and install-path validation");
 assert.match(template, /Section EarlyChecks[\s\S]*?\$\{If\} \$\{Silent\}[\s\S]*?Call DetectExistingInstall[\s\S]*?\$MaintenanceVersionComparison = -1[\s\S]*?Abort/, "silent newer-version downgrades must abort before payload sections");
+assert.match(template, /Section EarlyChecks[\s\S]*?\$MaintenanceRegistrationInvalid = 1[\s\S]*?conflicting or unsafe install locations[\s\S]*?Abort/, "invalid registered install locations must block a second installation before payload sections");
 assert.match(template, /Section EarlyChecks[\s\S]*?\$MaintenanceVersionComparison = 0[\s\S]*?StrCpy \$UpdateMode 0[\s\S]*?\$MaintenanceVersionComparison = 1[\s\S]*?StrCpy \$UpdateMode 1/, "silent same-version repairs and older-version updates must be deterministic");
 assert.match(pageLeaveReinstall, /\$\{If\} \$UpdateMode = 1[\s\S]*?\$\{If\} \$MaintenanceDetected = 1[\s\S]*?\$MaintenanceVersionComparison = 0[\s\S]*?\$MaintenanceVersionComparison = 1[\s\S]*?Goto reinst_done[\s\S]*?Abort/, "the /UPDATE bypass must apply only to detected compatible NSIS installs");
 assert.match(pageLeaveReinstall, /\$\{If\} \$PassiveMode = 1[\s\S]*?\$\{If\} \$R0 = 0\s+StrCpy \$R1 1[\s\S]*?\$\{ElseIf\} \$R0 = 1\s+StrCpy \$R1 1[\s\S]*?\$\{ElseIf\} \$R0 = -1\s+StrCpy \$R1 0[\s\S]*?\$\{Else\}\s+\$\{NSD_GetState\} \$R2 \$R1/, "passive mode must default to Repair, Update, or Cancel before reading dialog controls");

@@ -13,7 +13,6 @@ pub const MANIFEST_SCHEMA_VERSION: &str = "1.0.0";
 pub const CAPABILITY_SCHEMA_VERSION: &str = "1.0.0";
 pub const MAX_TOOL_INPUT_BYTES: u64 = 64 * 1024;
 pub const MAX_TOOL_RESULT_BYTES: u64 = 64 * 1024;
-pub const MAX_SCREENSHOT_TRANSPORT_BYTES: u64 = 48 * 1024;
 pub const MAX_JSON_SAFE_REVISION: i64 = 9_007_199_254_740_991;
 pub const MAX_INVERSE_CHANGES: usize = 128;
 pub const MAX_INVERSE_CHANGESET_BYTES: u64 = 256 * 1024;
@@ -48,7 +47,6 @@ pub struct DefaultLimits {
     pub max_created_elements: u8,
     pub max_workspace_items: u8,
     pub max_tool_result_bytes: u64,
-    pub max_screenshot_transport_bytes: u64,
 }
 
 pub const DEFAULT_LIMITS: DefaultLimits = DefaultLimits {
@@ -70,7 +68,6 @@ pub const DEFAULT_LIMITS: DefaultLimits = DefaultLimits {
     max_created_elements: 25,
     max_workspace_items: 10,
     max_tool_result_bytes: MAX_TOOL_RESULT_BYTES,
-    max_screenshot_transport_bytes: MAX_SCREENSHOT_TRANSPORT_BYTES,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -182,6 +179,7 @@ pub enum PreviewType {
     None,
     Navigation,
     Summary,
+    ScreenshotApproval,
     Diff,
     CanvasOverlay,
     ArchiveSummary,
@@ -210,7 +208,7 @@ pub fn canonical_manifest() -> AgentManifest {
         capabilities: vec![
             capability(
                 CapabilityId::WorkspaceListStructure,
-                object_schema(&[], json!({})),
+                object_schema(&[], json!({"includeTrashMetadata": boolean_schema()})),
                 structure_output_schema(),
                 DataScope::WorkspaceStructure,
                 CapabilityRisk::Read,
@@ -222,7 +220,7 @@ pub fn canonical_manifest() -> AgentManifest {
                 CapabilityId::WorkspaceSearch,
                 object_schema(
                     &["query"],
-                    json!({"query": string_schema(1, 512), "pageId": nullable_id_schema(), "limit": integer_schema(1, 100)}),
+                    json!({"query": string_schema(1, 512), "pageId": nullable_id_schema(), "limit": integer_schema(1, 200)}),
                 ),
                 search_output_schema(),
                 DataScope::WorkspaceContent,
@@ -243,10 +241,7 @@ pub fn canonical_manifest() -> AgentManifest {
             ),
             capability(
                 CapabilityId::CanvasReadScene,
-                object_schema(
-                    &["pageId"],
-                    json!({"pageId": id_schema(), "includeText": boolean_schema()}),
-                ),
+                scene_input_schema(),
                 scene_output_schema(),
                 DataScope::CanvasScene,
                 CapabilityRisk::Read,
@@ -270,7 +265,7 @@ pub fn canonical_manifest() -> AgentManifest {
             capability(
                 CapabilityId::CanvasRequestScreenshot,
                 object_schema(
-                    &["pageId"],
+                    &["pageId", "viewport"],
                     json!({"pageId": id_schema(), "viewport": viewport_schema(), "scale": number_schema(0.5, 2.0)}),
                 ),
                 screenshot_output_schema(),
@@ -278,11 +273,14 @@ pub fn canonical_manifest() -> AgentManifest {
                 CapabilityRisk::Read,
                 15_000,
                 MAX_TOOL_RESULT_BYTES,
-                PreviewType::None,
+                PreviewType::ScreenshotApproval,
             ),
             capability(
                 CapabilityId::WorkspaceCreateFolder,
-                object_schema(&["name"], json!({"name": string_schema(1, 120)})),
+                object_schema(
+                    &["name", "expectedWorkspaceRevision"],
+                    json!({"name": string_schema(1, 120), "expectedWorkspaceRevision": revision_schema()}),
+                ),
                 receipt_output_schema(),
                 DataScope::WorkspaceMutation,
                 CapabilityRisk::Write,
@@ -306,8 +304,8 @@ pub fn canonical_manifest() -> AgentManifest {
             capability(
                 CapabilityId::WorkspaceCreatePage,
                 object_schema(
-                    &["folderId", "title"],
-                    json!({"folderId": id_schema(), "title": string_schema(1, 240)}),
+                    &["folderId", "title", "expectedWorkspaceRevision"],
+                    json!({"folderId": id_schema(), "title": string_schema(1, 240), "expectedWorkspaceRevision": revision_schema()}),
                 ),
                 receipt_output_schema(),
                 DataScope::WorkspaceMutation,
@@ -319,8 +317,8 @@ pub fn canonical_manifest() -> AgentManifest {
             capability(
                 CapabilityId::WorkspaceRenamePage,
                 object_schema(
-                    &["pageId", "title", "expectedPageRevision"],
-                    json!({"pageId": id_schema(), "title": string_schema(1, 240), "expectedPageRevision": revision_schema()}),
+                    &["pageId", "title", "expectedWorkspaceRevision"],
+                    json!({"pageId": id_schema(), "title": string_schema(1, 240), "expectedWorkspaceRevision": revision_schema()}),
                 ),
                 receipt_output_schema(),
                 DataScope::WorkspaceMutation,
@@ -332,8 +330,8 @@ pub fn canonical_manifest() -> AgentManifest {
             capability(
                 CapabilityId::WorkspaceMovePage,
                 object_schema(
-                    &["pageId", "folderId", "expectedPageRevision"],
-                    json!({"pageId": id_schema(), "folderId": id_schema(), "expectedPageRevision": revision_schema()}),
+                    &["pageId", "folderId", "expectedWorkspaceRevision"],
+                    json!({"pageId": id_schema(), "folderId": id_schema(), "expectedWorkspaceRevision": revision_schema()}),
                 ),
                 receipt_output_schema(),
                 DataScope::WorkspaceMutation,
@@ -345,8 +343,8 @@ pub fn canonical_manifest() -> AgentManifest {
             capability(
                 CapabilityId::WorkspaceBookmarkPage,
                 object_schema(
-                    &["pageId", "bookmarked", "expectedPageRevision"],
-                    json!({"pageId": id_schema(), "bookmarked": boolean_schema(), "expectedPageRevision": revision_schema()}),
+                    &["pageId", "bookmarked", "expectedWorkspaceRevision"],
+                    json!({"pageId": id_schema(), "bookmarked": boolean_schema(), "expectedWorkspaceRevision": revision_schema()}),
                 ),
                 receipt_output_schema(),
                 DataScope::WorkspaceMutation,
@@ -424,6 +422,9 @@ fn capability(
 fn object_schema(required: &[&str], properties: Value) -> Value {
     json!({"type":"object", "additionalProperties":false, "required":required, "properties":properties})
 }
+fn non_empty_object_schema(properties: Value) -> Value {
+    json!({"type":"object", "additionalProperties":false, "required":[], "minProperties":1, "properties":properties})
+}
 fn map_schema(value_schema: Value) -> Value {
     json!({"type":"object", "additionalProperties":value_schema, "required":[]})
 }
@@ -467,16 +468,55 @@ fn page_schema() -> Value {
         json!({"id": id_schema(), "folderId": id_schema(), "title": string_schema(1, 240), "isBookmarked": boolean_schema(), "revision": revision_schema()}),
     )
 }
+fn completeness_schema() -> Value {
+    object_schema(
+        &["returnedCount", "isComplete"],
+        json!({
+            "returnedCount": integer_schema(0, DEFAULT_LIMITS.max_read_summaries as i64),
+            "isComplete": boolean_schema(),
+            "totalCount": integer_schema(0, MAX_JSON_SAFE_REVISION),
+            "reason": enum_schema(&["complete", "result_limit", "scope_limit"])
+        }),
+    )
+}
+fn trash_metadata_schema() -> Value {
+    object_schema(
+        &["kind", "id", "name", "trashedAt"],
+        json!({
+            "kind": enum_schema(&["folder", "page"]),
+            "id": id_schema(),
+            "name": string_schema(1, 240),
+            "trashedAt": string_schema(1, 64)
+        }),
+    )
+}
 fn structure_output_schema() -> Value {
     object_schema(
-        &["workspaceRevision", "folders", "pages"],
-        json!({"workspaceRevision": revision_schema(), "folders": array_schema(folder_schema(), 0, 10_000), "pages": array_schema(page_schema(), 0, 100_000)}),
+        &["workspaceRevision", "folders", "pages", "completeness"],
+        json!({
+            "workspaceRevision": revision_schema(),
+            "folders": array_schema(folder_schema(), 0, DEFAULT_LIMITS.max_read_summaries as u64),
+            "pages": array_schema(page_schema(), 0, DEFAULT_LIMITS.max_read_summaries as u64),
+            "trashMetadata": array_schema(trash_metadata_schema(), 0, DEFAULT_LIMITS.max_read_summaries as u64),
+            "completeness": completeness_schema()
+        }),
     )
 }
 fn search_output_schema() -> Value {
     object_schema(
-        &["matches"],
-        json!({"matches": array_schema(object_schema(&["pageId", "title", "snippet"], json!({"pageId": id_schema(), "title": string_schema(0, 240), "snippet": string_schema(0, 2_000)})), 0, 200)}),
+        &["matches", "completeness"],
+        json!({
+            "matches": array_schema(object_schema(
+                &["pageId", "kind", "title", "snippet"],
+                json!({
+                    "pageId": id_schema(),
+                    "kind": enum_schema(&["title", "plain_text", "shape_text", "connector_label"]),
+                    "title": string_schema(0, 240),
+                    "snippet": string_schema(0, 2_000)
+                })
+            ), 0, DEFAULT_LIMITS.max_read_summaries as u64),
+            "completeness": completeness_schema()
+        }),
     )
 }
 fn page_output_schema() -> Value {
@@ -484,14 +524,14 @@ fn page_output_schema() -> Value {
 }
 fn scene_output_schema() -> Value {
     object_schema(
-        &["pageId", "revision", "elements"],
-        json!({"pageId":id_schema(), "revision":revision_schema(), "elements":array_schema(canvas_element_schema(), 0, 120)}),
+        &["pageId", "revision", "elements", "completeness"],
+        json!({"pageId":id_schema(), "revision":revision_schema(), "elements":array_schema(canvas_element_schema(), 0, DEFAULT_LIMITS.max_viewport_summaries as u64), "completeness":completeness_schema()}),
     )
 }
 fn elements_output_schema() -> Value {
     object_schema(
-        &["pageId", "revision", "elements"],
-        json!({"pageId":id_schema(), "revision":revision_schema(), "elements":array_schema(canvas_element_schema(), 0, 50)}),
+        &["pageId", "revision", "elements", "completeness"],
+        json!({"pageId":id_schema(), "revision":revision_schema(), "elements":array_schema(canvas_element_schema(), 0, DEFAULT_LIMITS.max_detailed_elements as u64), "completeness":completeness_schema()}),
     )
 }
 fn screenshot_output_schema() -> Value {
@@ -499,13 +539,41 @@ fn screenshot_output_schema() -> Value {
         &[
             "pageId",
             "revision",
+            "attachmentId",
             "mediaType",
-            "dataBase64",
+            "viewport",
+            "providerId",
+            "normalizedEndpointIdentity",
             "requiresApproval",
             "persisted",
         ],
-        json!({"pageId":id_schema(), "revision":revision_schema(), "mediaType":enum_schema(&["image/png"]), "dataBase64":string_schema(1, MAX_SCREENSHOT_TRANSPORT_BYTES), "requiresApproval":boolean_schema(), "persisted":json!({"type":"boolean", "enum":[false]})}),
+        json!({
+            "pageId":id_schema(),
+            "revision":revision_schema(),
+            "attachmentId":id_schema(),
+            "mediaType":enum_schema(&["image/png"]),
+            "viewport":viewport_schema(),
+            "providerId":id_schema(),
+            "normalizedEndpointIdentity":string_schema(1, 2_048),
+            "requiresApproval":json!({"type":"boolean", "enum":[true]}),
+            "persisted":json!({"type":"boolean", "enum":[false]})
+        }),
     )
+}
+fn scene_input_schema() -> Value {
+    let active_page = object_schema(
+        &["pageId", "scope"],
+        json!({"pageId":id_schema(), "scope":enum_schema(&["active_page"])}),
+    );
+    let viewport = object_schema(
+        &["pageId", "scope", "viewport"],
+        json!({"pageId":id_schema(), "scope":enum_schema(&["viewport"]), "viewport":viewport_schema()}),
+    );
+    let selection = object_schema(
+        &["pageId", "scope", "elementIds"],
+        json!({"pageId":id_schema(), "scope":enum_schema(&["selection"]), "elementIds":array_schema(id_schema(), 1, DEFAULT_LIMITS.max_selected_descriptors as u64)}),
+    );
+    json!({"type":"object", "additionalProperties":false, "oneOf":[active_page, viewport, selection]})
 }
 fn viewport_schema() -> Value {
     object_schema(
@@ -527,12 +595,14 @@ fn mutation_receipt_schema() -> Value {
         &[
             "auditId",
             "changeSetId",
+            "runId",
+            "toolCallId",
             "changedResources",
             "workspaceRevision",
             "pageRevisions",
             "inverseChangeSet",
         ],
-        json!({"auditId":id_schema(), "changeSetId":id_schema(), "changedResources":array_schema(changed_resource_schema(), 0, 10), "workspaceRevision":revision_schema(), "pageRevisions":map_schema(revision_schema()), "inverseChangeSet":inverse_change_set_schema()}),
+        json!({"auditId":id_schema(), "changeSetId":id_schema(), "runId":id_schema(), "toolCallId":id_schema(), "changedResources":array_schema(changed_resource_schema(), 0, DEFAULT_LIMITS.max_touched_elements as u64), "workspaceRevision":revision_schema(), "pageRevisions":map_schema(revision_schema()), "inverseChangeSet":inverse_change_set_schema()}),
     )
 }
 fn inverse_change_set_schema() -> Value {
@@ -550,25 +620,25 @@ fn inverse_change_set_schema() -> Value {
 fn workspace_operation_schema() -> Value {
     let folder = || {
         object_schema(
-            &["type", "folder_id", "name"],
-            json!({"type":enum_schema(&["create_folder", "rename_folder"]), "folder_id":id_schema(), "name":string_schema(1,120)}),
+            &["type", "folderId", "name"],
+            json!({"type":enum_schema(&["create_folder", "rename_folder"]), "folderId":id_schema(), "name":string_schema(1,120)}),
         )
     };
     let create_page = object_schema(
-        &["type", "page_id", "folder_id", "title"],
-        json!({"type":enum_schema(&["create_page"]), "page_id":id_schema(), "folder_id":id_schema(), "title":string_schema(1,240)}),
+        &["type", "pageId", "folderId", "title"],
+        json!({"type":enum_schema(&["create_page"]), "pageId":id_schema(), "folderId":id_schema(), "title":string_schema(1,240)}),
     );
     let rename_page = object_schema(
-        &["type", "page_id", "title"],
-        json!({"type":enum_schema(&["rename_page"]), "page_id":id_schema(), "title":string_schema(1,240)}),
+        &["type", "pageId", "title"],
+        json!({"type":enum_schema(&["rename_page"]), "pageId":id_schema(), "title":string_schema(1,240)}),
     );
     let move_page = object_schema(
-        &["type", "page_id", "folder_id"],
-        json!({"type":enum_schema(&["move_page"]), "page_id":id_schema(), "folder_id":id_schema()}),
+        &["type", "pageId", "folderId"],
+        json!({"type":enum_schema(&["move_page"]), "pageId":id_schema(), "folderId":id_schema()}),
     );
     let bookmark = object_schema(
-        &["type", "page_id", "bookmarked"],
-        json!({"type":enum_schema(&["bookmark_page"]), "page_id":id_schema(), "bookmarked":boolean_schema()}),
+        &["type", "pageId", "bookmarked"],
+        json!({"type":enum_schema(&["bookmark_page"]), "pageId":id_schema(), "bookmarked":boolean_schema()}),
     );
     let archive = object_schema(
         &["type", "items"],
@@ -584,8 +654,8 @@ fn changed_resource_schema() -> Value {
 }
 fn canvas_element_schema() -> Value {
     object_schema(
-        &["id", "kind", "x", "y", "width", "height"],
-        json!({"id":id_schema(), "kind":enum_schema(&["text", "shape", "connector"]), "x":number_schema(-1_000_000.0, 1_000_000.0), "y":number_schema(-1_000_000.0, 1_000_000.0), "width":number_schema(1.0, 100_000.0), "height":number_schema(1.0, 100_000.0)}),
+        &["id", "kind", "x", "y", "width", "height", "summary"],
+        json!({"id":id_schema(), "kind":enum_schema(&["text", "shape", "line", "connector", "image", "ink"]), "x":number_schema(-1_000_000.0, 1_000_000.0), "y":number_schema(-1_000_000.0, 1_000_000.0), "width":number_schema(1.0, 100_000.0), "height":number_schema(1.0, 100_000.0), "summary":string_schema(0, 2_000)}),
     )
 }
 
@@ -607,15 +677,19 @@ fn semantic_operations_schema() -> Value {
     );
     let move_elements = object_schema(
         &["type", "targets", "deltaX", "deltaY"],
-        json!({"type":enum_schema(&["move_elements"]), "targets":array_schema(element_target_schema(), 1, 100), "deltaX":number_schema(-1_000_000.0, 1_000_000.0), "deltaY":number_schema(-1_000_000.0, 1_000_000.0)}),
+        json!({"type":enum_schema(&["move_elements"]), "targets":array_schema(element_target_schema(), 1, DEFAULT_LIMITS.max_touched_elements as u64), "deltaX":number_schema(-1_000_000.0, 1_000_000.0), "deltaY":number_schema(-1_000_000.0, 1_000_000.0)}),
     );
     let resize = object_schema(
         &["type", "elementId", "targetKind", "width", "height"],
-        json!({"type":enum_schema(&["resize_element"]), "elementId":id_schema(), "targetKind":bindable_element_kind_schema(), "width":number_schema(1.0, 100_000.0), "height":number_schema(1.0, 100_000.0)}),
+        json!({"type":enum_schema(&["resize_element"]), "elementId":id_schema(), "targetKind":mutable_element_kind_schema(), "width":number_schema(1.0, 100_000.0), "height":number_schema(1.0, 100_000.0)}),
     );
     let style = object_schema(
         &["type", "elementId", "targetKind", "style"],
-        json!({"type":enum_schema(&["set_style"]), "elementId":id_schema(), "targetKind":bindable_element_kind_schema(), "style":object_schema(&[], json!({"fill":string_schema(1, 32), "stroke":string_schema(1, 32), "strokeWidth":number_schema(0.5, 32.0), "opacity":number_schema(0.0, 1.0)}))}),
+        json!({"type":enum_schema(&["set_style"]), "elementId":id_schema(), "targetKind":mutable_element_kind_schema(), "style":non_empty_object_schema(json!({"fill":string_schema(1, 32), "stroke":string_schema(1, 32), "strokeWidth":number_schema(0.5, 32.0), "opacity":number_schema(0.0, 1.0)}))}),
+    );
+    let text_style = object_schema(
+        &["type", "elementId", "targetKind", "style"],
+        json!({"type":enum_schema(&["set_text_style"]), "elementId":id_schema(), "targetKind":bindable_element_kind_schema(), "style":text_style_schema()}),
     );
     let connector = object_schema(
         &["type", "elementId", "start", "end"],
@@ -623,7 +697,11 @@ fn semantic_operations_schema() -> Value {
     );
     let label = object_schema(
         &["type", "elementId", "label"],
-        json!({"type":enum_schema(&["set_connector_label"]), "elementId":id_schema(), "label":string_schema(0, 1_000)}),
+        json!({"type":enum_schema(&["set_connector_label"]), "elementId":id_schema(), "label":string_schema(0, 1_000), "labelStyle":text_style_schema()}),
+    );
+    let arrowheads = object_schema(
+        &["type", "elementId", "startArrowhead", "endArrowhead"],
+        json!({"type":enum_schema(&["set_arrowheads"]), "elementId":id_schema(), "startArrowhead":arrowhead_schema(), "endArrowhead":arrowhead_schema()}),
     );
     let line = object_schema(
         &[
@@ -638,24 +716,16 @@ fn semantic_operations_schema() -> Value {
         json!({"type":enum_schema(&["create_line"]), "elementId":id_schema(), "startX":number_schema(-1_000_000.0,1_000_000.0), "startY":number_schema(-1_000_000.0,1_000_000.0), "endX":number_schema(-1_000_000.0,1_000_000.0), "endY":number_schema(-1_000_000.0,1_000_000.0), "style":line_style_schema()}),
     );
     let arrow = object_schema(
-        &[
-            "type",
-            "elementId",
-            "start",
-            "end",
-            "style",
-            "label",
-            "labelStyle",
-        ],
+        &["type", "elementId", "start", "end", "style", "label"],
         json!({"type":enum_schema(&["create_arrow"]), "elementId":id_schema(), "start":element_anchor_schema(), "end":element_anchor_schema(), "style":arrow_style_schema(), "label":string_schema(0,1_000), "labelStyle":text_style_schema()}),
     );
     let shape_text = object_schema(
-        &["type", "elementId", "text", "textStyle"],
+        &["type", "elementId", "text"],
         json!({"type":enum_schema(&["set_shape_text"]), "elementId":id_schema(), "text":string_schema(0,10_000), "textStyle":text_style_schema()}),
     );
     let duplicate = object_schema(
         &["type", "targets", "deltaX", "deltaY"],
-        json!({"type":enum_schema(&["duplicate_elements"]), "targets":array_schema(element_target_schema(),1,50), "deltaX":number_schema(-1_000_000.0,1_000_000.0), "deltaY":number_schema(-1_000_000.0,1_000_000.0)}),
+        json!({"type":enum_schema(&["duplicate_elements"]), "targets":array_schema(element_target_schema(),1,DEFAULT_LIMITS.max_created_elements as u64), "deltaX":number_schema(-1_000_000.0,1_000_000.0), "deltaY":number_schema(-1_000_000.0,1_000_000.0)}),
     );
     let align = object_schema(
         &["type", "targets", "alignment"],
@@ -670,7 +740,7 @@ fn semantic_operations_schema() -> Value {
         json!({"type":enum_schema(&["reorder_elements"]), "targets":array_schema(element_target_schema(),1,50), "placement":enum_schema(&["bring_to_front", "bring_forward", "send_backward", "send_to_back"])}),
     );
     array_schema(
-        json!({"oneOf":[text, replace_text, shape, move_elements, resize, style, connector, label, line, arrow, shape_text, duplicate, align, distribute, reorder]}),
+        json!({"oneOf":[text, replace_text, shape, move_elements, resize, style, text_style, connector, label, arrowheads, line, arrow, shape_text, duplicate, align, distribute, reorder]}),
         1,
         64,
     )
@@ -691,18 +761,20 @@ fn arrowhead_schema() -> Value {
     enum_schema(&["none", "triangle", "arrow", "diamond"])
 }
 fn text_style_schema() -> Value {
-    object_schema(
-        &[],
+    non_empty_object_schema(
         json!({"fontSize":integer_schema(8,96), "fontWeight":enum_schema(&["normal", "bold"]), "color":string_schema(1,32), "alignment":enum_schema(&["left", "center", "right"])}),
     )
 }
 fn bindable_element_kind_schema() -> Value {
     enum_schema(&["text", "shape"])
 }
+fn mutable_element_kind_schema() -> Value {
+    enum_schema(&["text", "shape", "line", "connector"])
+}
 fn element_target_schema() -> Value {
     object_schema(
         &["elementId", "targetKind"],
-        json!({"elementId":id_schema(), "targetKind":bindable_element_kind_schema()}),
+        json!({"elementId":id_schema(), "targetKind":mutable_element_kind_schema()}),
     )
 }
 fn element_anchor_schema() -> Value {
@@ -743,10 +815,16 @@ pub enum ContractValidationError {
     TooManyOperations,
     #[error("canvas change set must bind one non-empty page transaction")]
     InvalidCanvasChangeSet,
+    #[error("workspace change set must bind one non-empty workspace transaction")]
+    InvalidWorkspaceChangeSet,
     #[error("permission grant requests a capability outside its profile")]
     PermissionEscalation,
     #[error("canvas change set exceeds V1 creation or touched-element budgets")]
     CanvasBudgetExceeded,
+    #[error("agent context exceeds V1 bounds")]
+    ContextBoundsExceeded,
+    #[error("run and tool-call identifiers must both be non-empty")]
+    InvalidIdempotencyKey,
 }
 
 /// Parses untrusted JSON and rejects unknown DTO fields before it reaches a host.
@@ -861,6 +939,7 @@ pub fn validate_json_schema(
     match schema_type {
         "object" => {
             let object = value.as_object().expect("checked object");
+            bounds(object.len() as f64, schema, path)?;
             let empty_properties = serde_json::Map::new();
             let properties = schema
                 .get("properties")
@@ -937,12 +1016,14 @@ fn bounds(actual: f64, schema: &Value, path: &str) -> Result<(), ContractValidat
         .get("minimum")
         .and_then(Value::as_f64)
         .or_else(|| schema.get("minLength").and_then(Value::as_f64))
-        .or_else(|| schema.get("minItems").and_then(Value::as_f64));
+        .or_else(|| schema.get("minItems").and_then(Value::as_f64))
+        .or_else(|| schema.get("minProperties").and_then(Value::as_f64));
     let maximum = schema
         .get("maximum")
         .and_then(Value::as_f64)
         .or_else(|| schema.get("maxLength").and_then(Value::as_f64))
-        .or_else(|| schema.get("maxItems").and_then(Value::as_f64));
+        .or_else(|| schema.get("maxItems").and_then(Value::as_f64))
+        .or_else(|| schema.get("maxProperties").and_then(Value::as_f64));
     if minimum.is_some_and(|minimum| actual < minimum)
         || maximum.is_some_and(|maximum| actual > maximum)
     {
@@ -993,6 +1074,7 @@ pub struct AgentDescriptor {
 pub struct StartRunRequest {
     pub agent_id: String,
     pub prompt: String,
+    pub context: AgentContextEnvelope,
     pub permission_grant: PermissionGrant,
     pub provider_consent: ProviderConsent,
 }
@@ -1001,6 +1083,7 @@ pub struct StartRunRequest {
 pub struct ContinueRunRequest {
     pub run_id: String,
     pub response: Value,
+    pub context: AgentContextEnvelope,
     pub permission_grant: PermissionGrant,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1043,25 +1126,24 @@ pub enum AdapterContractError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentHostState {
-    Queued,
+    Idle,
     Running,
-    AwaitingInput,
-    AwaitingPermission,
-    PreviewingChanges,
-    ApplyingChanges,
+    AwaitingApproval,
+    Executing,
     Completed,
-    Cancelled,
     Failed,
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionProfile {
     ReadOnly,
-    WorkspaceEditor,
-    CanvasEditor,
-    ArchiveManager,
+    AskBeforeChanges,
+    FullNoteAccess,
+    Custom,
 }
+pub const DEFAULT_PERMISSION_PROFILE: PermissionProfile = PermissionProfile::AskBeforeChanges;
 impl PermissionProfile {
     pub fn capabilities(self) -> BTreeSet<CapabilityId> {
         let reads: BTreeSet<_> = canonical_manifest()
@@ -1072,37 +1154,61 @@ impl PermissionProfile {
             .collect();
         match self {
             Self::ReadOnly => reads,
-            Self::WorkspaceEditor => reads
-                .into_iter()
-                .chain([
-                    CapabilityId::WorkspaceCreateFolder,
-                    CapabilityId::WorkspaceRenameFolder,
-                    CapabilityId::WorkspaceCreatePage,
-                    CapabilityId::WorkspaceRenamePage,
-                    CapabilityId::WorkspaceMovePage,
-                    CapabilityId::WorkspaceBookmarkPage,
-                ])
-                .collect(),
-            Self::CanvasEditor => reads
-                .into_iter()
-                .chain([CapabilityId::CanvasApplyOperations])
-                .collect(),
-            Self::ArchiveManager => reads
-                .into_iter()
-                .chain([
-                    CapabilityId::WorkspaceArchiveItems,
-                    CapabilityId::WorkspaceRestoreItems,
-                ])
-                .collect(),
+            Self::AskBeforeChanges | Self::FullNoteAccess | Self::Custom => {
+                CapabilityId::ALL.into_iter().collect()
+            }
+        }
+    }
+
+    pub fn mutation_approval_policy(self) -> MutationApprovalPolicy {
+        match self {
+            Self::ReadOnly => MutationApprovalPolicy::NotApplicable,
+            Self::AskBeforeChanges => MutationApprovalPolicy::EveryChange,
+            Self::FullNoteAccess => MutationApprovalPolicy::Automatic,
+            Self::Custom => MutationApprovalPolicy::GrantControlled,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MutationApprovalPolicy {
+    NotApplicable,
+    EveryChange,
+    Automatic,
+    GrantControlled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GlobalAgentPermissionSettings {
+    pub default_profile: PermissionProfile,
+    pub custom_capability_ids: BTreeSet<CapabilityId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceAgentPause {
+    pub workspace_id: String,
+    pub actions_paused: bool,
+}
+
+impl WorkspaceAgentPause {
+    pub fn effective_profile(&self, global: &GlobalAgentPermissionSettings) -> PermissionProfile {
+        if self.actions_paused {
+            PermissionProfile::ReadOnly
+        } else {
+            global.default_profile
         }
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GrantDuration {
+    Once,
     ThisRun,
-    UntilAppExit,
-    Persistent,
+    ThisSession,
+    Global,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1145,29 +1251,206 @@ pub struct ProviderEndpointIdentity {
     pub provider_id: String,
     pub display_name: String,
     pub transport: ProviderTransport,
-    pub endpoint_origin: String,
+    pub normalized_endpoint_identity: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentSharingScope {
+    Selection,
+    ActivePageScene,
+    WorkspaceSearch,
+    TrashMetadata,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderConsent {
     pub endpoint: ProviderEndpointIdentity,
+    pub scopes: BTreeSet<ContentSharingScope>,
     pub accepted_at_unix_ms: u64,
     pub data_may_leave_device: bool,
+}
+
+impl ProviderConsent {
+    pub fn permits(&self, endpoint: &ProviderEndpointIdentity, scope: ContentSharingScope) -> bool {
+        &self.endpoint == endpoint && self.scopes.contains(&scope)
+    }
+}
+
+/// The bounded, provider-shareable context for one model turn. It deliberately
+/// contains semantic descriptors rather than raw scene payloads, image bytes,
+/// ink points, credentials, or reusable approvals.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentContextEnvelope {
+    pub schema_version: String,
+    pub workspace_id: String,
+    pub workspace_revision: u64,
+    pub active_page: Option<ActivePageContext>,
+    pub selection: Vec<SelectedElementDescriptor>,
+    pub viewport: Option<ViewportContext>,
+}
+
+impl AgentContextEnvelope {
+    pub fn validate_bounds(&self) -> Result<(), ContractValidationError> {
+        if self.schema_version != CAPABILITY_SCHEMA_VERSION {
+            return Err(ContractValidationError::UnsupportedSchemaVersion(
+                self.schema_version.clone(),
+            ));
+        }
+        if self.workspace_id.is_empty()
+            || self.workspace_revision > MAX_JSON_SAFE_REVISION as u64
+            || self.selection.len() > DEFAULT_LIMITS.max_selected_descriptors as usize
+            || self.active_page.as_ref().is_some_and(|page| {
+                page.page_id.is_empty() || page.page_revision > MAX_JSON_SAFE_REVISION as u64
+            })
+            || self.selection.iter().any(|descriptor| {
+                descriptor.element_id.is_empty()
+                    || descriptor.fingerprint.is_empty()
+                    || descriptor.summary.chars().count() > 2_000
+            })
+            || self.viewport.as_ref().is_some_and(|viewport| {
+                !viewport.x.is_finite()
+                    || !viewport.y.is_finite()
+                    || !viewport.width.is_finite()
+                    || !viewport.height.is_finite()
+                    || viewport.width <= 0.0
+                    || viewport.height <= 0.0
+            })
+        {
+            return Err(ContractValidationError::ContextBoundsExceeded);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ActivePageContext {
+    pub page_id: String,
+    pub title: String,
+    pub page_revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SelectedElementDescriptor {
+    pub element_id: String,
+    pub kind: SemanticElementKind,
+    pub summary: String,
+    pub fingerprint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ViewportContext {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticElementKind {
+    Text,
+    Shape,
+    Line,
+    Connector,
+    Image,
+    Ink,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompletenessReason {
+    Complete,
+    ResultLimit,
+    ScopeLimit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompletenessMetadata {
+    pub returned_count: u16,
+    pub is_complete: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<CompletenessReason>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    tag = "scope",
+    deny_unknown_fields
+)]
+pub enum SceneReadRequest {
+    ActivePage {
+        page_id: String,
+    },
+    Viewport {
+        page_id: String,
+        viewport: ViewportContext,
+    },
+    Selection {
+        page_id: String,
+        element_ids: Vec<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TrashMetadataDescriptor {
+    pub kind: ArchiveItemKind,
+    pub id: String,
+    pub name: String,
+    pub trashed_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolCallIdempotencyKey {
+    pub run_id: String,
+    pub tool_call_id: String,
+}
+
+impl ToolCallIdempotencyKey {
+    pub fn validate(&self) -> Result<(), ContractValidationError> {
+        if self.run_id.is_empty()
+            || self.run_id.len() > 128
+            || self.tool_call_id.is_empty()
+            || self.tool_call_id.len() > 128
+        {
+            return Err(ContractValidationError::InvalidIdempotencyKey);
+        }
+        Ok(())
+    }
 }
 
 /// A change set is either a workspace transaction or one page-bound canvas
 /// transaction. The tagged union prevents mixed workspace/canvas commits.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", tag = "kind", deny_unknown_fields)]
+#[serde(
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    tag = "kind",
+    deny_unknown_fields
+)]
 pub enum WorkspaceChangeSet {
     Workspace {
         change_set_id: String,
+        run_id: String,
+        tool_call_id: String,
         expected_workspace_revision: u64,
         target_fingerprints: Vec<TargetFingerprint>,
         operations: Vec<WorkspaceOperation>,
     },
     Canvas {
         change_set_id: String,
+        run_id: String,
+        tool_call_id: String,
         page_id: String,
         expected_page_revision: u64,
         target_fingerprints: Vec<TargetFingerprint>,
@@ -1177,28 +1460,69 @@ pub enum WorkspaceChangeSet {
 impl WorkspaceChangeSet {
     pub fn validate_bounds(&self) -> Result<(), ContractValidationError> {
         match self {
-            Self::Workspace { operations, .. } => {
-                if operations.is_empty()
-                    || operations.len() > DEFAULT_LIMITS.max_operations_per_change_set as usize
-                {
-                    return Err(ContractValidationError::TooManyOperations);
-                }
-            }
-            Self::Canvas {
-                page_id,
+            Self::Workspace {
+                run_id,
+                tool_call_id,
+                expected_workspace_revision,
                 target_fingerprints,
                 operations,
                 ..
             } => {
+                ToolCallIdempotencyKey {
+                    run_id: run_id.clone(),
+                    tool_call_id: tool_call_id.clone(),
+                }
+                .validate()?;
+                if operations.is_empty()
+                    || operations.len() > DEFAULT_LIMITS.max_workspace_items as usize
+                    || operations
+                        .iter()
+                        .map(WorkspaceOperation::affected_item_count)
+                        .sum::<usize>()
+                        > DEFAULT_LIMITS.max_workspace_items as usize
+                    || *expected_workspace_revision > MAX_JSON_SAFE_REVISION as u64
+                    || target_fingerprints.len() > DEFAULT_LIMITS.max_workspace_items as usize
+                    || !fingerprints_are_valid(target_fingerprints)
+                    || target_fingerprints.iter().any(|fingerprint| {
+                        fingerprint.resource_kind == ChangedResourceKind::CanvasElement
+                    })
+                {
+                    return Err(ContractValidationError::InvalidWorkspaceChangeSet);
+                }
+            }
+            Self::Canvas {
+                run_id,
+                tool_call_id,
+                page_id,
+                expected_page_revision,
+                target_fingerprints,
+                operations,
+                ..
+            } => {
+                ToolCallIdempotencyKey {
+                    run_id: run_id.clone(),
+                    tool_call_id: tool_call_id.clone(),
+                }
+                .validate()?;
                 if page_id.is_empty()
                     || operations.is_empty()
                     || operations.len() > DEFAULT_LIMITS.max_operations_per_change_set as usize
+                    || *expected_page_revision > MAX_JSON_SAFE_REVISION as u64
+                    || target_fingerprints.len() > DEFAULT_LIMITS.max_touched_elements as usize
+                    || !fingerprints_are_valid(target_fingerprints)
                 {
                     return Err(ContractValidationError::InvalidCanvasChangeSet);
                 }
-                if target_fingerprints.iter().any(|fingerprint| {
+                if !target_fingerprints.iter().any(|fingerprint| {
                     fingerprint.resource_kind == ChangedResourceKind::Page
-                        && fingerprint.resource_id != *page_id
+                        && fingerprint.resource_id == *page_id
+                        && fingerprint.expected_revision == *expected_page_revision
+                }) || target_fingerprints.iter().any(|fingerprint| {
+                    matches!(
+                        fingerprint.resource_kind,
+                        ChangedResourceKind::Folder | ChangedResourceKind::ArchiveItem
+                    ) || (fingerprint.resource_kind == ChangedResourceKind::Page
+                        && fingerprint.resource_id != *page_id)
                 }) {
                     return Err(ContractValidationError::InvalidCanvasChangeSet);
                 }
@@ -1228,7 +1552,18 @@ pub struct TargetFingerprint {
     pub expected_revision: u64,
     pub content_hash: String,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+fn fingerprints_are_valid(fingerprints: &[TargetFingerprint]) -> bool {
+    let mut identities = BTreeSet::new();
+    fingerprints.iter().all(|fingerprint| {
+        !fingerprint.resource_id.is_empty()
+            && !fingerprint.content_hash.is_empty()
+            && fingerprint.content_hash.len() <= 256
+            && fingerprint.expected_revision <= MAX_JSON_SAFE_REVISION as u64
+            && identities.insert((fingerprint.resource_kind, fingerprint.resource_id.as_str()))
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChangedResourceKind {
     Folder,
@@ -1237,7 +1572,12 @@ pub enum ChangedResourceKind {
     ArchiveItem,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", tag = "type", deny_unknown_fields)]
+#[serde(
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    tag = "type",
+    deny_unknown_fields
+)]
 pub enum WorkspaceOperation {
     CreateFolder {
         folder_id: String,
@@ -1271,8 +1611,22 @@ pub enum WorkspaceOperation {
         items: Vec<ArchiveItemTarget>,
     },
 }
+
+impl WorkspaceOperation {
+    fn affected_item_count(&self) -> usize {
+        match self {
+            Self::ArchiveItems { items } | Self::RestoreItems { items } => items.len(),
+            _ => 1,
+        }
+    }
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", tag = "type", deny_unknown_fields)]
+#[serde(
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    tag = "type",
+    deny_unknown_fields
+)]
 pub enum SemanticCanvasOperation {
     CreateText {
         element_id: String,
@@ -1299,14 +1653,19 @@ pub enum SemanticCanvasOperation {
     },
     ResizeElement {
         element_id: String,
-        target_kind: CanvasBindableElementKind,
+        target_kind: CanvasMutableElementKind,
         width: f64,
         height: f64,
     },
     SetStyle {
         element_id: String,
-        target_kind: CanvasBindableElementKind,
+        target_kind: CanvasMutableElementKind,
         style: CanvasStyle,
+    },
+    SetTextStyle {
+        element_id: String,
+        target_kind: CanvasBindableElementKind,
+        style: TextStyle,
     },
     CreateConnector {
         element_id: String,
@@ -1316,6 +1675,13 @@ pub enum SemanticCanvasOperation {
     SetConnectorLabel {
         element_id: String,
         label: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        label_style: Option<TextStyle>,
+    },
+    SetArrowheads {
+        element_id: String,
+        start_arrowhead: Arrowhead,
+        end_arrowhead: Arrowhead,
     },
     CreateLine {
         element_id: String,
@@ -1331,12 +1697,14 @@ pub enum SemanticCanvasOperation {
         end: ElementAnchor,
         style: ArrowStyle,
         label: String,
-        label_style: TextStyle,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        label_style: Option<TextStyle>,
     },
     SetShapeText {
         element_id: String,
         text: String,
-        text_style: TextStyle,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        text_style: Option<TextStyle>,
     },
     DuplicateElements {
         targets: Vec<ElementTarget>,
@@ -1386,7 +1754,9 @@ impl SemanticCanvasOperation {
             | Self::CreateShape { element_id, .. }
             | Self::ResizeElement { element_id, .. }
             | Self::SetStyle { element_id, .. }
+            | Self::SetTextStyle { element_id, .. }
             | Self::SetConnectorLabel { element_id, .. }
+            | Self::SetArrowheads { element_id, .. }
             | Self::CreateLine { element_id, .. }
             | Self::SetShapeText { element_id, .. } => vec![element_id.as_str()],
         }
@@ -1409,6 +1779,7 @@ pub enum ArchiveItemKind {
 pub struct LineStyle {
     pub stroke: String,
     pub stroke_width: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub dash: Option<LineDash>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1422,9 +1793,13 @@ pub struct ArrowStyle {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TextStyle {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub font_size: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub font_weight: Option<FontWeight>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub alignment: Option<TextAlignment>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1491,18 +1866,30 @@ pub enum CanvasBindableElementKind {
     Text,
     Shape,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CanvasMutableElementKind {
+    Text,
+    Shape,
+    Line,
+    Connector,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ElementTarget {
     pub element_id: String,
-    pub target_kind: CanvasBindableElementKind,
+    pub target_kind: CanvasMutableElementKind,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CanvasStyle {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fill: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub stroke: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub stroke_width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub opacity: Option<f64>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1527,6 +1914,8 @@ pub enum ElementAnchorPosition {
 pub struct MutationReceipt {
     pub audit_id: String,
     pub change_set_id: String,
+    pub run_id: String,
+    pub tool_call_id: String,
     pub changed_resources: Vec<ChangedResource>,
     pub workspace_revision: u64,
     pub page_revisions: BTreeMap<String, u64>,
@@ -1599,6 +1988,47 @@ mod tests {
     }
 
     #[test]
+    fn host_states_and_pause_policy_match_v1() {
+        assert_eq!(
+            DEFAULT_PERMISSION_PROFILE,
+            PermissionProfile::AskBeforeChanges
+        );
+        assert_eq!(
+            serde_json::to_value([
+                AgentHostState::Idle,
+                AgentHostState::Running,
+                AgentHostState::AwaitingApproval,
+                AgentHostState::Executing,
+                AgentHostState::Completed,
+                AgentHostState::Failed,
+                AgentHostState::Cancelled,
+            ])
+            .unwrap(),
+            json!([
+                "idle",
+                "running",
+                "awaiting_approval",
+                "executing",
+                "completed",
+                "failed",
+                "cancelled"
+            ])
+        );
+        let global = GlobalAgentPermissionSettings {
+            default_profile: PermissionProfile::FullNoteAccess,
+            custom_capability_ids: BTreeSet::new(),
+        };
+        let pause = WorkspaceAgentPause {
+            workspace_id: "workspace".into(),
+            actions_paused: true,
+        };
+        assert_eq!(
+            pause.effective_profile(&global),
+            PermissionProfile::ReadOnly
+        );
+    }
+
+    #[test]
     fn canonical_manifest_matches_checked_in_golden() {
         let serialized = serde_json::to_string_pretty(&canonical_manifest()).unwrap();
         assert_eq!(
@@ -1644,15 +2074,14 @@ mod tests {
 
     #[test]
     fn receipts_maps_screenshots_and_json_safe_revisions_validate() {
-        let receipt = json!({"receipt": serde_json::to_value(MutationReceipt { audit_id: "audit".into(), change_set_id: "change".into(), changed_resources: vec![], workspace_revision: MAX_JSON_SAFE_REVISION as u64, page_revisions: BTreeMap::from([("page".into(), MAX_JSON_SAFE_REVISION as u64)]), inverse_change_set: BoundedInverseChangeSet { inverse_change_set_id: "undo".into(), changes: vec![InverseChange::RestoreResource { kind: ChangedResourceKind::Page, id: "page".into() }] } }).unwrap()});
+        let receipt = json!({"receipt": serde_json::to_value(MutationReceipt { audit_id: "audit".into(), change_set_id: "change".into(), run_id: "run".into(), tool_call_id: "call".into(), changed_resources: vec![], workspace_revision: MAX_JSON_SAFE_REVISION as u64, page_revisions: BTreeMap::from([("page".into(), MAX_JSON_SAFE_REVISION as u64)]), inverse_change_set: BoundedInverseChangeSet { inverse_change_set_id: "undo".into(), changes: vec![InverseChange::RestoreResource { kind: ChangedResourceKind::Page, id: "page".into() }] } }).unwrap()});
         assert!(validate_tool_result(CapabilityId::WorkspaceCreatePage, &receipt).is_ok());
-        let screenshot = json!({"pageId":"page","revision":0,"mediaType":"image/png","dataBase64":"x".repeat(MAX_SCREENSHOT_TRANSPORT_BYTES as usize),"requiresApproval":true,"persisted":false});
+        let screenshot = json!({"pageId":"page","revision":0,"attachmentId":"attachment","mediaType":"image/png","viewport":{"x":0,"y":0,"width":640,"height":480},"providerId":"provider","normalizedEndpointIdentity":"https://provider.example","requiresApproval":true,"persisted":false});
         assert!(validate_tool_result(CapabilityId::CanvasRequestScreenshot, &screenshot).is_ok());
+        let mut invalid_screenshot = screenshot;
+        invalid_screenshot["revision"] = json!(MAX_JSON_SAFE_REVISION + 1);
         assert!(matches!(
-            validate_tool_result(
-                CapabilityId::CanvasRequestScreenshot,
-                &json!({"pageId":"page","revision":MAX_JSON_SAFE_REVISION + 1,"mediaType":"image/png","dataBase64":"x","requiresApproval":true,"persisted":false})
-            ),
+            validate_tool_result(CapabilityId::CanvasRequestScreenshot, &invalid_screenshot),
             Err(ContractValidationError::SchemaViolation { .. })
         ));
     }
@@ -1672,6 +2101,151 @@ mod tests {
         assert_eq!(
             grant.validate(),
             Err(ContractValidationError::PermissionEscalation)
+        );
+    }
+
+    #[test]
+    fn permission_grants_allow_registered_capabilities_within_profile() {
+        let grant = PermissionGrant {
+            profile: PermissionProfile::AskBeforeChanges,
+            scope: PermissionScope {
+                workspace_id: "workspace".into(),
+                page_ids: Some(BTreeSet::from(["page".into()])),
+                capability_ids: BTreeSet::from([
+                    CapabilityId::CanvasReadScene,
+                    CapabilityId::CanvasApplyOperations,
+                ]),
+            },
+            duration: GrantDuration::ThisRun,
+            granted_at_unix_ms: 0,
+        };
+        assert!(grant.validate().is_ok());
+        assert_eq!(
+            PermissionProfile::AskBeforeChanges.mutation_approval_policy(),
+            MutationApprovalPolicy::EveryChange
+        );
+        assert_eq!(
+            PermissionProfile::FullNoteAccess.mutation_approval_policy(),
+            MutationApprovalPolicy::Automatic
+        );
+    }
+
+    #[test]
+    fn provider_consent_is_bound_to_endpoint_identity_and_scope() {
+        let endpoint = ProviderEndpointIdentity {
+            provider_id: "provider".into(),
+            display_name: "Provider".into(),
+            transport: ProviderTransport::RemoteHttps,
+            normalized_endpoint_identity: "https://provider.example".into(),
+        };
+        let consent = ProviderConsent {
+            endpoint: endpoint.clone(),
+            scopes: BTreeSet::from([ContentSharingScope::ActivePageScene]),
+            accepted_at_unix_ms: 0,
+            data_may_leave_device: true,
+        };
+        assert!(consent.permits(&endpoint, ContentSharingScope::ActivePageScene));
+        assert!(!consent.permits(&endpoint, ContentSharingScope::WorkspaceSearch));
+        assert!(!consent.permits(
+            &ProviderEndpointIdentity {
+                normalized_endpoint_identity: "https://other.example".into(),
+                ..endpoint
+            },
+            ContentSharingScope::ActivePageScene
+        ));
+    }
+
+    #[test]
+    fn restore_invocation_uses_typed_items_and_workspace_revision() {
+        let invocation = ToolInvocation {
+            capability_id: CapabilityId::WorkspaceRestoreItems,
+            schema_version: CAPABILITY_SCHEMA_VERSION.into(),
+            asserted_risk: CapabilityRisk::Destructive,
+            input: json!({
+                "items":[{"kind":"page", "id":"page"}],
+                "expectedWorkspaceRevision":7
+            }),
+        };
+        assert!(validate_tool_invocation(&invocation).is_ok());
+    }
+
+    #[test]
+    fn style_dtos_round_trip_through_semantic_operation_schema() {
+        let operations = vec![
+            SemanticCanvasOperation::CreateLine {
+                element_id: "line".into(),
+                start_x: 0.0,
+                start_y: 0.0,
+                end_x: 10.0,
+                end_y: 10.0,
+                style: LineStyle {
+                    stroke: "#000".into(),
+                    stroke_width: 1.0,
+                    dash: None,
+                },
+            },
+            SemanticCanvasOperation::SetStyle {
+                element_id: "shape".into(),
+                target_kind: CanvasMutableElementKind::Shape,
+                style: CanvasStyle {
+                    fill: Some("#fff".into()),
+                    stroke: None,
+                    stroke_width: None,
+                    opacity: None,
+                },
+            },
+            SemanticCanvasOperation::SetShapeText {
+                element_id: "shape".into(),
+                text: "label".into(),
+                text_style: Some(TextStyle {
+                    font_size: None,
+                    font_weight: None,
+                    color: Some("#000".into()),
+                    alignment: None,
+                }),
+            },
+            SemanticCanvasOperation::SetConnectorLabel {
+                element_id: "connector".into(),
+                label: "label".into(),
+                label_style: None,
+            },
+            SemanticCanvasOperation::SetTextStyle {
+                element_id: "text".into(),
+                target_kind: CanvasBindableElementKind::Text,
+                style: TextStyle {
+                    font_size: Some(16),
+                    font_weight: None,
+                    color: None,
+                    alignment: None,
+                },
+            },
+        ];
+        let value = serde_json::to_value(&operations).unwrap();
+        assert!(validate_json_schema(&semantic_operations_schema(), &value, "$").is_ok());
+        assert_eq!(
+            serde_json::from_value::<Vec<SemanticCanvasOperation>>(value).unwrap(),
+            operations
+        );
+    }
+
+    #[test]
+    fn inverse_workspace_operation_round_trips_through_receipt_schema() {
+        let inverse = BoundedInverseChangeSet {
+            inverse_change_set_id: "inverse".into(),
+            changes: vec![InverseChange::ReapplyWorkspaceOperation {
+                operation: WorkspaceOperation::RestoreItems {
+                    items: vec![ArchiveItemTarget {
+                        kind: ArchiveItemKind::Page,
+                        id: "page".into(),
+                    }],
+                },
+            }],
+        };
+        let value = serde_json::to_value(&inverse).unwrap();
+        assert!(validate_json_schema(&inverse_change_set_schema(), &value, "$").is_ok());
+        assert_eq!(
+            serde_json::from_value::<BoundedInverseChangeSet>(value).unwrap(),
+            inverse
         );
     }
 
@@ -1745,6 +2319,62 @@ mod tests {
     }
 
     #[test]
+    fn read_contracts_are_bounded_complete_and_trash_metadata_only() {
+        let manifest = canonical_manifest();
+        let list = manifest
+            .capabilities
+            .iter()
+            .find(|contract| contract.id == CapabilityId::WorkspaceListStructure)
+            .unwrap();
+        assert!(validate_json_schema(
+            &list.input_schema,
+            &json!({"includeTrashMetadata":true}),
+            "$"
+        )
+        .is_ok());
+        let trash_schema = &list.output_schema["properties"]["trashMetadata"]["items"];
+        assert!(trash_schema["properties"].get("content").is_none());
+        assert!(trash_schema["properties"].get("scene").is_none());
+
+        let scene = manifest
+            .capabilities
+            .iter()
+            .find(|contract| contract.id == CapabilityId::CanvasReadScene)
+            .unwrap();
+        for request in [
+            SceneReadRequest::ActivePage {
+                page_id: "page".into(),
+            },
+            SceneReadRequest::Viewport {
+                page_id: "page".into(),
+                viewport: ViewportContext {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 100.0,
+                    height: 100.0,
+                },
+            },
+            SceneReadRequest::Selection {
+                page_id: "page".into(),
+                element_ids: vec!["element".into()],
+            },
+        ] {
+            let value = serde_json::to_value(request).unwrap();
+            assert!(validate_json_schema(&scene.input_schema, &value, "$").is_ok());
+        }
+        assert!(
+            scene.output_schema["properties"]["elements"]["items"]["properties"]
+                .get("dataBase64")
+                .is_none()
+        );
+        assert!(
+            scene.output_schema["properties"]["elements"]["items"]["properties"]
+                .get("points")
+                .is_none()
+        );
+    }
+
+    #[test]
     fn result_size_and_inverse_bounds_are_enforced() {
         assert!(matches!(
             check_payload_size(&json!("abcdef"), 3),
@@ -1769,6 +2399,8 @@ mod tests {
     fn canvas_change_set_cannot_mix_pages_or_be_empty() {
         let valid = WorkspaceChangeSet::Canvas {
             change_set_id: "change".into(),
+            run_id: "run".into(),
+            tool_call_id: "call".into(),
             page_id: "page-a".into(),
             expected_page_revision: 3,
             target_fingerprints: vec![TargetFingerprint {
@@ -1787,6 +2419,8 @@ mod tests {
         assert!(valid.validate_bounds().is_ok());
         let invalid = WorkspaceChangeSet::Canvas {
             change_set_id: "change".into(),
+            run_id: "run".into(),
+            tool_call_id: "call".into(),
             page_id: "page-a".into(),
             expected_page_revision: 3,
             target_fingerprints: vec![TargetFingerprint {
@@ -1805,6 +2439,120 @@ mod tests {
         assert_eq!(
             invalid.validate_bounds(),
             Err(ContractValidationError::InvalidCanvasChangeSet)
+        );
+    }
+
+    #[test]
+    fn v1_detailed_touched_and_created_boundaries_are_enforced() {
+        let detailed_ids: Vec<_> = (0..DEFAULT_LIMITS.max_detailed_elements)
+            .map(|index| format!("element-{index}"))
+            .collect();
+        let detailed = ToolInvocation {
+            capability_id: CapabilityId::CanvasReadElements,
+            schema_version: CAPABILITY_SCHEMA_VERSION.into(),
+            asserted_risk: CapabilityRisk::Read,
+            input: json!({"pageId":"page", "elementIds":detailed_ids}),
+        };
+        assert!(validate_tool_invocation(&detailed).is_ok());
+        let mut too_many_detailed = detailed;
+        too_many_detailed.input["elementIds"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("element-over"));
+        assert!(validate_tool_invocation(&too_many_detailed).is_err());
+
+        let targets = |count: usize| {
+            (0..count)
+                .map(|index| ElementTarget {
+                    element_id: format!("element-{index}"),
+                    target_kind: CanvasMutableElementKind::Shape,
+                })
+                .collect::<Vec<_>>()
+        };
+        let canvas = |operations| WorkspaceChangeSet::Canvas {
+            change_set_id: "change".into(),
+            run_id: "run".into(),
+            tool_call_id: "call".into(),
+            page_id: "page".into(),
+            expected_page_revision: 0,
+            target_fingerprints: vec![TargetFingerprint {
+                resource_kind: ChangedResourceKind::Page,
+                resource_id: "page".into(),
+                expected_revision: 0,
+                content_hash: "page-fingerprint".into(),
+            }],
+            operations,
+        };
+
+        assert!(canvas(vec![SemanticCanvasOperation::MoveElements {
+            targets: targets(DEFAULT_LIMITS.max_touched_elements as usize),
+            delta_x: 1.0,
+            delta_y: 1.0,
+        }])
+        .validate_bounds()
+        .is_ok());
+        assert_eq!(
+            canvas(vec![SemanticCanvasOperation::MoveElements {
+                targets: targets(DEFAULT_LIMITS.max_touched_elements as usize + 1),
+                delta_x: 1.0,
+                delta_y: 1.0,
+            }])
+            .validate_bounds(),
+            Err(ContractValidationError::CanvasBudgetExceeded)
+        );
+
+        let creates = |count: usize| {
+            (0..count)
+                .map(|index| SemanticCanvasOperation::CreateText {
+                    element_id: format!("created-{index}"),
+                    text: String::new(),
+                    x: index as f64,
+                    y: 0.0,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            canvas(creates(DEFAULT_LIMITS.max_created_elements as usize))
+                .validate_bounds()
+                .is_ok()
+        );
+        assert_eq!(
+            canvas(creates(DEFAULT_LIMITS.max_created_elements as usize + 1)).validate_bounds(),
+            Err(ContractValidationError::CanvasBudgetExceeded)
+        );
+    }
+
+    #[test]
+    fn context_and_idempotency_keys_are_bounded() {
+        let descriptor = |index| SelectedElementDescriptor {
+            element_id: format!("element-{index}"),
+            kind: SemanticElementKind::Shape,
+            summary: "shape".into(),
+            fingerprint: format!("fingerprint-{index}"),
+        };
+        let mut context = AgentContextEnvelope {
+            schema_version: CAPABILITY_SCHEMA_VERSION.into(),
+            workspace_id: "workspace".into(),
+            workspace_revision: 0,
+            active_page: None,
+            selection: (0..DEFAULT_LIMITS.max_selected_descriptors)
+                .map(descriptor)
+                .collect(),
+            viewport: None,
+        };
+        assert!(context.validate_bounds().is_ok());
+        context.selection.push(descriptor(255));
+        assert_eq!(
+            context.validate_bounds(),
+            Err(ContractValidationError::ContextBoundsExceeded)
+        );
+        assert_eq!(
+            ToolCallIdempotencyKey {
+                run_id: "run".into(),
+                tool_call_id: String::new(),
+            }
+            .validate(),
+            Err(ContractValidationError::InvalidIdempotencyKey)
         );
     }
 }

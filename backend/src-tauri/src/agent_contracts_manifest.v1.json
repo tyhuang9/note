@@ -19,8 +19,7 @@
     "maxTouchedElements": 50,
     "maxCreatedElements": 25,
     "maxWorkspaceItems": 10,
-    "maxToolResultBytes": 65536,
-    "maxScreenshotTransportBytes": 49152
+    "maxToolResultBytes": 65536
   },
   "capabilities": [
     {
@@ -28,13 +27,48 @@
       "schemaVersion": "1.0.0",
       "inputSchema": {
         "additionalProperties": false,
-        "properties": {},
+        "properties": {
+          "includeTrashMetadata": {
+            "type": "boolean"
+          }
+        },
         "required": [],
         "type": "object"
       },
       "outputSchema": {
         "additionalProperties": false,
         "properties": {
+          "completeness": {
+            "additionalProperties": false,
+            "properties": {
+              "isComplete": {
+                "type": "boolean"
+              },
+              "reason": {
+                "enum": [
+                  "complete",
+                  "result_limit",
+                  "scope_limit"
+                ],
+                "type": "string"
+              },
+              "returnedCount": {
+                "maximum": 200,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "totalCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "returnedCount",
+              "isComplete"
+            ],
+            "type": "object"
+          },
           "folders": {
             "items": {
               "additionalProperties": false,
@@ -60,7 +94,7 @@
               ],
               "type": "object"
             },
-            "maxItems": 10000,
+            "maxItems": 200,
             "minItems": 0,
             "type": "array"
           },
@@ -101,7 +135,46 @@
               ],
               "type": "object"
             },
-            "maxItems": 100000,
+            "maxItems": 200,
+            "minItems": 0,
+            "type": "array"
+          },
+          "trashMetadata": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "folder",
+                    "page"
+                  ],
+                  "type": "string"
+                },
+                "name": {
+                  "maxLength": 240,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "trashedAt": {
+                  "maxLength": 64,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "name",
+                "trashedAt"
+              ],
+              "type": "object"
+            },
+            "maxItems": 200,
             "minItems": 0,
             "type": "array"
           },
@@ -114,7 +187,8 @@
         "required": [
           "workspaceRevision",
           "folders",
-          "pages"
+          "pages",
+          "completeness"
         ],
         "type": "object"
       },
@@ -131,7 +205,7 @@
         "additionalProperties": false,
         "properties": {
           "limit": {
-            "maximum": 100,
+            "maximum": 200,
             "minimum": 1,
             "type": "integer"
           },
@@ -161,10 +235,50 @@
       "outputSchema": {
         "additionalProperties": false,
         "properties": {
+          "completeness": {
+            "additionalProperties": false,
+            "properties": {
+              "isComplete": {
+                "type": "boolean"
+              },
+              "reason": {
+                "enum": [
+                  "complete",
+                  "result_limit",
+                  "scope_limit"
+                ],
+                "type": "string"
+              },
+              "returnedCount": {
+                "maximum": 200,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "totalCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "returnedCount",
+              "isComplete"
+            ],
+            "type": "object"
+          },
           "matches": {
             "items": {
               "additionalProperties": false,
               "properties": {
+                "kind": {
+                  "enum": [
+                    "title",
+                    "plain_text",
+                    "shape_text",
+                    "connector_label"
+                  ],
+                  "type": "string"
+                },
                 "pageId": {
                   "maxLength": 128,
                   "minLength": 1,
@@ -183,6 +297,7 @@
               },
               "required": [
                 "pageId",
+                "kind",
                 "title",
                 "snippet"
               ],
@@ -194,7 +309,8 @@
           }
         },
         "required": [
-          "matches"
+          "matches",
+          "completeness"
         ],
         "type": "object"
       },
@@ -277,24 +393,151 @@
       "schemaVersion": "1.0.0",
       "inputSchema": {
         "additionalProperties": false,
-        "properties": {
-          "includeText": {
-            "type": "boolean"
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "pageId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "scope": {
+                "enum": [
+                  "active_page"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "pageId",
+              "scope"
+            ],
+            "type": "object"
           },
-          "pageId": {
-            "maxLength": 128,
-            "minLength": 1,
-            "type": "string"
+          {
+            "additionalProperties": false,
+            "properties": {
+              "pageId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "scope": {
+                "enum": [
+                  "viewport"
+                ],
+                "type": "string"
+              },
+              "viewport": {
+                "additionalProperties": false,
+                "properties": {
+                  "height": {
+                    "maximum": 100000.0,
+                    "minimum": 1.0,
+                    "type": "number"
+                  },
+                  "width": {
+                    "maximum": 100000.0,
+                    "minimum": 1.0,
+                    "type": "number"
+                  },
+                  "x": {
+                    "maximum": 1000000.0,
+                    "minimum": -1000000.0,
+                    "type": "number"
+                  },
+                  "y": {
+                    "maximum": 1000000.0,
+                    "minimum": -1000000.0,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "x",
+                  "y",
+                  "width",
+                  "height"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "pageId",
+              "scope",
+              "viewport"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "elementIds": {
+                "items": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 25,
+                "minItems": 1,
+                "type": "array"
+              },
+              "pageId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "scope": {
+                "enum": [
+                  "selection"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "pageId",
+              "scope",
+              "elementIds"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "pageId"
         ],
         "type": "object"
       },
       "outputSchema": {
         "additionalProperties": false,
         "properties": {
+          "completeness": {
+            "additionalProperties": false,
+            "properties": {
+              "isComplete": {
+                "type": "boolean"
+              },
+              "reason": {
+                "enum": [
+                  "complete",
+                  "result_limit",
+                  "scope_limit"
+                ],
+                "type": "string"
+              },
+              "returnedCount": {
+                "maximum": 200,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "totalCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "returnedCount",
+              "isComplete"
+            ],
+            "type": "object"
+          },
           "elements": {
             "items": {
               "additionalProperties": false,
@@ -313,8 +556,16 @@
                   "enum": [
                     "text",
                     "shape",
-                    "connector"
+                    "line",
+                    "connector",
+                    "image",
+                    "ink"
                   ],
+                  "type": "string"
+                },
+                "summary": {
+                  "maxLength": 2000,
+                  "minLength": 0,
                   "type": "string"
                 },
                 "width": {
@@ -339,7 +590,8 @@
                 "x",
                 "y",
                 "width",
-                "height"
+                "height",
+                "summary"
               ],
               "type": "object"
             },
@@ -361,7 +613,8 @@
         "required": [
           "pageId",
           "revision",
-          "elements"
+          "elements",
+          "completeness"
         ],
         "type": "object"
       },
@@ -402,6 +655,37 @@
       "outputSchema": {
         "additionalProperties": false,
         "properties": {
+          "completeness": {
+            "additionalProperties": false,
+            "properties": {
+              "isComplete": {
+                "type": "boolean"
+              },
+              "reason": {
+                "enum": [
+                  "complete",
+                  "result_limit",
+                  "scope_limit"
+                ],
+                "type": "string"
+              },
+              "returnedCount": {
+                "maximum": 200,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "totalCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "returnedCount",
+              "isComplete"
+            ],
+            "type": "object"
+          },
           "elements": {
             "items": {
               "additionalProperties": false,
@@ -420,8 +704,16 @@
                   "enum": [
                     "text",
                     "shape",
-                    "connector"
+                    "line",
+                    "connector",
+                    "image",
+                    "ink"
                   ],
+                  "type": "string"
+                },
+                "summary": {
+                  "maxLength": 2000,
+                  "minLength": 0,
                   "type": "string"
                 },
                 "width": {
@@ -446,7 +738,8 @@
                 "x",
                 "y",
                 "width",
-                "height"
+                "height",
+                "summary"
               ],
               "type": "object"
             },
@@ -468,7 +761,8 @@
         "required": [
           "pageId",
           "revision",
-          "elements"
+          "elements",
+          "completeness"
         ],
         "type": "object"
       },
@@ -528,15 +822,16 @@
           }
         },
         "required": [
-          "pageId"
+          "pageId",
+          "viewport"
         ],
         "type": "object"
       },
       "outputSchema": {
         "additionalProperties": false,
         "properties": {
-          "dataBase64": {
-            "maxLength": 49152,
+          "attachmentId": {
+            "maxLength": 128,
             "minLength": 1,
             "type": "string"
           },
@@ -544,6 +839,11 @@
             "enum": [
               "image/png"
             ],
+            "type": "string"
+          },
+          "normalizedEndpointIdentity": {
+            "maxLength": 2048,
+            "minLength": 1,
             "type": "string"
           },
           "pageId": {
@@ -557,20 +857,63 @@
             ],
             "type": "boolean"
           },
+          "providerId": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
           "requiresApproval": {
+            "enum": [
+              true
+            ],
             "type": "boolean"
           },
           "revision": {
             "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
+          },
+          "viewport": {
+            "additionalProperties": false,
+            "properties": {
+              "height": {
+                "maximum": 100000.0,
+                "minimum": 1.0,
+                "type": "number"
+              },
+              "width": {
+                "maximum": 100000.0,
+                "minimum": 1.0,
+                "type": "number"
+              },
+              "x": {
+                "maximum": 1000000.0,
+                "minimum": -1000000.0,
+                "type": "number"
+              },
+              "y": {
+                "maximum": 1000000.0,
+                "minimum": -1000000.0,
+                "type": "number"
+              }
+            },
+            "required": [
+              "x",
+              "y",
+              "width",
+              "height"
+            ],
+            "type": "object"
           }
         },
         "required": [
           "pageId",
           "revision",
+          "attachmentId",
           "mediaType",
-          "dataBase64",
+          "viewport",
+          "providerId",
+          "normalizedEndpointIdentity",
           "requiresApproval",
           "persisted"
         ],
@@ -580,7 +923,7 @@
       "risk": "read",
       "timeoutMs": 15000,
       "resultByteLimit": 65536,
-      "previewType": "none"
+      "previewType": "screenshot_approval"
     },
     {
       "id": "workspace.create_folder",
@@ -588,6 +931,11 @@
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
+          "expectedWorkspaceRevision": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
           "name": {
             "maxLength": 120,
             "minLength": 1,
@@ -595,7 +943,8 @@
           }
         },
         "required": [
-          "name"
+          "name",
+          "expectedWorkspaceRevision"
         ],
         "type": "object"
       },
@@ -646,7 +995,7 @@
                   ],
                   "type": "object"
                 },
-                "maxItems": 10,
+                "maxItems": 50,
                 "minItems": 0,
                 "type": "array"
               },
@@ -695,7 +1044,7 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "folder_id": {
+                                    "folderId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -715,7 +1064,7 @@
                                   },
                                   "required": [
                                     "type",
-                                    "folder_id",
+                                    "folderId",
                                     "name"
                                   ],
                                   "type": "object"
@@ -723,12 +1072,12 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "folder_id": {
+                                    "folderId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
                                     },
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -747,8 +1096,8 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
-                                    "folder_id",
+                                    "pageId",
+                                    "folderId",
                                     "title"
                                   ],
                                   "type": "object"
@@ -756,7 +1105,7 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -775,7 +1124,7 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
+                                    "pageId",
                                     "title"
                                   ],
                                   "type": "object"
@@ -783,12 +1132,12 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "folder_id": {
+                                    "folderId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
                                     },
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -802,8 +1151,8 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
-                                    "folder_id"
+                                    "pageId",
+                                    "folderId"
                                   ],
                                   "type": "object"
                                 },
@@ -813,7 +1162,7 @@
                                     "bookmarked": {
                                       "type": "boolean"
                                     },
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -827,7 +1176,7 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
+                                    "pageId",
                                     "bookmarked"
                                   ],
                                   "type": "object"
@@ -918,6 +1267,16 @@
                 "required": [],
                 "type": "object"
               },
+              "runId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "toolCallId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
               "workspaceRevision": {
                 "maximum": 9007199254740991,
                 "minimum": 0,
@@ -927,6 +1286,8 @@
             "required": [
               "auditId",
               "changeSetId",
+              "runId",
+              "toolCallId",
               "changedResources",
               "workspaceRevision",
               "pageRevisions",
@@ -1022,7 +1383,7 @@
                   ],
                   "type": "object"
                 },
-                "maxItems": 10,
+                "maxItems": 50,
                 "minItems": 0,
                 "type": "array"
               },
@@ -1071,7 +1432,7 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "folder_id": {
+                                    "folderId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -1091,7 +1452,7 @@
                                   },
                                   "required": [
                                     "type",
-                                    "folder_id",
+                                    "folderId",
                                     "name"
                                   ],
                                   "type": "object"
@@ -1099,12 +1460,12 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "folder_id": {
+                                    "folderId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
                                     },
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -1123,8 +1484,8 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
-                                    "folder_id",
+                                    "pageId",
+                                    "folderId",
                                     "title"
                                   ],
                                   "type": "object"
@@ -1132,7 +1493,7 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -1151,7 +1512,7 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
+                                    "pageId",
                                     "title"
                                   ],
                                   "type": "object"
@@ -1159,12 +1520,12 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "folder_id": {
+                                    "folderId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
                                     },
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -1178,8 +1539,8 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
-                                    "folder_id"
+                                    "pageId",
+                                    "folderId"
                                   ],
                                   "type": "object"
                                 },
@@ -1189,7 +1550,7 @@
                                     "bookmarked": {
                                       "type": "boolean"
                                     },
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -1203,7 +1564,7 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
+                                    "pageId",
                                     "bookmarked"
                                   ],
                                   "type": "object"
@@ -1294,6 +1655,16 @@
                 "required": [],
                 "type": "object"
               },
+              "runId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "toolCallId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
               "workspaceRevision": {
                 "maximum": 9007199254740991,
                 "minimum": 0,
@@ -1303,6 +1674,8 @@
             "required": [
               "auditId",
               "changeSetId",
+              "runId",
+              "toolCallId",
               "changedResources",
               "workspaceRevision",
               "pageRevisions",
@@ -1328,6 +1701,11 @@
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
+          "expectedWorkspaceRevision": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
           "folderId": {
             "maxLength": 128,
             "minLength": 1,
@@ -1341,7 +1719,8 @@
         },
         "required": [
           "folderId",
-          "title"
+          "title",
+          "expectedWorkspaceRevision"
         ],
         "type": "object"
       },
@@ -1392,7 +1771,7 @@
                   ],
                   "type": "object"
                 },
-                "maxItems": 10,
+                "maxItems": 50,
                 "minItems": 0,
                 "type": "array"
               },
@@ -1441,7 +1820,7 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "folder_id": {
+                                    "folderId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -1461,7 +1840,7 @@
                                   },
                                   "required": [
                                     "type",
-                                    "folder_id",
+                                    "folderId",
                                     "name"
                                   ],
                                   "type": "object"
@@ -1469,12 +1848,12 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "folder_id": {
+                                    "folderId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
                                     },
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -1493,8 +1872,8 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
-                                    "folder_id",
+                                    "pageId",
+                                    "folderId",
                                     "title"
                                   ],
                                   "type": "object"
@@ -1502,7 +1881,7 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -1521,7 +1900,7 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
+                                    "pageId",
                                     "title"
                                   ],
                                   "type": "object"
@@ -1529,12 +1908,12 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "folder_id": {
+                                    "folderId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
                                     },
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -1548,8 +1927,8 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
-                                    "folder_id"
+                                    "pageId",
+                                    "folderId"
                                   ],
                                   "type": "object"
                                 },
@@ -1559,7 +1938,7 @@
                                     "bookmarked": {
                                       "type": "boolean"
                                     },
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -1573,7 +1952,7 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
+                                    "pageId",
                                     "bookmarked"
                                   ],
                                   "type": "object"
@@ -1664,6 +2043,16 @@
                 "required": [],
                 "type": "object"
               },
+              "runId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "toolCallId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
               "workspaceRevision": {
                 "maximum": 9007199254740991,
                 "minimum": 0,
@@ -1673,6 +2062,8 @@
             "required": [
               "auditId",
               "changeSetId",
+              "runId",
+              "toolCallId",
               "changedResources",
               "workspaceRevision",
               "pageRevisions",
@@ -1698,7 +2089,7 @@
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
-          "expectedPageRevision": {
+          "expectedWorkspaceRevision": {
             "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
@@ -1717,7 +2108,7 @@
         "required": [
           "pageId",
           "title",
-          "expectedPageRevision"
+          "expectedWorkspaceRevision"
         ],
         "type": "object"
       },
@@ -1768,7 +2159,7 @@
                   ],
                   "type": "object"
                 },
-                "maxItems": 10,
+                "maxItems": 50,
                 "minItems": 0,
                 "type": "array"
               },
@@ -1817,7 +2208,7 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "folder_id": {
+                                    "folderId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -1837,7 +2228,7 @@
                                   },
                                   "required": [
                                     "type",
-                                    "folder_id",
+                                    "folderId",
                                     "name"
                                   ],
                                   "type": "object"
@@ -1845,12 +2236,12 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "folder_id": {
+                                    "folderId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
                                     },
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -1869,8 +2260,8 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
-                                    "folder_id",
+                                    "pageId",
+                                    "folderId",
                                     "title"
                                   ],
                                   "type": "object"
@@ -1878,7 +2269,7 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -1897,7 +2288,7 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
+                                    "pageId",
                                     "title"
                                   ],
                                   "type": "object"
@@ -1905,12 +2296,12 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "folder_id": {
+                                    "folderId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
                                     },
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -1924,8 +2315,8 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
-                                    "folder_id"
+                                    "pageId",
+                                    "folderId"
                                   ],
                                   "type": "object"
                                 },
@@ -1935,7 +2326,7 @@
                                     "bookmarked": {
                                       "type": "boolean"
                                     },
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -1949,7 +2340,7 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
+                                    "pageId",
                                     "bookmarked"
                                   ],
                                   "type": "object"
@@ -2040,6 +2431,16 @@
                 "required": [],
                 "type": "object"
               },
+              "runId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "toolCallId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
               "workspaceRevision": {
                 "maximum": 9007199254740991,
                 "minimum": 0,
@@ -2049,6 +2450,8 @@
             "required": [
               "auditId",
               "changeSetId",
+              "runId",
+              "toolCallId",
               "changedResources",
               "workspaceRevision",
               "pageRevisions",
@@ -2074,7 +2477,7 @@
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
-          "expectedPageRevision": {
+          "expectedWorkspaceRevision": {
             "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
@@ -2093,7 +2496,7 @@
         "required": [
           "pageId",
           "folderId",
-          "expectedPageRevision"
+          "expectedWorkspaceRevision"
         ],
         "type": "object"
       },
@@ -2144,7 +2547,7 @@
                   ],
                   "type": "object"
                 },
-                "maxItems": 10,
+                "maxItems": 50,
                 "minItems": 0,
                 "type": "array"
               },
@@ -2193,7 +2596,7 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "folder_id": {
+                                    "folderId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -2213,7 +2616,7 @@
                                   },
                                   "required": [
                                     "type",
-                                    "folder_id",
+                                    "folderId",
                                     "name"
                                   ],
                                   "type": "object"
@@ -2221,12 +2624,12 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "folder_id": {
+                                    "folderId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
                                     },
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -2245,8 +2648,8 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
-                                    "folder_id",
+                                    "pageId",
+                                    "folderId",
                                     "title"
                                   ],
                                   "type": "object"
@@ -2254,7 +2657,7 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -2273,7 +2676,7 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
+                                    "pageId",
                                     "title"
                                   ],
                                   "type": "object"
@@ -2281,12 +2684,12 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "folder_id": {
+                                    "folderId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
                                     },
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -2300,8 +2703,8 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
-                                    "folder_id"
+                                    "pageId",
+                                    "folderId"
                                   ],
                                   "type": "object"
                                 },
@@ -2311,7 +2714,7 @@
                                     "bookmarked": {
                                       "type": "boolean"
                                     },
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -2325,7 +2728,7 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
+                                    "pageId",
                                     "bookmarked"
                                   ],
                                   "type": "object"
@@ -2416,6 +2819,16 @@
                 "required": [],
                 "type": "object"
               },
+              "runId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "toolCallId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
               "workspaceRevision": {
                 "maximum": 9007199254740991,
                 "minimum": 0,
@@ -2425,6 +2838,8 @@
             "required": [
               "auditId",
               "changeSetId",
+              "runId",
+              "toolCallId",
               "changedResources",
               "workspaceRevision",
               "pageRevisions",
@@ -2453,7 +2868,7 @@
           "bookmarked": {
             "type": "boolean"
           },
-          "expectedPageRevision": {
+          "expectedWorkspaceRevision": {
             "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
@@ -2467,7 +2882,7 @@
         "required": [
           "pageId",
           "bookmarked",
-          "expectedPageRevision"
+          "expectedWorkspaceRevision"
         ],
         "type": "object"
       },
@@ -2518,7 +2933,7 @@
                   ],
                   "type": "object"
                 },
-                "maxItems": 10,
+                "maxItems": 50,
                 "minItems": 0,
                 "type": "array"
               },
@@ -2567,7 +2982,7 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "folder_id": {
+                                    "folderId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -2587,7 +3002,7 @@
                                   },
                                   "required": [
                                     "type",
-                                    "folder_id",
+                                    "folderId",
                                     "name"
                                   ],
                                   "type": "object"
@@ -2595,12 +3010,12 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "folder_id": {
+                                    "folderId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
                                     },
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -2619,8 +3034,8 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
-                                    "folder_id",
+                                    "pageId",
+                                    "folderId",
                                     "title"
                                   ],
                                   "type": "object"
@@ -2628,7 +3043,7 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -2647,7 +3062,7 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
+                                    "pageId",
                                     "title"
                                   ],
                                   "type": "object"
@@ -2655,12 +3070,12 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "folder_id": {
+                                    "folderId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
                                     },
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -2674,8 +3089,8 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
-                                    "folder_id"
+                                    "pageId",
+                                    "folderId"
                                   ],
                                   "type": "object"
                                 },
@@ -2685,7 +3100,7 @@
                                     "bookmarked": {
                                       "type": "boolean"
                                     },
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -2699,7 +3114,7 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
+                                    "pageId",
                                     "bookmarked"
                                   ],
                                   "type": "object"
@@ -2790,6 +3205,16 @@
                 "required": [],
                 "type": "object"
               },
+              "runId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "toolCallId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
               "workspaceRevision": {
                 "maximum": 9007199254740991,
                 "minimum": 0,
@@ -2799,6 +3224,8 @@
             "required": [
               "auditId",
               "changeSetId",
+              "runId",
+              "toolCallId",
               "changedResources",
               "workspaceRevision",
               "pageRevisions",
@@ -2910,7 +3337,7 @@
                   ],
                   "type": "object"
                 },
-                "maxItems": 10,
+                "maxItems": 50,
                 "minItems": 0,
                 "type": "array"
               },
@@ -2959,7 +3386,7 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "folder_id": {
+                                    "folderId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -2979,7 +3406,7 @@
                                   },
                                   "required": [
                                     "type",
-                                    "folder_id",
+                                    "folderId",
                                     "name"
                                   ],
                                   "type": "object"
@@ -2987,12 +3414,12 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "folder_id": {
+                                    "folderId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
                                     },
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -3011,8 +3438,8 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
-                                    "folder_id",
+                                    "pageId",
+                                    "folderId",
                                     "title"
                                   ],
                                   "type": "object"
@@ -3020,7 +3447,7 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -3039,7 +3466,7 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
+                                    "pageId",
                                     "title"
                                   ],
                                   "type": "object"
@@ -3047,12 +3474,12 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "folder_id": {
+                                    "folderId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
                                     },
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -3066,8 +3493,8 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
-                                    "folder_id"
+                                    "pageId",
+                                    "folderId"
                                   ],
                                   "type": "object"
                                 },
@@ -3077,7 +3504,7 @@
                                     "bookmarked": {
                                       "type": "boolean"
                                     },
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -3091,7 +3518,7 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
+                                    "pageId",
                                     "bookmarked"
                                   ],
                                   "type": "object"
@@ -3182,6 +3609,16 @@
                 "required": [],
                 "type": "object"
               },
+              "runId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "toolCallId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
               "workspaceRevision": {
                 "maximum": 9007199254740991,
                 "minimum": 0,
@@ -3191,6 +3628,8 @@
             "required": [
               "auditId",
               "changeSetId",
+              "runId",
+              "toolCallId",
               "changedResources",
               "workspaceRevision",
               "pageRevisions",
@@ -3302,7 +3741,7 @@
                   ],
                   "type": "object"
                 },
-                "maxItems": 10,
+                "maxItems": 50,
                 "minItems": 0,
                 "type": "array"
               },
@@ -3351,7 +3790,7 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "folder_id": {
+                                    "folderId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -3371,7 +3810,7 @@
                                   },
                                   "required": [
                                     "type",
-                                    "folder_id",
+                                    "folderId",
                                     "name"
                                   ],
                                   "type": "object"
@@ -3379,12 +3818,12 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "folder_id": {
+                                    "folderId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
                                     },
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -3403,8 +3842,8 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
-                                    "folder_id",
+                                    "pageId",
+                                    "folderId",
                                     "title"
                                   ],
                                   "type": "object"
@@ -3412,7 +3851,7 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -3431,7 +3870,7 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
+                                    "pageId",
                                     "title"
                                   ],
                                   "type": "object"
@@ -3439,12 +3878,12 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "folder_id": {
+                                    "folderId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
                                     },
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -3458,8 +3897,8 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
-                                    "folder_id"
+                                    "pageId",
+                                    "folderId"
                                   ],
                                   "type": "object"
                                 },
@@ -3469,7 +3908,7 @@
                                     "bookmarked": {
                                       "type": "boolean"
                                     },
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -3483,7 +3922,7 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
+                                    "pageId",
                                     "bookmarked"
                                   ],
                                   "type": "object"
@@ -3574,6 +4013,16 @@
                 "required": [],
                 "type": "object"
               },
+              "runId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "toolCallId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
               "workspaceRevision": {
                 "maximum": 9007199254740991,
                 "minimum": 0,
@@ -3583,6 +4032,8 @@
             "required": [
               "auditId",
               "changeSetId",
+              "runId",
+              "toolCallId",
               "changedResources",
               "workspaceRevision",
               "pageRevisions",
@@ -3761,7 +4212,9 @@
                           "targetKind": {
                             "enum": [
                               "text",
-                              "shape"
+                              "shape",
+                              "line",
+                              "connector"
                             ],
                             "type": "string"
                           }
@@ -3772,7 +4225,7 @@
                         ],
                         "type": "object"
                       },
-                      "maxItems": 100,
+                      "maxItems": 50,
                       "minItems": 1,
                       "type": "array"
                     },
@@ -3807,7 +4260,9 @@
                     "targetKind": {
                       "enum": [
                         "text",
-                        "shape"
+                        "shape",
+                        "line",
+                        "connector"
                       ],
                       "type": "string"
                     },
@@ -3842,6 +4297,7 @@
                     },
                     "style": {
                       "additionalProperties": false,
+                      "minProperties": 1,
                       "properties": {
                         "fill": {
                           "maxLength": 32,
@@ -3870,13 +4326,78 @@
                     "targetKind": {
                       "enum": [
                         "text",
-                        "shape"
+                        "shape",
+                        "line",
+                        "connector"
                       ],
                       "type": "string"
                     },
                     "type": {
                       "enum": [
                         "set_style"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "elementId",
+                    "targetKind",
+                    "style"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "elementId": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "style": {
+                      "additionalProperties": false,
+                      "minProperties": 1,
+                      "properties": {
+                        "alignment": {
+                          "enum": [
+                            "left",
+                            "center",
+                            "right"
+                          ],
+                          "type": "string"
+                        },
+                        "color": {
+                          "maxLength": 32,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "fontSize": {
+                          "maximum": 96,
+                          "minimum": 8,
+                          "type": "integer"
+                        },
+                        "fontWeight": {
+                          "enum": [
+                            "normal",
+                            "bold"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [],
+                      "type": "object"
+                    },
+                    "targetKind": {
+                      "enum": [
+                        "text",
+                        "shape"
+                      ],
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "set_text_style"
                       ],
                       "type": "string"
                     }
@@ -3991,6 +4512,39 @@
                       "minLength": 0,
                       "type": "string"
                     },
+                    "labelStyle": {
+                      "additionalProperties": false,
+                      "minProperties": 1,
+                      "properties": {
+                        "alignment": {
+                          "enum": [
+                            "left",
+                            "center",
+                            "right"
+                          ],
+                          "type": "string"
+                        },
+                        "color": {
+                          "maxLength": 32,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "fontSize": {
+                          "maximum": 96,
+                          "minimum": 8,
+                          "type": "integer"
+                        },
+                        "fontWeight": {
+                          "enum": [
+                            "normal",
+                            "bold"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [],
+                      "type": "object"
+                    },
                     "type": {
                       "enum": [
                         "set_connector_label"
@@ -4002,6 +4556,47 @@
                     "type",
                     "elementId",
                     "label"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "elementId": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "endArrowhead": {
+                      "enum": [
+                        "none",
+                        "triangle",
+                        "arrow",
+                        "diamond"
+                      ],
+                      "type": "string"
+                    },
+                    "startArrowhead": {
+                      "enum": [
+                        "none",
+                        "triangle",
+                        "arrow",
+                        "diamond"
+                      ],
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "set_arrowheads"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "elementId",
+                    "startArrowhead",
+                    "endArrowhead"
                   ],
                   "type": "object"
                 },
@@ -4126,6 +4721,7 @@
                     },
                     "labelStyle": {
                       "additionalProperties": false,
+                      "minProperties": 1,
                       "properties": {
                         "alignment": {
                           "enum": [
@@ -4242,8 +4838,7 @@
                     "start",
                     "end",
                     "style",
-                    "label",
-                    "labelStyle"
+                    "label"
                   ],
                   "type": "object"
                 },
@@ -4262,6 +4857,7 @@
                     },
                     "textStyle": {
                       "additionalProperties": false,
+                      "minProperties": 1,
                       "properties": {
                         "alignment": {
                           "enum": [
@@ -4302,8 +4898,7 @@
                   "required": [
                     "type",
                     "elementId",
-                    "text",
-                    "textStyle"
+                    "text"
                   ],
                   "type": "object"
                 },
@@ -4332,7 +4927,9 @@
                           "targetKind": {
                             "enum": [
                               "text",
-                              "shape"
+                              "shape",
+                              "line",
+                              "connector"
                             ],
                             "type": "string"
                           }
@@ -4343,7 +4940,7 @@
                         ],
                         "type": "object"
                       },
-                      "maxItems": 50,
+                      "maxItems": 25,
                       "minItems": 1,
                       "type": "array"
                     },
@@ -4388,7 +4985,9 @@
                           "targetKind": {
                             "enum": [
                               "text",
-                              "shape"
+                              "shape",
+                              "line",
+                              "connector"
                             ],
                             "type": "string"
                           }
@@ -4439,7 +5038,9 @@
                           "targetKind": {
                             "enum": [
                               "text",
-                              "shape"
+                              "shape",
+                              "line",
+                              "connector"
                             ],
                             "type": "string"
                           }
@@ -4492,7 +5093,9 @@
                           "targetKind": {
                             "enum": [
                               "text",
-                              "shape"
+                              "shape",
+                              "line",
+                              "connector"
                             ],
                             "type": "string"
                           }
@@ -4587,7 +5190,7 @@
                   ],
                   "type": "object"
                 },
-                "maxItems": 10,
+                "maxItems": 50,
                 "minItems": 0,
                 "type": "array"
               },
@@ -4636,7 +5239,7 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "folder_id": {
+                                    "folderId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -4656,7 +5259,7 @@
                                   },
                                   "required": [
                                     "type",
-                                    "folder_id",
+                                    "folderId",
                                     "name"
                                   ],
                                   "type": "object"
@@ -4664,12 +5267,12 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "folder_id": {
+                                    "folderId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
                                     },
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -4688,8 +5291,8 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
-                                    "folder_id",
+                                    "pageId",
+                                    "folderId",
                                     "title"
                                   ],
                                   "type": "object"
@@ -4697,7 +5300,7 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -4716,7 +5319,7 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
+                                    "pageId",
                                     "title"
                                   ],
                                   "type": "object"
@@ -4724,12 +5327,12 @@
                                 {
                                   "additionalProperties": false,
                                   "properties": {
-                                    "folder_id": {
+                                    "folderId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
                                     },
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -4743,8 +5346,8 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
-                                    "folder_id"
+                                    "pageId",
+                                    "folderId"
                                   ],
                                   "type": "object"
                                 },
@@ -4754,7 +5357,7 @@
                                     "bookmarked": {
                                       "type": "boolean"
                                     },
-                                    "page_id": {
+                                    "pageId": {
                                       "maxLength": 128,
                                       "minLength": 1,
                                       "type": "string"
@@ -4768,7 +5371,7 @@
                                   },
                                   "required": [
                                     "type",
-                                    "page_id",
+                                    "pageId",
                                     "bookmarked"
                                   ],
                                   "type": "object"
@@ -4859,6 +5462,16 @@
                 "required": [],
                 "type": "object"
               },
+              "runId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "toolCallId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
               "workspaceRevision": {
                 "maximum": 9007199254740991,
                 "minimum": 0,
@@ -4868,6 +5481,8 @@
             "required": [
               "auditId",
               "changeSetId",
+              "runId",
+              "toolCallId",
               "changedResources",
               "workspaceRevision",
               "pageRevisions",

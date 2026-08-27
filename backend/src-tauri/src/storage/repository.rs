@@ -2479,17 +2479,30 @@ fn asset_ids_for_purged_pages(connection: &rusqlite::Connection) -> Result<Vec<S
     Ok(ids.into_iter().collect())
 }
 
+fn cleanup_path_component(value: &str, label: &str) -> Result<String, String> {
+    let mut components = Path::new(value).components();
+    match (components.next(), components.next()) {
+        (Some(std::path::Component::Normal(component)), None) if !component.is_empty() => {
+            Ok(component.to_string_lossy().into_owned())
+        }
+        _ => Err(format!("invalid asset cleanup {label}")),
+    }
+}
+
 fn retry_asset_cleanup(root: &Path) -> Result<(), String> {
     let mut connection = database::open(&root.join("note.db"))?;
     database::migrate(&mut connection)?;
-    let entries: Vec<(String, String, String)> = connection
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+    let entries: Vec<(String, String, String)> = transaction
         .prepare("SELECT asset_id,relative_path,staged_path FROM asset_cleanup_journal")
         .map_err(|e| e.to_string())?
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
         .map_err(|e| e.to_string())?
         .collect::<Result<_, _>>()
         .map_err(|e| e.to_string())?;
-    let live: std::collections::HashSet<String> = connection
+    let live: std::collections::HashSet<String> = transaction
         .prepare("SELECT payload_json FROM elements")
         .map_err(|e| e.to_string())?
         .query_map([], |row| row.get::<_, String>(0))
@@ -2508,6 +2521,12 @@ fn retry_asset_cleanup(root: &Path) -> Result<(), String> {
         .collect();
     let assets_dir = root.join("assets");
     for (id, relative, staged) in entries {
+        let relative = cleanup_path_component(&relative, "relative path")?;
+        let staged = cleanup_path_component(&staged, "staged path")?;
+        let parsed_id = uuid::Uuid::parse_str(&id).map_err(|_| "invalid asset cleanup id".to_owned())?;
+        if staged != format!(".purging-{parsed_id}") {
+            return Err("invalid asset cleanup staged path".into());
+        }
         if live.contains(&id) {
             let source = assets_dir.join(&relative);
             let staged_path = assets_dir.join(&staged);
@@ -2515,7 +2534,7 @@ fn retry_asset_cleanup(root: &Path) -> Result<(), String> {
                 fs::rename(&staged_path, &source)
                     .map_err(|e| format!("restore live asset staged for cleanup: {e}"))?;
             }
-            connection
+            transaction
                 .execute("DELETE FROM asset_cleanup_journal WHERE asset_id=?", [&id])
                 .map_err(|e| e.to_string())?;
             continue;
@@ -2525,7 +2544,7 @@ fn retry_asset_cleanup(root: &Path) -> Result<(), String> {
         if source.exists() && !staged_path.exists() {
             fs::rename(&source, &staged_path).map_err(|e| format!("stage purged asset: {e}"))?;
         }
-        if let Err(error) = connection.execute("DELETE FROM assets WHERE id=?", [&id]) {
+        if let Err(error) = transaction.execute("DELETE FROM assets WHERE id=?", [&id]) {
             if staged_path.exists() && !source.exists() {
                 let _ = fs::rename(&staged_path, &source);
             }
@@ -2535,18 +2554,35 @@ fn retry_asset_cleanup(root: &Path) -> Result<(), String> {
             fs::remove_file(&staged_path)
                 .map_err(|e| format!("remove staged purged asset: {e}"))?;
         }
-        connection
+        transaction
             .execute("DELETE FROM asset_cleanup_journal WHERE asset_id=?", [&id])
             .map_err(|e| e.to_string())?;
     }
-    Ok(())
+    transaction.commit().map_err(|error| error.to_string())
 }
 
 pub fn trash_purge_preview_at(root: &Path) -> Result<TrashPurgePreview, String> {
     let mut connection = database::open(&root.join("note.db"))?;
     database::migrate(&mut connection)?;
-    let mut preview = trash_purge_preview(&connection)?;
-    let entries = list_trash_from_connection(&connection)?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute("DELETE FROM trash_purge_snapshots WHERE expires_at<?", [now_ms()])
+        .map_err(|e| e.to_string())?;
+    let outstanding: i64 = transaction
+        .query_row("SELECT count(*) FROM trash_purge_snapshots", [], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+    if outstanding >= 32 {
+        transaction
+            .execute(
+                "DELETE FROM trash_purge_snapshots WHERE token IN (SELECT token FROM trash_purge_snapshots ORDER BY expires_at ASC LIMIT 1)",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+    }
+    let mut preview = trash_purge_preview(&transaction)?;
+    let entries = list_trash_from_connection(&transaction)?;
     let snapshot = serde_json::to_string(&(
         entries,
         preview.folder_count,
@@ -2555,18 +2591,13 @@ pub fn trash_purge_preview_at(root: &Path) -> Result<TrashPurgePreview, String> 
     ))
     .map_err(|e| e.to_string())?;
     let token = uuid::Uuid::new_v4().to_string();
-    connection
-        .execute(
-            "DELETE FROM trash_purge_snapshots WHERE expires_at<?",
-            [now_ms()],
-        )
-        .map_err(|e| e.to_string())?;
-    connection
+    transaction
         .execute(
             "INSERT INTO trash_purge_snapshots(token,snapshot_json,expires_at) VALUES(?,?,?)",
             params![token, snapshot, now_ms() + 300_000],
         )
         .map_err(|e| e.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())?;
     preview.confirmation_token = token;
     Ok(preview)
 }
@@ -2604,6 +2635,7 @@ pub fn purge_trash_at(
         .map_err(|e| e.to_string())?;
     let (snapshot, expires_at) = snapshot.ok_or("invalid or already-used Trash confirmation")?;
     if expires_at < now_ms() {
+        transaction.commit().map_err(|error| error.to_string())?;
         return Err("Trash confirmation expired; review and confirm again".into());
     }
     let mut preview = trash_purge_preview(&transaction)?;
@@ -2620,6 +2652,7 @@ pub fn purge_trash_at(
         || preview.page_count != request.expected_page_count
         || preview.element_count != request.expected_element_count
     {
+        transaction.commit().map_err(|error| error.to_string())?;
         return Err("Trash changed; review the affected counts and confirm again".into());
     }
     transaction
@@ -5247,6 +5280,7 @@ mod tests {
             )
             .unwrap();
         assert!(purge_trash_at(directory.path(), request.clone()).is_err());
+        assert!(purge_trash_at(directory.path(), request).is_err());
         let preview = trash_purge_preview_at(directory.path()).unwrap();
         let request = TrashPurgeRequest {
             confirmation_token: preview.confirmation_token.clone(),
@@ -5255,8 +5289,9 @@ mod tests {
             expected_element_count: preview.element_count,
         };
         connection
-            .execute("UPDATE pages SET trashed_at=trashed_at+1 WHERE id='p'", [])
+            .execute("UPDATE pages SET id='replacement' WHERE id='p'", [])
             .unwrap();
+        assert!(purge_trash_at(directory.path(), request.clone()).is_err());
         assert!(purge_trash_at(directory.path(), request).is_err());
         let preview = trash_purge_preview_at(directory.path()).unwrap();
         let request = TrashPurgeRequest {
@@ -5468,5 +5503,21 @@ mod tests {
                 .unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn deferred_cleanup_refuses_traversal_paths_without_touching_files() {
+        let directory = root();
+        initialize_storage_at(directory.path()).unwrap();
+        let asset = save_test_asset(directory.path(), "safe.png");
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        connection.execute(
+            "INSERT INTO asset_cleanup_journal(asset_id,relative_path,staged_path) VALUES(?,?,?)",
+            params![&asset.id, "../note.db", format!(".purging-{}", asset.id)],
+        ).unwrap();
+        drop(connection);
+
+        assert!(retry_asset_cleanup(directory.path()).unwrap_err().contains("relative path"));
+        assert!(asset_file(directory.path(), &asset.id).exists());
     }
 }

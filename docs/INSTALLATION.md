@@ -26,8 +26,8 @@ When Note is already installed, a newer installer offers **Update** and
 **Remove Note**. Choosing Remove runs the existing uninstaller and closes the
 setup program; it does not reinstall Note. If the installed version is newer,
 setup blocks a downgrade and offers only Remove or Cancel. Updates and repairs
-preserve local app data. Removing Note also preserves that data unless you
-explicitly select **Delete application data** in the uninstaller.
+preserve local app data. Removing Note also preserves notes, assets, and local
+preferences; the uninstaller does not offer an application-data deletion option.
 
 The installer is unsigned for now. SmartScreen may warn before it starts. Only
 continue after verifying that the file came from the official release page.

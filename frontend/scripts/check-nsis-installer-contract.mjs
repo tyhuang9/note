@@ -37,9 +37,9 @@ assert.match(template, /NOTE MAINTENANCE PATCH END/);
 assert.match(template, /!define UNINSTKEY "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\\$\{PRODUCTNAME\}"/);
 assert.match(template, /!define MANUKEY "Software\\\$\{MANUFACTURER\}"/);
 assert.match(template, /WriteRegStr SHCTX "\$\{UNINSTKEY\}" "UninstallString"/);
-assert.match(template, /Function un\.ConfirmShow ; Add add a `Delete app data` check box/);
-assert.match(template, /\$\{If\} \$DeleteAppDataCheckboxState = 1[\s\S]*RmDir \/r "\$APPDATA\\\$\{BUNDLEID\}"/);
-assert.doesNotMatch(template, /DeleteAppDataCheckbox[^\n]*\$\{BM_SETCHECK\}/, "the data-deletion checkbox must never be selected automatically");
+assert.match(template, /!insertmacro MUI_UNPAGE_CONFIRM/, "the standard uninstall confirmation must remain");
+assert.doesNotMatch(template, /DeleteAppData|deleteAppData|RmDir \/r "\$(?:APPDATA|LOCALAPPDATA)/, "uninstall must preserve application data and avoid recursive app-data deletion");
+assert.doesNotMatch(template, /WixMode|EnumRegKey .*CurrentVersion\\Uninstall|msiexec|HKLM .*"UninstallString"/, "unsupported legacy WiX discovery and raw MSI execution must remain disabled");
 
 assert.match(template, /StrCpy \$R2 "Repair \$\{PRODUCTNAME\}"/);
 assert.match(template, /StrCpy \$R2 "Update \$\{PRODUCTNAME\}"/);
@@ -50,11 +50,11 @@ assert.match(pageLeaveReinstall, /\$\{If\} \$R0 = 0 ; Same version[\s\S]*?Goto r
 assert.match(pageLeaveReinstall, /StrCpy \$RemoveOnlyMode 1\s+Goto reinst_uninstall/, "remove must invoke the existing uninstaller");
 assert.match(pageLeaveReinstall, /\$\{If\} \$RemoveOnlyMode = 1\s+Quit\s+\$\{EndIf\}\s+reinst_done:/, "remove-only must exit setup instead of reinstalling");
 assert.match(pageLeaveReinstall, /\$\{Else\}\s+Quit\s+; User chose to cancel setup/, "newer installed versions must block an implicit downgrade");
-assert.match(pageLeaveReinstall, /\$\{If\} \$WixMode = 1[\s\S]*?\$\{Else\}[\s\S]*?\$\{If\} \$R1 = 1[^\n]*\s+Goto reinst_uninstall/, "a same-version WiX repair and WiX update must uninstall WiX before NSIS installation");
-assert.match(pageLeaveReinstall, /\$\{If\} \$WixMode = 1[\s\S]*?StrCpy \$RemoveOnlyMode 1\s+Goto reinst_uninstall/, "a WiX Remove action must run the existing WiX uninstaller");
-assert.match(pageLeaveReinstall, /\$\{If\} \$WixMode = 1[\s\S]*?\$\{If\} \$R0 = -1[\s\S]*?\$\{Else\}\s+Quit\s+; User chose to cancel setup/, "a WiX downgrade must allow only terminal Remove or Cancel");
-assert.match(pageLeaveReinstall, /\$\{If\} \$WixMode = 1\s+ReadRegStr \$R1 HKLM "\$R6" "UninstallString"\s+ExecWait '\$R1' \$0/, "WiX maintenance actions must execute the stored WiX uninstaller");
-assert.match(pageLeaveReinstall, /\$\{If\} \$UpdateMode = 1\s+Goto reinst_done[\s\S]*?\$\{If\} \$PassiveMode = 1/, "the existing /UPDATE bypass must remain before passive maintenance routing");
+assert.match(template, /Function \.onInit[\s\S]*?Call DetectExistingInstall[\s\S]*?FunctionEnd/, "detection must initialize outside maintenance page callbacks");
+assert.match(template, /Function DetectExistingInstall[\s\S]*?ReadRegStr \$0 SHCTX "\$\{UNINSTKEY\}" "UninstallString"[\s\S]*?ReadRegStr \$MaintenanceInstalledVersion SHCTX "\$\{UNINSTKEY\}" "DisplayVersion"[\s\S]*?SemverCompare/, "shared detection must use the current NSIS identity and compare versions");
+assert.match(template, /Section EarlyChecks[\s\S]*?\$\{If\} \$\{Silent\}[\s\S]*?Call DetectExistingInstall[\s\S]*?\$MaintenanceVersionComparison = -1[\s\S]*?Abort/, "silent newer-version downgrades must abort before payload sections");
+assert.match(template, /Section EarlyChecks[\s\S]*?\$MaintenanceVersionComparison = 0[\s\S]*?StrCpy \$UpdateMode 0[\s\S]*?\$MaintenanceVersionComparison = 1[\s\S]*?StrCpy \$UpdateMode 1/, "silent same-version repairs and older-version updates must be deterministic");
+assert.match(pageLeaveReinstall, /\$\{If\} \$UpdateMode = 1[\s\S]*?\$\{If\} \$MaintenanceDetected = 1[\s\S]*?\$MaintenanceVersionComparison = 0[\s\S]*?\$MaintenanceVersionComparison = 1[\s\S]*?Goto reinst_done[\s\S]*?Abort/, "the /UPDATE bypass must apply only to detected compatible NSIS installs");
 assert.match(pageLeaveReinstall, /\$\{If\} \$PassiveMode = 1[\s\S]*?\$\{If\} \$R0 = 0\s+StrCpy \$R1 1[\s\S]*?\$\{ElseIf\} \$R0 = 1\s+StrCpy \$R1 1[\s\S]*?\$\{ElseIf\} \$R0 = -1\s+StrCpy \$R1 0[\s\S]*?\$\{Else\}\s+\$\{NSD_GetState\} \$R2 \$R1/, "passive mode must default to Repair, Update, or Cancel before reading dialog controls");
 assert.match(
   releaseWorkflow,

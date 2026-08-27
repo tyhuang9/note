@@ -71,9 +71,11 @@ ${StrLoc}
 Var PassiveMode
 Var UpdateMode
 Var NoShortcutMode
-Var WixMode
 Var OldMainBinaryName
 Var RemoveOnlyMode
+Var MaintenanceDetected
+Var MaintenanceInstalledVersion
+Var MaintenanceVersionComparison
 
 Name "${PRODUCTNAME}"
 BrandingText "${COPYRIGHT}"
@@ -185,52 +187,14 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
 Var ReinstallPageCheck
 Page custom PageReinstall PageLeaveReinstall
 Function PageReinstall
-  ; Uninstall previous WiX installation if exists.
-  ;
-  ; A WiX installer stores the installation info in registry
-  ; using a UUID and so we have to loop through all keys under
-  ; `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall`
-  ; and check if `DisplayName` and `Publisher` keys match ${PRODUCTNAME} and ${MANUFACTURER}
-  ;
-  ; This has a potential issue that there maybe another installation that matches
-  ; our ${PRODUCTNAME} and ${MANUFACTURER} but wasn't installed by our WiX installer,
-  ; however, this should be fine since the user will have to confirm the uninstallation
-  ; and they can chose to abort it if doesn't make sense.
-  StrCpy $0 0
-  wix_loop:
-    EnumRegKey $1 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall" $0
-    StrCmp $1 "" wix_loop_done ; Exit loop if there is no more keys to loop on
-    IntOp $0 $0 + 1
-    ReadRegStr $R0 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$1" "DisplayName"
-    ReadRegStr $R1 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$1" "Publisher"
-    StrCmp "$R0$R1" "${PRODUCTNAME}${MANUFACTURER}" 0 wix_loop
-    ReadRegStr $R0 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$1" "UninstallString"
-    ${StrCase} $R1 $R0 "L"
-    ${StrLoc} $R0 $R1 "msiexec" ">"
-    StrCmp $R0 0 0 wix_loop_done
-    StrCpy $WixMode 1
-    StrCpy $R6 "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$1"
-    Goto compare_version
-  wix_loop_done:
+  Call DetectExistingInstall
+  ${IfThen} $MaintenanceDetected <> 1 ${|} Abort ${|}
 
-  ; Check if there is an existing installation, if not, abort the reinstall page
-  ReadRegStr $R0 SHCTX "${UNINSTKEY}" ""
-  ReadRegStr $R1 SHCTX "${UNINSTKEY}" "UninstallString"
-  ${IfThen} "$R0$R1" == "" ${|} Abort ${|}
-
-  ; Compare this installar version with the existing installation
-  ; and modify the messages presented to the user accordingly
-  compare_version:
+  ; The shared detection runs in .onInit so silent installs take the same
+  ; version decisions before payload sections execute.
+  StrCpy $R0 $MaintenanceVersionComparison
   StrCpy $R4 "$(older)"
-  ${If} $WixMode = 1
-    ReadRegStr $R0 HKLM "$R6" "DisplayVersion"
-  ${Else}
-    ReadRegStr $R0 SHCTX "${UNINSTKEY}" "DisplayVersion"
-  ${EndIf}
-  ${IfThen} $R0 == "" ${|} StrCpy $R4 "$(unknown)" ${|}
-
-  nsis_tauri_utils::SemverCompare "${VERSION}" $R0
-  Pop $R0
+  ${IfThen} $MaintenanceInstalledVersion == "" ${|} StrCpy $R4 "$(unknown)" ${|}
   ; Reinstalling the same version
   ${If} $R0 = 0
     StrCpy $R1 "$(alreadyInstalledLong)"
@@ -306,7 +270,14 @@ FunctionEnd
 Function PageLeaveReinstall
   ; In update mode, always proceeds without uninstalling
   ${If} $UpdateMode = 1
-    Goto reinst_done
+    ${If} $MaintenanceDetected = 1
+      ${If} $MaintenanceVersionComparison = 0
+      ${OrIf} $MaintenanceVersionComparison = 1
+        Goto reinst_done
+      ${EndIf}
+      Abort
+    ${EndIf}
+    StrCpy $UpdateMode 0
   ${EndIf}
 
   ; Passive mode has no radio controls. Choose only safe primary actions:
@@ -328,33 +299,11 @@ Function PageLeaveReinstall
 
   ; NOTE MAINTENANCE PATCH: $R0 holds same(0)/upgrade(1)/downgrade(-1).
   ; Remove always runs the existing uninstaller without /UPDATE and exits
-  ; this setup after a successful uninstall. An NSIS Update uses /UPDATE so
-  ; its existing uninstaller preserves shortcuts and app data before installing.
+  ; this setup after a successful uninstall. Update uses /UPDATE so the
+  ; existing uninstaller preserves shortcuts and app data before installing.
   ; $R1 holds the radio buttons state:
   ;   1 => first choice was selected
   ;   0 => second choice was selected
-  ; A legacy WiX product must be removed before either a repair or update
-  ; continues as an NSIS installation; otherwise its files and ARP entry
-  ; would remain. Its Remove action must still terminate this setup, and a
-  ; downgrade must remain Remove-or-Cancel only.
-  ${If} $WixMode = 1
-    ${If} $R0 = -1
-      ${If} $R1 = 1            ; User chose to remove
-        StrCpy $RemoveOnlyMode 1
-        Goto reinst_uninstall
-      ${Else}
-        Quit                   ; User chose to cancel setup
-      ${EndIf}
-    ${Else}
-      ${If} $R1 = 1            ; User chose to repair or update
-        Goto reinst_uninstall
-      ${Else}                  ; User chose to remove
-        StrCpy $RemoveOnlyMode 1
-        Goto reinst_uninstall
-      ${EndIf}
-    ${EndIf}
-  ${EndIf}
-
   ${If} $R0 = 0 ; Same version
     ${If} $R1 = 1              ; User chose to repair
       Goto reinst_done
@@ -383,17 +332,12 @@ Function PageLeaveReinstall
     HideWindow
     ClearErrors
 
-    ${If} $WixMode = 1
-      ReadRegStr $R1 HKLM "$R6" "UninstallString"
-      ExecWait '$R1' $0
-    ${Else}
-      ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""
-      ReadRegStr $R1 SHCTX "${UNINSTKEY}" "UninstallString"
-      ${IfThen} $UpdateMode = 1 ${|} StrCpy $R1 "$R1 /UPDATE" ${|} ; append /UPDATE
-      ${IfThen} $PassiveMode = 1 ${|} StrCpy $R1 "$R1 /P" ${|} ; append /P
-      StrCpy $R1 "$R1 _?=$4" ; append uninstall directory
-      ExecWait '$R1' $0
-    ${EndIf}
+    ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""
+    ReadRegStr $R1 SHCTX "${UNINSTKEY}" "UninstallString"
+    ${IfThen} $UpdateMode = 1 ${|} StrCpy $R1 "$R1 /UPDATE" ${|} ; append /UPDATE
+    ${IfThen} $PassiveMode = 1 ${|} StrCpy $R1 "$R1 /P" ${|} ; append /P
+    StrCpy $R1 "$R1 _?=$4" ; append uninstall directory
+    ExecWait '$R1' $0
 
     BringToFront
 
@@ -404,12 +348,6 @@ Function PageLeaveReinstall
       ; A cancelled/failed Update must return to maintenance selection rather
       ; than letting the saved update flag bypass the uninstaller on retry.
       StrCpy $UpdateMode 0
-      ; User cancelled wix uninstaller? return to select un/reinstall page
-      ${If} $WixMode = 1
-      ${AndIf} $0 = 1602
-        Abort
-      ${EndIf}
-
       ; User cancelled NSIS uninstaller? return to select un/reinstall page
       ${If} $0 = 1
         Abort
@@ -463,45 +401,7 @@ Function RunMainBinary
 FunctionEnd
 
 ; Uninstaller Pages
-; 1. Confirm uninstall page
-Var DeleteAppDataCheckbox
-Var DeleteAppDataCheckboxState
-!define /ifndef WS_EX_LAYOUTRTL         0x00400000
-!define MUI_PAGE_CUSTOMFUNCTION_SHOW un.ConfirmShow
-Function un.ConfirmShow ; Add add a `Delete app data` check box
-  ; $1 inner dialog HWND
-  ; $2 window DPI
-  ; $3 style
-  ; $4 x
-  ; $5 y
-  ; $6 width
-  ; $7 height
-  FindWindow $1 "#32770" "" $HWNDPARENT ; Find inner dialog
-  System::Call "user32::GetDpiForWindow(p r1) i .r2"
-  ${If} $(^RTL) = 1
-    StrCpy $3 "${__NSD_CheckBox_EXSTYLE} | ${WS_EX_LAYOUTRTL}"
-    IntOp $4 50 * $2
-  ${Else}
-    StrCpy $3 "${__NSD_CheckBox_EXSTYLE}"
-    IntOp $4 0 * $2
-  ${EndIf}
-  IntOp $5 100 * $2
-  IntOp $6 400 * $2
-  IntOp $7 25 * $2
-  IntOp $4 $4 / 96
-  IntOp $5 $5 / 96
-  IntOp $6 $6 / 96
-  IntOp $7 $7 / 96
-  System::Call 'user32::CreateWindowEx(i r3, w "${__NSD_CheckBox_CLASS}", w "$(deleteAppData)", i ${__NSD_CheckBox_STYLE}, i r4, i r5, i r6, i r7, p r1, i0, i0, i0) i .s'
-  Pop $DeleteAppDataCheckbox
-  SendMessage $HWNDPARENT ${WM_GETFONT} 0 0 $1
-  SendMessage $DeleteAppDataCheckbox ${WM_SETFONT} $1 1
-FunctionEnd
-!define MUI_PAGE_CUSTOMFUNCTION_LEAVE un.ConfirmLeave
-Function un.ConfirmLeave
-  SendMessage $DeleteAppDataCheckbox ${BM_GETCHECK} 0 0 $DeleteAppDataCheckboxState
-FunctionEnd
-!define MUI_PAGE_CUSTOMFUNCTION_PRE un.SkipIfPassive
+; 1. Confirm uninstall page. Application data is always preserved.
 !insertmacro MUI_UNPAGE_CONFIRM
 
 ; 2. Uninstalling Page
@@ -563,26 +463,55 @@ Function .onInit
   !if "${INSTALLMODE}" == "both"
     !insertmacro MULTIUSER_INIT
   !endif
+
+  ; Must run outside the maintenance UI so `/S` can make a safe decision
+  ; before any payload section starts.
+  Call DetectExistingInstall
 FunctionEnd
 
+Function DetectExistingInstall
+  StrCpy $MaintenanceDetected 0
+  StrCpy $MaintenanceInstalledVersion ""
+  StrCpy $MaintenanceVersionComparison 2
+
+  ReadRegStr $0 SHCTX "${UNINSTKEY}" "UninstallString"
+  ${IfThen} $0 == "" ${|} Return ${|}
+
+  StrCpy $MaintenanceDetected 1
+  ReadRegStr $MaintenanceInstalledVersion SHCTX "${UNINSTKEY}" "DisplayVersion"
+  ${IfThen} $MaintenanceInstalledVersion == "" ${|} Return ${|}
+
+  nsis_tauri_utils::SemverCompare "${VERSION}" $MaintenanceInstalledVersion
+  Pop $MaintenanceVersionComparison
+FunctionEnd
 
 Section EarlyChecks
-  ; Abort silent installer if downgrades is disabled
-  !if "${ALLOWDOWNGRADES}" == "false"
   ${If} ${Silent}
-    ; If downgrading
-    ${If} $R0 = -1
-      System::Call 'kernel32::AttachConsole(i -1)i.r0'
-      ${If} $0 <> 0
-        System::Call 'kernel32::GetStdHandle(i -11)i.r0'
-        System::call 'kernel32::SetConsoleTextAttribute(i r0, i 0x0004)' ; set red color
-        FileWrite $0 "$(silentDowngrades)"
+    Call DetectExistingInstall
+    ${If} $MaintenanceDetected = 1
+      ${If} $MaintenanceVersionComparison = -1
+        System::Call 'kernel32::AttachConsole(i -1)i.r0'
+        ${If} $0 <> 0
+          System::Call 'kernel32::GetStdHandle(i -11)i.r0'
+          FileWrite $0 "Cannot install Note silently because a newer version is already installed.$\r$\n"
+        ${EndIf}
+        Abort
+      ${ElseIf} $MaintenanceVersionComparison = 0
+        ; Same-version silent installs are deterministic in-place repairs.
+        StrCpy $UpdateMode 0
+      ${ElseIf} $MaintenanceVersionComparison = 1
+        ; Older-version silent installs are deterministic updates.
+        StrCpy $UpdateMode 1
+      ${Else}
+        System::Call 'kernel32::AttachConsole(i -1)i.r0'
+        ${If} $0 <> 0
+          System::Call 'kernel32::GetStdHandle(i -11)i.r0'
+          FileWrite $0 "Cannot install Note silently because the installed version is unknown.$\r$\n"
+        ${EndIf}
+        Abort
       ${EndIf}
-      Abort
     ${EndIf}
   ${EndIf}
-  !endif
-
 SectionEnd
 
 Section WebView2
@@ -907,24 +836,6 @@ Section Uninstall
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}"
   ${EndIf}
 
-  ; Delete app data if the checkbox is selected
-  ; and if not updating
-  ${If} $DeleteAppDataCheckboxState = 1
-  ${AndIf} $UpdateMode <> 1
-    ; Clear the install location $INSTDIR from registry
-    DeleteRegKey SHCTX "${MANUPRODUCTKEY}"
-    DeleteRegKey /ifempty SHCTX "${MANUKEY}"
-
-    ; Clear the install language from registry
-    DeleteRegValue HKCU "${MANUPRODUCTKEY}" "Installer Language"
-    DeleteRegKey /ifempty HKCU "${MANUPRODUCTKEY}"
-    DeleteRegKey /ifempty HKCU "${MANUKEY}"
-
-    SetShellVarContext current
-    RmDir /r "$APPDATA\${BUNDLEID}"
-    RmDir /r "$LOCALAPPDATA\${BUNDLEID}"
-  ${EndIf}
-
   !ifmacrodef NSIS_HOOK_POSTUNINSTALL
     !insertmacro NSIS_HOOK_POSTUNINSTALL
   !endif
@@ -976,13 +887,10 @@ Function CreateOrUpdateStartMenuShortcut
     Return
   ${EndIf}
 
-  ; Skip creating shortcut if in update mode or no shortcut mode
-  ; but always create if migrating from wix
-  ${If} $WixMode = 0
-    ${If} $UpdateMode = 1
-    ${OrIf} $NoShortcutMode = 1
-      Return
-    ${EndIf}
+  ; Skip creating shortcuts when updating or explicitly disabled.
+  ${If} $UpdateMode = 1
+  ${OrIf} $NoShortcutMode = 1
+    Return
   ${EndIf}
 
   !if "${STARTMENUFOLDER}" != ""
@@ -1005,13 +913,10 @@ Function CreateOrUpdateDesktopShortcut
     Return
   ${EndIf}
 
-  ; Skip creating shortcut if in update mode or no shortcut mode
-  ; but always create if migrating from wix
-  ${If} $WixMode = 0
-    ${If} $UpdateMode = 1
-    ${OrIf} $NoShortcutMode = 1
-      Return
-    ${EndIf}
+  ; Skip creating shortcuts when updating or explicitly disabled.
+  ${If} $UpdateMode = 1
+  ${OrIf} $NoShortcutMode = 1
+    Return
   ${EndIf}
 
   CreateShortcut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"

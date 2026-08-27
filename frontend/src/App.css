@@ -1375,11 +1375,15 @@ h2 {
   white-space: nowrap;
 }
 
-.trash-feedback {
+.trash-status {
   margin: 4px 0 8px;
   color: #475467;
   font-size: 12px;
   line-height: 16px;
+}
+
+.app-shell.is-dark .trash-status {
+  color: #d8d8d8;
 }
 
 .item-count {

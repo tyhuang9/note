@@ -160,5 +160,5 @@ test("folder More and right-click share one accessible action menu", async ({
   await expect(trashedFolder).toContainText("Renamed project");
   await expect(trashedFolder).toContainText("Workspace");
   await expect(trashedFolder.locator(".trash-entry-detail")).toContainText("·");
-  await expect(page.locator(".trash-feedback")).toHaveText("Moved Renamed project to Trash.");
+  await expect(page.locator(".trash-status")).toHaveText("Moved Renamed project to Trash.");
 });

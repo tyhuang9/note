@@ -3,6 +3,9 @@ import { expect, test } from "@playwright/test";
 test("Trash shows safe metadata and restores a folder to its destination", async ({ page }) => {
   await page.addInitScript(() => {
     let restored = false;
+    let archived = false;
+    let archiveCalls = 0;
+    let resolveArchive: (() => void) | undefined;
     let resolveRestore: (() => void) | undefined;
     const trashEntries = [
       {
@@ -42,6 +45,11 @@ test("Trash shows safe metadata and restores a folder to its destination", async
           restored = true;
           resolveRestore?.();
         },
+        completeArchive: () => {
+          archived = true;
+          resolveArchive?.();
+        },
+        archiveCalls: () => archiveCalls,
       },
       __TAURI_INTERNALS__: {
         invoke: async (command: string, args?: { structure?: { pages: Array<Record<string, unknown>> } }) => {
@@ -51,13 +59,27 @@ test("Trash shows safe metadata and restores a folder to its destination", async
             case "load_workspace_data":
               return workspace();
             case "list_trash":
-              return trashEntries.filter((entry) => !restored || entry.id !== "restored-folder");
+              return [
+                ...trashEntries.filter((entry) => !restored || entry.id !== "restored-folder"),
+                ...(archived ? [{
+                  id: "restored-child",
+                  kind: "page",
+                  name: "Restored child",
+                  previousLocation: "Restored folder",
+                  trashedAt: 1_701_000_000_000,
+                }] : []),
+              ];
             case "restore_folder_from_trash":
               return new Promise<void>((resolve) => {
                 resolveRestore = resolve;
               });
             case "restore_page_from_trash":
               throw new Error("test restore failure");
+            case "move_page_to_trash":
+              archiveCalls += 1;
+              return new Promise<void>((resolve) => {
+                resolveArchive = resolve;
+              });
             case "reconcile_workspace_structure":
               return {
                 pages: (args?.structure?.pages ?? []).map((entry) => ({ ...entry, revision: 0 })),
@@ -83,18 +105,37 @@ test("Trash shows safe metadata and restores a folder to its destination", async
   const restorePage = trashedItems.getByRole("listitem").filter({ hasText: "Root" }).getByRole("button");
   await restorePage.locator("xpath=ancestor::li").hover();
   await restorePage.click();
-  await expect(page.locator(".trash-feedback")).toHaveText("Could not restore Duplicate.");
+  await expect(page.locator(".trash-status")).toHaveText("Could not restore Duplicate.");
+  await expect(page.locator(".trash-status")).toHaveCSS("color", "rgb(216, 216, 216)");
+  await page.getByRole("button", { name: "Dark mode" }).click();
+  await expect(page.locator(".trash-status")).toHaveCSS("color", "rgb(71, 84, 103)");
+  await page.getByRole("button", { name: "Dark mode" }).click();
 
   const restoreFolder = trashedItems.getByRole("listitem").filter({ hasText: "Workspace" }).getByRole("button");
   await restoreFolder.locator("xpath=ancestor::li").hover();
   await restoreFolder.click();
   await expect(restoreFolder).toBeDisabled();
   await expect(restoreFolder).toHaveAttribute("aria-label", "Restoring Duplicate");
-  await expect(page.locator(".trash-feedback")).toHaveText("Restoring Duplicate…");
+  await expect(page.getByRole("button", { name: "Empty Trash" })).toBeDisabled();
+  await expect(page.locator(".trash-status")).toHaveText("Restoring Duplicate…");
   await page.evaluate(() => (window as typeof window & { __trashTest: { completeRestore(): void } }).__trashTest.completeRestore());
-  await expect(page.locator(".trash-feedback")).toHaveText("Restored Duplicate. 1 items remain in Trash.");
+  await expect(page.locator(".trash-status")).toHaveText("Restored Duplicate. 1 items remain in Trash.");
 
   await page.getByRole("button", { name: "File explorer" }).click();
   await expect(page.locator(".nav-item-folder.is-active").filter({ hasText: "Restored folder" })).toBeVisible();
   await expect(page.locator(".nav-item-page.is-open").filter({ hasText: "Restored child" })).toBeVisible();
+
+  const archiveChild = page.locator('[data-page-trash-action="restored-child"]');
+  await archiveChild.evaluate((button) => {
+    button.click();
+    button.click();
+  });
+  await expect(archiveChild).toBeDisabled();
+  await expect(archiveChild).toHaveAttribute("aria-label", "Moving Restored child to Trash");
+  await page.getByRole("button", { name: "1 items in Trash" }).click();
+  await expect(page.getByRole("button", { name: "Empty Trash" })).toBeDisabled();
+  await expect(page.locator(".trash-status")).toHaveText("Moving Restored child to Trash…");
+  await expect.poll(() => page.evaluate(() => (window as typeof window & { __trashTest: { archiveCalls(): number } }).__trashTest.archiveCalls())).toBe(1);
+  await page.evaluate(() => (window as typeof window & { __trashTest: { completeArchive(): void } }).__trashTest.completeArchive());
+  await expect(page.locator('[data-page-trash-action="restored-child"]')).toHaveCount(0);
 });

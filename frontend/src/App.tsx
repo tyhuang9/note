@@ -1376,6 +1376,7 @@ function App() {
   const [trashAnnouncement, setTrashAnnouncement] = useState("");
   const [trashFeedback, setTrashFeedback] = useState("");
   const [pendingTrashAction, setPendingTrashAction] = useState<string | null>(null);
+  const pendingTrashActionRef = useRef<string | null>(null);
   const [selectedFolderId, setSelectedFolderId] = useState("");
   const [selectedPageId, setSelectedPageIdState] = useState("");
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
@@ -4330,8 +4331,30 @@ function App() {
     }));
   }
 
+  function beginTrashMutation(action: string, feedback: string) {
+    if (pendingTrashActionRef.current !== null) {
+      return false;
+    }
+    pendingTrashActionRef.current = action;
+    setPendingTrashAction(action);
+    setTrashAnnouncement(feedback);
+    setTrashFeedback(feedback);
+    return true;
+  }
+
+  function finishTrashMutation(action: string) {
+    if (pendingTrashActionRef.current === action) {
+      pendingTrashActionRef.current = null;
+      setPendingTrashAction(null);
+    }
+  }
+
   async function deleteFolder(folderId: string) {
     const folderName = dataRef.current.folders.find((folder) => folder.id === folderId)?.name ?? "folder";
+    const action = `archive:folder:${folderId}`;
+    if (!beginTrashMutation(action, `Moving ${folderName} to Trash…`)) {
+      return;
+    }
     try {
       await flushPendingPersistence();
       const repository = repositoryRef.current;
@@ -4351,13 +4374,6 @@ function App() {
           setTrashFeedback(message);
         }
       }
-    } catch (error) {
-      setPersistenceStatus({ kind: "failed", error: error instanceof Error ? error : new Error(String(error)) });
-      const message = `Could not move ${folderName} to Trash.`;
-      setTrashAnnouncement(message);
-      setTrashFeedback(message);
-      return;
-    }
     setData((currentData) => {
       const nextFolders = currentData.folders.filter(
         (folder) => folder.id !== folderId,
@@ -4402,6 +4418,14 @@ function App() {
         ),
       };
     });
+    } catch (error) {
+      setPersistenceStatus({ kind: "failed", error: error instanceof Error ? error : new Error(String(error)) });
+      const message = `Could not move ${folderName} to Trash.`;
+      setTrashAnnouncement(message);
+      setTrashFeedback(message);
+    } finally {
+      finishTrashMutation(action);
+    }
   }
 
   function selectFolder(folderId: string) {
@@ -5731,8 +5755,10 @@ function App() {
       return;
     }
 
-    setPendingTrashAction(`restore:${entry.id}`);
-    setTrashFeedback(`Restoring ${entry.name}…`);
+    const action = `restore:${entry.id}`;
+    if (!beginTrashMutation(action, `Restoring ${entry.name}…`)) {
+      return;
+    }
     try {
       if (entry.kind === "folder") {
         await repository.restoreFolderFromTrash(entry.id);
@@ -5798,7 +5824,7 @@ function App() {
       setTrashAnnouncement(message);
       setTrashFeedback(message);
     } finally {
-      setPendingTrashAction(null);
+      finishTrashMutation(action);
     }
   }
 
@@ -5806,6 +5832,10 @@ function App() {
     const repository = repositoryRef.current;
     if (!repository) {
       setTrashFeedback("Could not empty Trash: storage is unavailable.");
+      return;
+    }
+    const action = "empty";
+    if (!beginTrashMutation(action, "Preparing Trash for permanent deletion…")) {
       return;
     }
     try {
@@ -5817,9 +5847,9 @@ function App() {
         `Permanently delete ${preview.folderCount} folder${preview.folderCount === 1 ? "" : "s"}, ${preview.pageCount} page${preview.pageCount === 1 ? "" : "s"}, and ${preview.elementCount} canvas element${preview.elementCount === 1 ? "" : "s"}?\n\nThis cannot be undone.`,
       );
       if (!confirmed) {
+        setTrashFeedback("Empty Trash canceled.");
         return;
       }
-      setPendingTrashAction("empty");
       setTrashFeedback("Permanently deleting Trash items…");
       await repository.purgeTrash(preview);
       setTrashEntries(await repository.listTrash());
@@ -5835,7 +5865,7 @@ function App() {
       setTrashAnnouncement(message);
       setTrashFeedback(message);
     } finally {
-      setPendingTrashAction(null);
+      finishTrashMutation(action);
     }
   }
 
@@ -5962,6 +5992,10 @@ function App() {
     const pageIndex = siblingPages.findIndex((page) => page.id === pageId);
     const successorPageId = siblingPages[pageIndex + 1]?.id ?? siblingPages[pageIndex - 1]?.id ?? null;
     const parentFolderId = pageToTrash?.folderId ?? null;
+    const action = `archive:page:${pageId}`;
+    if (!beginTrashMutation(action, `Moving ${pageName} to Trash…`)) {
+      return;
+    }
     try {
       await flushPendingPersistence();
       const repository = repositoryRef.current;
@@ -5981,13 +6015,6 @@ function App() {
           setTrashFeedback(message);
         }
       }
-    } catch (error) {
-      setPersistenceStatus({ kind: "failed", error: error instanceof Error ? error : new Error(String(error)) });
-      const message = `Could not move ${pageName} to Trash.`;
-      setTrashAnnouncement(message);
-      setTrashFeedback(message);
-      return;
-    }
     setData((currentData) => {
       const pageToDelete = currentData.pages.find((page) => page.id === pageId);
       const nextPages = currentData.pages.filter((page) => page.id !== pageId);
@@ -6037,6 +6064,14 @@ function App() {
         : null;
       (successorAction ?? parentControl ?? explorerPanelRef.current)?.focus();
     });
+    } catch (error) {
+      setPersistenceStatus({ kind: "failed", error: error instanceof Error ? error : new Error(String(error)) });
+      const message = `Could not move ${pageName} to Trash.`;
+      setTrashAnnouncement(message);
+      setTrashFeedback(message);
+    } finally {
+      finishTrashMutation(action);
+    }
   }
 
   const deleteBlock = useCallback(
@@ -10168,6 +10203,7 @@ const Sidebar = memo(function Sidebar({
   const [folderMenuState, setFolderMenuState] = useState<FolderMenuState | null>(
     null,
   );
+  const isTrashMutationPending = pendingTrashAction !== null;
   useEffect(() => {
     const folderIdAtPoint = (clientX: number, clientY: number) => {
       const target = document
@@ -11211,13 +11247,14 @@ const Sidebar = memo(function Sidebar({
                     <span className="nav-actions">
                       <button
                         type="button"
-                        aria-label={`Move ${page.title} to Trash`}
+                        aria-label={pendingTrashAction === `archive:page:${page.id}` ? `Moving ${page.title} to Trash` : `Move ${page.title} to Trash`}
                         data-page-trash-action={page.id}
+                        disabled={isTrashMutationPending}
                         onClick={(event) => {
                           event.stopPropagation();
                           onDeletePage(page.id);
                         }}
-                        title={`Move ${page.title} to Trash`}
+                        title={pendingTrashAction === `archive:page:${page.id}` ? `Moving ${page.title} to Trash` : `Move ${page.title} to Trash`}
                       >
                         <HeroIcon name="trash" />
                       </button>
@@ -11378,13 +11415,14 @@ const Sidebar = memo(function Sidebar({
                               <span className="nav-actions">
                                 <button
                                   type="button"
-                                  aria-label={`Move ${page.title} to Trash`}
+                                  aria-label={pendingTrashAction === `archive:page:${page.id}` ? `Moving ${page.title} to Trash` : `Move ${page.title} to Trash`}
                                   data-page-trash-action={page.id}
+                                  disabled={isTrashMutationPending}
                                   onClick={(event) => {
                                     event.stopPropagation();
                                     onDeletePage(page.id);
                                   }}
-                                  title={`Move ${page.title} to Trash`}
+                                  title={pendingTrashAction === `archive:page:${page.id}` ? `Moving ${page.title} to Trash` : `Move ${page.title} to Trash`}
                                 >
                                   <HeroIcon name="trash" />
                                 </button>
@@ -11566,13 +11604,14 @@ const Sidebar = memo(function Sidebar({
                                   <span className="nav-actions">
                                     <button
                                       type="button"
-                                      aria-label={`Move ${page.title} to Trash`}
+                                      aria-label={pendingTrashAction === `archive:page:${page.id}` ? `Moving ${page.title} to Trash` : `Move ${page.title} to Trash`}
                                       data-page-trash-action={page.id}
+                                      disabled={isTrashMutationPending}
                                       onClick={(event) => {
                                         event.stopPropagation();
                                         onDeletePage(page.id);
                                       }}
-                                      title={`Move ${page.title} to Trash`}
+                                      title={pendingTrashAction === `archive:page:${page.id}` ? `Moving ${page.title} to Trash` : `Move ${page.title} to Trash`}
                                     >
                                       <HeroIcon name="trash" />
                                     </button>
@@ -11670,9 +11709,10 @@ const Sidebar = memo(function Sidebar({
                       </button>
                       <span className="nav-actions">
                         <button
-                          aria-label={`Move template ${templatePage.title} to Trash`}
+                          aria-label={pendingTrashAction === `archive:page:${templatePage.id}` ? `Moving template ${templatePage.title} to Trash` : `Move template ${templatePage.title} to Trash`}
+                          disabled={isTrashMutationPending}
                           onClick={() => onDeletePageTemplate(templatePage.id)}
-                          title={`Move template ${templatePage.title} to Trash`}
+                          title={pendingTrashAction === `archive:page:${templatePage.id}` ? `Moving template ${templatePage.title} to Trash` : `Move template ${templatePage.title} to Trash`}
                           type="button"
                         >
                           <HeroIcon name="trash" />
@@ -11701,7 +11741,7 @@ const Sidebar = memo(function Sidebar({
                   aria-label={pendingTrashAction === "empty" ? "Emptying Trash" : "Empty Trash"}
                   className="section-action"
                   data-empty-trash
-                  disabled={trashEntries.length === 0 || pendingTrashAction === "empty"}
+                  disabled={trashEntries.length === 0 || isTrashMutationPending}
                   onClick={onEmptyTrash}
                   title={pendingTrashAction === "empty" ? "Emptying Trash" : "Permanently delete everything in Trash"}
                   type="button"
@@ -11709,7 +11749,7 @@ const Sidebar = memo(function Sidebar({
                   <HeroIcon name="trash" />
                 </button>
               </div>
-              {trashFeedback ? <p className="trash-feedback" role="status">{trashFeedback}</p> : null}
+              {trashFeedback ? <p className="trash-status" role="status">{trashFeedback}</p> : null}
               {trashEntries.length > 0 ? (
                 <ul className="nav-list trash-list" aria-label="Trashed items">
                   {trashEntries.map((entry, restoreIndex) => (
@@ -11765,7 +11805,9 @@ const Sidebar = memo(function Sidebar({
                     : "Bookmark"
                   : action.id === "rename"
                     ? "Rename"
-                    : "Move to Trash";
+                    : pendingTrashAction === `archive:folder:${folderMenuFolder.id}`
+                      ? "Moving to Trash"
+                      : "Move to Trash";
 
               return (
                 <Fragment key={action.id}>
@@ -11779,6 +11821,7 @@ const Sidebar = memo(function Sidebar({
                     onClick={() =>
                       runFolderMenuAction(action.id, folderMenuFolder.id)
                     }
+                    disabled={action.id === "delete" && isTrashMutationPending}
                     role="menuitem"
                     type="button"
                   >

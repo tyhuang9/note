@@ -4,6 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 use tauri::Manager;
 
+pub mod agent_contracts;
 pub mod storage;
 
 #[derive(Debug, Default, Deserialize, Serialize)]

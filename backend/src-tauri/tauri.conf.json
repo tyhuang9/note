@@ -32,7 +32,8 @@
     "targets": "all",
     "windows": {
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "template": "installer/nsis/tauri-2.11.2-installer.nsi"
       }
     },
     "icon": [

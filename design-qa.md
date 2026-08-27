@@ -52,6 +52,45 @@ No actionable P0, P1, or P2 visual or interaction mismatch remains for the reque
 
 final result: passed
 
+## Documentation directional-border cleanup — 2026-08-27
+
+### Source and implementation evidence
+
+- Source visual truth: `C:\Users\huang\Documents\Projects\Note\note\docs\qa\docs-site-audit\12-first-use-colored-top-border-reference.png` (785 × 330 pixels).
+- Browser-rendered implementation: `C:\Users\huang\Documents\Projects\Note\note\docs\qa\docs-site-audit\11-first-use-cards-focused-after.png` (619 × 239 pixels).
+- Full section evidence: `C:\Users\huang\Documents\Projects\Note\note\docs\qa\docs-site-audit\10-first-use-no-top-accent-after.png` (674 × 986 pixels).
+- Combined comparison: `C:\Users\huang\Documents\Projects\Note\note\docs\qa\docs-site-audit\13-first-use-top-border-comparison.png` (1280 × 720 pixels).
+- Viewport/state: dark system theme in the Codex in-app Browser. The implementation was captured at 674 × 986 CSS pixels with device pixel ratio 1 and compared as a focused card-group crop. The source is a tighter crop of the same three-card state, so the comparison normalizes by displaying both crops at equal column width rather than claiming pixel-for-pixel layout parity.
+
+### Full-view and focused comparison evidence
+
+The full section capture confirms the first-use cards remain readable, grouped, and visually subordinate to the section heading after the accent is removed. The focused combined comparison makes the requested change explicit: the previous gold top-edge lines are gone, while the neutral complete borders and existing rounded geometry remain.
+
+### Required fidelity surfaces
+
+- Fonts and typography: unchanged; the existing strong lead phrase and regular supporting copy remain legible at the same sizes and weights.
+- Spacing and layout rhythm: unchanged; card padding, radius, gaps, and responsive vertical stack are preserved.
+- Colors and visual tokens: the gold directional accent is removed. Computed top and left borders are the same neutral `rgb(74, 70, 62)` in dark mode, and computed `box-shadow` is `none`.
+- Image quality and asset fidelity: no product imagery or brand assets changed. The comparison uses lossless PNG captures.
+- Copy and content: unchanged.
+
+### Findings and comparison history
+
+- P2 resolved: first-use and download cards used `inset 0 3px var(--golden)`, visually simulating a colored top border. Fix: remove that inset shadow and rely on the existing complete neutral border. Post-fix evidence is the combined comparison above.
+- No actionable P0, P1, or P2 mismatch remains for the requested directional-border cleanup.
+
+### Interaction and runtime checks
+
+- The documentation validator passes and now rejects brand-colored left/top borders and equivalent gold inset shadows.
+- Browser inspection confirms the three card borders are neutral, their inset shadows are absent, and the page reports no horizontal overflow.
+- No controls, links, content, breakpoints, or motion behavior changed.
+
+### Remaining gaps
+
+- P3/unverified: non-Chromium antialiasing may differ slightly, but the underlying CSS border and shadow values are deterministic.
+
+final result: passed
+
 ## Canvas controls and global utilities — 2026-08-26
 
 ### Verification plan

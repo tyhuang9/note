@@ -565,6 +565,14 @@ const LLAMA_HARNESS_SELECTED_AGENT_KEY = "note.llamaHarness.selectedAgentId.v1";
 const DEFAULT_PAN_OFFSET: PanOffset = { x: 0, y: 0 };
 const SEARCH_CONTROL_COMMAND_KEYS = new Set(["a", "f", "n", "o", "y", "z", "+", "=", "-", "0"]);
 
+function formatTrashCount(count: number, noun: string) {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+function formatTrashRemaining(count: number) {
+  return `${formatTrashCount(count, "item")} ${count === 1 ? "remains" : "remain"} in Trash.`;
+}
+
 function createConnectorPreviewLayer(): ConnectorPreviewLayer {
   return { labels: null, renderer: null };
 }
@@ -4364,7 +4372,7 @@ function App() {
         try {
           const nextTrashEntries = await repository.listTrash();
           setTrashEntries(nextTrashEntries);
-          message = `Moved ${folderName} to Trash. ${nextTrashEntries.length} items remain in Trash.`;
+          message = `Moved ${folderName} to Trash. ${formatTrashRemaining(nextTrashEntries.length)}`;
         } catch {
           message = `Moved ${folderName} to Trash. Trash could not refresh; it will update when reopened.`;
         }
@@ -5797,7 +5805,7 @@ function App() {
       setData(nextData);
       const nextTrashEntries = await repository.listTrash();
       setTrashEntries(nextTrashEntries);
-      const message = `Restored ${entry.name}. ${nextTrashEntries.length} items remain in Trash.`;
+      const message = `Restored ${entry.name}. ${formatTrashRemaining(nextTrashEntries.length)}`;
       setTrashAnnouncement(message);
       setTrashFeedback(message);
 
@@ -5856,18 +5864,18 @@ function App() {
         return;
       }
       const confirmed = window.confirm(
-        `Permanently delete ${preview.folderCount} folder${preview.folderCount === 1 ? "" : "s"}, ${preview.pageCount} page${preview.pageCount === 1 ? "" : "s"}, and ${preview.elementCount} canvas element${preview.elementCount === 1 ? "" : "s"}?\n\nThis cannot be undone.`,
+        `Permanently delete ${formatTrashCount(preview.folderCount, "folder")}, ${formatTrashCount(preview.pageCount, "page")}, and ${formatTrashCount(preview.elementCount, "canvas element")}?\n\nThis cannot be undone.`,
       );
       if (!confirmed) {
         setTrashFeedback("Empty Trash canceled.");
         return;
       }
-      setTrashFeedback("Permanently deleting Trash items…");
+      setTrashFeedback("Permanently deleting Trash contents…");
       const purgeResult = await repository.purgeTrash(preview);
       setTrashEntries(await repository.listTrash());
       const message = purgeResult.cleanupWarning
-        ? `Permanently deleted ${preview.folderCount} folders, ${preview.pageCount} pages, and ${preview.elementCount} canvas elements. Some purged assets will be cleaned up automatically.`
-        : `Permanently deleted ${preview.folderCount} folders, ${preview.pageCount} pages, and ${preview.elementCount} canvas elements.`;
+        ? `Permanently deleted ${formatTrashCount(preview.folderCount, "folder")}, ${formatTrashCount(preview.pageCount, "page")}, and ${formatTrashCount(preview.elementCount, "canvas element")}. Some purged assets will be cleaned up automatically.`
+        : `Permanently deleted ${formatTrashCount(preview.folderCount, "folder")}, ${formatTrashCount(preview.pageCount, "page")}, and ${formatTrashCount(preview.elementCount, "canvas element")}.`;
       setTrashAnnouncement(message);
       setTrashFeedback(message);
       window.requestAnimationFrame(() => {
@@ -6019,7 +6027,7 @@ function App() {
         try {
           const nextTrashEntries = await repository.listTrash();
           setTrashEntries(nextTrashEntries);
-          message = `Moved ${pageName} to Trash. ${nextTrashEntries.length} items remain in Trash.`;
+          message = `Moved ${pageName} to Trash. ${formatTrashRemaining(nextTrashEntries.length)}`;
         } catch {
           message = `Moved ${pageName} to Trash. Trash could not refresh; it will update when reopened.`;
         }

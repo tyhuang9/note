@@ -44,6 +44,7 @@ export const ActivityRail = memo(function ActivityRail({
   const themeToggleTitle = isDarkMode
     ? "Switch to light mode"
     : "Switch to dark mode";
+  const trashEntryLabel = `${trashEntryCount} ${trashEntryCount === 1 ? "item" : "items"} in Trash`;
 
   return (
     <nav className="activity-rail" aria-label="Primary workspace tools">
@@ -102,7 +103,7 @@ export const ActivityRail = memo(function ActivityRail({
             trashEntryCount > 0 ? "has-count" : ""
           }`}
           aria-controls="workspace-explorer-panel"
-          aria-label={`${trashEntryCount} items in Trash`}
+          aria-label={trashEntryLabel}
           aria-pressed={activeTab === "trash"}
           onClick={(event) => onSelectTab("trash", event.currentTarget)}
           ref={trashToggleButtonRef}

@@ -133,7 +133,7 @@ test("Trash shows safe metadata and restores a folder to its destination", async
   expect(restoreCommands.indexOf("reconcile_workspace_structure")).toBeGreaterThanOrEqual(0);
   expect(restoreCommands.indexOf("reconcile_workspace_structure")).toBeLessThan(restoreCommands.indexOf("restore_folder_from_trash"));
   await page.evaluate(() => (window as typeof window & { __trashTest: { completeRestore(): void } }).__trashTest.completeRestore());
-  await expect(page.locator(".trash-status")).toHaveText("Restored Duplicate. 1 items remain in Trash.");
+  await expect(page.locator(".trash-status")).toHaveText("Restored Duplicate. 1 item remains in Trash.");
 
   await page.getByRole("button", { name: "File explorer" }).click();
   await expect(page.locator(".nav-item-folder.is-active").filter({ hasText: "Restored folder" })).toBeVisible();
@@ -147,7 +147,7 @@ test("Trash shows safe metadata and restores a folder to its destination", async
   });
   await expect(archiveChild).toBeDisabled();
   await expect(archiveChild).toHaveAttribute("aria-label", "Moving Restored child to Trash");
-  await page.getByRole("button", { name: "1 items in Trash" }).click();
+  await page.getByRole("button", { name: "1 item in Trash" }).click();
   await expect(page.getByRole("button", { name: "Empty Trash" })).toBeDisabled();
   await expect(page.locator(".trash-status")).toHaveText("Moving Restored child to Trash…");
   await expect.poll(() => page.evaluate(() => (window as typeof window & { __trashTest: { archiveCalls(): number } }).__trashTest.archiveCalls())).toBe(1);
@@ -225,7 +225,7 @@ test("Empty Trash flushes first, refreshes an empty preview, and reports deferre
   });
 
   await page.goto("/");
-  await page.getByRole("button", { name: "1 items in Trash" }).click();
+  await page.getByRole("button", { name: "1 item in Trash" }).click();
   await page.evaluate(() => (window as typeof window & { __trashCorrection: { clearCommandLog(): void } }).__trashCorrection.clearCommandLog());
   await page.getByRole("button", { name: "Empty Trash" }).click();
   await expect(page.locator(".trash-status")).toHaveText("Trash is already empty.");
@@ -237,11 +237,11 @@ test("Empty Trash flushes first, refreshes an empty preview, and reports deferre
 
   await page.evaluate(() => window.sessionStorage.setItem("trash-native-mode", "warning"));
   await page.reload();
-  await page.getByRole("button", { name: "1 items in Trash" }).click();
+  await page.getByRole("button", { name: "1 item in Trash" }).click();
   await page.evaluate(() => (window as typeof window & { __trashCorrection: { clearCommandLog(): void } }).__trashCorrection.clearCommandLog());
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Empty Trash" }).click();
-  await expect(page.locator(".trash-status")).toHaveText("Permanently deleted 0 folders, 1 pages, and 0 canvas elements. Some purged assets will be cleaned up automatically.");
+  await expect(page.locator(".trash-status")).toHaveText("Permanently deleted 0 folders, 1 page, and 0 canvas elements. Some purged assets will be cleaned up automatically.");
   const purgeCommands = await page.evaluate(() => (window as typeof window & { __trashCorrection: { commandLog(): string[] } }).__trashCorrection.commandLog());
   expect(purgeCommands.indexOf("reconcile_workspace_structure")).toBeGreaterThanOrEqual(0);
   expect(purgeCommands.indexOf("reconcile_workspace_structure")).toBeLessThan(purgeCommands.indexOf("purge_trash"));

@@ -2520,7 +2520,9 @@ fn retry_asset_cleanup(root: &Path) -> Result<(), String> {
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
     let entries: Vec<(String, String, String)> = transaction
-        .prepare("SELECT asset_id,relative_path,staged_path FROM asset_cleanup_journal ORDER BY rowid")
+        .prepare(
+            "SELECT asset_id,relative_path,staged_path FROM asset_cleanup_journal ORDER BY rowid",
+        )
         .map_err(|e| e.to_string())?
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
         .map_err(|e| e.to_string())?
@@ -2549,8 +2551,8 @@ fn retry_asset_cleanup(root: &Path) -> Result<(), String> {
         let cleanup = (|| -> Result<(), String> {
             let relative = cleanup_path_component(&relative, "relative path")?;
             let staged = cleanup_path_component(&staged, "staged path")?;
-            let parsed_id = uuid::Uuid::parse_str(&id)
-                .map_err(|_| "invalid asset cleanup id".to_owned())?;
+            let parsed_id =
+                uuid::Uuid::parse_str(&id).map_err(|_| "invalid asset cleanup id".to_owned())?;
             if staged != format!(".purging-{parsed_id}") {
                 return Err("invalid asset cleanup staged path".into());
             }
@@ -2562,10 +2564,12 @@ fn retry_asset_cleanup(root: &Path) -> Result<(), String> {
                 )
                 .optional()
                 .map_err(|error| error.to_string())?;
-            let (authoritative_relative, media_type) = authoritative
-                .ok_or_else(|| "asset cleanup metadata is unavailable".to_owned())?;
+            let (authoritative_relative, media_type) =
+                authoritative.ok_or_else(|| "asset cleanup metadata is unavailable".to_owned())?;
             if relative != authoritative_relative {
-                return Err("asset cleanup path does not match authoritative asset metadata".into());
+                return Err(
+                    "asset cleanup path does not match authoritative asset metadata".into(),
+                );
             }
             validate_managed_cleanup_path(parsed_id, &relative, &media_type)?;
             if live.contains(&id) {
@@ -5651,8 +5655,16 @@ mod tests {
         let valid_asset = save_test_asset(directory.path(), "valid.png");
         let malformed_file = asset_file(directory.path(), &malformed_asset.id);
         let valid_file = asset_file(directory.path(), &valid_asset.id);
-        let malformed_relative = malformed_file.file_name().unwrap().to_string_lossy().into_owned();
-        let valid_relative = valid_file.file_name().unwrap().to_string_lossy().into_owned();
+        let malformed_relative = malformed_file
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let valid_relative = valid_file
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         let connection = database::open(&directory.path().join("note.db")).unwrap();
         connection
             .execute(
@@ -5746,7 +5758,8 @@ mod tests {
         let connection = database::open(&directory.path().join("note.db")).unwrap();
         assert_eq!(
             connection
-                .query_row("SELECT count(*) FROM pages WHERE id='p'", [], |row| row.get::<_, i64>(0))
+                .query_row("SELECT count(*) FROM pages WHERE id='p'", [], |row| row
+                    .get::<_, i64>(0))
                 .unwrap(),
             0
         );

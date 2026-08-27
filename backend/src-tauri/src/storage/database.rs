@@ -126,7 +126,7 @@ PRAGMA user_version=1;
             )
             .unwrap();
 
-        assert_eq!(migrate(&mut connection).unwrap(), 4);
+        assert_eq!(migrate(&mut connection).unwrap(), 5);
         assert_eq!(
             connection
                 .query_row(

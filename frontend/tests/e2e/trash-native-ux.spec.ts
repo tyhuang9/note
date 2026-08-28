@@ -342,3 +342,143 @@ test("Trash metadata startup failure keeps native persistence active", async ({ 
   await expect(page.locator('[data-page-trash-action="stored-page"]')).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => (window as typeof window & { __trashStartup: { legacyLoadCalls(): number } }).__trashStartup.legacyLoadCalls())).toBe(0);
 });
+
+test("Trash separates save failures from native command failures", async ({ page }) => {
+  await page.addInitScript(() => {
+    let failNextReconcile = false;
+    let archiveCalls = 0;
+    let restoreCalls = 0;
+    let previewCalls = 0;
+    let purgeCalls = 0;
+    const commandLog: string[] = [];
+    const workspace = {
+      elements: [],
+      folders: [{ id: "", name: "Root", isBookmarked: false }],
+      isDarkMode: false,
+      pages: [{ id: "archive-page", folderId: "", title: "Archive page", isBookmarked: false, revision: 0 }],
+      sessionState: {},
+      warnings: [],
+    };
+    const trashEntries = [{
+      id: "restorable-page",
+      kind: "page",
+      name: "Restorable page",
+      previousLocation: "Root",
+      trashedAt: 1_700_000_000_000,
+    }];
+    Object.assign(window, {
+      isTauri: true,
+      __trashFailure: {
+        calls: () => ({ archiveCalls, restoreCalls, previewCalls, purgeCalls }),
+        clearCommandLog: () => { commandLog.length = 0; },
+        commandLog: () => commandLog,
+        failNextReconcile: () => { failNextReconcile = true; },
+      },
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args?: { structure?: { pages: Array<Record<string, unknown>> } }) => {
+          commandLog.push(command);
+          switch (command) {
+            case "initialize_storage":
+              return { databasePath: "failures.db", importedLegacyData: false, schemaVersion: 5, warnings: [] };
+            case "load_workspace_data":
+              return workspace;
+            case "list_trash":
+              return trashEntries;
+            case "reconcile_workspace_structure":
+              if (failNextReconcile) {
+                failNextReconcile = false;
+                throw new Error("test persistence failure");
+              }
+              return { pages: (args?.structure?.pages ?? []).map((entry) => ({ ...entry, revision: 0 })) };
+            case "move_page_to_trash":
+              archiveCalls += 1;
+              throw new Error("native archive failure");
+            case "restore_page_from_trash":
+              restoreCalls += 1;
+              throw new Error("native restore failure");
+            case "get_trash_purge_preview":
+              previewCalls += 1;
+              return { confirmationToken: "purge", folderCount: 0, pageCount: 1, elementCount: 0 };
+            case "purge_trash":
+              purgeCalls += 1;
+              throw new Error("native purge failure");
+            case "apply_scene_changes":
+              return { newRevision: 0, pageId: "archive-page" };
+            default:
+              return undefined;
+          }
+        },
+      },
+    });
+  });
+
+  await page.goto("/");
+  const trashFailureCalls = () => page.evaluate(() => (window as typeof window & {
+    __trashFailure: {
+      calls(): { archiveCalls: number; restoreCalls: number; previewCalls: number; purgeCalls: number };
+    };
+  }).__trashFailure.calls());
+  const trashFailureCommandLog = () => page.evaluate(() => (window as typeof window & {
+    __trashFailure: { commandLog(): string[] };
+  }).__trashFailure.commandLog());
+  const archiveAction = page.locator('[data-page-trash-action="archive-page"]').first();
+
+  await page.evaluate(() => (window as typeof window & { __trashFailure: { clearCommandLog(): void; failNextReconcile(): void } }).__trashFailure.clearCommandLog());
+  await page.evaluate(() => (window as typeof window & { __trashFailure: { failNextReconcile(): void } }).__trashFailure.failNextReconcile());
+  await archiveAction.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("[data-trash-announcement]")).toHaveText("Could not move Archive page to Trash: save failed before the Trash change. Retry save and try again.");
+  await expect.poll(async () => (await trashFailureCalls()).archiveCalls).toBe(0);
+  await expect(page.locator(".persistence-status-failed")).toContainText("Save failed: test persistence failure");
+  let commands = await trashFailureCommandLog();
+  expect(commands).toContain("reconcile_workspace_structure");
+  expect(commands).not.toContain("move_page_to_trash");
+
+  await page.evaluate(() => (window as typeof window & { __trashFailure: { clearCommandLog(): void } }).__trashFailure.clearCommandLog());
+  await archiveAction.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("[data-trash-announcement]")).toHaveText("Could not move Archive page to Trash.");
+  await expect.poll(async () => (await trashFailureCalls()).archiveCalls).toBe(1);
+  await expect(page.locator(".persistence-status-saved")).toHaveText("Saved");
+  commands = await trashFailureCommandLog();
+  expect(commands.indexOf("reconcile_workspace_structure")).toBeLessThan(commands.indexOf("move_page_to_trash"));
+
+  await page.getByRole("button", { name: "1 item in Trash" }).click();
+  const restoreAction = page.getByRole("button", { name: "Restore Restorable page" });
+  await page.evaluate(() => (window as typeof window & { __trashFailure: { clearCommandLog(): void; failNextReconcile(): void } }).__trashFailure.clearCommandLog());
+  await page.evaluate(() => (window as typeof window & { __trashFailure: { failNextReconcile(): void } }).__trashFailure.failNextReconcile());
+  await restoreAction.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("[data-trash-announcement]")).toHaveText("Could not restore Restorable page: save failed before the Trash change. Retry save and try again.");
+  await expect.poll(async () => (await trashFailureCalls()).restoreCalls).toBe(0);
+  commands = await trashFailureCommandLog();
+  expect(commands).not.toContain("restore_page_from_trash");
+
+  await page.evaluate(() => (window as typeof window & { __trashFailure: { clearCommandLog(): void } }).__trashFailure.clearCommandLog());
+  await restoreAction.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("[data-trash-announcement]")).toHaveText("Could not restore Restorable page.");
+  await expect.poll(async () => (await trashFailureCalls()).restoreCalls).toBe(1);
+  await expect(page.locator(".persistence-status-saved")).toHaveText("Saved");
+  commands = await trashFailureCommandLog();
+  expect(commands.indexOf("reconcile_workspace_structure")).toBeLessThan(commands.indexOf("restore_page_from_trash"));
+
+  const emptyTrash = page.getByRole("button", { name: "Empty Trash" });
+  await page.evaluate(() => (window as typeof window & { __trashFailure: { clearCommandLog(): void; failNextReconcile(): void } }).__trashFailure.clearCommandLog());
+  await page.evaluate(() => (window as typeof window & { __trashFailure: { failNextReconcile(): void } }).__trashFailure.failNextReconcile());
+  await emptyTrash.click();
+  await expect(page.locator("[data-trash-announcement]")).toHaveText("Could not empty Trash: save failed before the Trash change. Retry save and try again.");
+  await expect.poll(async () => (await trashFailureCalls()).previewCalls).toBe(0);
+  commands = await trashFailureCommandLog();
+  expect(commands).not.toContain("get_trash_purge_preview");
+
+  await page.evaluate(() => (window as typeof window & { __trashFailure: { clearCommandLog(): void } }).__trashFailure.clearCommandLog());
+  page.once("dialog", (dialog) => dialog.accept());
+  await emptyTrash.click();
+  await expect(page.locator("[data-trash-announcement]")).toHaveText("Could not empty Trash.");
+  await expect.poll(async () => (await trashFailureCalls()).purgeCalls).toBe(1);
+  await expect(page.locator(".persistence-status-saved")).toHaveText("Saved");
+  commands = await trashFailureCommandLog();
+  expect(commands.indexOf("reconcile_workspace_structure")).toBeLessThan(commands.indexOf("get_trash_purge_preview"));
+  expect(commands.indexOf("get_trash_purge_preview")).toBeLessThan(commands.indexOf("purge_trash"));
+});

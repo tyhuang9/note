@@ -2418,7 +2418,7 @@ SELECT id,'folder' AS kind,substr(name,1,160),'Workspace',trashed_at FROM folder
 WHERE lifecycle='trashed' AND id NOT IN (?,?)
 UNION ALL
 SELECT p.id,'page' AS kind,substr(p.title,1,160),substr(COALESCE(NULLIF(f.name,''),'Root'),1,160),p.trashed_at FROM pages p LEFT JOIN folders f ON f.id=p.folder_id WHERE p.lifecycle='trashed'
-ORDER BY trashed_at DESC
+ORDER BY trashed_at DESC, kind ASC, id ASC
 "#,
         )
         .map_err(|error| error.to_string())?;
@@ -5206,6 +5206,54 @@ mod tests {
         assert_eq!(entries[1].name, "Duplicate");
         assert_eq!(entries[1].previous_location, "Root");
         assert_eq!(entries[1].trashed_at, 100);
+    }
+
+    #[test]
+    fn trash_metadata_and_purge_snapshots_are_stable_when_timestamps_tie() {
+        let directory = root();
+        seed_page(directory.path());
+        seed_additional_page(directory.path(), "a-page");
+        trash_folder_at(directory.path(), "f").unwrap();
+        trash_page_at(directory.path(), "p").unwrap();
+        trash_page_at(directory.path(), "a-page").unwrap();
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        connection
+            .execute("UPDATE folders SET trashed_at=100 WHERE id='f'", [])
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE pages SET trashed_at=100 WHERE id IN ('p','a-page')",
+                [],
+            )
+            .unwrap();
+
+        let entries = list_trash_at(directory.path()).unwrap();
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| (entry.kind.as_str(), entry.id.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("folder", "f"), ("page", "a-page"), ("page", "p")]
+        );
+
+        let first_preview = trash_purge_preview_at(directory.path()).unwrap();
+        let second_preview = trash_purge_preview_at(directory.path()).unwrap();
+        let first_snapshot: String = connection
+            .query_row(
+                "SELECT snapshot_json FROM trash_purge_snapshots WHERE token=?",
+                [&first_preview.confirmation_token],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let second_snapshot: String = connection
+            .query_row(
+                "SELECT snapshot_json FROM trash_purge_snapshots WHERE token=?",
+                [&second_preview.confirmation_token],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(first_snapshot, second_snapshot);
+        purge_trash_at(directory.path(), purge_request(&first_preview)).unwrap();
     }
 
     #[test]

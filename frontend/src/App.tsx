@@ -575,6 +575,15 @@ function formatTrashRemaining(count: number) {
   return `${formatTrashCount(count, "item")} ${count === 1 ? "remains" : "remain"} in Trash.`;
 }
 
+function orderTrashEntries(entries: readonly TrashEntry[]) {
+  return [...entries].sort((left, right) => {
+    if (left.trashedAt !== right.trashedAt) return right.trashedAt - left.trashedAt;
+    if (left.kind !== right.kind) return left.kind < right.kind ? -1 : 1;
+    if (left.id === right.id) return 0;
+    return left.id < right.id ? -1 : 1;
+  });
+}
+
 function createConnectorPreviewLayer(): ConnectorPreviewLayer {
   return { labels: null, renderer: null };
 }
@@ -4373,6 +4382,19 @@ function App() {
     }
   }
 
+  async function flushBeforeTrashMutation(operation: string) {
+    try {
+      await flushPendingPersistence();
+      return true;
+    } catch (error) {
+      setPersistenceStatus({ kind: "failed", error: error instanceof Error ? error : new Error(String(error)) });
+      const message = `Could not ${operation}: save failed before the Trash change. Retry save and try again.`;
+      setTrashAnnouncement(message);
+      setTrashFeedback(message);
+      return false;
+    }
+  }
+
   async function deleteFolder(folderId: string) {
     const folderName = dataRef.current.folders.find((folder) => folder.id === folderId)?.name ?? "folder";
     const action = `archive:folder:${folderId}`;
@@ -4381,7 +4403,9 @@ function App() {
     }
     let shouldRestoreFolderFocus = false;
     try {
-      await flushPendingPersistence();
+      if (!await flushBeforeTrashMutation(`move ${folderName} to Trash`)) {
+        return;
+      }
       const repository = repositoryRef.current;
       if (repository) {
         await repository.moveFolderToTrash(folderId);
@@ -4401,7 +4425,10 @@ function App() {
       } else {
         const folder = dataRef.current.folders.find((candidate) => candidate.id === folderId);
         if (folder) {
-          setTrashEntries((entries) => [{ id: folder.id, kind: "folder", name: folder.name, previousLocation: "Workspace", trashedAt: Date.now() }, ...entries]);
+          setTrashEntries((entries) => orderTrashEntries([
+            { id: folder.id, kind: "folder", name: folder.name, previousLocation: "Workspace", trashedAt: Date.now() },
+            ...entries,
+          ]));
           const message = `Moved ${folder.name} to Trash.`;
           setTrashAnnouncement(message);
           setTrashFeedback(message);
@@ -4452,7 +4479,6 @@ function App() {
       };
     });
     } catch (error) {
-      setPersistenceStatus({ kind: "failed", error: error instanceof Error ? error : new Error(String(error)) });
       const message = `Could not move ${folderName} to Trash.`;
       setTrashAnnouncement(message);
       setTrashFeedback(message);
@@ -5789,7 +5815,7 @@ function App() {
   async function restoreTrashEntry(entry: TrashEntry, restoreIndex: number) {
     const repository = repositoryRef.current;
     if (!repository) {
-      setTrashFeedback(`Could not restore ${entry.name}: storage is unavailable.`);
+      setTrashFeedback(`Restore ${entry.name} is unavailable in this session. Restoration requires the desktop app and native storage.`);
       return;
     }
 
@@ -5799,7 +5825,9 @@ function App() {
     }
     let shouldRestoreTrashFocus = false;
     try {
-      await flushPendingPersistence();
+      if (!await flushBeforeTrashMutation(`restore ${entry.name}`)) {
+        return;
+      }
       if (entry.kind === "folder") {
         await repository.restoreFolderFromTrash(entry.id);
       } else {
@@ -5861,7 +5889,6 @@ function App() {
       setSidebarPageSelection(selectedPageIdRef.current ? [selectedPageIdRef.current] : []);
       shouldRestoreTrashFocus = true;
     } catch (error) {
-      setPersistenceStatus({ kind: "failed", error: error instanceof Error ? error : new Error(String(error)) });
       const message = `Could not restore ${entry.name}.`;
       setTrashAnnouncement(message);
       setTrashFeedback(message);
@@ -5898,7 +5925,9 @@ function App() {
     }
     let shouldRestoreEmptyTrashFocus = false;
     try {
-      await flushPendingPersistence();
+      if (!await flushBeforeTrashMutation("empty Trash")) {
+        return;
+      }
       const preview = await repository.getTrashPurgePreview();
       if (preview.pageCount === 0 && preview.folderCount === 0) {
         let message = "Trash is already empty.";
@@ -5941,7 +5970,6 @@ function App() {
       setTrashFeedback(message);
       shouldRestoreEmptyTrashFocus = true;
     } catch (error) {
-      setPersistenceStatus({ kind: "failed", error: error instanceof Error ? error : new Error(String(error)) });
       const message = "Could not empty Trash.";
       setTrashAnnouncement(message);
       setTrashFeedback(message);
@@ -6084,7 +6112,9 @@ function App() {
     }
     let shouldRestorePageFocus = false;
     try {
-      await flushPendingPersistence();
+      if (!await flushBeforeTrashMutation(`move ${pageName} to Trash`)) {
+        return;
+      }
       const repository = repositoryRef.current;
       if (repository) {
         await repository.movePageToTrash(pageId);
@@ -6103,7 +6133,10 @@ function App() {
       } else {
         const page = dataRef.current.pages.find((candidate) => candidate.id === pageId);
         if (page) {
-          setTrashEntries((entries) => [{ id: page.id, kind: "page", name: page.title, previousLocation: page.folderId === ROOT_FOLDER_ID ? "Root" : "Workspace", trashedAt: Date.now() }, ...entries]);
+          setTrashEntries((entries) => orderTrashEntries([
+            { id: page.id, kind: "page", name: page.title, previousLocation: page.folderId === ROOT_FOLDER_ID ? "Root" : "Workspace", trashedAt: Date.now() },
+            ...entries,
+          ]));
           const message = `Moved ${page.title} to Trash.`;
           setTrashAnnouncement(message);
           setTrashFeedback(message);
@@ -6150,7 +6183,6 @@ function App() {
     });
     shouldRestorePageFocus = true;
     } catch (error) {
-      setPersistenceStatus({ kind: "failed", error: error instanceof Error ? error : new Error(String(error)) });
       const message = `Could not move ${pageName} to Trash.`;
       setTrashAnnouncement(message);
       setTrashFeedback(message);
@@ -11841,12 +11873,12 @@ const Sidebar = memo(function Sidebar({
               <div className="section-header">
                 <h2 id="trash-title" tabIndex={-1}>Trash</h2>
                 <button
-                  aria-label={pendingTrashAction === "empty" ? "Emptying Trash" : !isTrashRestoreAvailable ? "Empty Trash unavailable until storage reconnects" : hasTrashMetadata && trashEntries.length === 0 ? "Trash is empty" : "Empty Trash"}
+                  aria-label={pendingTrashAction === "empty" ? "Emptying Trash" : !isTrashRestoreAvailable ? "Empty Trash unavailable: requires the desktop app and native storage" : hasTrashMetadata && trashEntries.length === 0 ? "Trash is empty" : "Empty Trash"}
                   className="section-action"
                   data-empty-trash
                   disabled={!canEmptyTrash || isTrashMutationPending}
                   onClick={onEmptyTrash}
-                  title={pendingTrashAction === "empty" ? "Emptying Trash" : !isTrashRestoreAvailable ? "Empty Trash unavailable until storage reconnects" : hasTrashMetadata && trashEntries.length === 0 ? "Trash is empty" : "Permanently delete everything in Trash"}
+                  title={pendingTrashAction === "empty" ? "Emptying Trash" : !isTrashRestoreAvailable ? "Empty Trash requires the desktop app and native storage" : hasTrashMetadata && trashEntries.length === 0 ? "Trash is empty" : "Permanently delete everything in Trash"}
                   type="button"
                 >
                   <HeroIcon name="trash" />
@@ -11869,11 +11901,11 @@ const Sidebar = memo(function Sidebar({
                       <span className="file-kind">{entry.kind.toUpperCase()}</span>
                       <span className="nav-actions">
                         <button
-                          aria-label={!isTrashRestoreAvailable ? `Restore ${entry.name} unavailable until storage reconnects` : pendingTrashAction === `restore:${entry.id}` ? `Restoring ${entry.name}` : `Restore ${entry.name}`}
+                          aria-label={!isTrashRestoreAvailable ? `Restore ${entry.name} unavailable: requires the desktop app and native storage` : pendingTrashAction === `restore:${entry.id}` ? `Restoring ${entry.name}` : `Restore ${entry.name}`}
                           data-trash-restore
                           disabled={!isTrashRestoreAvailable || pendingTrashAction !== null}
                           onClick={() => onRestoreTrashEntry(entry, restoreIndex)}
-                          title={!isTrashRestoreAvailable ? "Restore unavailable until storage reconnects" : pendingTrashAction === `restore:${entry.id}` ? `Restoring ${entry.name}` : `Restore ${entry.name}`}
+                          title={!isTrashRestoreAvailable ? "Restore requires the desktop app and native storage" : pendingTrashAction === `restore:${entry.id}` ? `Restoring ${entry.name}` : `Restore ${entry.name}`}
                           type="button"
                         >
                           <HeroIcon name="check" />

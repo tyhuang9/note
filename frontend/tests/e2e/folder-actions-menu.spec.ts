@@ -160,6 +160,6 @@ test("folder More and right-click share one accessible action menu", async ({
   await expect(trashedFolder).toContainText("Renamed project");
   await expect(trashedFolder).toContainText("Workspace");
   await expect(trashedFolder.locator(".trash-entry-detail")).toContainText("·");
-  await expect(trashedFolder.getByRole("button", { name: /restore renamed project unavailable/i })).toBeDisabled();
+  await expect(trashedFolder.getByRole("button", { name: "Restore Renamed project unavailable: requires the desktop app and native storage" })).toBeDisabled();
   await expect(page.locator(".trash-status")).toHaveText("Moved Renamed project to Trash.");
 });

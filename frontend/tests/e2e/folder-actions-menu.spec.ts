@@ -38,6 +38,16 @@ test("folder More and right-click share one accessible action menu", async ({
 }) => {
   await page.setViewportSize({ width: 1024, height: 720 });
   const folderRow = await createFolder(page, "Project notes");
+  const rootPageTrashAction = page.getByRole("button", {
+    name: "Move New page to Trash",
+  });
+  await expect(rootPageTrashAction).toHaveCount(1);
+  await rootPageTrashAction.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#workspace-explorer-panel")).toBeFocused();
+  await expect(page.locator("[data-trash-announcement]")).toHaveText(
+    "Moved New page to Trash.",
+  );
   const addPageButton = folderRow.getByRole("button", {
     name: "Create page in Project notes",
   });
@@ -47,7 +57,7 @@ test("folder More and right-click share one accessible action menu", async ({
 
   await expect(addPageButton).toHaveCount(1);
   await expect(moreButton).toHaveCount(1);
-  await expect(folderRow.getByRole("button", { name: /delete/i })).toHaveCount(0);
+  await expect(folderRow.getByRole("button", { name: /move .* to trash/i })).toHaveCount(0);
   await expect(folderRow.getByRole("button", { name: /bookmark/i })).toHaveCount(0);
 
   await clickRowAction(folderRow, moreButton);
@@ -55,7 +65,7 @@ test("folder More and right-click share one accessible action menu", async ({
   const menuItems = menu.getByRole("menuitem");
 
   await expect(menu).toBeVisible();
-  await expect(menuItems).toHaveText(["Bookmark", "Rename", "Delete"]);
+  await expect(menuItems).toHaveText(["Bookmark", "Rename", "Move to Trash"]);
   await expect(menuItems.first()).toBeFocused();
   await expect(moreButton).toHaveAttribute("aria-expanded", "true");
   await expectMenuInsideViewport(page, menu);
@@ -63,7 +73,7 @@ test("folder More and right-click share one accessible action menu", async ({
   await page.keyboard.press("ArrowDown");
   await expect(menu.getByRole("menuitem", { name: "Rename" })).toBeFocused();
   await page.keyboard.press("End");
-  await expect(menu.getByRole("menuitem", { name: "Delete" })).toBeFocused();
+  await expect(menu.getByRole("menuitem", { name: "Move to Trash" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(menu).toHaveCount(0);
   await expect(moreButton).toBeFocused();
@@ -92,7 +102,7 @@ test("folder More and right-click share one accessible action menu", async ({
 
   await folderRow.click({ button: "right" });
   await expect(menu).toBeVisible();
-  await expect(menuItems).toHaveText(["Bookmark", "Rename", "Delete"]);
+  await expect(menuItems).toHaveText(["Bookmark", "Rename", "Move to Trash"]);
   await menu.getByRole("menuitem", { name: "Rename" }).click();
 
   const renameInput = page.getByRole("textbox", { name: "Folder name" });
@@ -138,7 +148,18 @@ test("folder More and right-click share one accessible action menu", async ({
     .first();
 
   await fileRow.click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Delete" }).click();
+  await page.getByRole("menuitem", { name: "Move to Trash" }).click();
   await expect(fileRow).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Create folder" })).toBeFocused();
+  await expect(page.locator("[data-trash-announcement]")).toHaveText(
+    "Moved Renamed project to Trash.",
+  );
+  await page.getByRole("button", { name: "2 items in Trash" }).click();
+  await expect(page.getByRole("list", { name: "Trashed items" })).toBeVisible();
+  const trashedFolder = page.getByRole("listitem").filter({ hasText: "Renamed project" });
+  await expect(trashedFolder).toContainText("Renamed project");
+  await expect(trashedFolder).toContainText("Workspace");
+  await expect(trashedFolder.locator(".trash-entry-detail")).toContainText("·");
+  await expect(trashedFolder.getByRole("button", { name: "Restore Renamed project unavailable: requires the desktop app and native storage" })).toBeDisabled();
+  await expect(page.locator(".trash-status")).toHaveText("Moved Renamed project to Trash.");
 });

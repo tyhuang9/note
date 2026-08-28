@@ -1189,6 +1189,35 @@ h2 {
   gap: 2px;
 }
 
+.trash-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.trash-list .nav-actions,
+.trash-list .nav-actions button,
+.trash-list + .sidebar-placeholder {
+  min-width: 44px;
+}
+
+.trash-list .nav-actions,
+.trash-list .nav-actions button {
+  width: 44px;
+  height: 44px;
+}
+
+.trash-list .nav-item-template {
+  grid-template-columns: 22px minmax(0, 1fr) minmax(0, 72px) 44px;
+  min-height: 44px;
+}
+
+.sidebar-section .section-action[data-empty-trash] {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+}
+
 .nav-item {
   display: grid;
   position: relative;
@@ -1334,6 +1363,27 @@ h2 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.trash-entry-detail {
+  display: block;
+  overflow: hidden;
+  color: #7a8795;
+  font-size: 11px;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trash-status {
+  margin: 4px 0 8px;
+  color: #475467;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.app-shell.is-dark .trash-status {
+  color: #d8d8d8;
 }
 
 .item-count {

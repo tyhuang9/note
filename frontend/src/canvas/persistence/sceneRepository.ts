@@ -51,6 +51,22 @@ export type WorkspaceStructure = Pick<AppData, "folders"> & {
 
 export type WorkspaceStructureResult = { pages: StoragePage[] };
 
+export type TrashEntry = {
+  id: string;
+  kind: "folder" | "page";
+  name: string;
+  previousLocation: string;
+  trashedAt: number;
+};
+
+export type TrashPurgePreview = {
+  confirmationToken: string;
+  folderCount: number;
+  pageCount: number;
+  elementCount: number;
+  cleanupWarning?: string;
+};
+
 export type SaveAssetRequest = {
   dataBase64: string;
   mediaType: string;
@@ -84,6 +100,13 @@ export type SceneRepository = {
   saveAsset(request: SaveAssetRequest): Promise<Asset>;
   loadAsset(assetId: string): Promise<Asset>;
   saveSessionState(state: AppSessionState): Promise<void>;
+  movePageToTrash(pageId: string): Promise<void>;
+  moveFolderToTrash(folderId: string): Promise<void>;
+  restorePageFromTrash(pageId: string): Promise<void>;
+  restoreFolderFromTrash(folderId: string): Promise<void>;
+  listTrash(): Promise<TrashEntry[]>;
+  getTrashPurgePreview(): Promise<TrashPurgePreview>;
+  purgeTrash(preview: TrashPurgePreview): Promise<TrashPurgePreview>;
 };
 
 /** Typed boundary for all SQLite Tauri calls. React components never issue SQL. */
@@ -101,6 +124,20 @@ export function createSceneRepository(invoke: Invoke = tauriInvoke): SceneReposi
     saveAsset: (request) => invoke<Asset>("save_asset", { request }),
     loadAsset: (assetId) => invoke<Asset>("load_asset", { assetId }),
     saveSessionState: (state) => invoke<void>("save_session_state", { state }),
+    movePageToTrash: (pageId) => invoke<void>("move_page_to_trash", { pageId }),
+    moveFolderToTrash: (folderId) => invoke<void>("move_folder_to_trash", { folderId }),
+    restorePageFromTrash: (pageId) => invoke<void>("restore_page_from_trash", { pageId }),
+    restoreFolderFromTrash: (folderId) => invoke<void>("restore_folder_from_trash", { folderId }),
+    listTrash: () => invoke<TrashEntry[]>("list_trash"),
+    getTrashPurgePreview: () => invoke<TrashPurgePreview>("get_trash_purge_preview"),
+    purgeTrash: (preview) => invoke<TrashPurgePreview>("purge_trash", {
+      request: {
+        confirmationToken: preview.confirmationToken,
+        expectedFolderCount: preview.folderCount,
+        expectedPageCount: preview.pageCount,
+        expectedElementCount: preview.elementCount,
+      },
+    }),
   };
 }
 

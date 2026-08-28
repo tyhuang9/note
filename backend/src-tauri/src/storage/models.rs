@@ -8,6 +8,10 @@ pub struct FolderDto {
     pub name: String,
     #[serde(default)]
     pub is_bookmarked: bool,
+    #[serde(default = "active_lifecycle")]
+    pub lifecycle: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trashed_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -19,6 +23,44 @@ pub struct PageDto {
     #[serde(default)]
     pub is_bookmarked: bool,
     pub revision: i64,
+    #[serde(default = "active_lifecycle")]
+    pub lifecycle: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trashed_at: Option<i64>,
+}
+
+pub fn active_lifecycle() -> String {
+    "active".into()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrashEntryDto {
+    pub id: String,
+    pub kind: String,
+    pub name: String,
+    pub previous_location: String,
+    pub trashed_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrashPurgePreview {
+    pub confirmation_token: String,
+    pub folder_count: i64,
+    pub page_count: i64,
+    pub element_count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cleanup_warning: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrashPurgeRequest {
+    pub confirmation_token: String,
+    pub expected_folder_count: i64,
+    pub expected_page_count: i64,
+    pub expected_element_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

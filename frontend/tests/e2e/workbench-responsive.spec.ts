@@ -483,7 +483,7 @@ test("templates can be saved, instantiated, and deleted without changing created
     name: /^Create page from /,
   });
   const deleteTemplateButton = templatesSection.getByRole("button", {
-    name: /^Delete template /,
+    name: /^Move template .* to Trash/,
   });
   await expect(createFromTemplateButton).toBeVisible();
   await expect(deleteTemplateButton).toBeVisible();

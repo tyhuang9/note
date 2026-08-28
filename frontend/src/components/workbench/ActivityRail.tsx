@@ -6,7 +6,8 @@ export type ActivityRailTabId =
   | "files"
   | "search"
   | "bookmarks"
-  | "templates";
+  | "templates"
+  | "trash";
 
 export interface ActivityRailProps {
   readonly activeTab: ActivityRailTabId;
@@ -22,6 +23,8 @@ export interface ActivityRailProps {
   readonly onToggleAssistant: (trigger: HTMLButtonElement) => void;
   readonly onToggleDarkMode: () => void;
   readonly templatePageCount: number;
+  readonly trashToggleButtonRef: Ref<HTMLButtonElement>;
+  readonly trashEntryCount: number;
 }
 
 export const ActivityRail = memo(function ActivityRail({
@@ -35,10 +38,13 @@ export const ActivityRail = memo(function ActivityRail({
   onToggleAssistant,
   onToggleDarkMode,
   templatePageCount,
+  trashToggleButtonRef,
+  trashEntryCount,
 }: Readonly<ActivityRailProps>) {
   const themeToggleTitle = isDarkMode
     ? "Switch to light mode"
     : "Switch to dark mode";
+  const trashEntryLabel = `${trashEntryCount} ${trashEntryCount === 1 ? "item" : "items"} in Trash`;
 
   return (
     <nav className="activity-rail" aria-label="Primary workspace tools">
@@ -90,6 +96,20 @@ export const ActivityRail = memo(function ActivityRail({
           title="Templates"
         >
           <Icon name="rectangle-stack" />
+        </button>
+        <button
+          type="button"
+          className={`rail-button ${activeTab === "trash" ? "is-active" : ""} ${
+            trashEntryCount > 0 ? "has-count" : ""
+          }`}
+          aria-controls="workspace-explorer-panel"
+          aria-label={trashEntryLabel}
+          aria-pressed={activeTab === "trash"}
+          onClick={(event) => onSelectTab("trash", event.currentTarget)}
+          ref={trashToggleButtonRef}
+          title="Trash"
+        >
+          <Icon name="trash" />
         </button>
       </div>
       <div className="rail-utilities" aria-label="Global utilities" role="group">

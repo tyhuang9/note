@@ -2,7 +2,13 @@ use super::{assets, database, legacy_import, models::*};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 use serde_json::Value;
-use std::{collections::HashMap, io::Write, path::Path};
+use std::{
+    collections::HashMap,
+    fs,
+    io::Write,
+    path::Path,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 /// These folders are real rows solely to satisfy the page foreign key. They
 /// are not user folders and are filtered from the workspace DTO.
@@ -27,6 +33,14 @@ const MAX_RICH_TEXT_ATTRIBUTE_BYTES: usize = 12 * 1024 * 1024;
 const MIN_VISUAL_RECTANGLE_ROUNDNESS: f64 = 0.06;
 const DIAMOND_CORNER_INSET: f64 = 0.08;
 const RAY_INTERSECTION_TOLERANCE: f64 = 1e-12;
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(i64::MAX as u128) as i64
+}
 
 struct PayloadLimitWriter {
     bytes_written: usize,
@@ -2116,12 +2130,16 @@ pub fn initialize_storage_at(root: &Path) -> Result<StorageDiagnostics, String> 
         &root.join("backups"),
         &root.join("assets"),
     )?;
+    let mut warnings = import.warnings;
+    if let Err(error) = retry_asset_cleanup(root) {
+        warnings.push(format!("retry deferred purged-asset cleanup: {error}"));
+    }
     Ok(StorageDiagnostics {
         database_path: db.to_string_lossy().into_owned(),
         schema_version: version,
         imported_legacy_data: import.imported,
         backup_path: import.backup_path.map(|p| p.to_string_lossy().into_owned()),
-        warnings: import.warnings,
+        warnings,
     })
 }
 pub fn load_workspace_data_at(root: &Path) -> Result<WorkspaceData, String> {
@@ -2130,7 +2148,7 @@ pub fn load_workspace_data_at(root: &Path) -> Result<WorkspaceData, String> {
     let folders = {
         let mut s = c
             .prepare(
-                "SELECT id,name,is_bookmarked FROM folders WHERE id NOT IN (?,?) ORDER BY rowid",
+                "SELECT id,name,is_bookmarked,lifecycle,trashed_at FROM folders WHERE id NOT IN (?,?) AND lifecycle='active' ORDER BY rowid",
             )
             .map_err(|e| e.to_string())?;
         let rows = s
@@ -2139,6 +2157,8 @@ pub fn load_workspace_data_at(root: &Path) -> Result<WorkspaceData, String> {
                     id: r.get(0)?,
                     name: r.get(1)?,
                     is_bookmarked: r.get::<_, i64>(2)? != 0,
+                    lifecycle: r.get(3)?,
+                    trashed_at: r.get(4)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -2147,7 +2167,7 @@ pub fn load_workspace_data_at(root: &Path) -> Result<WorkspaceData, String> {
     };
     let pages = {
         let mut s = c
-            .prepare("SELECT id,folder_id,title,is_bookmarked,revision FROM pages ORDER BY rowid")
+            .prepare("SELECT p.id,p.folder_id,p.title,p.is_bookmarked,p.revision,p.lifecycle,p.trashed_at FROM pages p JOIN folders f ON f.id=p.folder_id WHERE p.lifecycle='active' AND f.lifecycle='active' ORDER BY p.rowid")
             .map_err(|e| e.to_string())?;
         let rows = s
             .query_map([], |r| {
@@ -2157,6 +2177,8 @@ pub fn load_workspace_data_at(root: &Path) -> Result<WorkspaceData, String> {
                     title: r.get(2)?,
                     is_bookmarked: r.get::<_, i64>(3)? != 0,
                     revision: r.get(4)?,
+                    lifecycle: r.get(5)?,
+                    trashed_at: r.get(6)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -2165,7 +2187,7 @@ pub fn load_workspace_data_at(root: &Path) -> Result<WorkspaceData, String> {
     };
     let elements = {
         let mut s = c
-            .prepare("SELECT payload_json FROM elements ORDER BY page_id,z_index,id")
+            .prepare("SELECT e.payload_json FROM elements e JOIN pages p ON p.id=e.page_id JOIN folders f ON f.id=p.folder_id WHERE p.lifecycle='active' AND f.lifecycle='active' ORDER BY e.page_id,e.z_index,e.id")
             .map_err(|e| e.to_string())?;
         let rows = s
             .query_map([], |r| r.get::<_, String>(0))
@@ -2270,68 +2292,21 @@ pub fn reconcile_workspace_structure_at(
     for folder in &structure.folders {
         transaction
             .execute(
-                "INSERT INTO folders(id,name,is_bookmarked) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,is_bookmarked=excluded.is_bookmarked",
+                "INSERT INTO folders(id,name,is_bookmarked) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,is_bookmarked=excluded.is_bookmarked WHERE folders.lifecycle='active'",
                 params![folder.id, folder.name.trim(), folder.is_bookmarked as i64],
             )
             .map_err(|error| format!("save folder {}: {error}", folder.id))?;
     }
 
-    let desired_page_ids: std::collections::HashSet<&str> = structure
-        .pages
-        .iter()
-        .map(|page| page.id.as_str())
-        .collect();
-    let existing_page_ids = {
-        let mut statement = transaction
-            .prepare("SELECT id FROM pages")
-            .map_err(|error| error.to_string())?;
-        let page_ids = statement
-            .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|error| error.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| error.to_string())?;
-        page_ids
-    };
-    for page_id in existing_page_ids {
-        if !desired_page_ids.contains(page_id.as_str()) {
-            transaction
-                .execute("DELETE FROM pages WHERE id=?", [page_id])
-                .map_err(|error| error.to_string())?;
-        }
-    }
     for page in &structure.pages {
         transaction
             .execute(
-                "INSERT INTO pages(id,folder_id,title,is_bookmarked) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET folder_id=excluded.folder_id,title=excluded.title,is_bookmarked=excluded.is_bookmarked",
+                "INSERT INTO pages(id,folder_id,title,is_bookmarked) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET folder_id=excluded.folder_id,title=excluded.title,is_bookmarked=excluded.is_bookmarked WHERE pages.lifecycle='active'",
                 params![page.id, page.folder_id, page.title.trim(), page.is_bookmarked as i64],
             )
             .map_err(|error| format!("save page {}: {error}", page.id))?;
     }
 
-    let desired_folder_ids: std::collections::HashSet<&str> = structure
-        .folders
-        .iter()
-        .map(|folder| folder.id.as_str())
-        .chain([ROOT_FOLDER_ID, TEMPLATE_FOLDER_ID])
-        .collect();
-    let existing_folder_ids = {
-        let mut statement = transaction
-            .prepare("SELECT id FROM folders")
-            .map_err(|error| error.to_string())?;
-        let folder_ids = statement
-            .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|error| error.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| error.to_string())?;
-        folder_ids
-    };
-    for folder_id in existing_folder_ids {
-        if !desired_folder_ids.contains(folder_id.as_str()) {
-            transaction
-                .execute("DELETE FROM folders WHERE id=?", [folder_id])
-                .map_err(|error| error.to_string())?;
-        }
-    }
     if let Some(is_dark_mode) = structure.is_dark_mode {
         transaction
             .execute(
@@ -2344,6 +2319,429 @@ pub fn reconcile_workspace_structure_at(
 
     let pages = load_workspace_data_at(root)?.pages;
     Ok(WorkspaceStructureResult { pages })
+}
+
+fn change_lifecycle(root: &Path, table: &str, id: &str, lifecycle: &str) -> Result<(), String> {
+    if id.trim().is_empty() {
+        return Err("item id must be a non-empty string".into());
+    }
+    let mut connection = database::open(&root.join("note.db"))?;
+    database::migrate(&mut connection)?;
+    let changed = match table {
+        "pages" => connection.execute(
+            "UPDATE pages SET lifecycle=?, trashed_at=CASE WHEN ?='trashed' THEN ? ELSE NULL END WHERE id=? AND lifecycle<>?",
+            params![lifecycle, lifecycle, now_ms(), id, lifecycle],
+        ),
+        "folders" => {
+            if matches!(id, ROOT_FOLDER_ID | TEMPLATE_FOLDER_ID) {
+                return Err("reserved folders cannot be moved to Trash".into());
+            }
+            connection.execute(
+                "UPDATE folders SET lifecycle=?, trashed_at=CASE WHEN ?='trashed' THEN ? ELSE NULL END WHERE id=? AND lifecycle<>?",
+                params![lifecycle, lifecycle, now_ms(), id, lifecycle],
+            )
+        }
+        _ => return Err("unsupported Trash item kind".into()),
+    }
+    .map_err(|error| error.to_string())?;
+    if changed == 0 {
+        return Err(format!("{table} item not found or already {lifecycle}"));
+    }
+    Ok(())
+}
+
+pub fn trash_page_at(root: &Path, id: &str) -> Result<(), String> {
+    change_lifecycle(root, "pages", id, "trashed")
+}
+
+pub fn trash_folder_at(root: &Path, id: &str) -> Result<(), String> {
+    change_lifecycle(root, "folders", id, "trashed")
+}
+
+pub fn restore_folder_at(root: &Path, id: &str) -> Result<(), String> {
+    change_lifecycle(root, "folders", id, "active")
+}
+
+pub fn restore_page_at(root: &Path, id: &str) -> Result<(), String> {
+    if id.trim().is_empty() {
+        return Err("page id must be a non-empty string".into());
+    }
+    let mut connection = database::open(&root.join("note.db"))?;
+    database::migrate(&mut connection)?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+    let parent_lifecycle: Option<Option<String>> = transaction
+        .query_row(
+            "SELECT f.lifecycle FROM pages p LEFT JOIN folders f ON f.id=p.folder_id WHERE p.id=? AND p.lifecycle='trashed'",
+            [id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    let parent_lifecycle = parent_lifecycle
+        .ok_or_else(|| "page not found or not in Trash".to_owned())?
+        .unwrap_or_default();
+    let folder_id = if parent_lifecycle == "active" {
+        None
+    } else {
+        Some(ROOT_FOLDER_ID)
+    };
+    if folder_id.is_some() {
+        transaction.execute(
+            "INSERT INTO folders(id,name,is_bookmarked) VALUES(?,?,0) ON CONFLICT(id) DO NOTHING",
+            params![ROOT_FOLDER_ID, "Root"],
+        ).map_err(|error| error.to_string())?;
+    }
+    transaction
+        .execute(
+            "UPDATE pages SET lifecycle='active',trashed_at=NULL,folder_id=COALESCE(?,folder_id) WHERE id=? AND lifecycle='trashed'",
+            params![folder_id, id],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+pub fn list_trash_at(root: &Path) -> Result<Vec<TrashEntryDto>, String> {
+    let mut connection = database::open(&root.join("note.db"))?;
+    database::migrate(&mut connection)?;
+    list_trash_from_connection(&connection)
+}
+
+fn list_trash_from_connection(
+    connection: &rusqlite::Connection,
+) -> Result<Vec<TrashEntryDto>, String> {
+    let mut statement = connection
+        .prepare(
+            r#"
+SELECT id,'folder' AS kind,substr(name,1,160),'Workspace',trashed_at FROM folders
+WHERE lifecycle='trashed' AND id NOT IN (?,?)
+UNION ALL
+SELECT p.id,'page' AS kind,substr(p.title,1,160),substr(COALESCE(NULLIF(f.name,''),'Root'),1,160),p.trashed_at FROM pages p LEFT JOIN folders f ON f.id=p.folder_id WHERE p.lifecycle='trashed'
+ORDER BY trashed_at DESC, kind ASC, id ASC
+"#,
+        )
+        .map_err(|error| error.to_string())?;
+    let entries = statement
+        .query_map(params![ROOT_FOLDER_ID, TEMPLATE_FOLDER_ID], |row| {
+            Ok(TrashEntryDto {
+                id: row.get(0)?,
+                kind: row.get(1)?,
+                name: row.get(2)?,
+                previous_location: row.get(3)?,
+                trashed_at: row.get(4)?,
+            })
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(entries)
+}
+
+fn trash_purge_preview(connection: &rusqlite::Connection) -> Result<TrashPurgePreview, String> {
+    let (folder_count, page_count, element_count) = connection.query_row(r#"
+WITH purged_pages AS (
+  SELECT p.id FROM pages p LEFT JOIN folders f ON f.id=p.folder_id
+  WHERE p.lifecycle='trashed' OR f.lifecycle='trashed'
+)
+SELECT
+  (SELECT count(*) FROM folders WHERE lifecycle='trashed' AND id NOT IN ('','__note_page_templates__')),
+  (SELECT count(*) FROM purged_pages),
+  (SELECT count(*) FROM elements WHERE page_id IN purged_pages)
+"#, [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).map_err(|error| error.to_string())?;
+    Ok(TrashPurgePreview {
+        confirmation_token: String::new(),
+        folder_count,
+        page_count,
+        element_count,
+        cleanup_warning: None,
+    })
+}
+
+fn asset_ids_for_purged_pages(connection: &rusqlite::Connection) -> Result<Vec<String>, String> {
+    let mut statement = connection.prepare("WITH purged_pages AS (SELECT p.id FROM pages p LEFT JOIN folders f ON f.id=p.folder_id WHERE p.lifecycle='trashed' OR f.lifecycle='trashed') SELECT payload_json FROM elements WHERE page_id IN purged_pages").map_err(|e| e.to_string())?;
+    let mut ids = std::collections::HashSet::new();
+    for payload in statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+    {
+        let payload = payload.map_err(|e| e.to_string())?;
+        if let Some(id) = serde_json::from_str::<Value>(&payload)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("assetId")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+        {
+            ids.insert(id);
+        }
+    }
+    Ok(ids.into_iter().collect())
+}
+
+fn cleanup_path_component(value: &str, label: &str) -> Result<String, String> {
+    let mut components = Path::new(value).components();
+    match (components.next(), components.next()) {
+        (Some(std::path::Component::Normal(component)), None) if !component.is_empty() => {
+            Ok(component.to_string_lossy().into_owned())
+        }
+        _ => Err(format!("invalid asset cleanup {label}")),
+    }
+}
+
+fn validate_managed_cleanup_path(
+    parsed_id: uuid::Uuid,
+    relative_path: &str,
+    media_type: &str,
+) -> Result<(), String> {
+    let path = Path::new(relative_path);
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "invalid asset cleanup relative path".to_owned())?;
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "invalid asset cleanup relative path".to_owned())?;
+    let expected_extension = assets::managed_extension(media_type)
+        .ok_or_else(|| "invalid asset cleanup media type".to_owned())?;
+    if stem != parsed_id.to_string() || !extension.eq_ignore_ascii_case(expected_extension) {
+        return Err("asset cleanup path does not match authoritative asset metadata".into());
+    }
+    Ok(())
+}
+
+fn retry_asset_cleanup(root: &Path) -> Result<(), String> {
+    let mut connection = database::open(&root.join("note.db"))?;
+    database::migrate(&mut connection)?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+    let entries: Vec<(String, String, String)> = transaction
+        .prepare(
+            "SELECT asset_id,relative_path,staged_path FROM asset_cleanup_journal ORDER BY rowid",
+        )
+        .map_err(|e| e.to_string())?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<_, _>>()
+        .map_err(|e| e.to_string())?;
+    let live: std::collections::HashSet<String> = transaction
+        .prepare("SELECT payload_json FROM elements")
+        .map_err(|e| e.to_string())?
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(Result::ok)
+        .filter_map(|payload| {
+            serde_json::from_str::<Value>(&payload)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("assetId")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+        })
+        .collect();
+    let assets_dir = root.join("assets");
+    let mut warnings = Vec::new();
+    for (id, relative, staged) in entries {
+        let cleanup = (|| -> Result<(), String> {
+            let relative = cleanup_path_component(&relative, "relative path")?;
+            let staged = cleanup_path_component(&staged, "staged path")?;
+            let parsed_id =
+                uuid::Uuid::parse_str(&id).map_err(|_| "invalid asset cleanup id".to_owned())?;
+            if staged != format!(".purging-{parsed_id}") {
+                return Err("invalid asset cleanup staged path".into());
+            }
+            let authoritative: Option<(String, String)> = transaction
+                .query_row(
+                    "SELECT relative_path,media_type FROM assets WHERE id=?",
+                    [&id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map_err(|error| error.to_string())?;
+            let (authoritative_relative, media_type) =
+                authoritative.ok_or_else(|| "asset cleanup metadata is unavailable".to_owned())?;
+            if relative != authoritative_relative {
+                return Err(
+                    "asset cleanup path does not match authoritative asset metadata".into(),
+                );
+            }
+            validate_managed_cleanup_path(parsed_id, &relative, &media_type)?;
+            if live.contains(&id) {
+                let source = assets_dir.join(&relative);
+                let staged_path = assets_dir.join(&staged);
+                if staged_path.exists() && !source.exists() {
+                    fs::rename(&staged_path, &source)
+                        .map_err(|e| format!("restore live asset staged for cleanup: {e}"))?;
+                }
+                transaction
+                    .execute("DELETE FROM asset_cleanup_journal WHERE asset_id=?", [&id])
+                    .map_err(|e| e.to_string())?;
+                return Ok(());
+            }
+            let source = assets_dir.join(&relative);
+            let staged_path = assets_dir.join(&staged);
+            if source.exists() && !staged_path.exists() {
+                fs::rename(&source, &staged_path)
+                    .map_err(|e| format!("stage purged asset: {e}"))?;
+            }
+            if staged_path.exists() {
+                fs::remove_file(&staged_path)
+                    .map_err(|e| format!("remove staged purged asset: {e}"))?;
+            }
+            transaction
+                .execute("DELETE FROM assets WHERE id=?", [&id])
+                .map_err(|e| format!("delete purged asset metadata: {e}"))?;
+            transaction
+                .execute("DELETE FROM asset_cleanup_journal WHERE asset_id=?", [&id])
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })();
+        if let Err(error) = cleanup {
+            warnings.push(format!("{id}: {error}"));
+        }
+    }
+    transaction.commit().map_err(|error| error.to_string())?;
+    if warnings.is_empty() {
+        Ok(())
+    } else {
+        Err(warnings.join("; "))
+    }
+}
+
+pub fn trash_purge_preview_at(root: &Path) -> Result<TrashPurgePreview, String> {
+    let mut connection = database::open(&root.join("note.db"))?;
+    database::migrate(&mut connection)?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "DELETE FROM trash_purge_snapshots WHERE expires_at<?",
+            [now_ms()],
+        )
+        .map_err(|e| e.to_string())?;
+    let outstanding: i64 = transaction
+        .query_row("SELECT count(*) FROM trash_purge_snapshots", [], |row| {
+            row.get(0)
+        })
+        .map_err(|e| e.to_string())?;
+    if outstanding >= 32 {
+        transaction
+            .execute(
+                "DELETE FROM trash_purge_snapshots WHERE token IN (SELECT token FROM trash_purge_snapshots ORDER BY expires_at ASC LIMIT 1)",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+    }
+    let mut preview = trash_purge_preview(&transaction)?;
+    let entries = list_trash_from_connection(&transaction)?;
+    let snapshot = serde_json::to_string(&(
+        entries,
+        preview.folder_count,
+        preview.page_count,
+        preview.element_count,
+    ))
+    .map_err(|e| e.to_string())?;
+    let token = uuid::Uuid::new_v4().to_string();
+    transaction
+        .execute(
+            "INSERT INTO trash_purge_snapshots(token,snapshot_json,expires_at) VALUES(?,?,?)",
+            params![token, snapshot, now_ms() + 300_000],
+        )
+        .map_err(|e| e.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())?;
+    preview.confirmation_token = token;
+    Ok(preview)
+}
+
+pub fn purge_trash_at(
+    root: &Path,
+    request: TrashPurgeRequest,
+) -> Result<TrashPurgePreview, String> {
+    if request.confirmation_token.is_empty() {
+        return Err("Trash confirmation token is required".into());
+    }
+    let mut connection = database::open(&root.join("note.db"))?;
+    database::migrate(&mut connection)?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+    let snapshot: Option<(String, i64)> = transaction
+        .query_row(
+            "SELECT snapshot_json,expires_at FROM trash_purge_snapshots WHERE token=?",
+            [&request.confirmation_token],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    transaction
+        .execute(
+            "DELETE FROM trash_purge_snapshots WHERE token=?",
+            [&request.confirmation_token],
+        )
+        .map_err(|e| e.to_string())?;
+    let (snapshot, expires_at) = snapshot.ok_or("invalid or already-used Trash confirmation")?;
+    if request.expected_folder_count < 0
+        || request.expected_page_count < 0
+        || request.expected_element_count < 0
+    {
+        transaction.commit().map_err(|error| error.to_string())?;
+        return Err("purge confirmation counts must be non-negative".into());
+    }
+    if expires_at < now_ms() {
+        transaction.commit().map_err(|error| error.to_string())?;
+        return Err("Trash confirmation expired; review and confirm again".into());
+    }
+    let mut preview = trash_purge_preview(&transaction)?;
+    let entries = list_trash_from_connection(&transaction)?;
+    let current_snapshot = serde_json::to_string(&(
+        entries,
+        preview.folder_count,
+        preview.page_count,
+        preview.element_count,
+    ))
+    .map_err(|e| e.to_string())?;
+    if snapshot != current_snapshot
+        || preview.folder_count != request.expected_folder_count
+        || preview.page_count != request.expected_page_count
+        || preview.element_count != request.expected_element_count
+    {
+        transaction.commit().map_err(|error| error.to_string())?;
+        return Err("Trash changed; review the affected counts and confirm again".into());
+    }
+    let asset_ids = asset_ids_for_purged_pages(&transaction)?;
+    transaction
+        .execute(
+            "DELETE FROM folders WHERE lifecycle='trashed' AND id NOT IN (?,?)",
+            params![ROOT_FOLDER_ID, TEMPLATE_FOLDER_ID],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute("DELETE FROM pages WHERE lifecycle='trashed'", [])
+        .map_err(|error| error.to_string())?;
+    for id in asset_ids {
+        if let Some(relative) = transaction
+            .query_row(
+                "SELECT relative_path FROM assets WHERE id=?",
+                [&id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+        {
+            transaction.execute("INSERT OR IGNORE INTO asset_cleanup_journal(asset_id,relative_path,staged_path) VALUES(?,?,?)", params![id,relative,format!(".purging-{id}")]).map_err(|e| e.to_string())?;
+        }
+    }
+    transaction.commit().map_err(|error| error.to_string())?;
+    preview.cleanup_warning = retry_asset_cleanup(root).err();
+    preview.confirmation_token = request.confirmation_token;
+    Ok(preview)
 }
 pub fn apply_scene_changes_at(
     root: &Path,
@@ -2360,7 +2758,7 @@ pub fn apply_scene_changes_at(
         .map_err(|e| e.to_string())?;
     let revision: Option<i64> = tx
         .query_row(
-            "SELECT revision FROM pages WHERE id=?",
+            "SELECT p.revision FROM pages p JOIN folders f ON f.id=p.folder_id WHERE p.id=? AND p.lifecycle='active' AND f.lifecycle='active'",
             [&batch.page_id],
             |r| r.get(0),
         )
@@ -2409,7 +2807,7 @@ pub fn apply_scene_changes_at(
     validate_final_connector_bindings(&tx, &batch.page_id)?;
     let next = revision + 1;
     tx.execute(
-        "UPDATE pages SET revision=? WHERE id=?",
+        "UPDATE pages SET revision=? WHERE id=? AND lifecycle='active' AND (SELECT lifecycle FROM folders WHERE id=pages.folder_id)='active'",
         params![next, batch.page_id],
     )
     .map_err(|e| e.to_string())?;
@@ -2682,6 +3080,36 @@ mod tests {
     }
     fn image_element(id: &str, asset_id: &str) -> Value {
         json!({"id":id,"pageId":"p","type":"image","x":1.0,"y":2.0,"width":100.0,"height":40.0,"rotation":0.0,"zIndex":0,"opacity":1.0,"locked":false,"createdAt":1,"updatedAt":1,"assetId":asset_id,"naturalWidth":100,"naturalHeight":40,"fit":"contain"})
+    }
+    fn save_test_asset(root: &Path, file_name: &str) -> AssetDto {
+        save_asset_at(
+            root,
+            SaveAssetRequest {
+                data_base64: STANDARD.encode(b"test image bytes"),
+                media_type: "image/png".into(),
+                file_name: Some(file_name.into()),
+                natural_width: Some(1),
+                natural_height: Some(1),
+            },
+        )
+        .unwrap()
+    }
+    fn asset_file(root: &Path, id: &str) -> std::path::PathBuf {
+        let connection = database::open(&root.join("note.db")).unwrap();
+        let relative: String = connection
+            .query_row("SELECT relative_path FROM assets WHERE id=?", [id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        root.join("assets").join(relative)
+    }
+    fn purge_request(preview: &TrashPurgePreview) -> TrashPurgeRequest {
+        TrashPurgeRequest {
+            confirmation_token: preview.confirmation_token.clone(),
+            expected_folder_count: preview.folder_count,
+            expected_page_count: preview.page_count,
+            expected_element_count: preview.element_count,
+        }
     }
     fn connector_element(start: Value, end: Value) -> Value {
         connector_element_on_page("connector-1", "p", start, end, true)
@@ -4535,6 +4963,8 @@ mod tests {
                     id: "projects".into(),
                     name: "Projects".into(),
                     is_bookmarked: true,
+                    lifecycle: "active".into(),
+                    trashed_at: None,
                 }],
                 pages: vec![
                     WorkspacePageDto {
@@ -4568,6 +4998,8 @@ mod tests {
                 id: "projects".into(),
                 name: "Projects".into(),
                 is_bookmarked: true,
+                lifecycle: "active".into(),
+                trashed_at: None,
             }]
         );
         let connection = database::open(&directory.path().join("note.db")).unwrap();
@@ -4591,6 +5023,8 @@ mod tests {
                     id: "folder".into(),
                     name: "Folder".into(),
                     is_bookmarked: false,
+                    lifecycle: "active".into(),
+                    trashed_at: None,
                 }],
                 pages: vec![WorkspacePageDto {
                     id: "page".into(),
@@ -4622,6 +5056,8 @@ mod tests {
                     id: "folder".into(),
                     name: "Folder renamed".into(),
                     is_bookmarked: true,
+                    lifecycle: "active".into(),
+                    trashed_at: None,
                 }],
                 pages: vec![WorkspacePageDto {
                     id: "page".into(),
@@ -4673,5 +5109,777 @@ mod tests {
         let loaded = load_workspace_data_at(directory.path()).unwrap();
         assert!(loaded.folders.is_empty());
         assert_eq!(loaded.pages[0].folder_id, ROOT_FOLDER_ID);
+    }
+
+    #[test]
+    fn trashed_folder_hides_active_children_without_rewriting_their_lifecycle() {
+        let directory = root();
+        seed_page(directory.path());
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![element("e", 1)],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+
+        trash_folder_at(directory.path(), "f").unwrap();
+        let hidden = load_workspace_data_at(directory.path()).unwrap();
+        assert!(hidden.folders.is_empty());
+        assert!(hidden.pages.is_empty());
+        assert!(hidden.elements.is_empty());
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT lifecycle FROM pages WHERE id='p'", [], |row| row
+                    .get::<_, String>(
+                    0
+                ))
+                .unwrap(),
+            "active"
+        );
+        assert_eq!(
+            list_trash_at(directory.path())
+                .unwrap()
+                .iter()
+                .map(|entry| entry.kind.as_str())
+                .collect::<Vec<_>>(),
+            vec!["folder"]
+        );
+
+        restore_folder_at(directory.path(), "f").unwrap();
+        let restored = load_workspace_data_at(directory.path()).unwrap();
+        assert_eq!(restored.pages.len(), 1);
+        assert_eq!(restored.elements.len(), 1);
+    }
+
+    #[test]
+    fn trash_metadata_distinguishes_duplicate_names_by_location_and_time() {
+        let directory = root();
+        seed_page(directory.path());
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO folders(id,name) VALUES('other','Other folder')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute("INSERT INTO folders(id,name) VALUES('','Root')", [])
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO pages(id,folder_id,title) VALUES('root-duplicate','','Duplicate')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO pages(id,folder_id,title) VALUES('folder-duplicate','other','Duplicate')",
+                [],
+            )
+            .unwrap();
+
+        trash_page_at(directory.path(), "root-duplicate").unwrap();
+        trash_page_at(directory.path(), "folder-duplicate").unwrap();
+        connection
+            .execute(
+                "UPDATE pages SET trashed_at=100 WHERE id='root-duplicate'",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE pages SET trashed_at=200 WHERE id='folder-duplicate'",
+                [],
+            )
+            .unwrap();
+
+        let entries = list_trash_at(directory.path()).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].name, "Duplicate");
+        assert_eq!(entries[0].previous_location, "Other folder");
+        assert_eq!(entries[0].trashed_at, 200);
+        assert_eq!(entries[1].name, "Duplicate");
+        assert_eq!(entries[1].previous_location, "Root");
+        assert_eq!(entries[1].trashed_at, 100);
+    }
+
+    #[test]
+    fn trash_metadata_and_purge_snapshots_are_stable_when_timestamps_tie() {
+        let directory = root();
+        seed_page(directory.path());
+        seed_additional_page(directory.path(), "a-page");
+        trash_folder_at(directory.path(), "f").unwrap();
+        trash_page_at(directory.path(), "p").unwrap();
+        trash_page_at(directory.path(), "a-page").unwrap();
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        connection
+            .execute("UPDATE folders SET trashed_at=100 WHERE id='f'", [])
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE pages SET trashed_at=100 WHERE id IN ('p','a-page')",
+                [],
+            )
+            .unwrap();
+
+        let entries = list_trash_at(directory.path()).unwrap();
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| (entry.kind.as_str(), entry.id.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("folder", "f"), ("page", "a-page"), ("page", "p")]
+        );
+
+        let first_preview = trash_purge_preview_at(directory.path()).unwrap();
+        let second_preview = trash_purge_preview_at(directory.path()).unwrap();
+        let first_snapshot: String = connection
+            .query_row(
+                "SELECT snapshot_json FROM trash_purge_snapshots WHERE token=?",
+                [&first_preview.confirmation_token],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let second_snapshot: String = connection
+            .query_row(
+                "SELECT snapshot_json FROM trash_purge_snapshots WHERE token=?",
+                [&second_preview.confirmation_token],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(first_snapshot, second_snapshot);
+        purge_trash_at(directory.path(), purge_request(&first_preview)).unwrap();
+    }
+
+    #[test]
+    fn separately_trashed_child_stays_hidden_and_restore_falls_back_to_root() {
+        let directory = root();
+        seed_page(directory.path());
+        trash_page_at(directory.path(), "p").unwrap();
+        trash_folder_at(directory.path(), "f").unwrap();
+        restore_folder_at(directory.path(), "f").unwrap();
+        assert!(load_workspace_data_at(directory.path())
+            .unwrap()
+            .pages
+            .is_empty());
+
+        trash_folder_at(directory.path(), "f").unwrap();
+        restore_page_at(directory.path(), "p").unwrap();
+        let restored = load_workspace_data_at(directory.path()).unwrap();
+        assert_eq!(restored.pages.len(), 1);
+        assert_eq!(restored.pages[0].folder_id, ROOT_FOLDER_ID);
+    }
+
+    #[test]
+    fn purge_requires_current_confirmation_and_cascades_scene_rows() {
+        let directory = root();
+        seed_page(directory.path());
+        seed_additional_page(directory.path(), "p2");
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![element("e1", 1)],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+        let mut second_page_element = element("e2", 1);
+        second_page_element["pageId"] = json!("p2");
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p2".into(),
+                base_revision: 0,
+                upserts: vec![second_page_element],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+        trash_page_at(directory.path(), "p2").unwrap();
+        trash_folder_at(directory.path(), "f").unwrap();
+
+        let preview = trash_purge_preview_at(directory.path()).unwrap();
+        assert_eq!(
+            (
+                preview.folder_count,
+                preview.page_count,
+                preview.element_count
+            ),
+            (1, 2, 2)
+        );
+        assert!(purge_trash_at(
+            directory.path(),
+            TrashPurgeRequest {
+                confirmation_token: "forged".into(),
+                expected_folder_count: 1,
+                expected_page_count: 1,
+                expected_element_count: 2
+            }
+        )
+        .is_err());
+        purge_trash_at(
+            directory.path(),
+            TrashPurgeRequest {
+                confirmation_token: preview.confirmation_token.clone(),
+                expected_folder_count: preview.folder_count,
+                expected_page_count: preview.page_count,
+                expected_element_count: preview.element_count,
+            },
+        )
+        .unwrap();
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM pages", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM elements", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert!(list_trash_at(directory.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn reconcile_omission_preserves_existing_active_scene() {
+        let directory = root();
+        seed_page(directory.path());
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![element("e", 1)],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+        reconcile_workspace_structure_at(
+            directory.path(),
+            WorkspaceStructure {
+                folders: vec![],
+                pages: vec![],
+                is_dark_mode: None,
+            },
+        )
+        .unwrap();
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM pages WHERE id='p'", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM elements WHERE page_id='p'", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn scene_writes_reject_trashed_pages_and_inherited_trashed_folders() {
+        let directory = root();
+        seed_page(directory.path());
+        trash_page_at(directory.path(), "p").unwrap();
+        assert!(apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![element("e", 1)],
+                deleted_element_ids: vec![]
+            }
+        )
+        .unwrap_err()
+        .contains("page not found"));
+        restore_page_at(directory.path(), "p").unwrap();
+        trash_folder_at(directory.path(), "f").unwrap();
+        assert!(apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![element("e", 1)],
+                deleted_element_ids: vec![]
+            }
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn purge_confirmation_is_expiring_single_use_and_snapshot_exact() {
+        let directory = root();
+        seed_page(directory.path());
+        trash_page_at(directory.path(), "p").unwrap();
+        let negative_preview = trash_purge_preview_at(directory.path()).unwrap();
+        let mut negative_request = purge_request(&negative_preview);
+        negative_request.expected_element_count = -1;
+        assert!(purge_trash_at(directory.path(), negative_request)
+            .unwrap_err()
+            .contains("non-negative"));
+        assert!(
+            purge_trash_at(directory.path(), purge_request(&negative_preview))
+                .unwrap_err()
+                .contains("invalid or already-used")
+        );
+        let preview = trash_purge_preview_at(directory.path()).unwrap();
+        let request = TrashPurgeRequest {
+            confirmation_token: preview.confirmation_token.clone(),
+            expected_folder_count: preview.folder_count,
+            expected_page_count: preview.page_count,
+            expected_element_count: preview.element_count,
+        };
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        connection
+            .execute(
+                "UPDATE trash_purge_snapshots SET expires_at=0 WHERE token=?",
+                [&preview.confirmation_token],
+            )
+            .unwrap();
+        assert!(purge_trash_at(directory.path(), request.clone()).is_err());
+        assert!(purge_trash_at(directory.path(), request).is_err());
+        let preview = trash_purge_preview_at(directory.path()).unwrap();
+        let request = TrashPurgeRequest {
+            confirmation_token: preview.confirmation_token.clone(),
+            expected_folder_count: preview.folder_count,
+            expected_page_count: preview.page_count,
+            expected_element_count: preview.element_count,
+        };
+        connection
+            .execute("UPDATE pages SET id='replacement' WHERE id='p'", [])
+            .unwrap();
+        assert!(purge_trash_at(directory.path(), request.clone()).is_err());
+        assert!(purge_trash_at(directory.path(), request).is_err());
+        let preview = trash_purge_preview_at(directory.path()).unwrap();
+        let request = TrashPurgeRequest {
+            confirmation_token: preview.confirmation_token.clone(),
+            expected_folder_count: preview.folder_count,
+            expected_page_count: preview.page_count,
+            expected_element_count: preview.element_count,
+        };
+        purge_trash_at(directory.path(), request.clone()).unwrap();
+        assert!(purge_trash_at(directory.path(), request).is_err());
+    }
+
+    #[test]
+    fn lifecycle_triggers_and_missing_parent_restore_are_enforced() {
+        let directory = root();
+        seed_page(directory.path());
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        assert!(connection
+            .execute("UPDATE pages SET trashed_at=1 WHERE id='p'", [])
+            .is_err());
+        assert!(connection
+            .execute("UPDATE folders SET lifecycle='trashed' WHERE id='f'", [])
+            .is_err());
+        trash_page_at(directory.path(), "p").unwrap();
+        connection.execute_batch("PRAGMA foreign_keys=OFF; DELETE FROM folders WHERE id='f'; PRAGMA foreign_keys=ON;").unwrap();
+        restore_page_at(directory.path(), "p").unwrap();
+        assert_eq!(
+            load_workspace_data_at(directory.path()).unwrap().pages[0].folder_id,
+            ROOT_FOLDER_ID
+        );
+    }
+
+    #[test]
+    fn purging_one_of_two_image_references_keeps_the_shared_asset_live() {
+        let directory = root();
+        seed_page(directory.path());
+        seed_additional_page(directory.path(), "p2");
+        let asset = save_test_asset(directory.path(), "shared.png");
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![image_element("image-p", &asset.id)],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+        let mut second = image_element("image-p2", &asset.id);
+        second["pageId"] = json!("p2");
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p2".into(),
+                base_revision: 0,
+                upserts: vec![second],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+        let file = asset_file(directory.path(), &asset.id);
+        trash_page_at(directory.path(), "p").unwrap();
+        let preview = trash_purge_preview_at(directory.path()).unwrap();
+        purge_trash_at(directory.path(), purge_request(&preview)).unwrap();
+
+        assert!(file.exists());
+        assert_eq!(
+            load_asset_at(directory.path(), &asset.id).unwrap().id,
+            asset.id
+        );
+        assert_eq!(
+            load_workspace_data_at(directory.path())
+                .unwrap()
+                .elements
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn purging_last_image_reference_removes_asset_metadata_and_bytes() {
+        let directory = root();
+        seed_page(directory.path());
+        let asset = save_test_asset(directory.path(), "orphan.png");
+        let file = asset_file(directory.path(), &asset.id);
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![image_element("image-p", &asset.id)],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+        trash_page_at(directory.path(), "p").unwrap();
+        let preview = trash_purge_preview_at(directory.path()).unwrap();
+        purge_trash_at(directory.path(), purge_request(&preview)).unwrap();
+
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM assets WHERE id=?",
+                    [&asset.id],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM asset_cleanup_journal WHERE asset_id=?",
+                    [&asset.id],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        assert!(!file.exists());
+        assert!(!directory
+            .path()
+            .join("assets")
+            .join(format!(".purging-{}", asset.id))
+            .exists());
+    }
+
+    #[test]
+    fn deferred_asset_cleanup_recovers_staged_and_missing_files_on_startup() {
+        let directory = root();
+        initialize_storage_at(directory.path()).unwrap();
+        let staged_asset = save_test_asset(directory.path(), "staged.png");
+        let staged_file = asset_file(directory.path(), &staged_asset.id);
+        let staged_name = format!(".purging-{}", staged_asset.id);
+        fs::rename(
+            &staged_file,
+            directory.path().join("assets").join(&staged_name),
+        )
+        .unwrap();
+        let missing_asset = save_test_asset(directory.path(), "missing.png");
+        let missing_file = asset_file(directory.path(), &missing_asset.id);
+        fs::remove_file(&missing_file).unwrap();
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        connection.execute("INSERT INTO asset_cleanup_journal(asset_id,relative_path,staged_path) VALUES(?,?,?)", params![&staged_asset.id, staged_file.file_name().unwrap().to_string_lossy().as_ref(), &staged_name]).unwrap();
+        connection.execute("INSERT INTO asset_cleanup_journal(asset_id,relative_path,staged_path) VALUES(?,?,?)", params![&missing_asset.id, missing_file.file_name().unwrap().to_string_lossy().as_ref(), format!(".purging-{}", missing_asset.id)]).unwrap();
+        drop(connection);
+
+        initialize_storage_at(directory.path()).unwrap();
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM assets WHERE id IN (?,?)",
+                    params![&staged_asset.id, &missing_asset.id],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM asset_cleanup_journal", [], |row| row
+                    .get::<_, i64>(
+                    0
+                ))
+                .unwrap(),
+            0
+        );
+        assert!(!directory.path().join("assets").join(staged_name).exists());
+    }
+
+    #[test]
+    fn deferred_cleanup_restores_a_staged_asset_referenced_by_a_live_page() {
+        let directory = root();
+        seed_page(directory.path());
+        let asset = save_test_asset(directory.path(), "live.png");
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![image_element("image-p", &asset.id)],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+        let file = asset_file(directory.path(), &asset.id);
+        let staged_name = format!(".purging-{}", asset.id);
+        fs::rename(&file, directory.path().join("assets").join(&staged_name)).unwrap();
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        connection.execute("INSERT INTO asset_cleanup_journal(asset_id,relative_path,staged_path) VALUES(?,?,?)", params![&asset.id, file.file_name().unwrap().to_string_lossy().as_ref(), &staged_name]).unwrap();
+        drop(connection);
+
+        retry_asset_cleanup(directory.path()).unwrap();
+        assert!(file.exists());
+        assert_eq!(
+            load_asset_at(directory.path(), &asset.id).unwrap().id,
+            asset.id
+        );
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM asset_cleanup_journal WHERE asset_id=?",
+                    [&asset.id],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn deferred_cleanup_refuses_traversal_paths_without_touching_files() {
+        let directory = root();
+        initialize_storage_at(directory.path()).unwrap();
+        let asset = save_test_asset(directory.path(), "safe.png");
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        connection.execute(
+            "INSERT INTO asset_cleanup_journal(asset_id,relative_path,staged_path) VALUES(?,?,?)",
+            params![&asset.id, "../note.db", format!(".purging-{}", asset.id)],
+        ).unwrap();
+        drop(connection);
+
+        assert!(retry_asset_cleanup(directory.path())
+            .unwrap_err()
+            .contains("relative path"));
+        assert!(asset_file(directory.path(), &asset.id).exists());
+    }
+
+    #[test]
+    fn deferred_cleanup_continues_after_a_malformed_journal_entry() {
+        let directory = root();
+        initialize_storage_at(directory.path()).unwrap();
+        let malformed_asset = save_test_asset(directory.path(), "malformed.png");
+        let valid_asset = save_test_asset(directory.path(), "valid.png");
+        let malformed_file = asset_file(directory.path(), &malformed_asset.id);
+        let valid_file = asset_file(directory.path(), &valid_asset.id);
+        let malformed_relative = malformed_file
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let valid_relative = valid_file
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO asset_cleanup_journal(asset_id,relative_path,staged_path) VALUES(?,?,?)",
+                params![
+                    &malformed_asset.id,
+                    "../note.db",
+                    format!(".purging-{}", malformed_asset.id)
+                ],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO asset_cleanup_journal(asset_id,relative_path,staged_path) VALUES(?,?,?)",
+                params![
+                    &valid_asset.id,
+                    valid_relative,
+                    format!(".purging-{}", valid_asset.id)
+                ],
+            )
+            .unwrap();
+        drop(connection);
+
+        assert!(retry_asset_cleanup(directory.path())
+            .unwrap_err()
+            .contains("relative path"));
+        assert!(malformed_file.exists());
+        assert!(!valid_file.exists());
+
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM asset_cleanup_journal WHERE asset_id=?",
+                    [&malformed_asset.id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM asset_cleanup_journal WHERE asset_id=?",
+                    [&valid_asset.id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            0
+        );
+        assert!(load_asset_at(directory.path(), &valid_asset.id).is_err());
+        connection
+            .execute(
+                "UPDATE asset_cleanup_journal SET relative_path=? WHERE asset_id=?",
+                params![malformed_relative, &malformed_asset.id],
+            )
+            .unwrap();
+        drop(connection);
+
+        retry_asset_cleanup(directory.path()).unwrap();
+        assert!(!malformed_file.exists());
+        assert!(load_asset_at(directory.path(), &malformed_asset.id).is_err());
+    }
+
+    #[test]
+    fn purge_succeeds_when_deferred_asset_cleanup_reports_a_warning() {
+        let directory = root();
+        seed_page(directory.path());
+        let asset = save_test_asset(directory.path(), "retry.png");
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO asset_cleanup_journal(asset_id,relative_path,staged_path) VALUES(?,?,?)",
+                params![
+                    &asset.id,
+                    "../note.db",
+                    format!(".purging-{}", asset.id)
+                ],
+            )
+            .unwrap();
+        drop(connection);
+        trash_page_at(directory.path(), "p").unwrap();
+        let preview = trash_purge_preview_at(directory.path()).unwrap();
+
+        let result = purge_trash_at(directory.path(), purge_request(&preview)).unwrap();
+
+        assert!(result
+            .cleanup_warning
+            .as_deref()
+            .is_some_and(|warning| warning.contains("relative path")));
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM pages WHERE id='p'", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM asset_cleanup_journal WHERE asset_id=?",
+                    [&asset.id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn deferred_cleanup_refuses_cross_asset_path_substitution() {
+        let directory = root();
+        seed_page(directory.path());
+        let unused_asset = save_test_asset(directory.path(), "unused.png");
+        let live_asset = save_test_asset(directory.path(), "live.png");
+        apply_scene_changes_at(
+            directory.path(),
+            SceneChangeBatch {
+                page_id: "p".into(),
+                base_revision: 0,
+                upserts: vec![image_element("live-image", &live_asset.id)],
+                deleted_element_ids: vec![],
+            },
+        )
+        .unwrap();
+        let unused_file = asset_file(directory.path(), &unused_asset.id);
+        let live_file = asset_file(directory.path(), &live_asset.id);
+        let live_relative = live_file
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let connection = database::open(&directory.path().join("note.db")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO asset_cleanup_journal(asset_id,relative_path,staged_path) VALUES(?,?,?)",
+                params![
+                    &unused_asset.id,
+                    live_relative,
+                    format!(".purging-{}", unused_asset.id)
+                ],
+            )
+            .unwrap();
+        drop(connection);
+
+        assert!(retry_asset_cleanup(directory.path())
+            .unwrap_err()
+            .contains("authoritative asset metadata"));
+        assert!(unused_file.exists());
+        assert!(live_file.exists());
+        assert_eq!(
+            load_asset_at(directory.path(), &unused_asset.id)
+                .unwrap()
+                .id,
+            unused_asset.id
+        );
+        assert_eq!(
+            load_asset_at(directory.path(), &live_asset.id).unwrap().id,
+            live_asset.id
+        );
+        assert_eq!(
+            load_workspace_data_at(directory.path())
+                .unwrap()
+                .elements
+                .len(),
+            1
+        );
     }
 }

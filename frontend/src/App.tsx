@@ -259,6 +259,7 @@ import {
   MAX_ASSET_BYTES,
   type SceneRepository,
   type StoragePage,
+  type TrashEntry,
 } from "./canvas/persistence/sceneRepository";
 import {
   SceneChangeQueue,
@@ -282,6 +283,7 @@ type DirectTextDraft = Readonly<{
 
 type SidebarProps = {
   assistantToggleButtonRef: Ref<HTMLButtonElement>;
+  trashRailButtonRef: Ref<HTMLButtonElement>;
   bookmarkedFolders: AppData["folders"];
   bookmarkedPages: AppData["pages"];
   editingFolderId: string | null;
@@ -295,6 +297,11 @@ type SidebarProps = {
   isNarrowWorkbench: boolean;
   pageSearchFocusRequest: number;
   pageTemplates: AppData["pages"];
+  hasTrashMetadata: boolean;
+  isTrashRestoreAvailable: boolean;
+  trashEntries: readonly TrashEntry[];
+  trashFeedback: string;
+  pendingTrashAction: string | null;
   pages: AppData["pages"];
   pageSearchQuery: string;
   pageSearchResults: FileSearchResult[];
@@ -307,6 +314,8 @@ type SidebarProps = {
   onDeleteFolder: (folderId: string) => void;
   onDeletePage: (pageId: string) => void;
   onDeletePageTemplate: (templatePageId: string) => void;
+  onRestoreTrashEntry: (entry: TrashEntry, restoreIndex: number) => void;
+  onEmptyTrash: () => void;
   onFolderDragLeave: (folderId: string) => void;
   onFolderDragOver: (folderId: string) => void;
   onFocusPageSearch: (trigger?: HTMLElement) => void;
@@ -558,6 +567,23 @@ const LLAMA_HARNESS_SELECTED_AGENT_KEY = "note.llamaHarness.selectedAgentId.v1";
 const DEFAULT_PAN_OFFSET: PanOffset = { x: 0, y: 0 };
 const SEARCH_CONTROL_COMMAND_KEYS = new Set(["a", "f", "n", "o", "y", "z", "+", "=", "-", "0"]);
 
+function formatTrashCount(count: number, noun: string) {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+function formatTrashRemaining(count: number) {
+  return `${formatTrashCount(count, "item")} ${count === 1 ? "remains" : "remain"} in Trash.`;
+}
+
+function orderTrashEntries(entries: readonly TrashEntry[]) {
+  return [...entries].sort((left, right) => {
+    if (left.trashedAt !== right.trashedAt) return right.trashedAt - left.trashedAt;
+    if (left.kind !== right.kind) return left.kind < right.kind ? -1 : 1;
+    if (left.id === right.id) return 0;
+    return left.id < right.id ? -1 : 1;
+  });
+}
+
 function createConnectorPreviewLayer(): ConnectorPreviewLayer {
   return { labels: null, renderer: null };
 }
@@ -590,7 +616,7 @@ type SidebarSortOrder =
   | "modified-asc"
   | "created-desc"
   | "created-asc";
-type SidebarTabId = "files" | "search" | "bookmarks" | "templates";
+type SidebarTabId = "files" | "search" | "bookmarks" | "templates" | "trash";
 type PersistenceStatus = SaveState;
 type PendingAssetUpload = { dataUrl: string; fileName: string };
 
@@ -1365,6 +1391,12 @@ function applyFormatStateToBlock(
 
 function App() {
   const [data, setData] = useState<AppData>(emptyData);
+  const [trashEntries, setTrashEntries] = useState<TrashEntry[]>([]);
+  const [hasTrashMetadata, setHasTrashMetadata] = useState(false);
+  const [trashAnnouncement, setTrashAnnouncement] = useState("");
+  const [trashFeedback, setTrashFeedback] = useState("");
+  const [pendingTrashAction, setPendingTrashAction] = useState<string | null>(null);
+  const pendingTrashActionRef = useRef<string | null>(null);
   const [selectedFolderId, setSelectedFolderId] = useState("");
   const [selectedPageId, setSelectedPageIdState] = useState("");
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
@@ -1481,6 +1513,7 @@ function App() {
   const searchReturnFocusRef = useRef<HTMLElement | null>(null);
   const explorerPanelRef = useRef<HTMLDivElement | null>(null);
   const explorerToggleButtonRef = useRef<HTMLButtonElement | null>(null);
+  const trashRailButtonRef = useRef<HTMLButtonElement | null>(null);
   const assistantPanelRef = useRef<HTMLElement | null>(null);
   const assistantToggleButtonRef = useRef<HTMLButtonElement | null>(null);
   const overlayReturnFocusRef = useRef<HTMLElement | null>(null);
@@ -2309,10 +2342,21 @@ function App() {
     let isMounted = true;
 
     async function loadData() {
+      setHasTrashMetadata(false);
       try {
         const repository = createSceneRepository();
         const diagnostics = await repository.initializeStorage();
         const workspace = await repository.loadWorkspace();
+        let loadedTrashEntries: TrashEntry[] = [];
+        let didLoadTrashMetadata = false;
+        let trashLoadWarning = "";
+        try {
+          loadedTrashEntries = await repository.listTrash();
+          didLoadTrashMetadata = true;
+        } catch (error) {
+          console.warn("Could not load Trash metadata; workspace storage remains available.", error);
+          trashLoadWarning = "Trash could not load; it will refresh when reopened.";
+        }
         const savedData: AppData = {
           elements: workspace.elements,
           folders: workspace.folders,
@@ -2416,6 +2460,10 @@ function App() {
         }
         sceneChangeQueueRef.current = queue;
         setData(savedData);
+        setTrashEntries(loadedTrashEntries);
+        setHasTrashMetadata(didLoadTrashMetadata);
+        setTrashAnnouncement(trashLoadWarning);
+        setTrashFeedback(trashLoadWarning);
         setIsDarkMode(savedData.isDarkMode ?? true);
         setIsSidebarCollapsed(savedSessionState?.isExplorerCollapsed ?? false);
         setIsAssistantOpen(savedSessionState?.isAssistantOpen ?? false);
@@ -4316,7 +4364,76 @@ function App() {
     }));
   }
 
-  function deleteFolder(folderId: string) {
+  function beginTrashMutation(action: string, feedback: string) {
+    if (pendingTrashActionRef.current !== null) {
+      return false;
+    }
+    pendingTrashActionRef.current = action;
+    setPendingTrashAction(action);
+    setTrashAnnouncement(feedback);
+    setTrashFeedback(feedback);
+    return true;
+  }
+
+  function finishTrashMutation(action: string) {
+    if (pendingTrashActionRef.current === action) {
+      pendingTrashActionRef.current = null;
+      setPendingTrashAction(null);
+    }
+  }
+
+  async function flushBeforeTrashMutation(operation: string) {
+    try {
+      await flushPendingPersistence();
+      return true;
+    } catch (error) {
+      setPersistenceStatus({ kind: "failed", error: error instanceof Error ? error : new Error(String(error)) });
+      const message = `Could not ${operation}: save failed before the Trash change. Retry save and try again.`;
+      setTrashAnnouncement(message);
+      setTrashFeedback(message);
+      return false;
+    }
+  }
+
+  async function deleteFolder(folderId: string) {
+    const folderName = dataRef.current.folders.find((folder) => folder.id === folderId)?.name ?? "folder";
+    const action = `archive:folder:${folderId}`;
+    if (!beginTrashMutation(action, `Moving ${folderName} to Trash…`)) {
+      return;
+    }
+    let shouldRestoreFolderFocus = false;
+    try {
+      if (!await flushBeforeTrashMutation(`move ${folderName} to Trash`)) {
+        return;
+      }
+      const repository = repositoryRef.current;
+      if (repository) {
+        await repository.moveFolderToTrash(folderId);
+        shouldRestoreFolderFocus = true;
+        let message: string;
+        try {
+          const nextTrashEntries = await repository.listTrash();
+          setTrashEntries(nextTrashEntries);
+          setHasTrashMetadata(true);
+          message = `Moved ${folderName} to Trash. ${formatTrashRemaining(nextTrashEntries.length)}`;
+        } catch {
+          setHasTrashMetadata(false);
+          message = `Moved ${folderName} to Trash. Trash could not refresh; it will update when reopened.`;
+        }
+        setTrashAnnouncement(message);
+        setTrashFeedback(message);
+      } else {
+        const folder = dataRef.current.folders.find((candidate) => candidate.id === folderId);
+        if (folder) {
+          setTrashEntries((entries) => orderTrashEntries([
+            { id: folder.id, kind: "folder", name: folder.name, previousLocation: "Workspace", trashedAt: Date.now() },
+            ...entries,
+          ]));
+          const message = `Moved ${folder.name} to Trash.`;
+          setTrashAnnouncement(message);
+          setTrashFeedback(message);
+        }
+      }
     setData((currentData) => {
       const nextFolders = currentData.folders.filter(
         (folder) => folder.id !== folderId,
@@ -4361,6 +4478,18 @@ function App() {
         ),
       };
     });
+    } catch (error) {
+      const message = `Could not move ${folderName} to Trash.`;
+      setTrashAnnouncement(message);
+      setTrashFeedback(message);
+    } finally {
+      finishTrashMutation(action);
+      if (shouldRestoreFolderFocus) {
+        window.requestAnimationFrame(() => {
+          explorerPanelRef.current?.focus();
+        });
+      }
+    }
   }
 
   function selectFolder(folderId: string) {
@@ -5680,16 +5809,178 @@ function App() {
       return;
     }
 
-    const nextData = {
-      ...currentData,
-      pages: currentData.pages.filter((page) => page.id !== templatePageId),
-      elements: currentData.elements.filter(
-        (block) => block.pageId !== templatePageId,
-      ),
-    };
+    void deletePage(templatePageId);
+  }
 
-    dataRef.current = nextData;
-    setData(nextData);
+  async function restoreTrashEntry(entry: TrashEntry, restoreIndex: number) {
+    const repository = repositoryRef.current;
+    if (!repository) {
+      setTrashFeedback(`Restore ${entry.name} is unavailable in this session. Restoration requires the desktop app and native storage.`);
+      return;
+    }
+
+    const action = `restore:${entry.id}`;
+    if (!beginTrashMutation(action, `Restoring ${entry.name}…`)) {
+      return;
+    }
+    let shouldRestoreTrashFocus = false;
+    try {
+      if (!await flushBeforeTrashMutation(`restore ${entry.name}`)) {
+        return;
+      }
+      if (entry.kind === "folder") {
+        await repository.restoreFolderFromTrash(entry.id);
+      } else {
+        await repository.restorePageFromTrash(entry.id);
+      }
+      setTrashEntries((entries) => entries.filter(
+        (candidate) => candidate.id !== entry.id || candidate.kind !== entry.kind,
+      ));
+      const workspace = await repository.loadWorkspace();
+      const nextData: AppData = {
+        elements: workspace.elements,
+        folders: workspace.folders,
+        isDarkMode: workspace.isDarkMode,
+        pages: workspace.pages.map(({ revision: _revision, ...page }) => page),
+        sessionState: dataRef.current.sessionState,
+      };
+      const activePageIds = new Set(nextData.pages.map((page) => page.id));
+      for (const page of dataRef.current.pages) {
+        if (!activePageIds.has(page.id)) {
+          sceneChangeQueueRef.current?.forgetPage(page.id);
+        }
+      }
+      pageRevisionsRef.current = new Map(workspace.pages.map((page) => [page.id, page.revision]));
+      for (const page of workspace.pages) {
+        sceneChangeQueueRef.current?.seed(
+          page.id,
+          page.revision,
+          workspace.elements.filter((element) => element.pageId === page.id),
+        );
+      }
+      dataRef.current = nextData;
+      setData(nextData);
+      let message: string;
+      try {
+        const nextTrashEntries = await repository.listTrash();
+        setTrashEntries(nextTrashEntries);
+        setHasTrashMetadata(true);
+        message = `Restored ${entry.name}. ${formatTrashRemaining(nextTrashEntries.length)}`;
+      } catch {
+        setHasTrashMetadata(false);
+        message = `Restored ${entry.name}. Trash could not refresh; it will update when reopened.`;
+      }
+      setTrashAnnouncement(message);
+      setTrashFeedback(message);
+
+      const restoredPage = entry.kind === "page"
+        ? nextData.pages.find((page) => page.id === entry.id)
+        : undefined;
+      const restoredFolderPage = entry.kind === "folder"
+        ? nextData.pages.find((page) => page.folderId === entry.id && !isTemplatePage(page))
+        : undefined;
+      const fallbackPage = restoredPage ?? restoredFolderPage ?? nextData.pages.find((page) => !isTemplatePage(page));
+      selectedFolderIdRef.current = entry.kind === "folder"
+        ? entry.id
+        : fallbackPage?.folderId ?? ROOT_FOLDER_ID;
+      selectedPageIdRef.current = fallbackPage?.id ?? "";
+      setSelectedFolderId(selectedFolderIdRef.current);
+      setSelectedPageId(selectedPageIdRef.current);
+      setSidebarPageSelection(selectedPageIdRef.current ? [selectedPageIdRef.current] : []);
+      shouldRestoreTrashFocus = true;
+    } catch (error) {
+      const message = `Could not restore ${entry.name}.`;
+      setTrashAnnouncement(message);
+      setTrashFeedback(message);
+    } finally {
+      finishTrashMutation(action);
+      if (shouldRestoreTrashFocus) {
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(() => {
+            const remainingRestoreButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-trash-restore]"))
+              .filter((button) => button.isConnected && !button.disabled && button.getClientRects().length > 0);
+            const nextRestore = remainingRestoreButtons[
+              Math.min(restoreIndex, Math.max(remainingRestoreButtons.length - 1, 0))
+            ];
+            const emptyTrash = document.querySelector<HTMLButtonElement>("[data-empty-trash]");
+            const usableEmptyTrash = emptyTrash && !emptyTrash.disabled && emptyTrash.getClientRects().length > 0
+              ? emptyTrash
+              : null;
+            (nextRestore ?? usableEmptyTrash ?? trashRailButtonRef.current ?? document.getElementById("trash-title"))?.focus();
+          });
+        });
+      }
+    }
+  }
+
+  async function emptyTrash() {
+    const repository = repositoryRef.current;
+    if (!repository) {
+      setTrashFeedback("Could not empty Trash: storage is unavailable.");
+      return;
+    }
+    const action = "empty";
+    if (!beginTrashMutation(action, "Preparing Trash for permanent deletion…")) {
+      return;
+    }
+    let shouldRestoreEmptyTrashFocus = false;
+    try {
+      if (!await flushBeforeTrashMutation("empty Trash")) {
+        return;
+      }
+      const preview = await repository.getTrashPurgePreview();
+      if (preview.pageCount === 0 && preview.folderCount === 0) {
+        let message = "Trash is already empty.";
+        setTrashEntries([]);
+        setHasTrashMetadata(true);
+        try {
+          const nextTrashEntries = await repository.listTrash();
+          setTrashEntries(nextTrashEntries);
+          setHasTrashMetadata(true);
+        } catch {
+          message = "Trash is already empty. Trash could not refresh; it will update when reopened.";
+        }
+        setTrashAnnouncement(message);
+        setTrashFeedback(message);
+        shouldRestoreEmptyTrashFocus = true;
+        return;
+      }
+      const confirmed = window.confirm(
+        `Permanently delete ${formatTrashCount(preview.folderCount, "folder")}, ${formatTrashCount(preview.pageCount, "page")}, and ${formatTrashCount(preview.elementCount, "canvas element")}?\n\nThis cannot be undone.`,
+      );
+      if (!confirmed) {
+        setTrashFeedback("Empty Trash canceled.");
+        return;
+      }
+      setTrashFeedback("Permanently deleting Trash contents…");
+      const purgeResult = await repository.purgeTrash(preview);
+      setTrashEntries([]);
+      setHasTrashMetadata(true);
+      let message = purgeResult.cleanupWarning
+        ? `Permanently deleted ${formatTrashCount(preview.folderCount, "folder")}, ${formatTrashCount(preview.pageCount, "page")}, and ${formatTrashCount(preview.elementCount, "canvas element")}. Some purged assets will be cleaned up automatically.`
+        : `Permanently deleted ${formatTrashCount(preview.folderCount, "folder")}, ${formatTrashCount(preview.pageCount, "page")}, and ${formatTrashCount(preview.elementCount, "canvas element")}.`;
+      try {
+        const nextTrashEntries = await repository.listTrash();
+        setTrashEntries(nextTrashEntries);
+        setHasTrashMetadata(true);
+      } catch {
+        message = `${message} Trash could not refresh; it will update when reopened.`;
+      }
+      setTrashAnnouncement(message);
+      setTrashFeedback(message);
+      shouldRestoreEmptyTrashFocus = true;
+    } catch (error) {
+      const message = "Could not empty Trash.";
+      setTrashAnnouncement(message);
+      setTrashFeedback(message);
+    } finally {
+      finishTrashMutation(action);
+      if (shouldRestoreEmptyTrashFocus) {
+        window.requestAnimationFrame(() => {
+          (trashRailButtonRef.current ?? document.getElementById("trash-title"))?.focus();
+        });
+      }
+    }
   }
 
   function beginPageDrag(pageId: string) {
@@ -5808,7 +6099,49 @@ function App() {
     }));
   }
 
-  function deletePage(pageId: string) {
+  async function deletePage(pageId: string) {
+    const pageToTrash = dataRef.current.pages.find((page) => page.id === pageId);
+    const pageName = pageToTrash?.title ?? "page";
+    const siblingPages = dataRef.current.pages.filter((page) => page.folderId === pageToTrash?.folderId && !isTemplatePage(page));
+    const pageIndex = siblingPages.findIndex((page) => page.id === pageId);
+    const successorPageId = siblingPages[pageIndex + 1]?.id ?? siblingPages[pageIndex - 1]?.id ?? null;
+    const parentFolderId = pageToTrash?.folderId ?? null;
+    const action = `archive:page:${pageId}`;
+    if (!beginTrashMutation(action, `Moving ${pageName} to Trash…`)) {
+      return;
+    }
+    let shouldRestorePageFocus = false;
+    try {
+      if (!await flushBeforeTrashMutation(`move ${pageName} to Trash`)) {
+        return;
+      }
+      const repository = repositoryRef.current;
+      if (repository) {
+        await repository.movePageToTrash(pageId);
+        let message: string;
+        try {
+          const nextTrashEntries = await repository.listTrash();
+          setTrashEntries(nextTrashEntries);
+          setHasTrashMetadata(true);
+          message = `Moved ${pageName} to Trash. ${formatTrashRemaining(nextTrashEntries.length)}`;
+        } catch {
+          setHasTrashMetadata(false);
+          message = `Moved ${pageName} to Trash. Trash could not refresh; it will update when reopened.`;
+        }
+        setTrashAnnouncement(message);
+        setTrashFeedback(message);
+      } else {
+        const page = dataRef.current.pages.find((candidate) => candidate.id === pageId);
+        if (page) {
+          setTrashEntries((entries) => orderTrashEntries([
+            { id: page.id, kind: "page", name: page.title, previousLocation: page.folderId === ROOT_FOLDER_ID ? "Root" : "Workspace", trashedAt: Date.now() },
+            ...entries,
+          ]));
+          const message = `Moved ${page.title} to Trash.`;
+          setTrashAnnouncement(message);
+          setTrashFeedback(message);
+        }
+      }
     setData((currentData) => {
       const pageToDelete = currentData.pages.find((page) => page.id === pageId);
       const nextPages = currentData.pages.filter((page) => page.id !== pageId);
@@ -5848,6 +6181,27 @@ function App() {
         elements: currentData.elements.filter((block) => block.pageId !== pageId),
       };
     });
+    shouldRestorePageFocus = true;
+    } catch (error) {
+      const message = `Could not move ${pageName} to Trash.`;
+      setTrashAnnouncement(message);
+      setTrashFeedback(message);
+    } finally {
+      finishTrashMutation(action);
+      if (shouldRestorePageFocus) {
+        window.requestAnimationFrame(() => {
+          const successorAction = successorPageId
+            ? Array.from(document.querySelectorAll<HTMLButtonElement>("[data-page-trash-action]"))
+              .find((button) => button.dataset.pageTrashAction === successorPageId && !button.disabled && button.getClientRects().length > 0)
+            : null;
+          const parentControl = parentFolderId
+            ? document.querySelector<HTMLButtonElement>(`.folder-menu-trigger[data-folder-id="${CSS.escape(parentFolderId)}"]`)
+            : null;
+          const enabledParentControl = parentControl && !parentControl.disabled ? parentControl : null;
+          (successorAction ?? enabledParentControl ?? explorerPanelRef.current)?.focus();
+        });
+      }
+    }
   }
 
   const deleteBlock = useCallback(
@@ -9069,6 +9423,7 @@ function App() {
     >
       <Sidebar
         assistantToggleButtonRef={assistantToggleButtonRef}
+        trashRailButtonRef={trashRailButtonRef}
         bookmarkedFolders={bookmarkedFolders}
         bookmarkedPages={bookmarkedPages}
         editingFolderId={editingFolderId}
@@ -9082,6 +9437,11 @@ function App() {
         isNarrowWorkbench={isNarrowWorkbench}
         pageSearchFocusRequest={pageSearchFocusRequest}
         pageTemplates={pageTemplates}
+        hasTrashMetadata={hasTrashMetadata}
+        isTrashRestoreAvailable={persistenceAvailable}
+        trashEntries={trashEntries}
+        trashFeedback={trashFeedback}
+        pendingTrashAction={pendingTrashAction}
         pages={explorerPages}
         pageSearchQuery={pageSearchQuery}
         pageSearchResults={pageSearchResults}
@@ -9094,6 +9454,8 @@ function App() {
         onDeleteFolder={deleteFolder}
         onDeletePage={deletePage}
         onDeletePageTemplate={deletePageTemplate}
+        onRestoreTrashEntry={restoreTrashEntry}
+        onEmptyTrash={emptyTrash}
         onFolderDragLeave={(folderId) => {
           if (pageDropTargetFolderId === folderId) {
             setPageDropTargetFolderId(null);
@@ -9132,6 +9494,9 @@ function App() {
         draggedPageIds={draggedPageIds}
         selectedPageIds={selectedSidebarPageIds}
       />
+      <div aria-atomic="true" aria-live="polite" className="canvas-accessibility-status" data-trash-announcement role="status">
+        {trashAnnouncement}
+      </div>
 
       <section
         className={`workspace ${isTextFormattingVisible ? "has-text-formatting" : ""} ${isShapeTextEditing ? "is-shape-text-editing" : ""} ${isPropertiesPanelOpen && availableDrawingPropertiesContext ? "has-compact-properties" : ""}`}
@@ -9867,6 +10232,7 @@ function App() {
 
 const Sidebar = memo(function Sidebar({
   assistantToggleButtonRef,
+  trashRailButtonRef,
   bookmarkedFolders,
   bookmarkedPages,
   editingFolderId,
@@ -9879,6 +10245,11 @@ const Sidebar = memo(function Sidebar({
   isDarkMode,
   pageSearchFocusRequest,
   pageTemplates,
+  hasTrashMetadata,
+  isTrashRestoreAvailable,
+  trashEntries,
+  trashFeedback,
+  pendingTrashAction,
   pages,
   pageSearchQuery,
   pageSearchResults,
@@ -9891,6 +10262,8 @@ const Sidebar = memo(function Sidebar({
   onDeleteFolder,
   onDeletePage,
   onDeletePageTemplate,
+  onRestoreTrashEntry,
+  onEmptyTrash,
   onFolderDragLeave,
   onFolderDragOver,
   onFocusPageSearch,
@@ -9964,6 +10337,8 @@ const Sidebar = memo(function Sidebar({
   const [folderMenuState, setFolderMenuState] = useState<FolderMenuState | null>(
     null,
   );
+  const isTrashMutationPending = pendingTrashAction !== null;
+  const canEmptyTrash = isTrashRestoreAvailable && (!hasTrashMetadata || trashEntries.length > 0);
   useEffect(() => {
     const folderIdAtPoint = (clientX: number, clientY: number) => {
       const target = document
@@ -10708,6 +11083,8 @@ const Sidebar = memo(function Sidebar({
         onToggleAssistant={onToggleAssistant}
         onToggleDarkMode={onToggleDarkMode}
         templatePageCount={pageTemplates.length}
+        trashToggleButtonRef={trashRailButtonRef}
+        trashEntryCount={trashEntries.length}
       />
 
       <div
@@ -11005,12 +11382,14 @@ const Sidebar = memo(function Sidebar({
                     <span className="nav-actions">
                       <button
                         type="button"
-                        aria-label={`Delete ${page.title}`}
+                        aria-label={pendingTrashAction === `archive:page:${page.id}` ? `Moving ${page.title} to Trash` : `Move ${page.title} to Trash`}
+                        data-page-trash-action={page.id}
+                        disabled={isTrashMutationPending}
                         onClick={(event) => {
                           event.stopPropagation();
                           onDeletePage(page.id);
                         }}
-                        title={`Delete ${page.title}`}
+                        title={pendingTrashAction === `archive:page:${page.id}` ? `Moving ${page.title} to Trash` : `Move ${page.title} to Trash`}
                       >
                         <HeroIcon name="trash" />
                       </button>
@@ -11171,12 +11550,14 @@ const Sidebar = memo(function Sidebar({
                               <span className="nav-actions">
                                 <button
                                   type="button"
-                                  aria-label={`Delete ${page.title}`}
+                                  aria-label={pendingTrashAction === `archive:page:${page.id}` ? `Moving ${page.title} to Trash` : `Move ${page.title} to Trash`}
+                                  data-page-trash-action={page.id}
+                                  disabled={isTrashMutationPending}
                                   onClick={(event) => {
                                     event.stopPropagation();
                                     onDeletePage(page.id);
                                   }}
-                                  title={`Delete ${page.title}`}
+                                  title={pendingTrashAction === `archive:page:${page.id}` ? `Moving ${page.title} to Trash` : `Move ${page.title} to Trash`}
                                 >
                                   <HeroIcon name="trash" />
                                 </button>
@@ -11358,12 +11739,14 @@ const Sidebar = memo(function Sidebar({
                                   <span className="nav-actions">
                                     <button
                                       type="button"
-                                      aria-label={`Delete ${page.title}`}
+                                      aria-label={pendingTrashAction === `archive:page:${page.id}` ? `Moving ${page.title} to Trash` : `Move ${page.title} to Trash`}
+                                      data-page-trash-action={page.id}
+                                      disabled={isTrashMutationPending}
                                       onClick={(event) => {
                                         event.stopPropagation();
                                         onDeletePage(page.id);
                                       }}
-                                      title={`Delete ${page.title}`}
+                                      title={pendingTrashAction === `archive:page:${page.id}` ? `Moving ${page.title} to Trash` : `Move ${page.title} to Trash`}
                                     >
                                       <HeroIcon name="trash" />
                                     </button>
@@ -11461,17 +11844,10 @@ const Sidebar = memo(function Sidebar({
                       </button>
                       <span className="nav-actions">
                         <button
-                          aria-label={`Delete template ${templatePage.title}`}
-                          onClick={() => {
-                            const didConfirm = window.confirm(
-                              `Delete template "${templatePage.title}"?\n\nPages already created from this template will not be affected.`,
-                            );
-
-                            if (didConfirm) {
-                              onDeletePageTemplate(templatePage.id);
-                            }
-                          }}
-                          title={`Delete template ${templatePage.title}`}
+                          aria-label={pendingTrashAction === `archive:page:${templatePage.id}` ? `Moving template ${templatePage.title} to Trash` : `Move template ${templatePage.title} to Trash`}
+                          disabled={isTrashMutationPending}
+                          onClick={() => onDeletePageTemplate(templatePage.id)}
+                          title={pendingTrashAction === `archive:page:${templatePage.id}` ? `Moving template ${templatePage.title} to Trash` : `Move template ${templatePage.title} to Trash`}
                           type="button"
                         >
                           <HeroIcon name="trash" />
@@ -11485,6 +11861,61 @@ const Sidebar = memo(function Sidebar({
                   <HeroIcon name="rectangle-stack" />
                   No templates
                 </p>
+              )}
+            </section>
+          ) : null}
+
+          {activeSidebarTab === "trash" ? (
+            <section
+              className="sidebar-section sidebar-tab-panel compact-section"
+              aria-labelledby="trash-title"
+            >
+              <div className="section-header">
+                <h2 id="trash-title" tabIndex={-1}>Trash</h2>
+                <button
+                  aria-label={pendingTrashAction === "empty" ? "Emptying Trash" : !isTrashRestoreAvailable ? "Empty Trash unavailable: requires the desktop app and native storage" : hasTrashMetadata && trashEntries.length === 0 ? "Trash is empty" : "Empty Trash"}
+                  className="section-action"
+                  data-empty-trash
+                  disabled={!canEmptyTrash || isTrashMutationPending}
+                  onClick={onEmptyTrash}
+                  title={pendingTrashAction === "empty" ? "Emptying Trash" : !isTrashRestoreAvailable ? "Empty Trash requires the desktop app and native storage" : hasTrashMetadata && trashEntries.length === 0 ? "Trash is empty" : "Permanently delete everything in Trash"}
+                  type="button"
+                >
+                  <HeroIcon name="trash" />
+                </button>
+              </div>
+              {trashFeedback ? <p className="trash-status">{trashFeedback}</p> : null}
+              {trashEntries.length > 0 ? (
+                <ul className="nav-list trash-list" aria-label="Trashed items">
+                  {trashEntries.map((entry, restoreIndex) => (
+                    <li className="nav-item nav-item-template" key={`${entry.kind}-${entry.id}`}>
+                      <span className="file-row-icon">
+                        <HeroIcon name={entry.kind === "folder" ? "folder" : "document-text"} />
+                      </span>
+                      <span className="nav-label">
+                        {entry.name}
+                        <span className="trash-entry-detail">
+                          {`${entry.previousLocation} · ${new Date(entry.trashedAt).toLocaleString()}`}
+                        </span>
+                      </span>
+                      <span className="file-kind">{entry.kind.toUpperCase()}</span>
+                      <span className="nav-actions">
+                        <button
+                          aria-label={!isTrashRestoreAvailable ? `Restore ${entry.name} unavailable: requires the desktop app and native storage` : pendingTrashAction === `restore:${entry.id}` ? `Restoring ${entry.name}` : `Restore ${entry.name}`}
+                          data-trash-restore
+                          disabled={!isTrashRestoreAvailable || pendingTrashAction !== null}
+                          onClick={() => onRestoreTrashEntry(entry, restoreIndex)}
+                          title={!isTrashRestoreAvailable ? "Restore requires the desktop app and native storage" : pendingTrashAction === `restore:${entry.id}` ? `Restoring ${entry.name}` : `Restore ${entry.name}`}
+                          type="button"
+                        >
+                          <HeroIcon name="check" />
+                        </button>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="sidebar-placeholder">Trash is empty</p>
               )}
             </section>
           ) : null}
@@ -11509,7 +11940,9 @@ const Sidebar = memo(function Sidebar({
                     : "Bookmark"
                   : action.id === "rename"
                     ? "Rename"
-                    : "Delete";
+                    : pendingTrashAction === `archive:folder:${folderMenuFolder.id}`
+                      ? "Moving to Trash"
+                      : "Move to Trash";
 
               return (
                 <Fragment key={action.id}>
@@ -11518,11 +11951,12 @@ const Sidebar = memo(function Sidebar({
                   ) : null}
                   <button
                     className={`folder-menu-item ${
-                      action.id === "delete" ? "is-danger" : ""
+      action.id === "delete" ? "is-danger" : ""
                     }`}
                     onClick={() =>
                       runFolderMenuAction(action.id, folderMenuFolder.id)
                     }
+                    disabled={action.id === "delete" && isTrashMutationPending}
                     role="menuitem"
                     type="button"
                   >
@@ -11553,6 +11987,11 @@ function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps) {
     previous.isNarrowWorkbench === next.isNarrowWorkbench &&
     previous.pageSearchFocusRequest === next.pageSearchFocusRequest &&
     previous.pageTemplates === next.pageTemplates &&
+    previous.hasTrashMetadata === next.hasTrashMetadata &&
+    previous.isTrashRestoreAvailable === next.isTrashRestoreAvailable &&
+    previous.trashEntries === next.trashEntries &&
+    previous.trashFeedback === next.trashFeedback &&
+    previous.pendingTrashAction === next.pendingTrashAction &&
     previous.pages === next.pages &&
     previous.pageSearchQuery === next.pageSearchQuery &&
     previous.pageSearchResults === next.pageSearchResults &&

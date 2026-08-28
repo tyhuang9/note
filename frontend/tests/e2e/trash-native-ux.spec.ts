@@ -249,6 +249,9 @@ test("Empty Trash flushes first, refreshes an empty preview, and reports deferre
   await expect(page.locator(".trash-status")).toHaveText("Trash is already empty. Trash could not refresh; it will update when reopened.");
   await expect(page.getByRole("list", { name: "Trashed items" }).getByRole("listitem")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Trash is empty" })).toBeDisabled();
+  const emptyTrashRailButton = page.getByRole("button", { name: "0 items in Trash" });
+  await expect(emptyTrashRailButton).toBeEnabled();
+  await expect(emptyTrashRailButton).toBeFocused();
   const emptyCommands = await page.evaluate(() => (window as typeof window & { __trashCorrection: { commandLog(): string[] } }).__trashCorrection.commandLog());
   expect(emptyCommands.indexOf("reconcile_workspace_structure")).toBeGreaterThanOrEqual(0);
   expect(emptyCommands.indexOf("reconcile_workspace_structure")).toBeLessThan(emptyCommands.indexOf("get_trash_purge_preview"));
